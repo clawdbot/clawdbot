@@ -5,7 +5,7 @@ import PeekabooAutomationKit
 import Testing
 @testable import OpenClaw
 
-/// Drives the real `ComputerActionServiceV2` reference lifecycle through the same
+/// Drives the real `ComputerWindowActionExecutor` reference lifecycle through the same
 /// case table the CUA provider runs in `ref-lifecycle.contract.test.ts`, so the two
 /// providers cannot drift apart on what an opaque ref means.
 @MainActor
@@ -64,7 +64,7 @@ struct ComputerRefLifecycleContractTests {
     }
 
     private func run(_ testCase: Case) async -> Error? {
-        let service = ComputerActionServiceV2()
+        let service = ComputerWindowActionExecutor()
         service.adoptLifecycleGeneration(1)
         let windowRef = service.issueWindowRef(
             app: Self.app,
@@ -72,7 +72,7 @@ struct ComputerRefLifecycleContractTests {
         let observation = service.issueObservation(
             windowRef: windowRef,
             snapshotId: "snapshot-1",
-            elements: [ComputerActionServiceV2.ElementTarget(id: "button", bounds: .zero)])
+            elements: [ComputerWindowActionExecutor.ElementTarget(id: "button", bounds: .zero)])
 
         do {
             switch testCase.scenario {
@@ -96,7 +96,7 @@ struct ComputerRefLifecycleContractTests {
                 _ = service.issueObservation(
                     windowRef: windowRef,
                     snapshotId: "snapshot-2",
-                    elements: [ComputerActionServiceV2.ElementTarget(id: "button", bounds: .zero)])
+                    elements: [ComputerWindowActionExecutor.ElementTarget(id: "button", bounds: .zero)])
                 _ = try service.resolveObservation(observation.id, windowRef: windowRef)
             case .unrelatedDiscovery:
                 _ = service.issueWindowRef(
@@ -115,7 +115,7 @@ struct ComputerRefLifecycleContractTests {
     /// Runs a real action whose lifecycle generation is revoked after the work
     /// completed but before the result is released, which is the only way the
     /// in-flight change reaches a caller.
-    private static func performWithRevokedLifecycle(_ service: ComputerActionServiceV2) async throws {
+    private static func performWithRevokedLifecycle(_ service: ComputerWindowActionExecutor) async throws {
         var checks = 0
         _ = try await service.perform(
             OpenClawComputerActParams(action: .getCursorPosition),

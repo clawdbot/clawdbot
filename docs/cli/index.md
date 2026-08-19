@@ -65,6 +65,26 @@ state directories and config paths remain unchanged.
   report to return.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
+### JSON failures
+
+Successful JSON payloads remain command-specific. When a command in JSON output
+mode fails, it exits nonzero and writes one JSON document to stdout with this
+envelope:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "cli_error",
+    "message": "Description of the failure"
+  }
+}
+```
+
+A command may add domain-specific fields, such as per-item results, beside this
+envelope. Failure messages are sanitized. Human-readable diagnostics may also be
+written to stderr, so scripts should parse stdout and still check the exit status.
+
 ## Color palette
 
 OpenClaw uses a lobster palette for CLI output:

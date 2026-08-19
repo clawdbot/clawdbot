@@ -13,6 +13,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
 import {
   ambiguousTargetError,
+  missingTargetError,
   reservedTargetLiteralError,
   unknownTargetError,
 } from "./target-errors.js";
@@ -425,7 +426,14 @@ async function resolveMessagingTarget(params: {
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
-    return { ok: false, error: new Error("Target is required") };
+    const plugin = params.plugin ?? getChannelPlugin(params.channel);
+    return {
+      ok: false,
+      error: missingTargetError(
+        plugin?.meta?.label ?? params.channel,
+        plugin?.messaging?.targetResolver?.hint,
+      ),
+    };
   }
   const plugin = params.plugin ?? getChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;

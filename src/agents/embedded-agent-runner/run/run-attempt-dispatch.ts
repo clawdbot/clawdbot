@@ -1,3 +1,4 @@
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -5,9 +6,11 @@ import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { resolveSandboxContext } from "../../sandbox/context.js";
+import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import {
@@ -40,11 +43,13 @@ type AttemptRuntime = {
   sessionKey?: string;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   workspaceDir: string;
+  bootstrapWorkspaceDir?: string;
   isCanonicalWorkspace: boolean;
   agentDir: string;
   preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
   contextEngine?: EmbeddedRunAttemptParams["contextEngine"];
   contextTokenBudget?: number;
+  authoredContextTokenCap?: number;
   contextWindowInfo?: EmbeddedRunAttemptParams["contextWindowInfo"];
   prompt: string;
   provider: string;
@@ -204,6 +209,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         });
         return await prepareEmbeddedAttemptPromptExecution({
           attempt: { ...params, model: runtime.model },
+          mediaOwnerAgentId: workspace.sessionAgentId,
           effectiveFsWorkspaceOnly: workspace.effectiveFsWorkspaceOnly,
           effectiveWorkspace: workspace.effectiveWorkspace,
           prompt: "",
@@ -240,6 +246,28 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
   }
+  const execOverrides = params.permissionMode
+    ? {
+        ...params.execOverrides,
+        mode: resolveSessionPermissionExecMode({ mode: params.permissionMode }),
+      }
+    : params.execOverrides;
+  const incognitoSystemPrompt = appendIncognitoSystemPrompt({
+    agentId: runtime.agentId,
+    extraSystemPrompt: params.extraSystemPrompt,
+    sessionKey: params.sessionKey,
+    storePath: params.sessionTarget?.storePath,
+  });
+  const extraSystemPrompt = await appendProgressCardSystemPrompt({
+    agentId: runtime.agentId,
+    authProfileId: runtime.authProfileId,
+    config: params.config,
+    extraSystemPrompt: incognitoSystemPrompt,
+    modelId: runtime.modelId,
+    provider: runtime.provider,
+    sessionKey: params.sessionKey,
+    toolsAllow: params.toolsAllow,
+  });
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
     contextEngineAgentId: runtime.contextEngineAgentId,
@@ -289,7 +317,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
       : { sessionTarget: input.transcriptOwnership.sessionTarget }),
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
+    bootstrapWorkspaceDir: runtime.bootstrapWorkspaceDir,
     cwd: params.cwd,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
@@ -298,10 +329,15 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(runtime.contextEngine
       ? {
           contextEngine: runtime.contextEngine,
-          contextTokenBudget: runtime.contextTokenBudget,
           contextWindowInfo: runtime.contextWindowInfo,
         }
       : {}),
+    ...(runtime.contextTokenBudget === undefined
+      ? {}
+      : { contextTokenBudget: runtime.contextTokenBudget }),
+    ...(runtime.authoredContextTokenCap === undefined
+      ? {}
+      : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
     skillsSnapshot: params.skillsSnapshot,
     prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
     transcriptPrompt:
@@ -346,6 +382,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       ? {
           agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
             requesterSessionKey: params.sessionKey,
+            gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
           }),
         }
       : {}),
@@ -384,7 +421,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     reasoningLevel: params.reasoningLevel,
     toolResultFormat: runtime.toolResultFormat,
     toolProgressDetail: params.toolProgressDetail,
-    execOverrides: params.execOverrides,
+    execOverrides,
     bashElevated: params.bashElevated,
     timeoutMs: params.timeoutMs,
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
@@ -423,12 +460,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt: appendIncognitoSystemPrompt({
-      agentId: runtime.agentId,
-      extraSystemPrompt: params.extraSystemPrompt,
-      sessionKey: params.sessionKey,
-      storePath: params.sessionTarget?.storePath,
-    }),
+    extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,

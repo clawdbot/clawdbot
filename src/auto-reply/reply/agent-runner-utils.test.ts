@@ -445,6 +445,39 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.replyToMode).toBe("off");
   });
 
+  it("carries a prepared direct-message reply mode into generic message tools", () => {
+    const run = makeRun();
+    const replyRoute = {
+      originatingChannel: "reef",
+      originatingTo: "reef:remote-agent",
+      originatingReplyToMode: "all",
+    } satisfies Pick<
+      FollowupRun,
+      "originatingChannel" | "originatingTo" | "originatingReplyToMode"
+    >;
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      replyRoute,
+      sessionCtx: {
+        Provider: "reef",
+        To: "reef:local-agent",
+        MessageSid: "message-1",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.embeddedContext).toMatchObject({
+      currentChannelId: "reef:remote-agent",
+      currentChannelProvider: "reef",
+      currentMessageId: "message-1",
+      replyToMode: "all",
+    });
+  });
+
   it("carries inbound audio context into embedded message tools", () => {
     const run = makeRun();
 

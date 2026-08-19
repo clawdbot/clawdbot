@@ -11,6 +11,10 @@ import {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
+  closeDiagnosticEmbeddedRunOwner,
+  type DiagnosticEmbeddedRunOwner,
+} from "../../../logging/diagnostic-run-activity.js";
+import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
@@ -90,8 +94,10 @@ export function prepareEmbeddedAttemptStream(input: {
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
   sandboxSessionKey: string;
   builtinToolNames: ReadonlySet<string>;
+  coreBuiltinToolNames?: ReadonlySet<string>;
   replaySafeToolNames: ReadonlySet<string>;
   sideEffectToolOwners?: ReadonlyMap<string, string>;
+  diagnosticOwner: DiagnosticEmbeddedRunOwner;
 }) {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
@@ -319,6 +325,7 @@ export function prepareEmbeddedAttemptStream(input: {
     sessionId: attempt.sessionId,
     agentId: input.hookAgentId,
     builtinToolNames: input.builtinToolNames,
+    coreBuiltinToolNames: input.coreBuiltinToolNames,
     replaySafeToolNames: input.replaySafeToolNames,
     ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
     internalEvents: attempt.internalEvents,
@@ -434,6 +441,8 @@ export function prepareEmbeddedAttemptStream(input: {
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
+    diagnosticOwner: input.diagnosticOwner,
+    closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(input.diagnosticOwner),
     ...(attempt.toolAuthorityFingerprint
       ? { toolAuthorityFingerprint: attempt.toolAuthorityFingerprint }
       : {}),

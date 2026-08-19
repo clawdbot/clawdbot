@@ -741,6 +741,28 @@ describe("tui command handlers", () => {
     expect(closeOverlay).toHaveBeenCalledWith(overlayHandle);
   });
 
+  it("closes the overlay and reports the cause when a selection handler rejects", async () => {
+    const setSession = vi
+      .fn()
+      .mockRejectedValue(new Error("gateway unavailable")) as SetSessionMock;
+    const { handleCommand, openOverlay, closeOverlay, overlayHandle, addSystem } = createHarness({
+      setSession,
+      agents: [{ id: "work" }],
+    });
+
+    await handleCommand("/agent");
+    const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
+    selector?.onSelect?.({ value: "work", label: "work" });
+    await flushAsyncSelect();
+
+    // The selector must not stay stranded open on a rejected selection, and
+    // the failure must reach the chat log instead of an unhandled rejection.
+    expect(closeOverlay).toHaveBeenCalledWith(overlayHandle);
+    expect(
+      addSystem.mock.calls.some(([line]) => String(line).includes("gateway unavailable")),
+    ).toBe(true);
+  });
+
   it("forwards /context list directly", async () => {
     const { handleCommand, sendChat, openOverlay } = createHarness();
 
@@ -2495,6 +2517,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/model");
 
+    expect(listModels).toHaveBeenCalledWith({ agentId: "main" });
     const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
     expect(selector?.items?.[0]?.value).toBe("openrouter/auto");
     expect(selector?.items?.[0]?.label).toBe("openrouter/auto");

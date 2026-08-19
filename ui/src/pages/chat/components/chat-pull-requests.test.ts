@@ -273,6 +273,28 @@ describe("renderChatPullRequests", () => {
     expect(row?.querySelector(".chat-pr__warning")).toBeNull();
     // The branch row is not dismissible; it reflects the checkout itself.
     expect(row?.querySelector(".chat-pr__dismiss")).toBeNull();
+    expect(row?.querySelector("button.chat-pr__diff")).toBeNull();
+  });
+
+  it("opens the session diff from interactive branch stats", () => {
+    const onOpenSessionDiff = vi.fn();
+    render(
+      renderChatPullRequests({
+        pullRequests: [],
+        branch: sessionBranch(),
+        rateLimited: false,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+        onOpenSessionDiff,
+      }),
+      container,
+    );
+
+    const button = container.querySelector<HTMLButtonElement>("button.chat-pr__diff");
+    expect(button?.getAttribute("aria-label")).toBe("Show session changes");
+    button?.click();
+    expect(onOpenSessionDiff).toHaveBeenCalledOnce();
   });
 
   it("hides the Create PR link while the branch has no createUrl", () => {

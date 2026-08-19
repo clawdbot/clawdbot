@@ -1872,7 +1872,7 @@ describe("buildQaRuntimeEnv", () => {
 });
 
 describe("qa bundled plugin dir", () => {
-  it("creates a scoped bundled plugin tree for allowed plugins plus always-allowed runtime facades", async () => {
+  it("creates a scoped bundled plugin tree with the always-staged runtime facade", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-bundled-scope-");
     await writeFile(
       path.join(repoRoot, "package.json"),
@@ -2345,7 +2345,7 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBe("2026.4.8");
   });
 
-  it("includes always-allowed runtime facade plugins when raising the QA runtime host version", async () => {
+  it("includes the always-staged runtime facade when raising the QA runtime host version", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-runtime-version-runtime-facade-");
     await writeJsonFixture(path.join(repoRoot, "package.json"), { version: "2026.4.7-1" });
     const bundledRoot = path.join(repoRoot, "extensions");

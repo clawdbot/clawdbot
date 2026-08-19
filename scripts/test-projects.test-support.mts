@@ -31,7 +31,10 @@ import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.
 import { isActiveMemoryExtensionRoot } from "../test/vitest/vitest.extension-active-memory-paths.mjs";
 import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
-import { isCodexExtensionRoot } from "../test/vitest/vitest.extension-codex-paths.mjs";
+import {
+  codexExtensionTestRoots,
+  isCodexExtensionRoot,
+} from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
@@ -261,6 +264,7 @@ const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts"
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
 const EXTENSION_TEST_PROCESS_ROOTS = new Map([
+  [EXTENSION_CODEX_VITEST_CONFIG, codexExtensionTestRoots],
   [EXTENSION_MATRIX_VITEST_CONFIG, matrixExtensionTestRoots],
   [EXTENSION_TELEGRAM_VITEST_CONFIG, telegramExtensionTestRoots],
 ]);
@@ -3059,6 +3063,17 @@ function resolvePromptSnapshotFixtureTargets(changedPath: string) {
   return ["test/scripts/prompt-snapshots.test.ts"];
 }
 
+function resolvePackageFixtureTargets(changedPath: string, cwd: string) {
+  const match = /^packages\/([^/]+)\/test\/fixtures\/([^/]+)\/.+$/u.exec(changedPath);
+  const packageName = match?.[1];
+  const fixtureFamily = match?.[2];
+  if (!packageName || !fixtureFamily) {
+    return null;
+  }
+  const owner = `packages/${packageName}/src/${fixtureFamily}.test.ts`;
+  return fs.existsSync(path.join(cwd, owner)) ? [owner] : null;
+}
+
 function resolveAppcastTargets(changedPath: string) {
   return changedPath === "appcast.xml" ? APPCAST_TEST_TARGETS : null;
 }
@@ -3075,7 +3090,8 @@ function resolvePreciseChangedTestTargets(
       : null) ??
     resolveToolingTestTargets(changedPath, cwd) ??
     resolveAppcastTargets(changedPath) ??
-    resolvePromptSnapshotFixtureTargets(changedPath);
+    resolvePromptSnapshotFixtureTargets(changedPath) ??
+    resolvePackageFixtureTargets(changedPath, cwd);
   if (mappedTargets) {
     return mappedTargets;
   }
@@ -3246,7 +3262,7 @@ function classifyTarget(arg: string, cwd: string) {
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
   }
-  if (isPathAtOrUnder(relative, "ui/src")) {
+  if (isPathAtOrUnder(relative, "ui")) {
     return "ui";
   }
   if (relative.startsWith("src/tui/tui-pty-")) {
@@ -4217,31 +4233,6 @@ function filterPlansForContractIncludeFile(plans: VitestRunPlan[], env: NodeJS.P
       includePatternMatchesConfig(candidate, configPatterns),
     );
   });
-}
-
-export function shouldAcquireLocalHeavyCheckLock(
-  runSpecs: Array<Pick<VitestRunSpec, "config" | "includePatterns" | "watchMode">>,
-  env = process.env,
-) {
-  if (env.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD === "1") {
-    return false;
-  }
-
-  if (env.OPENCLAW_TEST_PROJECTS_FORCE_LOCK === "1") {
-    return true;
-  }
-
-  const runSpec = runSpecs.length === 1 ? runSpecs[0] : undefined;
-  if (!runSpec) {
-    return true;
-  }
-  return !(
-    (runSpec.config === TOOLING_VITEST_CONFIG ||
-      runSpec.config === TOOLING_ISOLATED_VITEST_CONFIG) &&
-    !runSpec.watchMode &&
-    Array.isArray(runSpec.includePatterns) &&
-    runSpec.includePatterns.length > 0
-  );
 }
 
 function expandVitestIncludePatterns(includePatterns: string[], cwd: string) {

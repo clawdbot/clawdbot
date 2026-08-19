@@ -14,8 +14,14 @@ export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
 /** Authenticated same-origin prefix for allowlisted catalog icon bytes. */
 export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
 
+/** Authenticated same-origin prefix for SSRF-guarded public-site favicons. */
+export const CONTROL_UI_LINK_FAVICON_PATH_PREFIX = "/__openclaw__/link-favicon";
+
 /** Authenticated same-origin prefix for a session workspace's own project icon. */
 export const CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX = "/__openclaw__/workspace-icon";
+
+/** Authenticated same-origin prefix for a channel conversation's stored image. */
+export const CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX = "/__openclaw__/channel-avatar";
 
 /** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
 export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;
@@ -85,6 +91,22 @@ export type ControlUiGitHubPreview = {
   updatedAt: string;
 };
 
+/** Bounded session metadata rendered by Control UI session-link hover cards. */
+export type ControlUiSessionPreview =
+  | {
+      status: "ok";
+      sessionKey: string;
+      title?: string;
+      derivedTitle?: string;
+      agentId: string;
+      kind?: string;
+      channel?: string;
+      updatedAt?: number;
+      lastMessagePreview?: string;
+      archived?: boolean;
+    }
+  | { status: "unavailable" };
+
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
 /** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
@@ -108,6 +130,7 @@ export type ControlUiSessionPullRequest = {
   state: "open" | "draft" | "merged" | "closed";
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /** Latest check-run rollup for the head commit; absent when no checks ran. */
   checks?: ControlUiSessionPullRequestChecks;
   checksUrl?: string;
@@ -124,6 +147,7 @@ export type ControlUiSessionBranch = {
   /** Working-tree diff vs the merge base with the remote default branch. */
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /**
    * GitHub "open a pull request for this branch" page. Absent while the
    * branch is unpushed or has nothing to compare — the row then only reports
@@ -175,6 +199,7 @@ export type ControlUiBootstrapConfig = {
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  automaticallyFetchFavicons?: boolean;
   seamColor?: string;
   /**
    * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).

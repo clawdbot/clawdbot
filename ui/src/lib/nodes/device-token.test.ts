@@ -26,6 +26,7 @@ function createState(request: (method: string, params?: unknown) => Promise<unkn
     connected: true,
     requestGeneration: 1,
     devicesLoading: false,
+    devicesQueuedRefresh: "none" as const,
     devicesError: null as string | null,
     devicesList: null,
   };

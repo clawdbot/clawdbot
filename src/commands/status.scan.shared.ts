@@ -310,6 +310,7 @@ export async function resolveGatewayProbeSnapshot(params: {
         .then(({ probeGateway }) =>
           probeGateway({
             url: gatewayConnection.url,
+            config: params.cfg,
             auth: gatewayProbeAuthResolution.auth,
             timeoutMs: probeTimeoutMs,
             detailLevel: params.opts.detailLevel ?? "presence",
@@ -367,13 +368,11 @@ export async function resolveGatewayProbeSnapshot(params: {
 export function buildTailscaleHttpsUrl(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
-  serviceName?: string | null;
   controlUiBasePath?: string;
 }): string | null {
   const host = resolveTailscalePublishedHost({
     tailscaleMode: params.tailscaleMode,
     tailnetHost: params.tailscaleDns,
-    serviceName: params.serviceName,
   });
   return params.tailscaleMode !== "off" && host
     ? `https://${host}${normalizeControlUiBasePath(params.controlUiBasePath)}`

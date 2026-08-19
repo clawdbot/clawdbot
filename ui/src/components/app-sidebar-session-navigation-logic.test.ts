@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildSidebarSessionNavigationState,
@@ -40,7 +40,7 @@ function projectSidebarSession(
     highlightCurrentSession: false,
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
-    outboxCountForSessionKey: () => 0,
+    outboxAttentionCountForSessionKey: () => 0,
     hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
@@ -64,10 +64,10 @@ function sortSidebarRows(
   rows: GatewaySessionRow[],
   sortMode: "created" | "updated" | "people",
   createdOrder: ReadonlyMap<string, number>,
-  creators?: Array<{ id: string; label: string }>,
+  owners?: SessionsListResult["owners"],
 ) {
   return rows.toSorted((a, b) =>
-    compareSidebarSessionRowsByMode({ a, b, sortMode, createdOrder, creators }),
+    compareSidebarSessionRowsByMode({ a, b, sortMode, createdOrder, owners }),
   );
 }
 
@@ -76,13 +76,14 @@ describe("sidebar session sort modes", () => {
     key: string,
     createdAt?: number,
     updatedAt = 1,
-    creatorId?: string,
+    ownerId?: string,
   ): GatewaySessionRow => ({
     key,
     kind: "direct",
     updatedAt,
     createdAt,
-    createdActor: creatorId ? { type: "human", id: creatorId } : undefined,
+    createdActor: ownerId ? { type: "human", id: ownerId } : undefined,
+    owner: ownerId ? { actor: { type: "human", id: ownerId } } : undefined,
   });
 
   it("sorts timestamped sessions newest-first ahead of legacy sessions", () => {
@@ -124,7 +125,7 @@ describe("sidebar session sort modes", () => {
     ]);
   });
 
-  it("keeps creator ordering primary and creation time secondary in People mode", () => {
+  it("keeps owner ordering primary and creation time secondary in People mode", () => {
     const rows = [
       row("alex-old", 100, 1, "alex"),
       row("sam-new", 300, 1, "sam"),
@@ -134,8 +135,8 @@ describe("sidebar session sort modes", () => {
 
     expect(
       sortSidebarRows(rows, "people", observed, [
-        { id: "alex", label: "Alex" },
-        { id: "sam", label: "Sam" },
+        { type: "human", id: "alex", label: "Alex" },
+        { type: "human", id: "sam", label: "Sam" },
       ]).map((entry) => entry.key),
     ).toEqual(["alex-new", "alex-old", "sam-new"]);
   });
@@ -392,7 +393,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     highlightCurrentSession: true,
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
-    outboxCountForSessionKey: () => 0,
+    outboxAttentionCountForSessionKey: () => 0,
     hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,

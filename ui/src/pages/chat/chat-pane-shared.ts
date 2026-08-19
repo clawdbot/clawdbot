@@ -238,9 +238,6 @@ export const CHAT_AUTOTYPE_EXEMPT_SELECTOR =
 export const CHAT_SPACE_ACTIVATION_SELECTOR =
   "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
 export const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
-// One automatic page can fill a short initial tail without serially walking a
-// collapsed or sparse transcript to exhaustion.
-export const CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT = 1;
 
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -251,17 +248,18 @@ export const NEW_SESSION_CREATE_FAILED_MESSAGE =
 
 export function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],
+  previous?: SessionCatalogPullRequestSummary,
 ): SessionCatalogPullRequestSummary | undefined {
   const current = pullRequests[0];
   if (!current) {
     return undefined;
   }
-  return {
-    numbers: [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
-      .slice(0, 20)
-      .toSorted((left, right) => left - right),
-    state: current.state,
-  };
+  const numbers = [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
+    .slice(0, 20)
+    .toSorted((left, right) => left - right);
+  return previous?.state === current.state && previous.numbers.join(",") === numbers.join(",")
+    ? previous
+    : { numbers, state: current.state };
 }
 
 export function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {

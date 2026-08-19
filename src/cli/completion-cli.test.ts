@@ -91,7 +91,7 @@ describe("completion-cli", () => {
 
     expect(script).toContain('"[Gateway token]:token:"');
     expect(script).toContain(
-      '"[Shell to generate completion for (default: zsh)]:shell:(zsh bash powershell fish)"',
+      '"[Shell to generate completion for (default: detected)]:shell:(zsh bash powershell fish)"',
     );
   });
 
@@ -804,7 +804,7 @@ _openclaw_root_completion
     expect(fishScript).toContain(" -s s -l shell -r -f -a ");
     expect(fishScript).toContain(`"'zsh' 'bash' 'powershell' 'fish'"`);
     expect(zshScript).toContain(
-      `{--shell,-s}"[Shell to generate completion for (default: zsh)]:shell:(zsh bash powershell fish)"`,
+      `{--shell,-s}"[Shell to generate completion for (default: detected)]:shell:(zsh bash powershell fish)"`,
     );
     expect(zshScript).toContain('{--token,-t}"[Gateway token]:token:"');
   });

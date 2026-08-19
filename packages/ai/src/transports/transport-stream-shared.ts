@@ -3,7 +3,7 @@
  *
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
-import type { Usage } from "@openclaw/llm-core";
+import type { AssistantMessage, Usage } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
@@ -25,10 +25,6 @@ export type WritableTransportStream = Pick<
   ReturnType<typeof createAssistantMessageEventStream>,
   "push" | "end"
 >;
-
-type TransportOutputShape = Partial<Omit<ProviderErrorProjection, "stopReason">> & {
-  stopReason: string;
-};
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 export function sanitizeTransportPayloadText(text: string): string {
@@ -172,7 +168,7 @@ export function withProviderResponseHook<T = never>(params: {
 
 export function finalizeTransportStream(params: {
   stream: WritableTransportStream;
-  output: TransportOutputShape;
+  output: AssistantMessage;
   signal?: AbortSignal;
 }): void {
   const { stream, output, signal } = params;
@@ -182,29 +178,31 @@ export function finalizeTransportStream(params: {
   if (output.stopReason === "aborted" || output.stopReason === "error") {
     throw new Error(output.errorMessage ?? "An unknown error occurred");
   }
-  stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
+  stream.push({ type: "done", reason: output.stopReason, message: output });
   stream.end();
 }
 
 /** @deprecated Use projectProviderError. v2026.7.2-beta.5 compatibility; remove after 2026.10. */
 export function assignTransportErrorDetails(
-  output: TransportOutputShape,
+  output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
-): void {
-  Object.assign(output, projectProviderError(error, signal));
+): ProviderErrorProjection {
+  const projection = projectProviderError(error, signal);
+  Object.assign(output, projection);
+  return projection;
 }
 
 export function failTransportStream(params: {
   stream: WritableTransportStream;
-  output: TransportOutputShape;
+  output: AssistantMessage;
   signal?: AbortSignal;
   error: unknown;
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
   cleanup?.();
-  assignTransportErrorDetails(output, error, signal);
-  stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
+  const projection = assignTransportErrorDetails(output, error, signal);
+  stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();
 }

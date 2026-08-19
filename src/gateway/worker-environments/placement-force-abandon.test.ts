@@ -44,16 +44,11 @@ describe("forced worker environment abandonment", () => {
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
     store.markWorkspaceResultPending(claim);
-    const binding = {
-      sessionId: claim.sessionId,
-      environmentId,
-      ownerEpoch: 2,
-      runId: claim.runId,
-    };
+    const binding = claim;
     store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
       store.beginWorkerSessionToolOperation({
-        binding,
+        claim: binding,
         toolName: "sessions_send",
         toolCallId: "forced-send",
         requestDigest: "forced-send-digest",

@@ -196,6 +196,9 @@ describe("codex plugin", () => {
     );
 
     const agentHarnessRegistration = mockCallArg(registerAgentHarness) as Record<string, unknown>;
+    const agentHarnessOptions = mockCallArg(registerAgentHarness, 0, 1) as
+      | Record<string, unknown>
+      | undefined;
     const mediaProviderRegistration = mockCallArg(registerMediaUnderstandingProvider) as
       | Record<string, unknown>
       | undefined;
@@ -210,6 +213,8 @@ describe("codex plugin", () => {
     expect(agentHarnessRegistration.deliveryDefaults).toEqual({
       visibleReplies: "message_tool",
     });
+    expect(agentHarnessRegistration.compactNative).toBeUndefined();
+    expect(typeof agentHarnessOptions?.nativeCompaction).toBe("function");
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
     expect(typeof agentHarnessRegistration.fetchUsageSnapshot).toBe("function");
     expect(typeof agentHarnessRegistration.loadMcpToolCatalog).toBe("function");

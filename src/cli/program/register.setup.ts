@@ -1,6 +1,6 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 // Setup command registration: system-agent chat for configured systems, onboarding otherwise.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
@@ -20,7 +20,6 @@ import {
   pickOnboardAuthOptionValues,
   registerOnboardAuthOptions,
   resolveInstallDaemonFlag,
-  resolveTailscaleResetOnExitFlag,
   validateOnboardAuthOptionValues,
 } from "./register.onboard.js";
 
@@ -133,12 +132,12 @@ async function runOnboardingEntry(
     return;
   }
   const installDaemon = resolveInstallDaemonFlag(commandRuntime);
-  const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
   const gatewayPort = parseGatewayPortOption(options.gatewayPort, "--gateway-port");
   const { setupWizardCommand } = await import("../../commands/onboard.js");
   await setupWizardCommand(
     {
       workspace: readStringValue(options.workspace),
+      agentName: readStringValue(options.agentName),
       nonInteractive: Boolean(options.nonInteractive),
       acceptRisk: Boolean(options.acceptRisk),
       classic: Boolean(options.classic),
@@ -155,7 +154,6 @@ async function runOnboardingEntry(
       gatewayTokenRefEnv: readStringValue(options.gatewayTokenRefEnv),
       gatewayPassword: readStringValue(options.gatewayPassword),
       tailscale: options.tailscale as TailscaleMode | undefined,
-      tailscaleResetOnExit,
       installDaemon,
       daemonRuntime: options.daemonRuntime as GatewayDaemonRuntime | undefined,
       skipChannels: Boolean(options.skipChannels),
@@ -206,6 +204,7 @@ export function registerSetupCommand(program: Command): void {
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by baseline/classic/non-interactive setup",
     )
+    .option("--agent-name <name>", "Name for the first agent (default: main)")
     .option("--wizard", "Run interactive onboarding", false)
     .option(
       "--baseline",
@@ -241,8 +240,8 @@ export function registerSetupCommand(program: Command): void {
     )
     .option("--gateway-password <password>", "Gateway password (password auth)")
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
-    .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
-    .option("--no-tailscale-reset-on-exit", "Keep tailscale serve/funnel after exit")
+    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
+    .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
@@ -253,7 +252,7 @@ export function registerSetupCommand(program: Command): void {
     .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI launch")
-    .option("--suppress-gateway-token-output", "Suppress token-bearing Gateway/UI output")
+    .option("--suppress-gateway-token-output", "Disable the guided Control UI handoff")
     .option("--skip-hooks", "Accepted for onboard compatibility; hooks setup is skipped")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--import-from <provider>", "Migration provider to run during onboarding")

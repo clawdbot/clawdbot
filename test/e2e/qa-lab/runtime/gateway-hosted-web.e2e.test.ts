@@ -167,6 +167,9 @@ describe("Gateway hosted web surfaces", () => {
             controlUiEnabled: true,
             sidecarStartup: "defer",
           });
+          // Deferred startup replaces the bootstrap registry; register routes only after the
+          // server publishes the settled runtime so requests do not target a retired registry.
+          await server.startupSettled;
           const registry = getActivePluginRegistry();
           if (!registry) {
             throw new Error("gateway did not publish an active plugin registry");

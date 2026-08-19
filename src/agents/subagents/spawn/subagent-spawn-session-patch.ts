@@ -110,6 +110,7 @@ export async function createInitialSubagentSession(params: {
   childSessionKey: string;
   incognito: boolean;
   requesterInternalKey: string;
+  requesterAgentId: string;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
@@ -167,7 +168,7 @@ export async function createInitialSubagentSession(params: {
         ...childSessionIdentity,
         ...buildSessionCreationStamp({
           via: "spawn",
-          actor: { type: "agent", id: params.requesterInternalKey },
+          actor: { type: "agent", id: params.requesterAgentId },
         }),
       },
     );

@@ -60,9 +60,6 @@ creation has a token or password auth path.
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
 
-   If the setup code contains both LAN and Tailscale Serve routes, the app
-   probes them in order and saves the first reachable endpoint.
-
    Paired gateways remain in the **Gateways** list. The checkmark identifies
    the focused gateway; use the bolt control on another row to keep its
    operator session connected at the same time. Switching focus does not

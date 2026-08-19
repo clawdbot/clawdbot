@@ -3,13 +3,14 @@
  */
 import type {
   AgentHarnessV2,
-  AgentHarnessCompactParams,
-  AgentHarnessCompactResult,
+  AgentHarnessNativeCompaction,
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
+import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
@@ -18,8 +19,8 @@ import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-ty
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 // Audited against @openai/codex 0.147.0 (rust-v0.147.0). These exact denies
-// target OpenClaw-owned capabilities with no Codex-native equivalent. Keep the
-// list positive and conservative: an omitted tool isolates the native surface.
+// either have no Codex-native equivalent or are enforced by the harness. Keep
+// the list positive and conservative: an omitted tool isolates the native surface.
 const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "web_fetch",
   "x_search",
@@ -33,6 +34,7 @@ const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "automations",
   "gateway",
   "skill_workshop",
+  "image_generate",
   "music_generate",
   "video_generate",
   "tts",
@@ -49,9 +51,18 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
 
 type CodexAppServerAgentHarness = AgentHarnessV2 & {
   cloudPlacement?: { mode: "remote-exec" };
-  compactAfterContextEngine?(
-    params: AgentHarnessCompactParams,
-  ): Promise<AgentHarnessCompactResult | undefined>;
+};
+
+type CodexAppServerAgentHarnessOptions = {
+  id?: string;
+  label?: string;
+  providerIds?: Iterable<string>;
+  pluginConfig?: unknown;
+  resolvePluginConfig?: () => unknown;
+  resolveConfig?: () => OpenClawConfig | undefined;
+  runtime?: PluginRuntime;
+  bindingStore: CodexAppServerBindingStore;
+  sessionCatalogControlFactory?: CodexSessionCatalogControlFactory;
 };
 
 type CodexHostPreparedIsolatedCompletionParams = Parameters<
@@ -97,17 +108,9 @@ async function disposeSharedCodexAppServerClients(): Promise<void> {
  * Creates the Codex app-server harness used for attempts, side questions,
  * compaction, reset, and disposal.
  */
-export function createCodexAppServerAgentHarness(options: {
-  id?: string;
-  label?: string;
-  providerIds?: Iterable<string>;
-  pluginConfig?: unknown;
-  resolvePluginConfig?: () => unknown;
-  resolveConfig?: () => OpenClawConfig | undefined;
-  runtime?: PluginRuntime;
-  bindingStore: CodexAppServerBindingStore;
-  sessionCatalogControlFactory?: CodexSessionCatalogControlFactory;
-}): AgentHarnessV2 {
+export function createCodexAppServerAgentHarness(
+  options: CodexAppServerAgentHarnessOptions,
+): AgentHarnessV2 {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
   const providerIds = new Set(
@@ -117,6 +120,10 @@ export function createCodexAppServerAgentHarness(options: {
   );
   const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
+  const resolveAttemptPluginConfig = (config: OpenClawConfig | undefined) =>
+    resolvePluginConfigObject(config, "codex") ??
+    options.resolvePluginConfig?.() ??
+    options.pluginConfig;
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
@@ -167,6 +174,13 @@ export function createCodexAppServerAgentHarness(options: {
       return await fetchCodexAppServerUsageSnapshot(ctx, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
+    },
+    loadModelCatalog: async (params) => {
+      const { loadCodexAppServerModelCatalog } = await import("./src/app-server/model-catalog.js");
+      return await loadCodexAppServerModelCatalog(
+        params,
+        resolveAttemptPluginConfig(params.config),
+      );
     },
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
@@ -236,7 +250,8 @@ export function createCodexAppServerAgentHarness(options: {
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        pluginConfig: resolveAttemptPluginConfig(params.config),
+        runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
         nativeHookRelay: { enabled: true },
       });
     },
@@ -275,6 +290,7 @@ export function createCodexAppServerAgentHarness(options: {
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        runtimeModelId: readCodexRuntimeModelId(params.runtimeModel, params.model),
         nativeHookRelay: { enabled: true },
       });
     },
@@ -283,14 +299,6 @@ export function createCodexAppServerAgentHarness(options: {
       return maybeCompactCodexAppServerSession(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-      });
-    },
-    compactAfterContextEngine: async (params) => {
-      const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
-      return maybeCompactCodexAppServerSession(params, {
-        bindingStore: options.bindingStore,
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        allowNonManualNativeRequest: true,
       });
     },
     reset: async (params) => {
@@ -334,4 +342,22 @@ export function createCodexAppServerAgentHarness(options: {
     dispose: disposeSharedCodexAppServerClients,
   };
   return harness;
+}
+
+/** Creates the private native-compaction bridge registered in host-owned capability state. */
+export function createCodexAppServerNativeCompaction(
+  options: Pick<
+    CodexAppServerAgentHarnessOptions,
+    "bindingStore" | "pluginConfig" | "resolvePluginConfig"
+  >,
+): AgentHarnessNativeCompaction {
+  return async (params) => {
+    const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
+    return maybeCompactCodexAppServerSession(params, {
+      bindingStore: options.bindingStore,
+      pluginConfig: options.resolvePluginConfig?.() ?? options.pluginConfig,
+      allowNonManualNativeRequest: true,
+      nativeCompactionRequest: params.nativeCompactionRequest,
+    });
+  };
 }

@@ -142,6 +142,9 @@ function computerActIdempotencyKey(params: { scope?: string; toolCallId: string 
     .createHash("sha256")
     .update(JSON.stringify([stableScope, stableCallId, COMPUTER_ACT_COMMAND]))
     .digest("hex");
+  // `v1` versions this key's composition (scope + call id + command), not the
+  // `computer.act` wire contract. Changing what goes into the digest needs a
+  // new prefix so in-flight keys from an older node cannot collide.
   return `computer.act:v1:${digest}`;
 }
 

@@ -20,6 +20,8 @@ function baseProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
       paired: [],
     },
     canPairDevice: true,
+    canManagePairing: true,
+    canAdmin: true,
     configForm: null,
     configLoading: false,
     configSaving: false,
@@ -72,6 +74,17 @@ function getSection(container: Element, heading: string): Element {
     throw new Error(`Expected ${heading} section`);
   }
   return section;
+}
+
+function getSettingsRow(container: Element, title: string): Element {
+  const row = Array.from(container.querySelectorAll(".settings-row")).find(
+    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+  );
+  expect(row).toBeInstanceOf(Element);
+  if (!(row instanceof Element)) {
+    throw new Error(`Expected ${title} row`);
+  }
+  return row;
 }
 
 function getInventorySection(container: Element): Element {
@@ -248,7 +261,7 @@ describe("devices inventory rendering", () => {
     const gatewayEntry = expectDefined(entries[0], "gateway inventory entry");
 
     expect(statusesByText(gatewayEntry, "gateway")).toHaveLength(1);
-    expect(statusesByText(gatewayEntry, "connected")).toHaveLength(1);
+    expect(statusesByText(gatewayEntry, "connected")).toHaveLength(0);
     expect(gatewayEntry.textContent).toContain("gateway-host");
     expect(gatewayEntry.textContent).toContain("Linux · 2026.7.11 · input 5s ago");
     expect(gatewayEntry.querySelector("button")).toBeNull();
@@ -358,6 +371,49 @@ describe("devices inventory rendering", () => {
     expect(section.textContent).toContain("approval needed");
     findButton(section, "Approve").click();
     expect(approvals).toEqual(["node-req-1"]);
+  });
+
+  it("keeps installed workers quiet and warns when the retained bundle is missing", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "node-installed",
+          displayName: "Installed Mac",
+          connected: true,
+          paired: true,
+          workerSlots: { total: 2, available: 1 },
+          workerBundle: { status: "installed", version: "2026.8.9" },
+        },
+        {
+          nodeId: "node-missing",
+          displayName: "Missing Mac",
+          connected: true,
+          paired: true,
+          workerBundle: { status: "missing" },
+        },
+      ],
+    });
+    const section = getInventorySection(container);
+    const rows = Array.from(section.querySelectorAll(".device-entry"));
+    const installed = rows.find((row) => row.textContent?.includes("Installed Mac"));
+    const missing = rows.find((row) => row.textContent?.includes("Missing Mac"));
+
+    expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
+      "Worker 2026.8.9",
+    );
+    expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
+      "Worker slots 1/2",
+    );
+    expect(installed ? statusesByText(installed, "connected") : []).toHaveLength(0);
+    expect(installed ? statusesByText(installed, "worker missing") : []).toHaveLength(0);
+    expect(missing ? statusesByText(missing, "worker missing") : []).toHaveLength(1);
+    expect(
+      Array.from(missing?.querySelectorAll<HTMLElement>("[title]") ?? [])
+        .find((element) => element.textContent?.trim() === "worker missing")
+        ?.getAttribute("title"),
+    ).toBe(
+      "The Gateway-managed worker bundle is missing. Start a new session on this device to reinstall it.",
+    );
   });
 
   it("shows device and Gateway version drift", () => {
@@ -561,7 +617,7 @@ describe("devices inventory rendering", () => {
     );
     expect(entry?.textContent).toContain("unpaired");
     expect(entry?.textContent).toContain("macOS 26.5.2");
-    expect(entry ? statusesByText(entry, "connected") : []).toHaveLength(1);
+    expect(entry ? statusesByText(entry, "connected") : []).toHaveLength(0);
     expect(entry?.querySelector("button")).toBeNull();
   });
 
@@ -586,7 +642,140 @@ describe("devices inventory rendering", () => {
   });
 });
 
+describe("devices access gating", () => {
+  it("disables pairing and admin mutations with one browsing-only notice", () => {
+    const container = renderDevicesContainer({
+      canPairDevice: false,
+      canManagePairing: false,
+      canAdmin: false,
+      devicesList: {
+        pending: [
+          {
+            requestId: "request-1",
+            deviceId: "pending-device",
+            displayName: "Pending device",
+            roles: ["operator"],
+            scopes: ["operator.read"],
+          },
+        ],
+        paired: [
+          {
+            deviceId: "device-1",
+            displayName: "Device One",
+            roles: ["operator"],
+            tokens: [{ role: "operator", scopes: ["operator.read"], createdAtMs: Date.now() }],
+          },
+        ],
+      },
+      configForm: { agents: { entries: [{ id: "main", default: true }] } },
+      configDirty: true,
+    });
+
+    expect(container.querySelectorAll(".callout.info")).toHaveLength(1);
+    expect(container.textContent).toContain("Device changes require operator.pairing");
+    for (const label of ["Approve", "Reject", "Rotate", "Revoke", "Save"]) {
+      expect(findButton(container, label).disabled).toBe(true);
+    }
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Remove Device One"]')
+        ?.disabled,
+    ).toBe(true);
+    expect(container.textContent).toContain(
+      "Browsing only. Exec approvals and node bindings require operator.admin access.",
+    );
+  });
+});
+
 describe("devices exec approvals rendering", () => {
+  it("renders owner-reported defaults for fresh approval state", () => {
+    const container = renderDevicesContainer({
+      execApprovalsSnapshot: {
+        path: "/tmp/exec-approvals.json",
+        exists: false,
+        hash: "missing:empty",
+        file: { version: 1, agents: {} },
+        resolvedDefaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      },
+    });
+    const section = getSection(container, "Exec approvals");
+
+    expect(
+      getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select")?.value,
+    ).toBe("full");
+    expect(getSettingsRow(section, "Ask").querySelector<HTMLSelectElement>("select")?.value).toBe(
+      "off",
+    );
+  });
+
+  it("preserves authored wildcard and agent overrides above owner defaults", () => {
+    const container = renderDevicesContainer({
+      execApprovalsSnapshot: {
+        path: "/tmp/exec-approvals.json",
+        exists: false,
+        hash: "missing:empty",
+        file: {
+          version: 1,
+          agents: {
+            "*": { security: "allowlist", ask: "always" },
+            main: { ask: "on-miss" },
+          },
+        },
+        resolvedDefaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      },
+      execApprovalsSelectedAgent: "main",
+    });
+    const section = getSection(container, "Exec approvals");
+    const security = getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select");
+    const ask = getSettingsRow(section, "Ask").querySelector<HTMLSelectElement>("select");
+    const fallback = getSettingsRow(section, "Ask fallback").querySelector<HTMLSelectElement>(
+      "select",
+    );
+
+    expect(security?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (allowlist)");
+    expect(ask?.value).toBe("on-miss");
+    expect(fallback?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (deny)");
+  });
+
+  it("offers only nodes that support both reading and writing approval policy", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "get-only",
+          displayName: "Get only",
+          commands: ["system.execApprovals.get"],
+        },
+        {
+          nodeId: "set-only",
+          displayName: "Set only",
+          commands: ["system.execApprovals.set"],
+        },
+        {
+          nodeId: "editable",
+          displayName: "Editable",
+          commands: ["system.execApprovals.get", "system.execApprovals.set"],
+        },
+      ],
+      execApprovalsTarget: "node",
+    });
+    const section = getSection(container, "Exec approvals");
+    const nodeSelect = section.querySelector<HTMLSelectElement>('select[aria-label="Node"]');
+
+    expect(Array.from(nodeSelect?.options ?? [], (option) => option.value)).toEqual([
+      "",
+      "editable",
+    ]);
+  });
+
   it("renders defaults, configured agents, and approval-only agents in the avatar picker", async () => {
     const onExecApprovalsSelectAgent = vi.fn();
     const container = renderDevicesContainer({

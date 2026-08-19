@@ -4,7 +4,10 @@ import {
   getActiveDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+} from "./current-plugin-metadata-snapshot.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -354,46 +357,9 @@ export function resolvePluginMetadataSnapshot(
         : {}),
     });
     if (!current) {
-      const lifecycleSnapshot = getCurrentPluginMetadataSnapshot({
-        config: params.config,
-        env: params.env,
-        ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
-        ...(params.pluginIdScope !== undefined ? { pluginIdScope: params.pluginIdScope } : {}),
-        allowWorkspaceScopedSnapshot: true,
-      });
-      const targetWorkspace = params.workspaceDir;
-      const hasWorkspacePlugin = lifecycleSnapshot?.index.plugins.some(
-        (plugin) => plugin.origin === "workspace",
-      );
-      // Gateway metadata is lifecycle-stable. A workspace with no plugin root can reuse the
-      // published graph without polling every bundled/global artifact on its first turn.
-      if (
-        lifecycleSnapshot &&
-        targetWorkspace &&
-        targetWorkspace !== lifecycleSnapshot.workspaceDir &&
-        !hasWorkspacePlugin &&
-        params.workspacePluginRootPresent === false
-      ) {
-        const index = Object.freeze({
-          ...lifecycleSnapshot.index,
-          workspaceDir: targetWorkspace,
-        });
-        return Object.freeze({
-          ...lifecycleSnapshot,
-          configFingerprint: resolvePluginControlPlaneFingerprint({
-            config: params.config,
-            env: params.env,
-            index,
-            policyHash: lifecycleSnapshot.policyHash,
-            workspaceDir: targetWorkspace,
-          }),
-          index,
-          workspaceDir: targetWorkspace,
-        });
-      }
       return loadPluginMetadataSnapshot(params);
     }
-    if (!params.index) {
+    if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
       return current;
     }
     if (

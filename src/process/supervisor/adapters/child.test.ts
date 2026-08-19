@@ -13,20 +13,24 @@ import {
   mockLinuxOomWrapperShell,
 } from "./test-support.js";
 
-const { spawnWithFallbackMock, signalProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
-  () => ({
-    spawnWithFallbackMock: vi.fn(),
-    signalProcessTreeMock: vi.fn(
-      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
-        opts?.onComplete?.();
-      },
-    ),
-    createWindowsOutputDecoderMock: vi.fn(() => ({
-      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
-      flush: () => "",
-    })),
-  }),
-);
+const {
+  spawnWithFallbackMock,
+  signalProcessTreeMock,
+  createWindowsOutputDecoderMock,
+  createServiceChildRelayAdapterMock,
+} = vi.hoisted(() => ({
+  spawnWithFallbackMock: vi.fn(),
+  signalProcessTreeMock: vi.fn(
+    (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+      opts?.onComplete?.();
+    },
+  ),
+  createWindowsOutputDecoderMock: vi.fn(() => ({
+    decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+    flush: () => "",
+  })),
+  createServiceChildRelayAdapterMock: vi.fn(),
+}));
 
 vi.mock("../../spawn-utils.js", () => ({
   spawnWithFallback: spawnWithFallbackMock,
@@ -38,6 +42,10 @@ vi.mock("../../kill-tree.js", () => ({
 
 vi.mock("../../../infra/windows-encoding.js", () => ({
   createWindowsOutputDecoder: createWindowsOutputDecoderMock,
+}));
+
+vi.mock("../service-child-relay-host.js", () => ({
+  createServiceChildRelayAdapter: createServiceChildRelayAdapterMock,
 }));
 
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
@@ -167,11 +175,20 @@ describe("createChildAdapter", () => {
     ({ createChildAdapter } = await import("./child.js"));
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
+    createServiceChildRelayAdapterMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
     createWindowsOutputDecoderMock.mockImplementation(() => ({
       decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
       flush: () => "",
     }));
+    createServiceChildRelayAdapterMock.mockResolvedValue({
+      pid: 9999,
+      onStdout: vi.fn(),
+      onStderr: vi.fn(),
+      wait: vi.fn(),
+      kill: vi.fn(),
+      dispose: vi.fn(),
+    });
     delete process.env.OPENCLAW_SERVICE_MARKER;
     vi.useRealTimers();
   });
@@ -377,18 +394,23 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("passes detached:false in service-managed mode where useDetached is false from the start (#71662)", async () => {
+  it("selects the exact service relay instead of direct shared-group signaling", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "1";
     try {
-      const { adapter, killMock } = await createAdapterHarness({ pid: 9999 });
-      adapter.kill();
-      await Promise.resolve();
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(
-        9999,
-        "SIGKILL",
-        expect.objectContaining({ detached: false }),
+      await createChildAdapter({
+        argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+        exactEnv: true,
+        stdinMode: "pipe-open",
+      });
+      expect(createServiceChildRelayAdapterMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "node",
+          args: ["-e", "setTimeout(() => {}, 1000)"],
+          stdinMode: "pipe-open",
+        }),
       );
-      expect(killMock).toHaveBeenCalledWith("SIGKILL");
+      expect(spawnWithFallbackMock).not.toHaveBeenCalled();
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
     } finally {
       delete process.env.OPENCLAW_SERVICE_MARKER;
     }
@@ -689,7 +711,8 @@ describe("createChildAdapter", () => {
     await expect(waitPromise).resolves.toEqual({ code: 0, signal: null });
   });
 
-  it("disables detached mode in service-managed runtime", async () => {
+  it("keeps the service relay out of Windows child mode", async () => {
+    setPlatform("win32");
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 
     await createAdapterHarness({ pid: 7777 });
@@ -697,6 +720,7 @@ describe("createChildAdapter", () => {
     const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.detached).toBe(false);
     expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
+    expect(createServiceChildRelayAdapterMock).not.toHaveBeenCalled();
   });
 
   it("keeps inherited env when no override env is provided on non-Linux", async () => {

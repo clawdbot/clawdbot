@@ -35,6 +35,8 @@ import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export {
+  authorizeControlUiReadRequestOrReply,
+  authorizeControlUiSessionOwnerReadRequestOrReply,
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
@@ -42,12 +44,10 @@ export {
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
-  resolveHttpBrowserOriginPolicy,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
-  setControlUiPluginAuthCookieForRequest,
   type AuthorizedGatewayHttpRequest,
 } from "./http-auth-utils.js";
 

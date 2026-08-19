@@ -46,7 +46,7 @@ import {
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
-  assertCodexRestrictedToolSurfaceHasNoManagedHooks,
+  assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
@@ -239,7 +239,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
 
   let retrySelection = false;
   try {
-    const model = await resolveCodexBoundedTurnModel({
+    const modelSelection = await resolveCodexBoundedTurnModel({
       client,
       selection: params.model,
       requiredModalities: params.requiredModalities,
@@ -250,7 +250,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
     if (params.requireNoExternalCapabilities) {
-      await assertCodexRestrictedToolSurfaceHasNoManagedHooks(client, abortController.signal);
+      await assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+        client,
+        { restrictedToolSurface: true },
+        abortController.signal,
+      );
     }
     const threadConfig = buildCodexRuntimeThreadConfig(
       resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
@@ -260,7 +264,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       await client.request<unknown>(
         "thread/start",
         {
-          model,
+          model: modelSelection.runtimeModelId,
           ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
           cwd: workspace.cwd,
           approvalPolicy: "on-request",
@@ -316,7 +320,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
             threadId: thread.thread.id,
             input: params.input,
             approvalPolicy: "on-request",
-            model,
+            model: modelSelection.runtimeModelId,
             effort: "low",
           } satisfies CodexTurnStartParams,
           { timeoutMs, signal: abortController.signal },
@@ -331,7 +335,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           signal: abortController.signal,
           timeoutError,
         })),
-        model,
+        model: modelSelection.catalogId,
       };
     } finally {
       await interruptPromise;
@@ -468,7 +472,7 @@ async function resolveCodexBoundedTurnModel(params: {
   requiredModalities: string[];
   timeoutMs: number;
   signal: AbortSignal;
-}): Promise<string> {
+}): Promise<{ catalogId: string; runtimeModelId: string }> {
   const result = await params.client.request<unknown>(
     "model/list",
     { limit: null, cursor: null, includeHidden: false },
@@ -485,7 +489,7 @@ async function resolveCodexBoundedTurnModel(params: {
         `Codex app-server has no model supporting ${params.requiredModalities.join(" and ")} input.`,
       );
     }
-    return selected.model;
+    return { catalogId: selected.id, runtimeModelId: selected.model };
   }
 
   const model = params.selection.id;
@@ -499,7 +503,7 @@ async function resolveCodexBoundedTurnModel(params: {
   if (params.requiredModalities.includes("text") && !match.inputModalities.includes("text")) {
     throw new Error(`Codex app-server model does not support text: ${model}`);
   }
-  return model;
+  return { catalogId: match.id, runtimeModelId: match.model };
 }
 
 function createCodexBoundedTurnCollector(

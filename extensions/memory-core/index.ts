@@ -152,14 +152,19 @@ function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | nul
   });
 }
 
-function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentTool | null {
+function createLazyStandingIntentTool(
+  ctx: OpenClawPluginToolContext,
+  reportUnavailable: (reason: string) => void,
+): AnyAgentTool | null {
   if (ctx.senderIsOwner !== true) {
+    reportUnavailable("owner authorization is unavailable for this turn");
     return null;
   }
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
   const provider = ctx.messageChannel?.trim();
   const senderId = ctx.requesterSenderId?.trim();
   if (!cfg) {
+    reportUnavailable("runtime config is unavailable for this turn");
     return null;
   }
   const { sessionAgentId: agentId } = resolveSessionAgentIds({
@@ -302,9 +307,13 @@ export default definePluginEntry({
       names: ["memory_get"],
     });
 
-    api.registerTool((ctx) => createLazyStandingIntentTool(ctx), {
-      names: ["intent"],
-    });
+    api.registerTool(
+      (ctx) =>
+        createLazyStandingIntentTool(ctx, (reason) => {
+          api.logger.warn(`memory-core: intent tool unavailable: ${reason}`);
+        }),
+      { names: ["intent"] },
+    );
 
     api.on("before_prompt_build", async (event, ctx) => {
       if (ctx.trigger !== "user") {

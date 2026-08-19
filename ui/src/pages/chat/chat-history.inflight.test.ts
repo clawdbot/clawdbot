@@ -1,10 +1,17 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+  setChatSessionProjection,
+} from "./history-merge.ts";
 import { handleAgentEvent, type ToolStreamEntry } from "./tool-stream.ts";
 
 type TestState = ChatState & Parameters<typeof handleAgentEvent>[0];
@@ -28,7 +35,6 @@ function createState(result: ChatHistoryResult): TestState {
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatStreamStartedAt: null,
-    planStatus: null,
     sessions,
     toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),
     toolStreamOrder: host.toolStreamOrder ?? [],
@@ -226,7 +232,10 @@ describe("chat history in-flight assistant recovery", () => {
       {
         role: "user",
         content: "Also check the result.",
-        __openclaw: { idempotencyKey: "run-steer:user" },
+        __openclaw: {
+          idempotencyKey: "run-steer:user",
+          steerTargetRunId: "run-reconnected",
+        },
       },
     ];
     history.inFlightRun!.text = "Saved opening. Still working after the steer.";
@@ -237,6 +246,198 @@ describe("chat history in-flight assistant recovery", () => {
     expect(state.chatRunId).toBe("run-reconnected");
     expect(state.chatStream).toBe(" Still working after the steer.");
     expect(state.chatMessages).toEqual(history.messages);
+  });
+
+  it("replaces a pre-steer segment while retaining only the post-steer live tail", async () => {
+    const history = activeHistory("run-reconnected");
+    const originalUser = {
+      role: "user",
+      content: "Start working.",
+      __openclaw: { idempotencyKey: "run-reconnected:user" },
+    };
+    const steerUser = {
+      role: "user",
+      content: "Also check the result.",
+      __openclaw: {
+        idempotencyKey: "run-steer:user",
+        steerTargetRunId: "run-reconnected",
+      },
+    };
+    history.messages = [
+      originalUser,
+      {
+        role: "assistant",
+        content: "Saved opening.",
+        __openclaw: { idempotencyKey: "run-reconnected" },
+      },
+      steerUser,
+    ];
+    history.inFlightRun!.text = "Saved opening. Still working after the steer.";
+    const state = createState(history);
+    state.chatMessages = [originalUser, steerUser];
+    state.chatRunId = "run-reconnected";
+    handleChatGatewayEvent(state, {
+      runId: "run-reconnected",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "Saved opening. Still working after the steer.",
+      message: {
+        role: "assistant",
+        content: "Saved opening. Still working after the steer.",
+      },
+    });
+    state.chatStreamSegments = [
+      {
+        text: "Saved opening.",
+        ts: 2,
+        runId: "run-reconnected",
+        boundaryRunId: "run-steer",
+      },
+    ];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual(history.messages);
+    expect(state.chatStreamSegments).toEqual([
+      expect.objectContaining({
+        text: "",
+        boundaryMarker: true,
+        boundaryRunId: "run-steer",
+      }),
+    ]);
+    expect(state.chatStream).toBe(" Still working after the steer.");
+
+    handleChatGatewayEvent(state, {
+      runId: "run-reconnected",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Saved opening. Still working after the steer." }],
+      },
+    });
+    expect(state.chatMessages).toHaveLength(4);
+    expect(state.chatMessages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Still working after the steer." }],
+    });
+  });
+
+  it("falls back from a trimmed live boundary to the persisted cumulative prefix", async () => {
+    const history = activeHistory("run-reconnected");
+    history.messages = [
+      {
+        role: "user",
+        content: "Start working.",
+        __openclaw: { idempotencyKey: "run-reconnected:user", seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: "Saved opening.",
+        __openclaw: { id: "saved-opening", idempotencyKey: "run-reconnected", seq: 2 },
+      },
+      {
+        role: "user",
+        content: "Also check the result.",
+        __openclaw: {
+          idempotencyKey: "run-steer:user",
+          seq: 3,
+          steerTargetRunId: "run-reconnected",
+        },
+      },
+      {
+        role: "user",
+        content: "Queued follow-up.",
+        __openclaw: { idempotencyKey: "queued-run:user", seq: 4 },
+      },
+    ];
+    history.inFlightRun!.text = "Saved opening. Trimmed live tail.";
+    const state = createState(history);
+
+    await loadChatHistory(state);
+    expect(state.chatStream).toBe(" Trimmed live tail.");
+    const renderedBeforeTerminal = buildChatItems({
+      paneId: "reconnected-steer-boundary",
+      sessionKey: state.sessionKey,
+      runId: state.chatRunId,
+      messages: state.chatMessages,
+      toolMessages: state.chatToolMessages,
+      streamSegments: state.chatStreamSegments,
+      stream: state.chatStream,
+      streamStartedAt: state.chatStreamStartedAt,
+      showToolCalls: true,
+    }).flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.map(({ message }) => extractText(message))
+        : item.kind === "stream"
+          ? [item.text.trim()]
+          : [],
+    );
+    expect(renderedBeforeTerminal).toEqual([
+      "Start working.",
+      "Saved opening.",
+      "Also check the result.",
+      "Trimmed live tail.",
+      "Queued follow-up.",
+    ]);
+    handleChatGatewayEvent(state, {
+      runId: "run-reconnected",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Saved opening. Trimmed live tail. Final unseen suffix.",
+          },
+        ],
+      },
+    });
+
+    expect(
+      state.chatMessages.map((message) => ({
+        role: (message as { role?: unknown }).role,
+        text: extractText(message),
+      })),
+    ).toEqual([
+      { role: "user", text: "Start working." },
+      { role: "assistant", text: "Saved opening." },
+      { role: "user", text: "Also check the result." },
+      { role: "assistant", text: "Trimmed live tail. Final unseen suffix." },
+      { role: "user", text: "Queued follow-up." },
+    ]);
+
+    reduceChatSessionProjection(
+      state,
+      {
+        type: "messagePersisted",
+        message: {
+          role: "user",
+          content: "Later authoritative user.",
+          __openclaw: {
+            id: "later-authoritative-user",
+            idempotencyKey: "later-run:user",
+            seq: 6,
+          },
+        },
+        envelope: { messageId: "later-authoritative-user", messageSeq: 6 },
+      },
+      { scope: readChatSessionProjectionScope(state), runActive: false },
+    );
+
+    const visible = state.chatMessages.map((message) => extractText(message));
+    expect(visible).toEqual([
+      "Start working.",
+      "Saved opening.",
+      "Also check the result.",
+      "Trimmed live tail. Final unseen suffix.",
+      "Queued follow-up.",
+      "Later authoritative user.",
+    ]);
+    expect(
+      visible.filter((text) => text === "Trimmed live tail. Final unseen suffix."),
+    ).toHaveLength(1);
   });
 
   it("does not trim a matching assistant prefix owned by an earlier run", async () => {

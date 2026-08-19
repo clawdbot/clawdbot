@@ -20,6 +20,7 @@ type LoadSessionPullRequests = (
 
 type SubscriptionDeps = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  isConnectionActive?: (connId: string) => boolean;
   load?: LoadSessionPullRequests;
   setTimer?: typeof globalThis.setTimeout;
   clearTimer?: typeof globalThis.clearTimeout;
@@ -252,7 +253,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       return;
     }
     const normalizedConnId = connId.trim();
-    if (!normalizedConnId) {
+    if (!normalizedConnId || deps.isConnectionActive?.(normalizedConnId) === false) {
       return;
     }
     const replacementToken = {};

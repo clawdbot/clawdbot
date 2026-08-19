@@ -1,5 +1,4 @@
-import { createServer, type Server } from "node:net";
-import type { AddressInfo } from "node:net";
+import { createServer, type Server, type AddressInfo } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover-error.js";
 import {

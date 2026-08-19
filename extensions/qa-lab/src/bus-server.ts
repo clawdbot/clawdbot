@@ -211,6 +211,18 @@ export function writeError(res: ServerResponse, statusCode: number, error: unkno
   });
 }
 
+export function dispatchQaHttpRequest(res: ServerResponse, task: () => Promise<void>): void {
+  // Node does not observe promises returned by request listeners. Own rejection here so
+  // every admitted request receives an HTTP failure or an explicit connection close.
+  void task().catch((error: unknown) => {
+    if (res.headersSent) {
+      res.destroy(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+      return;
+    }
+    writeError(res, 500, error);
+  });
+}
+
 export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown): boolean {
   if (!isRequestBodyLimitError(error)) {
     return false;
@@ -287,11 +299,12 @@ function normalizeQaBusSearchInput(input: Record<string, unknown>): QaBusSearchM
   } as QaBusSearchMessagesInput;
 }
 
-export async function closeQaHttpServer(server: Server): Promise<void> {
+export async function closeQaHttpServer(server: Server, state?: QaBusState): Promise<void> {
   let forceCloseTimer: NodeJS.Timeout | undefined;
   try {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
+      state?.reset(true); // Fence first so late request bodies cannot add waiter timers.
       server.closeIdleConnections?.();
       forceCloseTimer = setTimeout(() => {
         server.closeAllConnections?.();
@@ -447,12 +460,12 @@ export async function handleQaBusRequest(params: {
 
 export function createQaBusServer(state: QaBusState): Server {
   return createServer((req, res) => {
-    void (async () => {
+    dispatchQaHttpRequest(res, async () => {
       const handled = await handleQaBusRequest({ req, res, state });
       if (!handled) {
         writeError(res, 404, "not found");
       }
-    })();
+    });
   });
 }
 
@@ -471,7 +484,7 @@ export async function startQaBusServer(params: { state: QaBusState; port?: numbe
     port: address.port,
     baseUrl: `http://127.0.0.1:${address.port}`,
     async stop() {
-      await closeQaHttpServer(server);
+      await closeQaHttpServer(server, params.state);
     },
   };
 }

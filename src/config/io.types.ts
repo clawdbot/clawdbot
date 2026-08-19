@@ -126,6 +126,8 @@ export type ConfigSnapshotReadOptions = {
     candidate: OpenClawConfig,
     current: OpenClawConfig,
   ) => boolean | Promise<boolean>;
+  /** Controls whether snapshot validation resolves plugin metadata and defaults. */
+  pluginValidation?: "full" | "skip" | "core-only";
   skipPluginValidation?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   suppressFutureVersionWarning?: boolean;

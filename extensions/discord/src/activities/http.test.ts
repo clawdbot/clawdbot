@@ -3,6 +3,7 @@ import { createServer, request as createHttpRequest, type Server } from "node:ht
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
@@ -11,7 +12,6 @@ import { DiscordActivitiesRuntime } from "./runtime.js";
 import {
   createActivityTestConfig,
   createActivityTestRuntime,
-  createMemoryActivityStore,
 } from "./test-helpers.test-support.js";
 
 const servers: Server[] = [];
@@ -244,6 +244,37 @@ function createWidgetFixture(
 }
 
 describe("Discord Activity HTTP OAuth", () => {
+  it.each([
+    {
+      name: "Activities are unconfigured",
+      config: { channels: { discord: { token: "testtok" } } },
+    },
+    {
+      name: "the client secret is unresolved",
+      config: createActivityTestConfig({ clientSecret: "" }),
+    },
+    {
+      name: "the bot token is unresolved",
+      config: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+            activities: {
+              clientSecret: "testsec",
+              applicationId: "123456789012345678",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    },
+  ])("leaves the public prefix externally absent when $name", async ({ config }) => {
+    const base = await startServer(createActivityTestRuntime(config));
+
+    const response = await fetch(`${base}/discord/activity/`);
+    await expect(response.text()).resolves.toBe("not found");
+    expect(response.status).toBe(404);
+  });
+
   it("terminates stalled token request bodies within the read timeout", async () => {
     const base = await startServer(createActivityTestRuntime(), { bodyTimeoutMs: 25 });
 
@@ -353,14 +384,6 @@ describe("Discord Activity HTTP OAuth", () => {
     );
     expect(widgetResponse.status).toBe(200);
     await expect(widgetResponse.json()).resolves.toMatchObject({ id: widgetId });
-  });
-
-  it("returns 503 when the configured account no longer resolves a secret", async () => {
-    const cfg = createActivityTestConfig({ clientSecret: "" });
-    const runtime = new DiscordActivitiesRuntime(createMemoryActivityStore(), cfg, undefined, {});
-    const base = await startServer(runtime);
-    const response = await requestToken(base);
-    expect(response.status).toBe(503);
   });
 
   it("limits token requests to ten per source IP per minute", async () => {

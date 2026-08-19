@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { GitHubSetupHandleSchema } from "./secrets.js";
 
 /**
  * Agent, model, skill, and tool catalog schemas.
@@ -18,6 +19,7 @@ const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
   cloudPlacementSupported: Type.Optional(Type.Boolean()),
+  devicePlacementSupported: Type.Optional(Type.Boolean()),
   source: Type.Union([
     Type.Literal("env"),
     Type.Literal("agent"),
@@ -64,10 +66,19 @@ export const ModelChoiceSchema = closedObject({
 /** Semantic owner of an agent roster entry. */
 export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("system")]);
 
+const AgentCreatedViaSchema = Type.Union([
+  Type.Literal("operator"),
+  Type.Literal("agent"),
+  Type.Literal("claw"),
+]);
+
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
   id: NonEmptyString,
   kind: Type.Optional(AgentKindSchema),
+  createdVia: Type.Optional(AgentCreatedViaSchema),
+  creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   name: Type.Optional(NonEmptyString),
   identity: Type.Optional(
     closedObject({
@@ -171,6 +182,7 @@ export const AgentsDeleteResultSchema = closedObject({
       }),
     ),
   ),
+  purgeFailed: Type.Optional(Type.Literal(true)),
 });
 
 /** File metadata and optional content for agent-local editable files. */
@@ -826,7 +838,7 @@ export const SkillsProposalRequestRevisionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   targetAgentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
-  expectedRevisionHash: Type.Optional(Sha256String),
+  expectedRevisionHash: Sha256String,
   instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
   sessionKey: NonEmptyString,
   sessionId: Type.Optional(NonEmptyString),
@@ -848,7 +860,16 @@ export const SkillsProposalRequestRevisionResultSchema = Type.Object(
   { additionalProperties: true },
 );
 
-/** Shared approve/reject/quarantine action payload for one proposal. */
+/** Apply/reject payload bound to the exact proposal revision reviewed by the operator. */
+export const SkillsProposalDecisionParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  proposalId: NonEmptyString,
+  expectedRevisionHash: Sha256String,
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  reason: Type.Optional(Type.String()),
+});
+
+/** Quarantine payload with optional optimistic-concurrency evidence. */
 export const SkillsProposalActionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
@@ -989,6 +1010,72 @@ export const ToolsCatalogParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   includePlugins: Type.Optional(Type.Boolean()),
 });
+
+export const ToolsGitHubStatusParamsSchema = closedObject({
+  agentId: NonEmptyString,
+});
+
+const GitHubIdentitySourceSchema = Type.Union([
+  Type.Literal("system-detected"),
+  Type.Literal("system-configured"),
+  Type.Literal("agent-override"),
+]);
+
+const GitHubAuthorValueSchema = Type.String({ minLength: 1, pattern: "\\S" });
+const GitHubAuthorSchema = closedObject({
+  name: Type.Optional(GitHubAuthorValueSchema),
+  email: Type.Optional(GitHubAuthorValueSchema),
+});
+
+export const ToolsGitHubStatusResultSchema = closedObject({
+  agentId: NonEmptyString,
+  source: GitHubIdentitySourceSchema,
+  credentialState: Type.Union([
+    Type.Literal("available"),
+    Type.Literal("unavailable"),
+    Type.Literal("configured_unavailable"),
+    Type.Literal("unverified"),
+    Type.Literal("rate_limited"),
+  ]),
+  account: Type.Union([
+    closedObject({
+      login: NonEmptyString,
+      avatarUrl: Type.Union([Type.String(), Type.Null()]),
+    }),
+    Type.Null(),
+  ]),
+  gitAuthor: closedObject({
+    name: Type.Union([Type.String(), Type.Null()]),
+    email: Type.Union([Type.String(), Type.Null()]),
+  }),
+  evidence: Type.Union([
+    Type.Literal("github-api"),
+    Type.Literal("none"),
+    Type.Literal("unverified"),
+    Type.Literal("rate-limited"),
+  ]),
+});
+
+const GitHubIdentityScopeSchema = Type.Union([Type.Literal("system"), Type.Literal("agent")]);
+
+export const ToolsGitHubManagedConfigureParamsSchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  agentId: NonEmptyString,
+  mode: Type.Literal("managed"),
+  secretName: GitHubSetupHandleSchema,
+  gitAuthor: Type.Optional(GitHubAuthorSchema),
+});
+
+export const ToolsGitHubInheritConfigureParamsSchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  agentId: NonEmptyString,
+  mode: Type.Literal("inherit"),
+});
+
+export const ToolsGitHubConfigureParamsSchema = Type.Union([
+  ToolsGitHubManagedConfigureParamsSchema,
+  ToolsGitHubInheritConfigureParamsSchema,
+]);
 
 /** Reads the effective tool set for one session. */
 export const ToolsEffectiveParamsSchema = closedObject({
@@ -1175,6 +1262,15 @@ export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchem
 export type ModelsProbeResult = Static<typeof ModelsProbeResultSchema>;
 export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
 export type ToolsCatalogParams = Static<typeof ToolsCatalogParamsSchema>;
+export type ToolsGitHubStatusParams = Static<typeof ToolsGitHubStatusParamsSchema>;
+export type ToolsGitHubStatusResult = Static<typeof ToolsGitHubStatusResultSchema>;
+export type ToolsGitHubManagedConfigureParams = Static<
+  typeof ToolsGitHubManagedConfigureParamsSchema
+>;
+export type ToolsGitHubInheritConfigureParams = Static<
+  typeof ToolsGitHubInheritConfigureParamsSchema
+>;
+export type ToolsGitHubConfigureParams = Static<typeof ToolsGitHubConfigureParamsSchema>;
 export type ToolCatalogProfile = Static<typeof ToolCatalogProfileSchema>;
 export type ToolCatalogEntry = Static<typeof ToolCatalogEntrySchema>;
 export type ToolCatalogGroup = Static<typeof ToolCatalogGroupSchema>;
@@ -1205,6 +1301,7 @@ export type SkillsProposalRequestRevisionParams = Static<
 export type SkillsProposalRequestRevisionResult = Static<
   typeof SkillsProposalRequestRevisionResultSchema
 >;
+export type SkillsProposalDecisionParams = Static<typeof SkillsProposalDecisionParamsSchema>;
 export type SkillsProposalActionParams = Static<typeof SkillsProposalActionParamsSchema>;
 export type SkillProposalEvaluation = Static<typeof SkillProposalEvaluationSchema>;
 export type SkillsProposalEvaluateParams = Static<typeof SkillsProposalEvaluateParamsSchema>;

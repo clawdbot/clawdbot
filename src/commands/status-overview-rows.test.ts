@@ -98,12 +98,36 @@ describe("status-overview-rows", () => {
   });
 
   it("builds status-all overview rows from the shared surface", () => {
+    const summary = createStatusCommandOverviewRowsParams().summary;
     const rows = buildStatusAllOverviewRows({
       surface: {
         ...baseStatusOverviewSurface,
         tailscaleMode: "off",
         tailscaleHttpsUrl: null,
         gatewayConnection: { url: "wss://gateway.example.com", urlSource: "config" },
+      },
+      summary: {
+        ...summary,
+        degradedSecretOwners: [
+          {
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "unavailable",
+            paths: ["tts.providers.elevenlabs.apiKey"],
+            reason: "secret reference was not found",
+          },
+        ],
+        degradedPlugins: [
+          {
+            pluginId: "discord",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "unreadable-package-json",
+              detail: "permission denied",
+            },
+          },
+        ],
       },
       osLabel: "macOS",
       configPath: "/tmp/openclaw.json",
@@ -122,6 +146,8 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
+    expect(findRowValue(rows, "Degraded secrets")).toBe("1 degraded · capability:tts");
+    expect(findRowValue(rows, "Degraded plugins")).toBe("1 configured-unavailable · discord");
     expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
   });
 });

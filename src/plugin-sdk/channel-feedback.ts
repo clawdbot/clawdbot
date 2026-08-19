@@ -1,6 +1,7 @@
 /**
  * Public SDK subpath for channel feedback reactions, status reactions, and logging helpers.
  */
+import { shouldAckReaction as sharedAckReactionGate } from "../channels/ack-reactions.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   createAckReactionHandle,
@@ -12,7 +13,6 @@ export {
   type AckReactionScope,
 } from "../channels/ack-reactions.js";
 export { logAckFailure, logTypingFailure, type LogFn } from "../channels/logging.js";
-import { shouldAckReaction as sharedAckReactionGate } from "../channels/ack-reactions.js";
 
 /** @deprecated Owner policy moved into the WhatsApp plugin (#121257). */
 export type WhatsAppAckReactionMode = "always" | "mentions" | "never";

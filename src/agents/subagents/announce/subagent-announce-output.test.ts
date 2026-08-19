@@ -226,7 +226,7 @@ describe("readSubagentOutput", () => {
     );
   });
 
-  it("returns only the latest assistant turn, not trailing tool output", async () => {
+  it("does not reuse assistant progress that issued a trailing tool call", async () => {
     installOutputDeps({
       messages: [
         {
@@ -244,12 +244,10 @@ describe("readSubagentOutput", () => {
       ],
     });
 
-    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "Mapped the code path.",
-    );
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
-  it("keeps earlier visible assistant text across a trailing empty assistant turn", async () => {
+  it("does not keep earlier visible progress across a trailing tool-only turn", async () => {
     installOutputDeps({
       messages: [
         {
@@ -268,8 +266,30 @@ describe("readSubagentOutput", () => {
       ],
     });
 
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("returns a final assistant reply emitted after trailing tool activity", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Mapped the code path." },
+            { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+          ],
+        },
+        { role: "toolResult", content: "tool result" },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "The fix is complete." }],
+        },
+      ],
+    });
+
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "Mapped the code path.",
+      "The fix is complete.",
     );
   });
 

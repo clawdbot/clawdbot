@@ -61,7 +61,6 @@ function refreshAuthStore(params: {
       config: params.config,
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: params.pluginGeneration.pluginRegistry,
-      workspaceDir: params.pluginGeneration.pluginMetadataSnapshot.workspaceDir,
     },
     () =>
       overlayExternalAuthProfiles(prepared, {
@@ -141,7 +140,6 @@ export async function runPreparedModelCatalogWorkerRequest(
         config: value.input.config,
         metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
         pluginRegistry: prepared.pluginGeneration.pluginRegistry,
-        workspaceDir: value.input.workspaceDir,
       },
       () =>
         resolveAmbientAgentCredentialsForDiscovery({

@@ -438,7 +438,7 @@ describe("openclaw channel mcp server", () => {
                 to: "-100123",
                 accountId: "acct-1",
               },
-              lastMessagePreview: "latest message",
+              lastMessagePreview: "Use `[[reply_to_current]]` literally.",
             },
           };
         }
@@ -452,7 +452,7 @@ describe("openclaw channel mcp server", () => {
       expect(conversation?.channel).toBe("telegram");
       expect(conversation?.to).toBe("-100123");
       expect(conversation?.accountId).toBe("acct-1");
-      expect(conversation?.lastMessagePreview).toBe("latest message");
+      expect(conversation?.lastMessagePreview).toBe("Use `[[reply_to_current]]` literally.");
       expect(gatewayRequest).toHaveBeenCalledWith("sessions.describe", {
         key: "agent:main:main",
         includeDerivedTitles: true,

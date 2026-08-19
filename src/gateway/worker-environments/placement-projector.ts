@@ -1,17 +1,30 @@
 import type {
   SessionPlacement,
   SessionPlacementDiskSpace,
+  SessionPlacementMove,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 
 export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  getPlacementMoves?(sessionIds: readonly string[]): ReadonlyMap<string, WorkerPlacementMoveIntent>;
 };
 
 export type WorkerPlacementDiskSpaceReader = {
   read(record: WorkerSessionPlacementRecord): SessionPlacementDiskSpace | undefined;
   version(): number;
 };
+
+export function projectWorkerPlacementMove(
+  intent: WorkerPlacementMoveIntent,
+): SessionPlacementMove {
+  return {
+    target: intent.target,
+    updatedAtMs: intent.updatedAtMs,
+    ...(intent.lastError ? { error: intent.lastError } : {}),
+  };
+}
 
 /** Removes gateway-only identity and turn-claim fields from the operator projection. */
 export function projectWorkerSessionPlacement(

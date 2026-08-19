@@ -424,6 +424,10 @@ const SLACK_CHART_PROMPT = [
   `Call the message tool exactly once with these exact arguments: ${JSON.stringify(SLACK_CHART_MESSAGE_TOOL_ARGS)}.`,
   `After the chart send succeeds, reply with only this exact marker: ${SLACK_CHART_DONE_TOKEN}`,
 ].join(" ");
+const MESSAGE_DECISION_SUPPRESSION_PROMPT = "Message delivery decision suppression QA check.";
+const MESSAGE_DECISION_SEND_PROMPT = "Message delivery decision send QA check.";
+const MESSAGE_DECISION_SUPPRESSION_TEXT =
+  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.";
 const WHATSAPP_AGENT_REACT_PROMPT =
   "React to this WhatsApp message with thumbs up for QA action check WHATSAPP_QA_AGENT_REACT_TEST.";
 const WHATSAPP_GROUP_AGENT_REACT_PROMPT =
@@ -725,6 +729,30 @@ describe("qa mock openai server", () => {
     });
     expect(outputText(finalBody)).toBe("QA-MSTEAMS-THREAD-DEDUPE-OK");
     expect(outputItems(finalBody).some((item) => item.type === "function_call")).toBe(false);
+  });
+
+  it("returns a distinct final after the ambiguous Teams message-tool send", async () => {
+    const server = await startMockServer();
+    const prompt = "qa msteams ambiguous gateway timeout. exact marker: `QA-MSTEAMS-AMBIGUOUS-504`";
+
+    const initialBody = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const toolCall = outputToolCall(initialBody, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: "QA-MSTEAMS-AMBIGUOUS-504",
+    });
+
+    const finalBody = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutputWithCallId(outputToolCallId(toolCall, "call_msteams_timeout"), "failed"),
+      ],
+    });
+    expect(outputText(finalBody)).toBe("QA-MSTEAMS-AMBIGUOUS-FINAL");
   });
 
   it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
@@ -1803,6 +1831,45 @@ describe("qa mock openai server", () => {
       ),
     ).toBe(false);
     expect(outputText(afterToolPayload)).toBe(SLACK_CHART_DONE_TOKEN);
+  });
+
+  it("emits the deterministic message-decision suppression fixture", async () => {
+    const server = await startMockServer();
+    const initial = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(MESSAGE_DECISION_SUPPRESSION_PROMPT)],
+    });
+    const toolCall = outputToolCall(initial, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: MESSAGE_DECISION_SUPPRESSION_TEXT,
+    });
+
+    const afterTool = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(MESSAGE_DECISION_SUPPRESSION_PROMPT),
+        makeToolOutputWithCallId(
+          outputToolCallId(toolCall, "call_mock_message_suppression"),
+          '{"status":"suppressed"}',
+        ),
+      ],
+    });
+    expect(outputText(afterTool)).toBe("NO_REPLY");
+  });
+
+  it("emits the deterministic durable message-decision send fixture", async () => {
+    const server = await startMockServer();
+    const initial = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(MESSAGE_DECISION_SEND_PROMPT)],
+    });
+    expect(outputToolArgsFromItem(outputToolCall(initial, "message"))).toEqual({
+      action: "send",
+      message: "QA-MESSAGE-DELIVERY-OK",
+      final: true,
+      presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+    });
   });
 
   it("emits WhatsApp agent reaction message tool calls only when the tool is declared", async () => {
@@ -7075,6 +7142,72 @@ Update and merge these partial structured summaries.`,
 
     expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
     expect(outputText(payload)).not.toBe("Protocol note: replay unsafe after write.");
+  });
+
+  it("derives three restart checkpoints from request history without server counters", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
+    const recoveryPrompt =
+      "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
+    const tools = [
+      {
+        type: "function",
+        name: "exec",
+        parameters: {
+          type: "object",
+          properties: {
+            language: { type: "string" },
+            code: { type: "string" },
+            restartSafe: { type: "boolean" },
+          },
+          required: ["code"],
+        },
+      },
+      {
+        type: "function",
+        name: "wait",
+        parameters: {
+          type: "object",
+          properties: { runId: { type: "string" } },
+          required: ["runId"],
+        },
+      },
+    ];
+    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
+
+    for (const checkpoint of [1, 2, 3]) {
+      const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      const execCall = outputToolCall(execPayload, "exec");
+      const execArgs = outputToolArgsFromItem(execCall);
+      expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
+      expect(execArgs.code).toContain("qa_restart_wait");
+      expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+
+      const runId = `restart-checkpoint-${checkpoint}`;
+      input.push(
+        execCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(execCall, `checkpoint-exec-${checkpoint}`),
+          JSON.stringify({ status: "waiting", runId }),
+        ),
+      );
+      const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      const waitCall = outputToolCall(waitPayload, "wait");
+      expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
+      input.push(waitCall, makeUserInput(recoveryPrompt));
+    }
+
+    const finalPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputText(finalPayload)).toBe("unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK");
+
+    const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools,
+      input: [makeUserInput(prompt)],
+    });
+    expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec")).code).toContain(
+      "CHECKPOINT-1",
+    );
   });
 
   it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {

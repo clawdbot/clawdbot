@@ -12,7 +12,7 @@ vi.mock("../cron/delivery.js", async (importOriginal) => {
 
 import { dispatchGatewayCronFinishedNotifications } from "./server-cron-notifications.js";
 
-function createThreadedJob(withFailureDestination: boolean): CronJob {
+function createThreadedJob(withFailureDestination: boolean, bestEffort?: boolean): CronJob {
   return {
     id: "cron-delivery-failure",
     name: "threaded report",
@@ -28,6 +28,7 @@ function createThreadedJob(withFailureDestination: boolean): CronJob {
       channel: "telegram",
       to: "-1001234567890",
       threadId: 42,
+      ...(bestEffort === undefined ? {} : { bestEffort }),
       ...(withFailureDestination
         ? {
             failureDestination: {
@@ -56,6 +57,7 @@ describe("cron primary delivery failure notifications", () => {
       jobId: "cron-delivery-failure",
       action: "finished" as const,
       status: "ok" as const,
+      completionStatus: "failed" as const,
       deliveryStatus: "not-delivered" as const,
       deliveryError: "message thread not found",
     };
@@ -86,4 +88,29 @@ describe("cron primary delivery failure notifications", () => {
         "Check automation history for details.",
     });
   });
+
+  it.each([
+    { completionStatus: "failed" as const, currentBestEffort: true, expected: 1 },
+    { completionStatus: "succeeded" as const, currentBestEffort: false, expected: 0 },
+  ])(
+    "uses event completion $completionStatus after the current policy changes",
+    ({ completionStatus, currentBestEffort, expected }) => {
+      dispatchGatewayCronFinishedNotifications({
+        evt: {
+          jobId: "cron-delivery-failure",
+          action: "finished",
+          status: "ok",
+          completionStatus,
+          deliveryStatus: "not-delivered",
+          deliveryError: "message thread not found",
+        },
+        job: createThreadedJob(true, currentBestEffort),
+        deps: {} as CliDeps,
+        logger: { warn: vi.fn() },
+        resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      });
+
+      expect(sendFailureNotificationAnnounce).toHaveBeenCalledTimes(expected);
+    },
+  );
 });

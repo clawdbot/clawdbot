@@ -52,85 +52,6 @@ async function withMarkedControlUiRoot(run: (root: string) => Promise<void>): Pr
   }
 }
 
-describe("gateway OpenAI-compatible disabled HTTP routes", () => {
-  it("returns 404 when compat endpoints are disabled", async () => {
-    await withGatewayServer({
-      prefix: "openai-compat-disabled",
-      resolvedAuth: AUTH_NONE,
-      run: async (server) => {
-        for (const path of ["/v1/chat/completions", "/v1/responses"]) {
-          const { res, getBody } = await sendGatewayRequest(server, {
-            path,
-            method: "POST",
-            headers: { "content-type": "application/json" },
-          });
-
-          expect(res.statusCode, path).toBe(404);
-          expect(getBody(), path).toBe("Not Found");
-        }
-      },
-    });
-  });
-
-  it("returns 404 for disabled GET routes when the Control UI is root-mounted", async () => {
-    await withGatewayServer({
-      prefix: "openai-compat-disabled-root-control-ui",
-      resolvedAuth: AUTH_NONE,
-      overrides: {
-        controlUiEnabled: true,
-        controlUiBasePath: "",
-      },
-      run: async (server) => {
-        for (const path of [
-          "/v1",
-          "/v1/",
-          "/v1/models",
-          "/v1/models/openclaw",
-          "/v1/chat/completions",
-          "/v1/responses",
-          "/v1/embeddings",
-        ]) {
-          const { res, getBody } = await sendGatewayRequest(server, {
-            path,
-            method: "GET",
-          });
-
-          expect(res.statusCode, path).toBe(404);
-          expect(getBody(), path).toBe("Not Found");
-        }
-      },
-    });
-  });
-
-  it.each([
-    { name: "chat completions", enabled: { openAiChatCompletionsEnabled: true } },
-    { name: "responses", enabled: { openResponsesEnabled: true } },
-  ])("keeps $name model discovery ahead of a root-mounted Control UI", async ({ enabled }) => {
-    await withGatewayServer({
-      prefix: "openai-compat-enabled-root-control-ui",
-      resolvedAuth: AUTH_NONE,
-      overrides: {
-        controlUiEnabled: true,
-        controlUiBasePath: "",
-        ...enabled,
-      },
-      run: async (server) => {
-        const { res, getBody } = await sendGatewayRequest(server, {
-          path: "/v1/models",
-          method: "GET",
-          headers: { "x-openclaw-scopes": "operator.read" },
-        });
-
-        expect(res.statusCode).toBe(200);
-        expect(JSON.parse(getBody())).toMatchObject({
-          object: "list",
-          data: expect.arrayContaining([expect.objectContaining({ id: "openclaw/default" })]),
-        });
-      },
-    });
-  });
-});
-
 describe("startup plugin HTTP routing", () => {
   it("keeps unclaimed webhook POSTs outside the root Control UI SPA", async () => {
     await withMarkedControlUiRoot(async (controlUiRoot) => {
@@ -629,6 +550,63 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("fails closed with guidance for unattributable proxied readiness", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: true,
+      failing: [],
+      uptimeMs: 45_000,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-unattributable-proxy",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/ready",
+          remoteAddress: "127.0.0.1",
+          host: "gateway.test",
+          authorization: "Bearer test-token",
+          headers: { forwarded: "for=203.0.113.10" },
+        });
+
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(getBody())).toEqual({
+          error: {
+            message:
+              "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+            type: "proxy_attribution_required",
+          },
+        });
+      },
+    });
+  });
+
+  it("rejects unattributable proxy ingress before hooks and watch-node handlers", async () => {
+    const handleHooksRequest = vi.fn(async () => true);
+    const handleWatchNodeRequest = vi.fn(async () => true);
+
+    await withGatewayServer({
+      prefix: "probe-unattributable-owned-routes",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { handleHooksRequest, handleWatchNodeRequest },
+      run: async (server) => {
+        for (const path of ["/hooks/test", "/api/nodes/watch/node-1"]) {
+          const { res, getBody } = await sendGatewayRequest(server, {
+            path,
+            remoteAddress: "127.0.0.1",
+            headers: { "x-forwarded-for": "203.0.113.10" },
+          });
+          expect(res.statusCode, path).toBe(403);
+          expect(getBody(), path).toContain("proxy_attribution_required");
+        }
+      },
+    });
+
+    expect(handleHooksRequest).not.toHaveBeenCalled();
+    expect(handleWatchNodeRequest).not.toHaveBeenCalled();
+  });
+
   it("re-resolves auth for remote /ready requests after shared auth rotation", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,
@@ -713,6 +691,12 @@ describe("gateway probe endpoints", () => {
           },
           overrides: {
             getReadiness,
+            getRuntimeConfig: () => ({
+              gateway: {
+                trustedProxies: ["10.0.0.1"],
+                controlUi: { allowedOrigins: ["https://control.example"] },
+              },
+            }),
           },
           run: async (server) => {
             const { res, getBody } = await sendGatewayRequest(server, {
@@ -722,6 +706,7 @@ describe("gateway probe endpoints", () => {
               headers: {
                 origin: "https://evil.example",
                 forwarded: "for=203.0.113.10;proto=https;host=gateway.test",
+                "x-forwarded-for": "203.0.113.10",
                 "x-forwarded-user": "user@example.com",
                 "x-forwarded-proto": "https",
               },

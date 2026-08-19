@@ -18,7 +18,10 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
 import { icons, type IconName } from "./icons.ts";
 import "./modal-dialog.ts";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import {
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
+  DESKTOP_PANEL_TOGGLE_EVENT,
+} from "./panel-toggle-contract.ts";
 
 type PaletteItem = {
   id: string;
@@ -35,7 +38,10 @@ const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
 
-function getPaletteBaseItems(desktopAvailable: boolean): PaletteItem[] {
+function getPaletteBaseItems(
+  desktopAvailable: boolean,
+  custodianAvailable: boolean,
+): PaletteItem[] {
   return [
     {
       id: "nav-new-session",
@@ -112,11 +118,25 @@ function getPaletteBaseItems(desktopAvailable: boolean): PaletteItem[] {
           },
         ]
       : []),
+    ...(custodianAvailable
+      ? [
+          {
+            id: "panel-custodian",
+            label: t("nav.askOpenClaw"),
+            icon: "lobster" as const,
+            category: "navigation" as const,
+            action: "panel:custodian",
+          },
+        ]
+      : []),
   ];
 }
 
-function getPaletteItemsInternal(desktopAvailable: boolean): PaletteItem[] {
-  return getPaletteBaseItems(desktopAvailable);
+function getPaletteItemsInternal(
+  desktopAvailable: boolean,
+  custodianAvailable: boolean,
+): PaletteItem[] {
+  return getPaletteBaseItems(desktopAvailable, custodianAvailable);
 }
 
 type CommandPaletteProps = {
@@ -124,6 +144,7 @@ type CommandPaletteProps = {
   query: string;
   activeIndex: number;
   sessionItems: readonly PaletteItem[];
+  sessionSearchFailed: boolean;
   onToggle: () => void;
   onQueryChange: (query: string) => void;
   onActiveIndexChange: (index: number) => void;
@@ -131,6 +152,7 @@ type CommandPaletteProps = {
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
   desktopAvailable: boolean;
+  custodianAvailable: boolean;
   onInputRef: (element: Element | undefined) => void;
 };
 
@@ -139,8 +161,9 @@ function filteredItems(
   includeSlashCommands = true,
   sessionItems: readonly PaletteItem[] = [],
   desktopAvailable = false,
+  custodianAvailable = false,
 ): PaletteItem[] {
-  const items = getPaletteItemsInternal(desktopAvailable).filter(
+  const items = getPaletteItemsInternal(desktopAvailable, custodianAvailable).filter(
     (item) => includeSlashCommands || item.category !== "search",
   );
   if (!query) {
@@ -178,6 +201,8 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
   } else if (item.action === "panel:desktop") {
     window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+  } else if (item.action === "panel:custodian") {
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
   } else {
     props.onSlashCommand?.(item.action);
   }
@@ -201,6 +226,7 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
     Boolean(props.onSlashCommand),
     props.sessionItems,
     props.desktopAvailable,
+    props.custodianAvailable,
   );
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
@@ -271,6 +297,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
     Boolean(props.onSlashCommand),
     props.sessionItems,
     props.desktopAvailable,
+    props.custodianAvailable,
   );
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
@@ -315,7 +342,11 @@ function renderCommandPalette(props: CommandPaletteProps) {
                 <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
                   >${icons.search}</span
                 >
-                <span>${t("palette.noResults")}</span>
+                <span
+                  >${props.sessionSearchFailed
+                    ? t("palette.searchFailed")
+                    : t("palette.noResults")}</span
+                >
               </div>`
             : grouped.map(
                 ([category, groupedItems]) => html`
@@ -363,12 +394,14 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
   @property({ attribute: false }) desktopAvailable = false;
+  @property({ attribute: false }) custodianAvailable = false;
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private open = false;
   @state() private query = "";
   @state() private activeIndex = 0;
   @state() private sessionItems: readonly PaletteItem[] = [];
+  @state() private sessionSearchFailed = false;
 
   private readonly subscriptions = new SubscriptionsController(this);
   private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -458,6 +491,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     }
     this.sessionSearchId += 1;
     this.sessionItems = [];
+    this.sessionSearchFailed = false;
   }
 
   private scheduleSessionSearch(query: string) {
@@ -469,6 +503,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     // repopulate selectable stale rows during the debounce window.
     this.sessionSearchId += 1;
     this.sessionItems = [];
+    this.sessionSearchFailed = false;
     const search = normalizeOptionalString(query);
     if (!this.open || !search || !this.onSelectSession) {
       return;
@@ -551,7 +586,13 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       }));
       this.activeIndex = 0;
     } catch {
-      // Session search is best-effort; navigation commands stay usable.
+      // Session search is best-effort; navigation commands stay usable. But a
+      // failed search must not render as "No results" — that reads as a
+      // successful search with zero matches and hides gateway-side failures
+      // (e.g. a store needing doctor migration) from the operator.
+      if (requestId === this.sessionSearchId && this.open) {
+        this.sessionSearchFailed = true;
+      }
     }
   }
 
@@ -573,7 +614,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       query: this.query,
       activeIndex: this.activeIndex,
       sessionItems: this.sessionItems,
+      sessionSearchFailed: this.sessionSearchFailed,
       desktopAvailable: this.desktopAvailable,
+      custodianAvailable: this.custodianAvailable,
       onToggle: this.togglePalette,
       onQueryChange: (query) => {
         this.query = query;
