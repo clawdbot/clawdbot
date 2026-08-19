@@ -12,6 +12,7 @@ import { cronStoreKey } from "../store/key.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { createCronServiceState } from "./state.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
+import { authorCronRunCompletion } from "./timer.js";
 
 const fixtures = setupCronRegressionFixtures({
   prefix: "cron-failure-alert-persistence-",
@@ -67,8 +68,10 @@ async function finalizeAlertOutcome(params: {
       jobId: params.job.id,
       job: structuredClone(params.job),
       activeJobMarker: markCronJobActive(params.job.id),
-      status: params.status,
-      error: params.error,
+      ...authorCronRunCompletion(params.state, params.job, {
+        status: params.status,
+        error: params.error,
+      }),
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     },

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   WORKSPACE,
+  captureDeviceRuntimeUiProof,
   captureEnvironmentMetadataUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -9,6 +10,103 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it("offers paired devices only to models that use the embedded runtime", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "anthropic/claude-sonnet-4-6",
+      models: [
+        {
+          available: true,
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          provider: "anthropic",
+          agentRuntime: {
+            id: "openclaw",
+            cloudPlacementSupported: true,
+            devicePlacementSupported: true,
+            source: "model",
+          },
+        },
+        {
+          available: true,
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          agentRuntime: {
+            id: "codex",
+            cloudPlacementSupported: true,
+            devicePlacementSupported: false,
+            source: "model",
+          },
+        },
+      ],
+      methodResponses: {
+        "node.list": {
+          nodes: [
+            {
+              nodeId: "build-mac",
+              displayName: "Build Mac",
+              connected: true,
+              commands: ["system.run"],
+            },
+          ],
+        },
+        "environments.list": {
+          environments: [
+            {
+              id: "node:build-mac",
+              type: "node",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 2, available: 2 },
+            },
+          ],
+          profiles: [],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("chat.metadata");
+      await gateway.waitForRequest("environments.list");
+      const whereTrigger = page.locator("#new-session-where-trigger");
+      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const device = where.locator('[data-value="node:build-mac"]');
+
+      await whereTrigger.click();
+      await device.waitFor();
+      expect(await device.isEnabled()).toBe(true);
+      expect(await device.textContent()).not.toContain("Needs the embedded runtime");
+      await captureDeviceRuntimeUiProof(page, "01-embedded-device-enabled.png");
+      await page.keyboard.press("Escape");
+
+      await page.locator('[data-chat-model-select="true"]').click();
+      await page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await whereTrigger.click();
+      await expect.poll(() => device.isDisabled()).toBe(true);
+      await expect
+        .poll(() => device.locator(".new-session-page__menu-fact").allTextContents())
+        .toEqual(["Needs the embedded runtime"]);
+      expect(await device.getAttribute("title")).toBe("Needs the embedded runtime");
+      await captureDeviceRuntimeUiProof(page, "02-codex-device-disabled.png");
+      await page.keyboard.press("Escape");
+
+      await page.locator('[data-chat-model-select="true"]').click();
+      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await whereTrigger.click();
+      await expect.poll(() => device.isEnabled()).toBe(true);
+      expect(await device.textContent()).not.toContain("Needs the embedded runtime");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders authoritative environment metadata without changing live destination filtering", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

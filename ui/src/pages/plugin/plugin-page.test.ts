@@ -98,6 +98,7 @@ function externalPluginConfig(
     localMediaPreviewRoots: [],
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
+    automaticallyFetchFavicons: false,
     terminalEnabled: false,
     pluginFrameGrants,
   };

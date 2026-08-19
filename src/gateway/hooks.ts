@@ -196,7 +196,11 @@ export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
 ): Promise<Result<unknown, string>> {
-  const result = await readJsonBodyWithLimit(req, { maxBytes, emptyObjectOnEmpty: true });
+  const result = await readJsonBodyWithLimit(req, {
+    maxBytes,
+    emptyObjectOnEmpty: true,
+    destroyOnLimit: false,
+  });
   if (result.ok) {
     return result;
   }
@@ -255,6 +259,9 @@ export function normalizeWakePayload(
   const sessionKey = normalizeOptionalString(payload.sessionKey);
   if (payload.sessionKey !== undefined && !sessionKey) {
     return { ok: false, error: "sessionKey must be a non-empty string" };
+  }
+  if (mode === "next-heartbeat" && sessionKey) {
+    return { ok: false, error: "sessionKey requires mode=now" };
   }
   return {
     ok: true,

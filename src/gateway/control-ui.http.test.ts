@@ -173,6 +173,7 @@ describe("handleControlUiHttpRequest", () => {
       seamColor?: string;
       terminalEnabled: boolean;
       cliAgentsEnabled: boolean;
+      automaticallyFetchFavicons: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
@@ -1630,7 +1631,9 @@ describe("handleControlUiHttpRequest", () => {
                 seamColor: "#1A2b3C",
                 assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
               },
-              gateway: { cliAgents: { enabled: true } },
+              gateway: {
+                cliAgents: { enabled: true },
+              },
             },
           },
         );
@@ -1645,8 +1648,30 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.cliAgentsEnabled).toBe(true);
+        expect(parsed.automaticallyFetchFavicons).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
+      },
+    });
+  });
+
+  it("projects an explicit favicon opt-out into bootstrap config", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              gateway: { controlUi: { automaticallyFetchFavicons: false } },
+            },
+          },
+        );
+
+        expect(handled).toBe(true);
+        expect(parseBootstrapPayload(end).automaticallyFetchFavicons).toBe(false);
       },
     });
   });

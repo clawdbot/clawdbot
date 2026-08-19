@@ -112,6 +112,9 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
+  manifestMetadataSnapshot: { plugins: [] },
+  resolvePluginMetadataSnapshotMock: vi.fn(),
+  listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
   loadProviderScopedThinkingCatalogMock: vi.fn(
     async (_params: unknown): Promise<ModelCatalogSnapshot["entries"] | undefined> => undefined,
   ),
@@ -374,10 +377,20 @@ vi.mock("./agent-runtime-config.js", () => {
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: () => false,
-  resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+    state.resolvePluginMetadataSnapshotMock(...args),
+}));
+
+vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
+  expandExplicitSkillReferences: ({ text }: { text: string }) => ({ body: text, skills: [] }),
+  hasSkillReferenceCandidate: () => true,
+  listSkillCommandsForWorkspace: (params: unknown) =>
+    state.listSkillCommandsForWorkspaceMock(params),
+  resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 
 vi.mock("../config/runtime-snapshot.js", () => ({
+  getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
 }));
@@ -726,11 +739,13 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
 let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
+let prepareAgentCommandExecution: typeof import("./command/prepare.js").prepareAgentCommandExecution;
 
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
   agentCommand ??= mod.agentCommand;
   agentCommandFromSystem ??= mod.agentCommandFromSystem;
+  ({ prepareAgentCommandExecution } = await import("./command/prepare.js"));
 });
 
 type FallbackRunnerParams = {
@@ -949,6 +964,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.resolvePluginMetadataSnapshotMock.mockReturnValue(state.manifestMetadataSnapshot);
     state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
     state.loadFullModelCatalogMock.mockClear();
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
@@ -1117,6 +1133,25 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("uses Gateway command metadata without resolving the agent workspace", async () => {
+    const pluginGeneration = {
+      pluginMetadataSnapshot: state.manifestMetadataSnapshot,
+    } as never;
+
+    const prepared = await prepareAgentCommandExecution(
+      { message: "/demo", to: "+1234567890" },
+      {} as never,
+      { config: {}, pluginGeneration },
+    );
+
+    expect(prepared.manifestMetadataSnapshot).toBe(state.manifestMetadataSnapshot);
+    expect(prepared.commandRuntimeContext?.pluginGeneration).toBe(pluginGeneration);
+    expect(state.listSkillCommandsForWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot: state.manifestMetadataSnapshot }),
+    );
+    expect(state.resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("retries with the switched provider/model when LiveSessionModelSwitchError is thrown", async () => {
@@ -2039,7 +2074,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           models: {
             "anthropic/default-model": {},
             "anthropic/stale-fallback-model": {},
-            "google/gemini-3-pro": {},
+            "google/user-model": {},
           },
         },
       },
@@ -2064,17 +2099,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         ...sessionEntry,
         updatedAt: 2,
         providerOverride: "google",
-        modelOverride: "gemini-3-pro",
+        modelOverride: "user-model",
         modelOverrideSource: "user",
       };
     });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("google", "gemini-3-pro"));
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("google", "user-model"));
 
     await runBasicAgentCommand();
 
     const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
     expect(fallbackParams.provider).toBe("google");
-    expect(fallbackParams.model).toBe("gemini-3-pro");
+    expect(fallbackParams.model).toBe("user-model");
   });
 
   it("probes the channel primary when a session is pinned to an auto fallback", async () => {
@@ -3705,6 +3740,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     if (allowlisted) {
       expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
+      expect(state.loadManifestModelCatalogMock).toHaveBeenCalledWith(
+        expect.objectContaining({ metadataSnapshot: state.manifestMetadataSnapshot }),
+      );
     }
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),

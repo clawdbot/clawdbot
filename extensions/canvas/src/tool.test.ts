@@ -583,7 +583,7 @@ describe("Canvas tool", () => {
     [
       "legacy createSurface JSONL",
       JSON.stringify({ createSurface: { surfaceId: "main", root: "root" } }),
-      /OpenClaw currently supports v0\.8 only/,
+      /expected exactly one v0\.8 action key/,
     ],
     [
       "A2UI v0.9 deleteSurface JSONL",

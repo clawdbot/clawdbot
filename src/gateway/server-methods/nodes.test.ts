@@ -277,7 +277,7 @@ async function approveNodeSurface(stateDir: string, nodeId: string): Promise<voi
 }
 
 describe("nodeHandlers node.describe", () => {
-  it("projects current runner availability as a safe session-host boolean", async () => {
+  it("projects exact runner slots with derived launch eligibility", async () => {
     const state = await createState("node-describe-session-host");
     const nodeId = "node-1";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
@@ -296,7 +296,7 @@ describe("nodeHandlers node.describe", () => {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: {
           enabled: true,
-          capacity: "available",
+          capacity: { total: 2, available: 2 },
           bundleRetention: 1,
           bundleStatus: 1,
         },
@@ -337,6 +337,7 @@ describe("nodeHandlers node.describe", () => {
         nodes: expect.arrayContaining([
           expect.objectContaining({
             nodeId,
+            workerSlots: { total: 2, available: 2 },
             workerBundle: { status: "installed", version: "2026.8.9" },
           }),
         ]),
@@ -348,6 +349,7 @@ describe("nodeHandlers node.describe", () => {
       expect.objectContaining({
         nodeId,
         sessionHost: true,
+        workerSlots: { total: 2, available: 2 },
         workerBundle: { status: "installed", version: "2026.8.9" },
       }),
       undefined,
@@ -490,7 +492,7 @@ describe("nodeHandlers node.pair.approve", () => {
     const publication = createOptions(
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
       },
       { client: client as never },
     );

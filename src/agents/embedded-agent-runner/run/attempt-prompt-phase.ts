@@ -312,7 +312,6 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       prompt: promptContext.promptSubmission.prompt,
       skipPromptSubmission,
     });
-
     const reserveTokens = input.getCompactionReserveTokens();
     let state: PromptPreflightInput["state"] = {
       ...input.lifecycle.readState(),

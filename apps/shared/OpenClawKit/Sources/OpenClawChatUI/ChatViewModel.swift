@@ -101,10 +101,13 @@ public final class OpenClawChatViewModel {
     var activeSessionRunIDs: [String] = []
     var liveRunStateByRunID: [String: ChatLiveRunState] = [:]
     public internal(set) var progressCard: ProgressCard?
+    var progressCardStoreAvailable: Bool?
     @ObservationIgnored
     var progressCardGeneration: UInt64 = 0
     @ObservationIgnored
     var lastIssuedProgressCardRequestID: UInt64 = 0
+    @ObservationIgnored
+    var legacyProgressCardRevision = 0
 
     public private(set) var sessionKey: String {
         didSet {

@@ -30,6 +30,7 @@ import {
   agentCommandMock,
   getGatewayTestPort,
   installGatewayTestHooks,
+  prepareGatewayReplyRuntimeForTest,
   startTestGatewayServer,
   setTestPluginRegistry,
   testState,
@@ -154,10 +155,11 @@ beforeAll(async () => {
   server = await startTestGatewayServer(gatewayPort);
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  await prepareGatewayReplyRuntimeForTest();
 });
 
 afterAll(async () => {
@@ -664,6 +666,7 @@ describe("sessions_send agent targeting", () => {
             },
           },
         });
+        await prepareGatewayReplyRuntimeForTest({ force: true });
 
         const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
         spy.mockImplementation(async (opts: unknown) =>
@@ -803,6 +806,7 @@ describe("sessions_send direct-message requester routing", () => {
             [targetSessionKey]: { sessionId: "dm-scope-orion", updatedAt: Date.now() },
           },
         });
+        await prepareGatewayReplyRuntimeForTest({ force: true });
 
         const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
         spy.mockReset();

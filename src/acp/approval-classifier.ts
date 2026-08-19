@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { isMutatingToolCall } from "../agents/tool-mutation.js";
+import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
 
@@ -169,11 +170,10 @@ function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefin
   if (!candidate) {
     return undefined;
   }
-  if (candidate.startsWith("file://")) {
-    try {
-      const parsed = new URL(candidate);
-      candidate = decodeURIComponent(parsed.pathname || "");
-    } catch {
+  // Parse every file-scheme spelling first; alternate URL forms otherwise look cwd-relative.
+  if (/^file:/i.test(candidate)) {
+    candidate = trySafeFileURLToPath(candidate) ?? "";
+    if (!candidate) {
       return undefined;
     }
   }

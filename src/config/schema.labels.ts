@@ -160,6 +160,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.sshHostKeyPolicy": "Remote Gateway SSH Host-Key Policy",
   "gateway.remote.token": "Remote Gateway Token",
   "gateway.remote.password": "Remote Gateway Password",
+  "gateway.remote.edgeAuth": "Remote Gateway Edge Auth Headers",
   "gateway.remote.tlsFingerprint": "Remote Gateway TLS Fingerprint",
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
@@ -361,6 +362,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.embedSandbox": "Control UI Embed Sandbox Mode",
   "gateway.controlUi.allowExternalEmbedUrls": "Allow External Control UI Embed URLs",
+  "gateway.controlUi.automaticallyFetchFavicons": "Automatically Fetch Link Favicons",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "Dangerously Allow Host-Header Origin Fallback",
@@ -759,6 +761,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance": "Session Maintenance",
   "session.maintenance.mode": "Session Maintenance Mode",
   "session.maintenance.pruneAfter": "Session Prune After",
+  "session.maintenance.archiveDashboardAfter": "Archive Inactive Dashboard Sessions After",
   "session.maintenance.maxEntries": "Session Max Entries",
   "session.maintenance.preserveRecent": "Preserve Recent Sessions",
   "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",

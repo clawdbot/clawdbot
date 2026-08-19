@@ -95,6 +95,9 @@
       "openclaw/plugin-sdk/media-generation-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/media-generation-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/meeting-page-script-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/meeting-page-script-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/conversation-binding-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/conversation-binding-runtime.d.ts"
       ],

@@ -18,7 +18,9 @@ import {
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { createCronServiceState } from "./state.js";
+import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
+import { authorCronRunCompletion } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-finalization-receipts-" });
@@ -37,6 +39,13 @@ function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
       resolveAgentId: (current) => current.agentId ?? "main",
     }),
   );
+}
+
+function authorOutcome(
+  state: ReturnType<typeof createCronServiceState>,
+  outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">,
+) {
+  return authorCronRunCompletion(state, outcome.job, outcome);
 }
 
 describe("cron outcome receipt finalization", () => {
@@ -79,7 +88,7 @@ describe("cron outcome receipt finalization", () => {
     });
 
     await finalizeCompletedCronRunOutcomes(state, [
-      {
+      authorOutcome(state, {
         jobId: stale.id,
         job: stale,
         activeJobMarker: markCronJobActive(stale.id),
@@ -87,8 +96,8 @@ describe("cron outcome receipt finalization", () => {
         status: "ok",
         startedAt,
         endedAt: startedAt + 2,
-      },
-      {
+      }),
+      authorOutcome(state, {
         jobId: current.id,
         job: current,
         activeJobMarker: markCronJobActive(current.id),
@@ -96,7 +105,7 @@ describe("cron outcome receipt finalization", () => {
         status: "ok",
         startedAt,
         endedAt: startedAt + 2,
-      },
+      }),
     ]);
 
     expect(events.filter((event) => event.action === "finished")).toEqual([
@@ -170,7 +179,7 @@ describe("cron outcome receipt finalization", () => {
     });
 
     await finalizeCompletedCronRunOutcomes(state, [
-      {
+      authorOutcome(state, {
         jobId: completed.id,
         job: completed,
         activeJobMarker: markCronJobActive(completed.id),
@@ -178,7 +187,7 @@ describe("cron outcome receipt finalization", () => {
         status: "ok",
         startedAt,
         endedAt: startedAt + 1,
-      },
+      }),
     ]);
 
     const persisted = await loadCronStore(store.storePath);
@@ -229,7 +238,7 @@ describe("cron outcome receipt finalization", () => {
     try {
       await expect(
         finalizeCompletedCronRunOutcomes(state, [
-          {
+          authorOutcome(state, {
             jobId: completed.id,
             job: completed,
             activeJobMarker: markCronJobActive(completed.id),
@@ -237,7 +246,7 @@ describe("cron outcome receipt finalization", () => {
             status: "ok",
             startedAt,
             endedAt: startedAt + 1,
-          },
+          }),
         ]),
       ).resolves.toHaveLength(1);
 

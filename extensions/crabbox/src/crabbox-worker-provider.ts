@@ -7,6 +7,7 @@ import {
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   crabboxCommandError,
@@ -23,6 +24,7 @@ import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
   buildCrabboxWarmupArgs,
+  type CrabboxMachineShape,
   CRABBOX_WORKER_PROVIDER_ID,
   listCrabboxMachineOptions,
   nonEmptyString,
@@ -34,6 +36,7 @@ import {
 import {
   countCrabboxProvisionSetupPhases,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
+  CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
   CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
@@ -81,6 +84,7 @@ type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
 };
 
 type InspectCommandResult = { status: "found"; inspect: ParsedInspect } | { status: "unknown" };
+type CrabboxMachineShapes = ReadonlyMap<string, readonly CrabboxMachineShape[]>;
 
 type CrabboxWorkerProviderDependencies = {
   isExecutable?: (candidate: string) => boolean;
@@ -91,6 +95,37 @@ type CrabboxWorkerProviderDependencies = {
   sleep?: (milliseconds: number) => Promise<void>;
   warn?: (message: string) => void;
 };
+
+function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
+  const parsed: unknown = JSON.parse(stdout);
+  if (!Array.isArray(parsed)) {
+    throw new Error("Crabbox providers returned invalid JSON");
+  }
+  return new Map(
+    parsed.flatMap<[string, readonly CrabboxMachineShape[]]>((entry) => {
+      if (!isRecord(entry)) {
+        return [];
+      }
+      const rawClasses = Array.isArray(entry.classes) ? entry.classes : [];
+      const classes = rawClasses.flatMap<CrabboxMachineShape>((raw) => {
+        if (!isRecord(raw)) {
+          return [];
+        }
+        const machineClass = nonEmptyString(raw.class);
+        if (!machineClass) {
+          return [];
+        }
+        const cpu = asPositiveSafeInteger(raw.vcpu);
+        const memoryGb = asPositiveSafeInteger(raw.memoryGb);
+        return [
+          { class: machineClass, ...(cpu ? { cpu } : {}), ...(memoryGb ? { memoryGb } : {}) },
+        ];
+      });
+      const provider = nonEmptyString(entry.provider)?.toLowerCase();
+      return provider && classes.length > 0 ? [[provider, classes]] : [];
+    }),
+  );
+}
 
 async function assertAwsWorkerHasNoInstanceProfile(params: {
   binary: string;
@@ -289,7 +324,12 @@ function nodeEnrollmentSetupCommand(params: {
     "    fi",
     "  done",
     "fi",
-    'test -s "$package_spec_file"',
+    'if [ ! -s "$package_spec_file" ]; then',
+    `  printf "%s\\n" ${shellQuote(
+      `OpenClaw worker bootstrap could not install Gateway version ${enrollment.openclawVersion}; for an unreleased Gateway build, cloudWorkers profile setup must install that exact version globally before enrollment.`,
+    )} >&2`,
+    "  exit 1",
+    "fi",
     'package_spec="$(cat "$package_spec_file")"',
     'if [ "$package_spec" = "@global" ]; then',
     `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
@@ -437,6 +477,7 @@ export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies = {},
 ): WorkerProvider {
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
+  const warn = dependencies.warn ?? (() => {});
   const sleep =
     dependencies.sleep ??
     ((milliseconds) =>
@@ -463,9 +504,10 @@ export function createCrabboxWorkerProvider(
         signal,
         timeoutMs: Math.min(CRABBOX_LIFECYCLE_TIMEOUT_MS, context.heartbeatIntervalMs),
       }),
-    warn: dependencies.warn ?? (() => {}),
+    warn,
   });
   let defaultBinary: string | undefined;
+  const machineShapesByBinary = new Map<string, Promise<CrabboxMachineShapes>>();
   const resolveBinary = (explicit?: string) => {
     if (explicit) {
       return explicit;
@@ -478,6 +520,26 @@ export function createCrabboxWorkerProvider(
       platform: dependencies.platform,
     });
     return defaultBinary;
+  };
+  const loadMachineShapes = async (binary: string): Promise<CrabboxMachineShapes> => {
+    try {
+      const result = await runCrabboxCommand({
+        action: "providers",
+        args: ["providers", "--json"],
+        binary,
+        runCommand,
+        timeoutMs: CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
+      });
+      if (result.termination !== "exit" || result.code !== 0) {
+        throw new Error("Crabbox providers command failed");
+      }
+      return parseCrabboxMachineShapes(result.stdout);
+    } catch (error) {
+      warn(
+        `Crabbox machine shapes unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return new Map();
+    }
   };
   const resolveLeaseContext = (
     lease: Parameters<WorkerProvider["inspect"]>[0],
@@ -497,7 +559,20 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
-    listMachineOptions: listCrabboxMachineOptions,
+    async listMachineOptions(profile) {
+      const parsed = parseCrabboxProfile(profile);
+      const binary = resolveBinary(parsed.binary);
+      // Provider metadata is process-stable, so one catalog read per binary serves the whole
+      // lifecycle. Keyed by resolved binary because `settings.binary` is profile-owned and
+      // environments.list loads every profile concurrently: a shared slot would hand one
+      // profile's Crabbox build the sizes reported by another's.
+      let shapes = machineShapesByBinary.get(binary);
+      if (!shapes) {
+        shapes = loadMachineShapes(binary);
+        machineShapesByBinary.set(binary, shapes);
+      }
+      return listCrabboxMachineOptions(parsed.class, (await shapes).get(parsed.provider));
+    },
     supportedExecutionModes: ["worker-turn"],
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,

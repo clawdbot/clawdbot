@@ -15,7 +15,6 @@ import {
 import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   groupSidebarSessionRows,
-  sidebarSectionHasHeader,
   type SidebarSessionSection,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
@@ -52,11 +51,7 @@ import {
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionAttentionController } from "./session-attention-controller.ts";
-import {
-  listSessionOwners,
-  type SessionCreatedActor,
-  type SessionOwnerOption,
-} from "./session-owner-chip.ts";
+import { listAssignableSessionOwners, type SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -78,7 +73,7 @@ export function compareSidebarSessionRowsByMode(input: {
   a: SessionRow;
   b: SessionRow;
   sortMode: SidebarSessionSortMode;
-  creators: SessionsListResult["creators"];
+  owners: SessionsListResult["owners"];
   createdOrder: ReadonlyMap<string, number>;
 }): number {
   const { a, b } = input;
@@ -87,19 +82,19 @@ export function compareSidebarSessionRowsByMode(input: {
       ? compareSessionRowsByUpdatedAt(a, b)
       : compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
   }
-  const creators = input.creators ?? [];
-  const ownerA = a.owner?.actor ?? a.createdActor;
-  const ownerB = b.owner?.actor ?? b.createdActor;
+  const owners = input.owners ?? [];
+  const ownerA = a.owner?.actor;
+  const ownerB = b.owner?.actor;
   const idA = ownerA?.id?.trim() ?? "";
   const idB = ownerB?.id?.trim() ?? "";
   if (idA !== idB) {
-    const creatorA = creators.find((candidate) => candidate.id === idA);
-    const creatorB = creators.find((candidate) => candidate.id === idB);
-    const labelA = creatorA?.label?.trim() || ownerA?.label?.trim() || idA;
-    const labelB = creatorB?.label?.trim() || ownerB?.label?.trim() || idB;
-    const byCreator = labelA.localeCompare(labelB) || idA.localeCompare(idB);
-    if (byCreator !== 0) {
-      return byCreator;
+    const facetOwnerA = owners.find((candidate) => candidate.id === idA);
+    const facetOwnerB = owners.find((candidate) => candidate.id === idB);
+    const labelA = facetOwnerA?.label?.trim() || ownerA?.label?.trim() || idA;
+    const labelB = facetOwnerB?.label?.trim() || ownerB?.label?.trim() || idB;
+    const byOwner = labelA.localeCompare(labelB) || idA.localeCompare(idB);
+    if (byOwner !== 0) {
+      return byOwner;
     }
   }
   return compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
@@ -240,6 +235,7 @@ export function buildSidebarSessionNavigationState(input: {
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),
+      channelAvatarUrl: normalizeOptionalString(row.channelAvatarUrl),
       boardFace: row.boardFace,
       channel: channelInfo.channel,
       channelSession: channelInfo.channelSession,
@@ -301,6 +297,7 @@ export type SidebarVisibleSections = {
     visibleRowCount: number;
     visibleLimit: number;
     collapsedVisibleRowCount: number;
+    renderHeader: boolean;
   })[];
   expandedRows: SidebarRecentSession[];
   visibleRows: SidebarRecentSession[];
@@ -313,11 +310,9 @@ export function partitionSidebarVisibleSections(input: {
   catalogIds?: readonly string[];
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
-  hideEmptyCreatorFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
+  hideEmptyOwnerFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
 }): SidebarVisibleSections {
-  const isCollapsed = (sectionId: string) =>
-    sidebarSectionHasHeader(sectionId, input.grouping) && input.collapsedSections.has(sectionId);
   const sections = groupSidebarSessionRows(input.rows, {
     grouping: input.grouping,
     knownGroups: input.knownGroups,
@@ -326,8 +321,17 @@ export function partitionSidebarVisibleSections(input: {
   }).filter(
     (section) =>
       section.id !== "pinned" &&
-      !input.hideEmptyCreatorFilteredGroup(section.category, section.rows.length),
+      !input.hideEmptyOwnerFilteredGroup(section.category, section.rows.length),
   );
+  // A lone catch-all sits directly under the global Sessions toolbar. Empty
+  // Coding does not render, while empty custom/Groups sections remain targets.
+  const ungroupedHasPeerHeader = sections.some(
+    (section) => section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
+  );
+  // Accepted tradeoff: headerless means no collapse control, so a stored
+  // ungrouped-collapsed preference is deliberately inert here — honoring it
+  // would blank the whole list with no affordance to undo. It re-applies
+  // unchanged once a peer section returns.
   const expandedRows: SidebarRecentSession[] = [];
   const visibleRows: SidebarRecentSession[] = [];
   // totalRowCount is the pre-pagination size: headers and empty-zone
@@ -335,13 +339,15 @@ export function partitionSidebarVisibleSections(input: {
   const limitedSections: SidebarVisibleSections["sections"] = [];
   for (const section of sections) {
     const totalRowCount = section.rows.length;
+    const renderHeader = section.id !== "ungrouped" || ungroupedHasPeerHeader;
+    const collapsed = renderHeader && input.collapsedSections.has(section.id);
     const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
     const collapsedVisibleRowCount = limitSidebarSessionRows(
       section.rows,
       SIDEBAR_SESSION_PAGE_SIZE,
     ).length;
     let visibleRowCount = 0;
-    if (!isCollapsed(section.id)) {
+    if (!collapsed) {
       expandedRows.push(...section.rows);
       section.rows = limitSidebarSessionRows(section.rows, visibleLimit);
       visibleRows.push(...section.rows);
@@ -353,6 +359,7 @@ export function partitionSidebarVisibleSections(input: {
         visibleRowCount,
         visibleLimit,
         collapsedVisibleRowCount,
+        renderHeader,
       }),
     );
   }
@@ -430,14 +437,14 @@ function latestVisibleAgentSessionRow(input: {
   agentId: string;
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
-  sessionRowsByAgent: Readonly<Record<string, SessionsListResult["sessions"]>>;
+  sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
   defaultAgentId: string;
 }): SessionRow | null {
   const normalized = normalizeAgentId(input.agentId);
   const rows =
     normalized === normalizeAgentId(input.sessionsAgentId ?? "")
       ? (input.sessionsResult?.sessions ?? [])
-      : (input.sessionRowsByAgent[normalized] ?? []);
+      : (input.sessionResultsByAgent[normalized]?.sessions ?? []);
   // Unprefixed keys belong to the system default agent. Keeping them for
   // another agent would resume the wrong conversation with the raw key.
   const visible = filterVisibleSessionRows(rows, {
@@ -471,7 +478,7 @@ export function resolveLatestSidebarAgentSession(input: {
   sessionData: {
     sessionsAgentId: string | null;
     sessionsResult: SessionsListResult | null;
-    sessionRowsByAgent: Readonly<Record<string, SessionsListResult["sessions"]>>;
+    sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
   };
   context: ApplicationContext<RouteId> | undefined;
 }): SessionRow | null {
@@ -479,7 +486,7 @@ export function resolveLatestSidebarAgentSession(input: {
     agentId: input.agentId,
     sessionsAgentId: input.sessionData.sessionsAgentId,
     sessionsResult: input.sessionData.sessionsResult,
-    sessionRowsByAgent: input.sessionData.sessionRowsByAgent,
+    sessionResultsByAgent: input.sessionData.sessionResultsByAgent,
     defaultAgentId: resolveUiDefaultAgentId({
       agentsList: input.context?.agents.state.agentsList,
       hello: input.context?.gateway.snapshot.hello,
@@ -583,7 +590,7 @@ export function collectKnownSidebarSessionGroups(
 export function findProjectedSidebarSession(input: {
   sessionKey: string;
   navigationState: SidebarSessionNavigationState;
-  sessionRowsByAgent: Readonly<Record<string, SessionsListResult["sessions"]>>;
+  sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
 }): SidebarRecentSession | undefined {
   const active = input.navigationState.visibleSessionRows.find(
     (candidate) => candidate.key === input.sessionKey,
@@ -591,8 +598,8 @@ export function findProjectedSidebarSession(input: {
   if (active) {
     return input.navigationState.toSidebarSession(active);
   }
-  for (const rows of Object.values(input.sessionRowsByAgent)) {
-    const row = rows.find((candidate) => candidate.key === input.sessionKey);
+  for (const result of Object.values(input.sessionResultsByAgent)) {
+    const row = result.sessions.find((candidate) => candidate.key === input.sessionKey);
     if (row) {
       return input.navigationState.toSidebarSession(row);
     }
@@ -617,63 +624,66 @@ export function promoteSidebarSessionCreatedOrder(
   return true;
 }
 
-export function applySidebarSessionCreatorFilter(input: {
-  projected: readonly SidebarRecentSession[];
-  creatorRows: readonly {
-    createdActor?: SessionCreatedActor;
-    owner?: { actor: SessionCreatedActor };
-  }[];
-  creatorFacet: readonly { id: string; label?: string; avatarUrl?: string }[] | undefined;
-  selectedCreatorId: string | null;
-  involvingActorId?: string;
+export function applySidebarSessionOwnerFilter(input: {
+  projected: SidebarRecentSession[];
+  ownerFacet: SessionsListResult["owners"];
+  selectedOwnerId: string | null;
+  self?: { id: string; name?: string; avatarUrl?: string } | null;
 }): {
   rows: SidebarRecentSession[];
-  creatorOptions: readonly SessionOwnerOption[];
+  ownerOptions: readonly SessionOwnerOption[];
   ownershipVisible: boolean;
-  activeCreatorId: string | null;
-  involvingMeActive: boolean;
+  activeOwnerId: string | null;
 } {
-  const flattened: SidebarRecentSession[] = [];
-  const pending = [...input.projected];
-  while (pending.length > 0) {
-    const row = pending.shift();
-    if (row) {
-      flattened.push(row);
+  const facetOwners = input.ownerFacet ?? [];
+  const selfId = input.self?.id;
+  const selfOwner = selfId
+    ? listAssignableSessionOwners({ facet: facetOwners, self: input.self }).find(
+        (owner) => owner.type === "human" && owner.id === selfId,
+      )
+    : undefined;
+  const ownerOptions = selfOwner
+    ? [selfOwner, ...facetOwners.filter((owner) => owner.id !== selfOwner.id)]
+    : facetOwners;
+  let hasParticipants = false;
+  if (ownerOptions.length < 2) {
+    const pending = [...input.projected];
+    let index = 0;
+    while (index < pending.length) {
+      const row = pending[index];
+      index += 1;
+      if (!row) {
+        continue;
+      }
+      if ((row.participantCount ?? 0) > 0) {
+        hasParticipants = true;
+        break;
+      }
       pending.push(...row.children);
     }
   }
-  const creatorOptions = listSessionOwners([
-    ...(input.creatorFacet ?? []).map((creator) => ({
-      createdActor: { type: "human" as const, ...creator },
-    })),
-    ...flattened,
-    ...input.creatorRows,
-  ]);
-  const ownershipVisible =
-    creatorOptions.length >= 2 || flattened.some((row) => (row.participantCount ?? 0) > 0);
-  const involvingMeActive = Boolean(input.involvingActorId);
-  const activeCreatorId = ownershipVisible
-    ? creatorOptions.some((creator) => creator.id === input.selectedCreatorId)
-      ? input.selectedCreatorId
+  const ownershipVisible = ownerOptions.length >= 2 || hasParticipants;
+  const activeOwnerId = ownershipVisible
+    ? ownerOptions.some((owner) => owner.id === input.selectedOwnerId)
+      ? input.selectedOwnerId
       : null
     : null;
-  if (!activeCreatorId) {
+  if (!activeOwnerId) {
     // Involving-me is evaluated by the Gateway against the complete participant table.
     // The bounded display projection cannot safely repeat that predicate client-side.
     return {
-      rows: [...input.projected],
-      creatorOptions,
+      rows: input.projected,
+      ownerOptions,
       ownershipVisible,
-      activeCreatorId,
-      involvingMeActive,
+      activeOwnerId,
     };
   }
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
       const children = filterTree(row.children);
-      const ownerId = (row.owner?.actor ?? row.createdActor)?.id;
-      if (activeCreatorId && ownerId === activeCreatorId) {
+      const ownerId = row.owner?.actor.id;
+      if (ownerId === activeOwnerId) {
         filtered.push({ ...row, children });
       } else {
         for (const child of children) {
@@ -685,10 +695,9 @@ export function applySidebarSessionCreatorFilter(input: {
   };
   return {
     rows: filterTree(input.projected),
-    creatorOptions,
+    ownerOptions,
     ownershipVisible,
-    activeCreatorId,
-    involvingMeActive,
+    activeOwnerId,
   };
 }
 
@@ -698,7 +707,7 @@ export function mergeAdoptedSessionPullRequestRows(input: {
   rows: SidebarRecentSession[];
   adopted: ReadonlySet<string>;
   sessionsResult: SessionsListResult | null;
-  sessionRowsByAgent: Record<string, GatewaySessionRow[]>;
+  sessionResultsByAgent: Record<string, SessionsListResult>;
   navigationState: SidebarSessionNavigationState;
 }): SidebarRecentSession[] {
   if (input.adopted.size === 0) {
@@ -707,7 +716,7 @@ export function mergeAdoptedSessionPullRequestRows(input: {
   const byKey = new Map(input.rows.map((row) => [row.key, row]));
   const liveRows = [
     ...(input.sessionsResult?.sessions ?? []),
-    ...Object.values(input.sessionRowsByAgent).flat(),
+    ...Object.values(input.sessionResultsByAgent).flatMap((result) => result.sessions),
   ];
   for (const row of liveRows) {
     if (input.adopted.has(row.key) && !byKey.has(row.key)) {

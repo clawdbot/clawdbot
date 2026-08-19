@@ -50,8 +50,6 @@ type SendExecApprovalFollowupResult =
 type BuildExecApprovalFollowupTarget =
   typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget;
 type ExecApprovalFollowupTarget = Parameters<BuildExecApprovalFollowupTarget>[0];
-type ShouldResolveExecApprovalUnavailableInline =
-  typeof import("./bash-tools.exec-host-shared.js").shouldResolveExecApprovalUnavailableInline;
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type BuildExecApprovalFollowupTargetMock = (
   value: ExecApprovalFollowupTarget,
@@ -66,6 +64,17 @@ type MockAllowlistResult = {
   segmentSatisfiedBy?: ExecSegmentSatisfiedBy[];
   authorizationPlan?: ExecAuthorizationPlan;
 };
+type MockRegisteredExecApprovalRequest = {
+  approvalId: string;
+  approvalSlug: string;
+  warningText: string;
+  expiresAtMs: number;
+  preResolvedDecision: string | null | undefined;
+  initiatingSurface: unknown;
+  sentApproverDms: boolean;
+  unavailableReason: string | null;
+};
+
 type MockExecHostApprovalContext = {
   approvals: {
     allowlist: ExecAllowlistEntry[];
@@ -88,7 +97,14 @@ function exactCommandMarker(command: string): string {
   return `=command:${crypto.createHash("sha256").update(command.trim()).digest("hex").slice(0, 16)}`;
 }
 
-const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
+const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() =>
+  vi.fn(
+    (
+      _params?: unknown,
+    ): MockRegisteredExecApprovalRequest | Promise<MockRegisteredExecApprovalRequest> | undefined =>
+      undefined,
+  ),
+);
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
   vi.fn<BuildExecApprovalFollowupTargetMock>(() => null),
@@ -183,7 +199,12 @@ const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
   vi.fn<SendExecApprovalFollowupResult>(async () => undefined),
 );
 const shouldResolveExecApprovalUnavailableInlineMock = vi.hoisted(() =>
-  vi.fn<ShouldResolveExecApprovalUnavailableInline>(() => false),
+  vi.fn(
+    (_params: {
+      unavailableReason: string | null;
+      preResolvedDecision: string | null | undefined;
+    }) => false,
+  ),
 );
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn(
@@ -240,6 +261,41 @@ const resolveExecApprovalDecisionStateMock = vi.hoisted(() =>
           : {}),
       });
       return { ...initial, ...strict, timeoutContext };
+    },
+  ),
+);
+const createExecApprovalRequestRouteMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      params: Record<string, unknown> & {
+        askFallback: ExecSecurity;
+        resolveTimedOut?: (state: {
+          baseDecision: { timedOut: boolean };
+          approvedByAsk: boolean;
+          deniedReason: string | null;
+        }) =>
+          | Promise<{ approvedByAsk: boolean; deniedReason: string | null; context?: unknown }>
+          | { approvedByAsk: boolean; deniedReason: string | null; context?: unknown };
+        requiresExplicitApproval: boolean | ((context: unknown) => boolean);
+        requiresAutoReviewHumanApproval?: boolean;
+      },
+    ) => {
+      const request = await createAndRegisterDefaultExecApprovalRequestMock(params);
+      if (!request) {
+        throw new Error("missing test approval request");
+      }
+      const inline = shouldResolveExecApprovalUnavailableInlineMock({
+        unavailableReason: request.unavailableReason,
+        preResolvedDecision: request.preResolvedDecision,
+      });
+      if (!inline) {
+        return { ...request, kind: "wait" as const };
+      }
+      const state = await resolveExecApprovalDecisionStateMock({
+        ...params,
+        decision: request.preResolvedDecision ?? null,
+      });
+      return { ...request, kind: "inline" as const, preResolvedDecision: null, state };
     },
   ),
 );
@@ -330,6 +386,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
   buildExecApprovalPendingToolResult: buildExecApprovalPendingToolResultMock,
   createExecApprovalDecisionState: createExecApprovalDecisionStateMock,
   createAndRegisterDefaultExecApprovalRequest: createAndRegisterDefaultExecApprovalRequestMock,
+  createExecApprovalRequestRoute: createExecApprovalRequestRouteMock,
   enforceStrictInlineEvalApprovalBoundary: enforceStrictInlineEvalApprovalBoundaryMock,
   resolveApprovalDecisionOrUndefined: resolveApprovalDecisionOrUndefinedMock,
   resolveExecApprovalDecisionState: resolveExecApprovalDecisionStateMock,
@@ -553,12 +610,10 @@ describe("processGatewayAllowlist", () => {
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
   }
 
-  async function useRealUnavailableApprovalGate() {
-    const actualShared = await vi.importActual<typeof import("./bash-tools.exec-host-shared.js")>(
-      "./bash-tools.exec-host-shared.js",
-    );
+  function useRealUnavailableApprovalGate() {
     shouldResolveExecApprovalUnavailableInlineMock.mockImplementation(
-      actualShared.shouldResolveExecApprovalUnavailableInline,
+      ({ unavailableReason, preResolvedDecision }) =>
+        unavailableReason === "no-approval-route" && preResolvedDecision === null,
     );
   }
 
@@ -831,7 +886,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("resolves a triggerless CLI no-route approval through the real gate", async () => {
-    await useRealUnavailableApprovalGate();
+    useRealUnavailableApprovalGate();
     createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
       approvalId: "approval-cli-no-route",
       approvalSlug: "slug",
@@ -878,7 +933,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("preserves a routed approval through the real gate", async () => {
-    await useRealUnavailableApprovalGate();
+    useRealUnavailableApprovalGate();
     createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
       approvalId: "approval-routed",
       approvalSlug: "slug",

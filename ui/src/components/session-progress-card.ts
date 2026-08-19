@@ -2,6 +2,7 @@ import type { ProgressCard, ProgressCardStep } from "@openclaw/gateway-protocol"
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../i18n/index.ts";
+import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 type SessionProgressCardPlacement = "board" | "composer" | "hovercard" | "rail";
@@ -69,6 +70,7 @@ function renderBody(card: ProgressCard) {
 export function renderSessionProgressCard(
   card: ProgressCard | null | undefined,
   placement: SessionProgressCardPlacement,
+  onDismiss?: (card: ProgressCard) => void,
 ) {
   if (!card) {
     return nothing;
@@ -80,6 +82,24 @@ export function renderSessionProgressCard(
         total: String(counts.total),
       })
     : t("sessionProgressCard.noteLabel");
+  const dismissible = Boolean(
+    onDismiss && card.steps?.length && card.steps.every((step) => step.status === "completed"),
+  );
+  const dismiss = dismissible
+    ? html`<button
+        class="rail-header__action session-progress-card__dismiss"
+        type="button"
+        aria-label=${t("sessionProgressCard.dismiss")}
+        title=${t("sessionProgressCard.dismiss")}
+        @click=${(event: MouseEvent) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onDismiss?.(card);
+        }}
+      >
+        ${icons.x}
+      </button>`
+    : nothing;
   if (placement === "composer") {
     const current = currentProgressStep(card.steps ?? []);
     return html`<details
@@ -96,6 +116,7 @@ export function renderSessionProgressCard(
               >${counts.completed}/${counts.total}</span
             >`
           : nothing}
+        ${dismiss}
       </summary>
       ${renderBody(card)}
     </details>`;
@@ -108,7 +129,10 @@ export function renderSessionProgressCard(
     ${counts
       ? html`<div class="session-progress-card__heading">
           <span>${t("sessionProgressCard.title")}</span>
-          <span>${counts.completed}/${counts.total}</span>
+          <span class="session-progress-card__heading-actions">
+            <span>${counts.completed}/${counts.total}</span>
+            ${dismiss}
+          </span>
         </div>`
       : nothing}
     ${renderBody(card)}

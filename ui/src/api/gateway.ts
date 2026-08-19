@@ -537,7 +537,7 @@ export class GatewayBrowserClient {
     );
     const migrateRecoveryScope =
       serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
-        ? (await import("../lib/sessions/cloud-recovery-migration.runtime.ts")).default
+        ? (await import("../lib/sessions/session-placement-recovery-migration.runtime.ts")).default
         : undefined;
     if (plan.generation !== this.recovery.generation || !this.client.connected) {
       return;

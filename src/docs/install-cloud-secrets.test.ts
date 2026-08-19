@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const INSTALL_DOCS_DIR = path.join(process.cwd(), "docs", "install");
-const CLOUD_DOCKER_VM_INSTALL_DOCS = new Set(["gcp.md", "hetzner.md"]);
+const SHARED_DOCKER_RUNTIME_DELEGATES = new Set(["gcp.md", "hetzner.md"]);
 const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
   "change-me-to-a-long-random-token",
   "change-me-now",
@@ -34,10 +34,12 @@ describe("cloud install docs", () => {
         expect(markdown, docName).not.toContain(`OPENCLAW_GATEWAY_PASSWORD=${password}`);
       }
       expect(markdown, docName).not.toMatch(/^ {4}GOG_KEYRING_PASSWORD=change-me-now$/m);
-      if (CLOUD_DOCKER_VM_INSTALL_DOCS.has(docName)) {
-        expect(markdown, docName).toMatch(/^ {4}OPENCLAW_GATEWAY_TOKEN=[ \t]*\r?$/m);
-        expect(markdown, docName).toMatch(/^ {4}GOG_KEYRING_PASSWORD=[ \t]*\r?$/m);
-        expect(markdown, docName).toContain("openssl rand -hex 32");
+      if (SHARED_DOCKER_RUNTIME_DELEGATES.has(docName)) {
+        expect(markdown, docName).toContain("[Docker VM runtime](/install/docker-vm-runtime)");
+      }
+      if (docName === "docker-vm-runtime.md") {
+        expect(markdown).toContain("./scripts/docker/setup.sh");
+        expect(markdown).toContain("generates a Gateway token");
       }
     }
   });

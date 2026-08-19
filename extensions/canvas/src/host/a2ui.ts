@@ -46,8 +46,10 @@ async function resolveA2uiRoot(): Promise<string | null> {
     try {
       const indexPath = path.join(dir, "index.html");
       const bundlePath = path.join(dir, "a2ui.bundle.js");
+      const v09BundlePath = path.join(dir, "a2ui-v0.9.bundle.js");
       await fs.stat(indexPath);
       await fs.stat(bundlePath);
+      await fs.stat(v09BundlePath);
       return dir;
     } catch {
       // try next

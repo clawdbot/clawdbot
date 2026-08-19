@@ -5885,9 +5885,10 @@ class ChatController internal constructor(
         }
       }
       "plan" -> {
-        // Released Gateways through v2026.7.x only emit stream:"plan" and lack progressCard.get.
-        // Remove this fallback with the Gateway's legacy dual-emit once the minimum supported
-        // Gateway ships the store (tracked follow-up).
+        // Released Gateways through v2026.8.x only emit stream:"plan" and lack progressCard.get.
+        // SUNSET 2026-10-18: this fallback is a fixed cutover window, not a permanent contract.
+        // On that date delete it together with the Gateway's legacy stream:"plan" dual-emit and
+        // the Apple twin in ChatViewModel+TransportEvents.swift. Tracked: #125639.
         if (gatewayAdvertisesProgressCard() != false) return
         val planData = data ?: return
         if (planData["phase"].asStringOrNull() != "update") return

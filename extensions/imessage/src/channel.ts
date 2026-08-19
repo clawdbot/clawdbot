@@ -32,6 +32,7 @@ import {
   normalizeIMessageMessagingTarget,
   type ChannelPlugin,
 } from "./channel-api.js";
+import { resolveIMessageDirectChatService } from "./chat-context.js";
 import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
 import {
   matchIMessageAcpConversation,
@@ -238,11 +239,9 @@ function resolveIMessageOutboundSessionRoute(params: {
     }
     const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
     const service =
-      parsed.serviceExplicit || parsed.service !== "auto"
-        ? parsed.service
-        : account.config.service === "sms"
-          ? "sms"
-          : "imessage";
+      resolveIMessageDirectChatService(
+        parsed.serviceExplicit ? parsed.service : account.config.service,
+      ) ?? "auto";
     const directTarget = `${service}:${handle}`;
     const peer: RoutePeer = { kind: "direct", id: handle };
     const baseSessionKey = buildIMessageBaseSessionKey({

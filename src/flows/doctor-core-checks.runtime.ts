@@ -178,6 +178,17 @@ export async function collectGatewayDaemonFindings(
   const service = resolveGatewayService();
   const state = await readGatewayServiceState(service, { env: process.env });
   const findings: HealthFinding[] = [];
+  if (state.loadState.status === "unknown") {
+    findings.push({
+      checkId: "core/doctor/gateway-daemon",
+      severity: "warning",
+      message: `Gateway service status could not be determined: ${state.loadState.detail}`,
+      path: state.command?.sourcePath,
+      target: service.label,
+      fixHint: "Run `openclaw gateway status --deep`, restore service-manager access, and retry.",
+    });
+    return findings;
+  }
   if (!state.installed) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
@@ -189,7 +200,7 @@ export async function collectGatewayDaemonFindings(
     });
     return findings;
   }
-  if (!state.loaded) {
+  if (state.loadState.status === "not-loaded") {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",
@@ -200,7 +211,7 @@ export async function collectGatewayDaemonFindings(
     });
   }
   const status = gatewayRuntimeStatus(state.runtime);
-  if (state.loaded && !state.running) {
+  if (state.loadState.status === "loaded" && !state.running) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",

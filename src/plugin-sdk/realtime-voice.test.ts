@@ -2,9 +2,37 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createRealtimeVoiceAudioQueue,
   normalizeRealtimeVoiceResponseOutcome,
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  realtimeVoiceAudioDurationMs,
   RealtimeVoiceSessionLifecycle,
+  toOpenAICompatibleRealtimeAudioFormat,
   type RealtimeVoiceSessionConnection,
 } from "./realtime-voice.js";
+
+describe("realtimeVoiceAudioDurationMs", () => {
+  it.each([
+    ["G.711 μ-law 8 kHz mono", REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ, 8_000, 1_000],
+    ["PCM16 24 kHz mono", REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, 48_000, 1_000],
+    [
+      "one G.711 μ-law sample without rounding",
+      REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+      1,
+      0.125,
+    ],
+  ] as const)("calculates %s", (_name, format, byteLength, durationMs) => {
+    expect(realtimeVoiceAudioDurationMs(format, byteLength)).toBe(durationMs);
+  });
+});
+
+describe("toOpenAICompatibleRealtimeAudioFormat", () => {
+  it.each([
+    ["G.711 μ-law", REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ, { type: "audio/pcmu" }],
+    ["PCM16", REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, { type: "audio/pcm", rate: 24000 }],
+  ] as const)("maps %s", (_name, format, expected) => {
+    expect(toOpenAICompatibleRealtimeAudioFormat(format)).toEqual(expected);
+  });
+});
 
 function connectLifecycle(
   lifecycle: RealtimeVoiceSessionLifecycle,
@@ -234,6 +262,27 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     lifecycle.enqueuePendingAudio(Buffer.from([0x04]));
     lifecycle.cancel();
     expect(lifecycle.drainPendingAudio()).toEqual([]);
+  });
+
+  it("keeps the freshest queued speech and warns once per overflow episode", () => {
+    const onPendingAudioOverflow = vi.fn();
+    const lifecycle = new RealtimeVoiceSessionLifecycle("Test", {
+      pendingAudioOverflowPolicy: "drop-oldest",
+      onPendingAudioOverflow,
+    });
+
+    for (let index = 0; index < 322; index += 1) {
+      expect(lifecycle.enqueuePendingAudio(Buffer.from([index % 256]))).toBe(true);
+    }
+    expect(onPendingAudioOverflow).toHaveBeenCalledOnce();
+    expect(lifecycle.drainPendingAudio()).toEqual(
+      Array.from({ length: 320 }, (_, index) => Buffer.from([(index + 2) % 256])),
+    );
+
+    for (let index = 0; index < 321; index += 1) {
+      lifecycle.enqueuePendingAudio(Buffer.from([index % 256]));
+    }
+    expect(onPendingAudioOverflow).toHaveBeenCalledTimes(2);
   });
 });
 

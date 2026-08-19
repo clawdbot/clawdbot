@@ -97,20 +97,6 @@ export function moveSessionSection(
   return moveSessionOrderEntry(order, source, target, position);
 }
 
-/**
- * Sections that render a header (and therefore can collapse). Pinned rows
- * render headerless like the nav entries above them; every other zone shows
- * one — Threads hosts the sort and new-session actions on its header.
- * Shared by the renderer and keyboard-order walker so collapse behavior
- * cannot drift between them.
- */
-export function sidebarSectionHasHeader(
-  sectionId: string,
-  _grouping: SidebarSessionsGrouping,
-): boolean {
-  return sectionId !== "pinned";
-}
-
 export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";
 }
@@ -216,7 +202,7 @@ export function categoryClearReturnsToGroups(
 
 /**
  * Zone partition: pinned, named categories (persisted `knownGroups` order,
- * new ones alphabetical), threads ("ungrouped" — the agent's chat sessions),
+ * new ones alphabetical), other sessions ("ungrouped"),
  * group conversations, then coding (worktree/exec-node/ACP). An explicit user
  * category wins over the smart group/coding classification so manual curation
  * sticks. `grouping: "none"` only disables categories; the kind-based Groups

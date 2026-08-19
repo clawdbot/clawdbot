@@ -108,7 +108,19 @@
 }
 
 .chat-group.tool {
-  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
+  display: block;
+  margin-inline-start: 4px;
+  padding-inline-start: 46px;
+}
+
+.chat-group.tool.chat-group--with-footer {
+  display: block;
+}
+
+.chat-group.tool.chat-group--with-footer > .chat-group-messages {
+  max-width: var(--chat-message-column-max);
+  margin-inline-start: 1px;
 }
 
 .chat-group.user .chat-group-footer {
@@ -347,7 +359,7 @@
 .chat-divider {
   display: grid;
   gap: 7px;
-  margin: 18px 8px;
+  margin: var(--space-7) 8px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0;
@@ -667,12 +679,17 @@ img.chat-avatar.chat-avatar--logo {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
 }
 
+.chat-thread--direct .chat-group.tool {
+  margin-inline-start: 0;
+  padding-inline-start: 0;
+}
+
 .chat-duplicate-count {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
+  align-self: baseline;
   min-height: 22px;
-  margin-top: 8px;
+  margin-top: 0;
   padding: 2px 7px;
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   border-radius: var(--radius-sm);
@@ -681,6 +698,8 @@ img.chat-avatar.chat-avatar--logo {
   font-size: 12px; /* was 11px */
   font-weight: 700;
   line-height: 1;
+  vertical-align: 0.08em;
+  white-space: nowrap;
 }
 
 .chat-group.user .chat-duplicate-count {

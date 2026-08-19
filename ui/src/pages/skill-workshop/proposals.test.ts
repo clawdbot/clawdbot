@@ -116,6 +116,7 @@ function inspectResult(status: SkillWorkshopProposal["status"] = "pending") {
 function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshopProposal {
   return {
     key: "proposal-1",
+    kind: "update",
     slug: "inbox-cleaner",
     name: "Inbox Cleaner",
     oneLine: "Clean inbox triage",
@@ -128,6 +129,7 @@ function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshop
     recencyGroup: "today",
     ageLabel: "now",
     supportFiles: [],
+    bodyLoaded: true,
     isNew: false,
     ...overrides,
   };
@@ -159,7 +161,7 @@ describe("Skill Workshop proposal RPCs", () => {
     await runSkillWorkshopLifecycleAction(state, context, "apply", "proposal-1");
     await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
     await expect(requestSkillWorkshopRevision(state, context, "proposal-1", vi.fn())).resolves.toBe(
-      false,
+      null,
     );
     expect(request).not.toHaveBeenCalled();
   });
@@ -185,6 +187,38 @@ describe("Skill Workshop proposal RPCs", () => {
       agentId: "research",
       proposalId: "proposal-1",
     });
+    expect(state.skillWorkshopProposals[0]?.kind).toBe("create");
+  });
+
+  it("reports a failed inspect for a selection retained across refresh", async () => {
+    const appliedManifest = manifest("applied");
+    const latest = appliedManifest.proposals[0];
+    if (!latest) {
+      throw new Error("Expected proposal fixture");
+    }
+    const previous = {
+      ...latest,
+      id: "proposal-0",
+      updatedAt: "2026-06-15T12:00:00.000Z",
+    };
+    const { state, context, request } = createFixture({
+      skillWorkshopAgentId: "research",
+      skillWorkshopSelectedKey: "proposal-1",
+    });
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.proposals.list") {
+        return { ...appliedManifest, proposals: [latest, previous] };
+      }
+      throw new Error("inspect failed");
+    });
+
+    await loadSkillWorkshopProposals(state, context, { force: true });
+
+    expect(state.skillWorkshopSelectedKey).toBe("proposal-1");
+    expect(state.skillWorkshopError).toContain("inspect failed");
+    expect(request.mock.calls.filter(([method]) => method === "skills.proposals.inspect")).toEqual([
+      ["skills.proposals.inspect", { agentId: "research", proposalId: "proposal-1" }],
+    ]);
   });
 
   it("preserves capped support-file size formatting through the shared helper", async () => {
@@ -215,7 +249,7 @@ describe("Skill Workshop proposal RPCs", () => {
 
   it("inspects a selected proposal with the agent from the current session", async () => {
     const { state, context, request } = createFixture(
-      { skillWorkshopProposals: [proposal({ body: "" })] },
+      { skillWorkshopProposals: [proposal({ body: "", bodyLoaded: false })] },
       { sessionKey: "agent:ops-team:main" },
       ["skills.proposals.inspect"],
     );
@@ -361,7 +395,7 @@ describe("Skill Workshop proposal RPCs", () => {
     const { state, context, request } = createFixture(
       {
         skillWorkshopAgentId: "research",
-        skillWorkshopProposals: [proposal({ body: "" })],
+        skillWorkshopProposals: [proposal({ body: "", bodyLoaded: false })],
       },
       {},
       ["skills.proposals.inspect", "skills.proposals.evaluate"],
@@ -383,7 +417,7 @@ describe("Skill Workshop proposal RPCs", () => {
   it("drops an inspected evaluation that belongs to a different revision", async () => {
     const baseInspect = inspectResult();
     const { state, context, request } = createFixture(
-      { skillWorkshopProposals: [proposal({ body: "" })] },
+      { skillWorkshopProposals: [proposal({ body: "", bodyLoaded: false })] },
       {},
       ["skills.proposals.inspect"],
     );
@@ -533,7 +567,7 @@ describe("Skill Workshop proposal RPCs", () => {
     const { state, context, request } = createFixture(
       {
         skillWorkshopAgentId: "research",
-        skillWorkshopProposals: [proposal({ body: "" })],
+        skillWorkshopProposals: [proposal({ body: "", bodyLoaded: false })],
       },
       {},
       ["skills.proposals.inspect"],
@@ -562,7 +596,11 @@ describe("Skill Workshop proposal RPCs", () => {
       {},
       ["skills.proposals.requestRevision"],
     );
-    const sendRevisionRequest = vi.fn(async () => {});
+    const sendRevisionRequest = vi.fn(async () => ({
+      id: "revision-1",
+      sessionKey: "agent:research:workshop",
+      status: "admitted" as const,
+    }));
 
     try {
       await requestSkillWorkshopRevision(state, context, "proposal-1", sendRevisionRequest);
@@ -574,62 +612,65 @@ describe("Skill Workshop proposal RPCs", () => {
       "Tighten the trigger.",
       expect.objectContaining({ key: "proposal-1" }),
       "research",
+      REVISION_HASH,
     );
   });
 
-  it("does not send an originless revision after the agent scope changes", async () => {
-    const detail = createDeferred<ReturnType<typeof inspectResult>>();
+  it("ignores a superseded selection and keeps its error out of the pane", async () => {
+    const first = createDeferred<ReturnType<typeof inspectResult>>();
+    const second = createDeferred<ReturnType<typeof inspectResult>>();
     const { state, context, request } = createFixture(
       {
         skillWorkshopAgentId: "research",
-        skillWorkshopProposals: [proposal({ body: "" })],
-        skillWorkshopRevisionDraft: "Tighten the trigger.",
+        skillWorkshopProposals: [
+          proposal({ key: "proposal-1", body: "", bodyLoaded: false }),
+          proposal({ key: "proposal-2", body: "", bodyLoaded: false }),
+        ],
       },
       {},
-      ["skills.proposals.inspect", "skills.proposals.requestRevision"],
+      ["skills.proposals.inspect"],
     );
-    request.mockReturnValueOnce(detail.promise);
-    const sendRevisionRequest = vi.fn(async () => {});
-
-    const revision = requestSkillWorkshopRevision(
-      state,
-      context,
-      "proposal-1",
-      sendRevisionRequest,
+    request.mockImplementation(async (_method, payload) =>
+      (payload as { proposalId: string }).proposalId === "proposal-1"
+        ? first.promise
+        : second.promise,
     );
-    state.skillWorkshopAgentId = "ops";
-    detail.resolve(inspectResult());
 
-    await expect(revision).resolves.toBe(false);
-    expect(sendRevisionRequest).not.toHaveBeenCalled();
+    const stale = selectSkillWorkshopProposal(state, context, "proposal-1");
+    const latest = selectSkillWorkshopProposal(state, context, "proposal-2");
+    const base = inspectResult();
+    second.resolve({ ...base, record: { ...base.record, id: "proposal-2" } });
+    await latest;
+    first.reject(new Error("inspect failed"));
+    await stale;
+
+    expect(state.skillWorkshopSelectedKey).toBe("proposal-2");
+    expect(state.skillWorkshopError).toBeNull();
   });
 
-  it("does not prepare a revision after the initiating source changes during inspection", async () => {
-    const detail = createDeferred<ReturnType<typeof inspectResult>>();
+  it("inspects a revision once even when its body is legitimately empty", async () => {
     const { state, context, request } = createFixture(
       {
         skillWorkshopAgentId: "research",
-        skillWorkshopProposals: [proposal({ body: "" })],
-        skillWorkshopRevisionDraft: "Tighten the trigger.",
+        skillWorkshopProposals: [proposal({ body: "", bodyLoaded: false })],
       },
       {},
-      ["skills.proposals.inspect", "skills.proposals.requestRevision"],
+      ["skills.proposals.inspect"],
     );
-    let current = true;
-    request.mockReturnValueOnce(detail.promise);
-    const sendRevisionRequest = vi.fn(async () => {});
+    const base = inspectResult();
+    request.mockResolvedValue({ ...base, content: "" });
 
-    const revision = requestSkillWorkshopRevision(
-      state,
-      context,
-      "proposal-1",
-      sendRevisionRequest,
-      () => current,
-    );
-    current = false;
-    detail.resolve(inspectResult());
+    await Promise.all([
+      selectSkillWorkshopProposal(state, context, "proposal-1"),
+      selectSkillWorkshopProposal(state, context, "proposal-1"),
+    ]);
+    await selectSkillWorkshopProposal(state, context, "proposal-1");
 
-    await expect(revision).resolves.toBe(false);
-    expect(sendRevisionRequest).not.toHaveBeenCalled();
+    expect(state.skillWorkshopProposals[0]?.body).toBe("");
+    expect(state.skillWorkshopProposals[0]?.bodyLoaded).toBe(true);
+    expect(
+      request.mock.calls.filter(([method]) => method === "skills.proposals.inspect"),
+    ).toHaveLength(1);
+    expect(state.skillWorkshopSelectedKey).toBe("proposal-1");
   });
 });

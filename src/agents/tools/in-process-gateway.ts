@@ -1,8 +1,11 @@
+import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 /** In-process Gateway calls for built-in agent tools. */
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import { withInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
 import type { TrustedSessionCreation } from "../../gateway/server-methods/session-creation-provenance.js";
 import type {
+  GatewayAgentRunTaskOwner,
   GatewayRequestContext,
   TrustedAgentToolCaller,
 } from "../../gateway/server-methods/types.js";
@@ -31,8 +34,24 @@ type AgentToolGatewayRequest = Pick<
   | "scopes"
   | "timeoutMs"
 > & {
+  agentRunTracking?: GatewayAgentRunTaskOwner;
   agentToolCaller?: TrustedAgentToolCaller;
 };
+
+const agentToolGatewayRuntimeIdentities = new WeakMap<object, AgentRuntimeIdentity>();
+
+/** Carry trusted runtime identity without making it enumerable or transportable. */
+export function withAgentToolGatewayRuntimeIdentity<T extends object>(
+  request: T,
+  identity: AgentRuntimeIdentity | undefined,
+): T {
+  if (!identity) {
+    return request;
+  }
+  const carried = { ...request };
+  agentToolGatewayRuntimeIdentities.set(carried, identity);
+  return carried;
+}
 
 export type AgentToolGatewayRequestCaller = <T = Record<string, unknown>>(
   request: AgentToolGatewayRequest,
@@ -56,9 +75,17 @@ export function getInProcessGatewayToolContext(): GatewayRequestContext | undefi
 export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async <T>(
   request: AgentToolGatewayRequest,
 ): Promise<T> => {
+  const runtimeIdentity = agentToolGatewayRuntimeIdentities.get(request);
   if (!hasInProcessGatewayContext()) {
+    if (runtimeIdentity) {
+      throw new Error("trusted agent runtime identity requires in-process Gateway dispatch");
+    }
     const { callGateway } = await import("../../gateway/call.js");
-    const { agentToolCaller: _agentToolCaller, ...wireRequest } = request;
+    const {
+      agentRunTracking: _agentRunTracking,
+      agentToolCaller: _agentToolCaller,
+      ...wireRequest
+    } = request;
     return await callGateway<T>(wireRequest);
   }
   const scopes =
@@ -69,6 +96,7 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
       : (request.timeoutMs ?? DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS);
   const dispatchOptions = {
     forceSyntheticClient: true,
+    ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),
     ...(request.agentToolCaller ? { agentToolCaller: request.agentToolCaller } : {}),
     syntheticScopes: scopes,
     ...(request.expectFinal !== undefined ? { expectFinal: request.expectFinal } : {}),
@@ -87,7 +115,7 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
   return await dispatchGatewayMethodInProcess<T>(
     request.method,
     (request.params ?? {}) as Record<string, unknown>,
-    dispatchOptions,
+    withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
   );
 };
 

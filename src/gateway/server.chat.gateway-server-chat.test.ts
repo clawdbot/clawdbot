@@ -10,6 +10,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -22,6 +23,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import {
+  agentDiscoveryMock,
   connectOk,
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -35,6 +37,11 @@ import {
 } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
+
+vi.mock("./session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils.js")>();
+  return { ...actual, resolveGatewayModelSupportsImages: vi.fn(async () => true) };
+});
 
 function createGatewayHistoryText(role: "user" | "assistant", text: unknown, timestamp: number) {
   return { role, content: [{ type: "text", text }], timestamp };
@@ -327,6 +334,10 @@ describe("gateway server chat", () => {
     expect(res.payload?.status).toBe("ok");
     return res;
   };
+  const waitForAgentRunDrained = async (runId: string) => {
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForAgentRunOk(runId, 0);
+  };
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {
       sessionKey: "main",
@@ -386,6 +397,7 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.runId).toBe("idem-sessions-send-1");
       expect(res.payload?.messageSeq).toBe(1);
+      await waitForAgentRunDrained("idem-sessions-send-1");
     } finally {
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
@@ -415,6 +427,7 @@ describe("gateway server chat", () => {
           storePath: testState.sessionStorePath,
         })?.sessionId,
       ).toBeTypeOf("string");
+      await waitForAgentRunDrained("idem-sessions-send-orion");
     } finally {
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -443,6 +456,7 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.runId).toBe("idem-sessions-steer-1");
       expect(res.payload?.messageSeq).toBe(1);
+      await waitForAgentRunDrained("idem-sessions-steer-1");
     } finally {
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
@@ -518,6 +532,7 @@ describe("gateway server chat", () => {
       } else {
         expect(abortRes.payload?.abortedRunId).toBeNull();
       }
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
@@ -553,6 +568,7 @@ describe("gateway server chat", () => {
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-runid-1");
       }
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
@@ -576,11 +592,16 @@ describe("gateway server chat", () => {
       idempotencyKey: "idem-sanitized-1",
     });
     expect(sanitizedRes.ok).toBe(true);
+    await waitForAgentRunDrained("idem-sanitized-1");
   });
 
   test("handles chat send and history flows", async () => {
     const tempDirs: string[] = [];
     let webchatWs: WebSocket | undefined;
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = [
+      { id: "claude-opus-4-6", provider: "anthropic", input: ["text", "image"] },
+    ];
 
     try {
       webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
@@ -605,6 +626,7 @@ describe("gateway server chat", () => {
         idempotencyKey: "idem-webchat-1",
       });
       expect(webchatRes.ok).toBe(true);
+      await waitForAgentRunDrained("idem-webchat-1");
 
       webchatWs.close();
       webchatWs = undefined;
@@ -617,6 +639,7 @@ describe("gateway server chat", () => {
       });
       expect(timeoutRes.ok).toBe(true);
       expect(timeoutRes.payload?.runId).toBe("idem-timeout-1");
+      await waitForAgentRunDrained("idem-timeout-1");
       testState.agentConfig = undefined;
 
       const sessionRes = await rpcReq(ws, "chat.send", {
@@ -626,6 +649,7 @@ describe("gateway server chat", () => {
       });
       expect(sessionRes.ok).toBe(true);
       expect(sessionRes.payload?.runId).toBe("idem-session-key-1");
+      await waitForAgentRunDrained("idem-session-key-1");
 
       const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(sendPolicyDir);
@@ -695,6 +719,7 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
       await waitForFast(() => expect(agentCommandMock).toHaveBeenCalled());
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -719,6 +744,7 @@ describe("gateway server chat", () => {
       });
       expect(imgRes.ok).toBe(true);
       expectStringRunId(imgRes.payload);
+      await waitForAgentRunDrained("idem-img");
       const imgOnlyRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "",
@@ -734,6 +760,7 @@ describe("gateway server chat", () => {
       });
       expect(imgOnlyRes.ok).toBe(true);
       expectStringRunId(imgOnlyRes.payload);
+      await waitForAgentRunDrained("idem-img-only");
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
@@ -769,6 +796,7 @@ describe("gateway server chat", () => {
       expect(defaultMsgs.length).toBe(200);
       expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m1");
     } finally {
+      Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -884,10 +912,15 @@ describe("gateway server chat", () => {
       const persistSpy = vi
         .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
         .mockImplementation(async (params) => {
+          if (params.event.runId !== "idem-dispatch-error-1") {
+            await persistLifecycleEvent(params);
+            return;
+          }
           persistenceEntered.resolve();
           await releasePersistence.promise;
           await persistLifecycleEvent(params);
         });
+      const messagePromises: Promise<unknown>[] = [];
       const sessionChanged = await (async () => {
         try {
           dispatchInboundMessageMock.mockImplementationOnce(async () => {
@@ -904,6 +937,7 @@ describe("gateway server chat", () => {
               o.payload?.runId === "idem-dispatch-error-1",
             8_000,
           );
+          messagePromises.push(errorPromise);
           const sessionChangedPromise = onceMessage(
             ws,
             (o) =>
@@ -913,6 +947,7 @@ describe("gateway server chat", () => {
               o.payload?.sessionKey === "agent:main:main",
             8_000,
           );
+          messagePromises.push(sessionChangedPromise);
           const res = await rpcReq(ws, "chat.send", {
             sessionKey: "main",
             message: "run: pwd",
@@ -926,16 +961,29 @@ describe("gateway server chat", () => {
           rejectDispatch.resolve();
           await errorPromise;
           await persistenceEntered.promise;
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
+          const restartInspectors = {
+            getQueueSize: () => 0,
+            getPendingReplies: () => 0,
+            getEmbeddedRuns: () => 0,
+            getCronRuns: () => 0,
+            getBackgroundExecSessions: () => 0,
+            getActiveTasks: () => 0,
+            getTaskBlockers: () => [],
+          };
+          expect(createSafeGatewayRestartPreflight(restartInspectors)).toMatchObject({
+            safe: false,
+            counts: { rootRequests: 1 },
+          });
           releasePersistence.resolve();
           const changed = await sessionChangedPromise;
           await waitForFast(() => {
-            expect(getActiveGatewayRootWorkCount()).toBe(0);
+            expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
           });
           return changed;
         } finally {
           rejectDispatch.resolve();
           releasePersistence.resolve();
+          await Promise.allSettled(messagePromises);
           persistSpy.mockRestore();
           resetGatewayWorkAdmission();
         }

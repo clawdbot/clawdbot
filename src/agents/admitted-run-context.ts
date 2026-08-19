@@ -7,6 +7,7 @@ import {
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
+import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -214,9 +215,14 @@ export function prepareAgentRunAdmission(params: {
       const fixedRuntimeKind = (admittedRuntimeKind ??= runtimeKind);
       admittedRuntimeInstanceId ??= runtimeInstanceId?.trim() || undefined;
       admitted ??= (async () => {
+        const facts = executionIdentitySpawnAdmission({
+          operation: "attach",
+          value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
+          extra: executionIdentitySpawnAdmission({ operation: "read", value: params.facts }),
+        });
         const context = admitPreparedAgentRun({
           cfg: params.cfg,
-          facts: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
+          facts,
           operationalRunInstance,
           runtimeInstanceId: admittedRuntimeInstanceId,
           ...(params.recovery ? { recovery: params.recovery } : {}),

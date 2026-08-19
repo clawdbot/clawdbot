@@ -9,7 +9,13 @@ import "./debug-page.ts";
 import { renderDebug } from "./view.ts";
 
 type DebugProps = Parameters<typeof renderDebug>[0];
-const DIAGNOSTIC_METHODS = ["status", "health", "models.list", "last-heartbeat"] as const;
+const DIAGNOSTIC_METHODS = [
+  "diagnostics.lanes",
+  "status",
+  "health",
+  "models.list",
+  "last-heartbeat",
+] as const;
 type DiagnosticMethod = (typeof DIAGNOSTIC_METHODS)[number];
 
 type TestDebugPage = HTMLElement & {
@@ -22,6 +28,7 @@ type TestDebugPage = HTMLElement & {
   debugDiagnosticsError: string | null;
   debugHealth: unknown;
   debugHeartbeat: unknown;
+  debugLanes: unknown[];
   debugModels: unknown[];
   debugStatus: unknown;
   loadDiagnostics: () => Promise<void>;
@@ -68,6 +75,22 @@ function diagnosticResponse(method: string, marker = "initial"): unknown {
       return { models: [{ id: marker }] };
     case "last-heartbeat":
       return { source: marker };
+    case "diagnostics.lanes":
+      return {
+        ts: 1,
+        lanes: [
+          {
+            lane: marker,
+            activeCount: 1,
+            queuedCount: 2,
+            maxConcurrent: 1,
+            draining: false,
+            generation: 0,
+            blockedBy: "lane",
+          },
+        ],
+        dynamic: null,
+      };
     default:
       throw new Error(`Unexpected diagnostics method: ${method}`);
   }
@@ -78,6 +101,7 @@ function expectSnapshots(page: TestDebugPage, marker: string): void {
   expect(page.debugHealth).toEqual({ marker, ok: true });
   expect(page.debugModels).toEqual([{ id: marker }]);
   expect(page.debugHeartbeat).toEqual({ source: marker });
+  expect(page.debugLanes).toEqual([expect.objectContaining({ lane: marker })]);
 }
 
 function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
@@ -87,6 +111,8 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
     health: null,
     models: [],
     heartbeat: null,
+    lanes: [],
+    dynamic: null,
     diagnosticsError: null,
     eventLog: [],
     methods: [],
@@ -97,6 +123,7 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
     onCallMethodChange: () => undefined,
     onCallParamsChange: () => undefined,
     onRefresh: () => undefined,
+    onOpenOverlay: () => undefined,
     onCall: () => undefined,
     ...overrides,
   };
@@ -169,6 +196,45 @@ describe("renderDebug", () => {
 
     expect(container.textContent).toContain("gateway");
     expect(container.textContent).not.toContain("Invalid Date");
+  });
+
+  it("renders lane diagnostics as an emphasized table", () => {
+    const container = document.createElement("div");
+    render(
+      renderDebug(
+        createProps({
+          lanes: [
+            {
+              lane: "main",
+              activeCount: 2,
+              queuedCount: 3,
+              maxConcurrent: 2,
+              draining: false,
+              generation: 0,
+              group: "interactive",
+              groupActive: 2,
+              groupBudget: 4,
+              blockedBy: "lane",
+            },
+          ],
+          dynamic: {
+            laneCount: 23,
+            activeCount: 9,
+            queuedCount: 4,
+            queuedLaneCount: 3,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const row = container.querySelector(".command-lane-row");
+    expect(row?.classList).toContain("command-lane-row--saturated");
+    expect(row?.classList).toContain("command-lane-row--queued");
+    expect(normalizedText(row)).toContain("main 2/2 3 interactive · 2/4 lane");
+    expect(normalizedText(container.querySelector(".command-lane-row--dynamic"))).toContain(
+      "Session lanes · 23 9 4 —",
+    );
   });
 });
 

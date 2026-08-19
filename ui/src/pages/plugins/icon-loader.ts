@@ -1,11 +1,12 @@
 import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
+  CONTROL_UI_LINK_FAVICON_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
 } from "../../../../src/gateway/control-ui-contract.js";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 
-const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml"]);
+const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml", "image/x-icon"]);
 const PLUGIN_ICON_RASTER_SIZE = 256;
 const PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS = 5_000;
 const PLUGIN_ICON_SVG_MAX_ELEMENTS = 4;
@@ -93,6 +94,11 @@ function pluginIconRouteUrl(basePath: string, pluginId: string): string {
 function catalogIconRouteUrl(basePath: string, iconUrl: string): string {
   const normalizedBasePath = normalizeRouteBasePath(basePath);
   return `${normalizedBasePath}${CONTROL_UI_CATALOG_ICON_PATH_PREFIX}/${encodeURIComponent(iconUrl)}`;
+}
+
+function linkFaviconRouteUrl(basePath: string, hostname: string): string {
+  const normalizedBasePath = normalizeRouteBasePath(basePath);
+  return `${normalizedBasePath}${CONTROL_UI_LINK_FAVICON_PATH_PREFIX}/${encodeURIComponent(hostname)}`;
 }
 
 function parseSvgNumber(value: string): number | null {
@@ -392,4 +398,10 @@ export function fetchCatalogIconBlobUrl(
   params: FetchProxiedIconParams & { iconUrl: string },
 ): Promise<string | null> {
   return fetchProxiedIconBlobUrl(params, catalogIconRouteUrl(params.basePath, params.iconUrl));
+}
+
+export function fetchLinkFaviconBlobUrl(
+  params: FetchProxiedIconParams & { hostname: string },
+): Promise<string | null> {
+  return fetchProxiedIconBlobUrl(params, linkFaviconRouteUrl(params.basePath, params.hostname));
 }

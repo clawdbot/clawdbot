@@ -757,6 +757,27 @@ async function restoreNpmBinShimBackup(backup: NpmBinShimBackup): Promise<void> 
   }
 }
 
+async function activateStagedNpmPackageRoot(source: string, destination: string): Promise<void> {
+  const stat = await fs.lstat(source);
+  if (!stat.isSymbolicLink()) {
+    await movePathWithCopyFallback({
+      from: source,
+      sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
+      to: destination,
+    });
+    return;
+  }
+
+  // npm represents global local-directory installs as relative symlinks. Moving
+  // one changes its meaning, so activate the same canonical source explicitly.
+  const canonicalSource = await fs.realpath(source);
+  await fs.symlink(
+    canonicalSource,
+    destination,
+    process.platform === "win32" ? "junction" : undefined,
+  );
+}
+
 async function swapStagedNpmInstall(params: {
   stage: StagedNpmInstall;
   installTarget: ResolvedGlobalInstallTarget;
@@ -793,11 +814,7 @@ async function swapStagedNpmInstall(params: {
       });
       movedExisting = true;
     }
-    await movePathWithCopyFallback({
-      from: params.stage.packageRoot,
-      sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-      to: targetPackageRoot,
-    });
+    await activateStagedNpmPackageRoot(params.stage.packageRoot, targetPackageRoot);
     movedStaged = true;
     if (params.installTarget.directNodeModulesRoot !== true) {
       await replaceNpmBinShims({

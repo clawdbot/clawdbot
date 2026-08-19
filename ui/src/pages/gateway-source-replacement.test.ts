@@ -680,7 +680,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     page.debugStatus = null;
 
     const load = page.diagnosticsTask.run();
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
     await replaceContext(page, client);
     pending.resolve({ models: [{ id: "stale" }], stale: true });
     await load;

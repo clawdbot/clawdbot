@@ -355,6 +355,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       return nothing;
     }
     const busy = this.busyProfileId !== null;
+    const canSave = this.canManage();
     const editing = this.editor.kind === "edit";
     const classMode = this.draft.customClass ? "custom" : this.draft.machineClass;
     return renderSettingsSection(
@@ -510,7 +511,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             <button
               class="btn primary"
               type="button"
-              ?disabled=${busy}
+              ?disabled=${!canSave}
               @click=${() => void this.saveProfile(this.draft)}
             >
               ${busy ? t("common.saving") : t("common.save")}

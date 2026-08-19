@@ -22,6 +22,7 @@ type Catalog = {
 type Options = {
   sessionLabel: string;
   activeRun: boolean;
+  deviceDisabledReason?: string;
   loadCatalog: () => Promise<Catalog>;
 };
 
@@ -128,7 +129,12 @@ export function showSessionPlacementMoveDialog(
                                     value: `device:${node.nodeId}`,
                                     label: node.displayName,
                                     icon: icons.monitor,
+                                    facts: options.deviceDisabledReason
+                                      ? [options.deviceDisabledReason]
+                                      : undefined,
                                     checked: selectedKey === `device:${node.nodeId}`,
+                                    disabled: Boolean(options.deviceDisabledReason),
+                                    title: options.deviceDisabledReason,
                                     onSelect: () =>
                                       select({ kind: "device", deviceId: node.nodeId }),
                                   },

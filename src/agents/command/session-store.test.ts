@@ -490,6 +490,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         [sessionKey]: {
           sessionId,
           updatedAt: 1,
+          agentHarnessId: "openclaw",
         },
       };
       await seedSessionStore(storePath, sessionStore);
@@ -502,6 +503,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
             provider: "openai",
             model: "gpt-5.5",
             contextTokens: 400_000,
+            contextTokensSource: "runtime",
           },
         },
       };
@@ -518,7 +520,11 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("runtime");
+      expect(sessionStore[sessionKey]?.agentHarnessId).toBeUndefined();
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(400_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe("runtime");
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.agentHarnessId).toBeUndefined();
     });
   });
 
@@ -566,7 +572,11 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved");
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(272_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(
+        "resolved",
+      );
     });
   });
 

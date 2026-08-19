@@ -99,4 +99,32 @@ suite.define(() => {
       await context.close();
     }
   });
+
+  it("opens chat pane rename on the stored label, not the account-decorated title", async () => {
+    const cardsKey = "agent:main:telegram:cards:direct:42";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([gatewayDirectRow(cardsKey, Date.now(), "cards")]),
+      },
+      sessionKey: cardsKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, cardsKey));
+      const title = page.locator(".chat-pane__session-title-button");
+      await expect.poll(() => title.textContent()).toContain("Alice · cards");
+      await title.click();
+      const field = page.locator(".chat-pane__session-title-input");
+      await field.waitFor({ state: "visible" });
+      expect(await field.inputValue()).toBe("");
+    } finally {
+      await context.close();
+    }
+  });
 });

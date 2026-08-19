@@ -81,6 +81,7 @@ const TRAIN_2026_7_METHODS = [
 ] as const;
 
 const CURRENT_TRAIN_METHODS = [
+  "diagnostics.lanes",
   "device.pair.setupStatus",
   "sessions.patchMany",
   "sessions.groups.update",
@@ -115,6 +116,8 @@ const CURRENT_TRAIN_METHODS = [
   "progressCard.put",
   "tools.github.status",
   "tools.github.configure",
+  "users.setGitHubIdentity",
+  "users.clearGitHubIdentity",
 ] as const;
 
 describe("core gateway method release trains", () => {

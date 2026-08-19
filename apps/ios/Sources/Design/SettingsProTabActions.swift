@@ -128,25 +128,32 @@ extension SettingsProTab {
         guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
         guard !self.isReconnectingGateway else { return }
         self.isReconnectingGateway = true
+        self.gatewayActionStatusText = nil
         defer { self.isReconnectingGateway = false }
-        await self.gatewayController.connectActiveGateway()
+        if case let .failed(message) = await self.gatewayController.connectActiveGateway() {
+            self.gatewayActionStatusText = message
+        }
     }
 
     func switchGateway(to entry: GatewaySettingsStore.GatewayRegistryEntry) async {
         guard self.connectingGateway == nil else { return }
         self.connectingGateway = .gateway(entry.id)
-        self.setupStatusText = String(
+        self.gatewayActionStatusText = String(
             format: String(localized: "Switching to %@…"),
             entry.name)
         defer {
             self.connectingGateway = nil
             self.refreshGatewayRegistry()
         }
-        if let failure = await self.gatewayController.switchToGateway(stableID: entry.stableID) {
-            self.setupStatusText = failure
-            return
+        switch await self.gatewayController.switchToGateway(stableID: entry.stableID) {
+        case .accepted:
+            self.gatewayActionStatusText = nil
+            self.selectGatewayCredentialTarget(entry.stableID, allowManualOverride: false)
+        case let .failed(message):
+            self.gatewayActionStatusText = message
+        case .superseded:
+            self.gatewayActionStatusText = nil
         }
-        self.selectGatewayCredentialTarget(entry.stableID, allowManualOverride: false)
     }
 
     func forgetGateway(_ entry: GatewaySettingsStore.GatewayRegistryEntry) async {

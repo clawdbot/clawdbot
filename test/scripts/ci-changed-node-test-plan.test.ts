@@ -20,7 +20,7 @@ import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
-const CODEX_TEST_PROCESS_FILE_LIMIT = 40;
+const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
 
 function expectBoundedCodexFallback(
   shards: ReturnType<typeof createChangedExtensionFallbackShards>,

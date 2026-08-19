@@ -315,7 +315,9 @@ const qaScenarioFileSchema = z
   .object({
     title: z.string().trim().min(1),
     scenario: qaSeedScenarioBodySchema.partial({ objective: true, successCriteria: true }),
-    flow: z.union([qaFlowSchema, qaScenarioModuleFlow.moduleSchema]).optional(),
+    flow: z
+      .union([qaFlowSchema, qaScenarioModuleFlow.moduleSchema, qaScenarioModuleFlow.sharedSchema])
+      .optional(),
   })
   .superRefine((file, ctx) => {
     if (file.scenario.runtimeParityUsage && !file.scenario.runtimePairLane) {

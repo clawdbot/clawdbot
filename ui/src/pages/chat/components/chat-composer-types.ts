@@ -86,6 +86,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
+  onDismissProgressCard?: (card: ProgressCard) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
   stream: string | null;
@@ -119,7 +120,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   suggestionComposer?: boolean;
-  typingActors?: readonly { id: string; label: string }[];
   onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;

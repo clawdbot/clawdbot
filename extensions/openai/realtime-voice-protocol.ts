@@ -4,7 +4,10 @@ import type {
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  realtimeVoiceAudioDurationMs,
+} from "openclaw/plugin-sdk/realtime-voice";
 import {
   AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
   OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS,
@@ -239,14 +242,10 @@ export abstract class OpenAIRealtimeProtocol {
       (this.oldestOutstandingMarkSequence !== null ||
         options?.audioPlaybackActive === true ||
         force);
-    const bytesPerSample = this.audioFormat.encoding === "pcm16" ? 2 : 1;
     const audioEndMs =
       shouldInterruptProvider && assistantAudioItem
         ? Math.min(
-            Math.floor(
-              (assistantAudioItem.bytes * 1000) /
-                (this.audioFormat.sampleRateHz * this.audioFormat.channels * bytesPerSample),
-            ),
+            Math.floor(realtimeVoiceAudioDurationMs(this.audioFormat, assistantAudioItem.bytes)),
             Math.max(0, this.latestMediaTimestamp - assistantAudioItem.startTimestamp),
           )
         : null;

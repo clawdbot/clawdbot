@@ -72,6 +72,8 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
       return actual.abortEmbeddedAgentRun(sessionId);
     },
     isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
+    resolveEmbeddedAgentRunProgressState: (...args: unknown[]) =>
+      isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
   };
 });
 

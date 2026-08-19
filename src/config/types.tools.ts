@@ -446,7 +446,7 @@ export type ToolsConfig = {
         enabled?: boolean;
         /** Prefer cached or explicitly request live access. Unrestricted Codex turns resolve cached to live. */
         mode?: "cached" | "live";
-        /** Optional allowlist of domains passed to the native Codex tool. */
+        /** Native Codex search allowlist; also gates web_fetch on native-hosted-search turns. */
         allowedDomains?: string[];
         /** Optional Codex native search context size hint. */
         contextSize?: "low" | "medium" | "high";

@@ -34,6 +34,7 @@ export function buildGatewaySessionEventFields(params: {
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
+  status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
   activeRunIds?: string[];
 }): Record<string, unknown> {
@@ -83,6 +84,7 @@ export function buildGatewaySessionEventFields(params: {
     previousSessionId: sessionRow.previousSessionId,
     label: params.label ?? sessionRow.label ?? null,
     icon: sessionRow.icon ?? null,
+    channelAvatarUrl: sessionRow.channelAvatarUrl ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
@@ -116,7 +118,7 @@ export function buildGatewaySessionEventFields(params: {
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
     agentRuntime: sessionRow.agentRuntime,
-    status: sessionRow.status,
+    status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.

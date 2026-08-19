@@ -1,11 +1,9 @@
 import { html, nothing } from "lit";
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
-import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
 import {
   resolveControlUiFollowUpMode,
@@ -18,15 +16,19 @@ import {
   projectSessionObserverDigest,
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
+import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
+import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
+  resolveChatModelCatalogState,
 } from "./chat-pane-session-controls.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
@@ -43,24 +45,15 @@ import {
   selectedChatSessionRow,
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { detailSlotOpen } from "./components/chat-detail-slot.ts";
 import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
 import {
-  createSessionWorkspaceProps,
   openSessionWorkspaceFile,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
+import { createLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import {
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  closeSlot,
-  isSidebarSlotVisible,
-  openSlot,
-  type SidebarSlotId,
-} from "./sidebar-layout.ts";
 import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
@@ -110,25 +103,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    const hasPanelSlot = (slot: SidebarSlotId) =>
-      sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
-    const progressCardInRail =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
-      isSidebarSlotVisible(sidebarLayout, "companion");
-    const openPanelSlot = (slot: SidebarSlotId) => {
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
-      if (slot === "companion") {
-        this.setSessionObserverVisibility(true);
-      }
-    };
-    const closePanelSlot = (slot: SidebarSlotId) => {
-      if (slot === "companion") {
-        this.setSessionObserverVisibility(false);
-      }
-      state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
-    };
-    const togglePanelSlot = (slot: SidebarSlotId) =>
-      hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
     state.chatFollowUpMode = resolveControlUiFollowUpMode(
       state.settings.chatFollowUpMode,
       resolveControlUiServerQueueMode(
@@ -161,10 +135,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
+    const modelCatalogState = resolveChatModelCatalogState(state);
     const modelUnavailable = isChatModelUnavailable(
       selectedSession?.model ?? agentDefaultModel,
       selectedSession?.modelProvider,
-      state.chatModelCatalog,
+      modelCatalogState.status === "ready" ? state.chatModelCatalog : [],
     );
     const modelSetupRequired = requiresChatModelSetup({
       catalog: catalogKey !== null,
@@ -174,8 +149,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       agentModel: agentDefaultModel,
     });
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
-    const cloudStartup = this.context.cloudStartup.get(state.sessionKey);
-    const cloudStartupPending = cloudStartup !== null && cloudStartup.phase !== "failed";
+    const placementStartup = this.context.placementStartup.get(state.sessionKey);
+    const placementStartupPending =
+      placementStartup !== null && placementStartup.phase !== "failed";
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
       listLoading: state.sessionsLoading,
@@ -183,6 +159,18 @@ export class ChatPane extends ChatPaneLayoutRender {
       session: selectedSession,
     });
     const gatewaySnapshot = this.context.gateway.snapshot;
+    const canDismissProgressCard =
+      state.connected &&
+      !sessionParticipationBlocked &&
+      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "progressCard.put") === true;
+    const onDismissProgressCard = canDismissProgressCard
+      ? (card: NonNullable<ChatProps["progressCard"]>) => {
+          void this.progressCard
+            .dismiss(card)
+            .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }));
+        }
+      : undefined;
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
@@ -199,7 +187,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
       : sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
-        : cloudStartupPending
+        : placementStartupPending
           ? t("newSession.starting")
           : null;
     const typingEnabled =
@@ -221,36 +209,15 @@ export class ChatPane extends ChatPaneLayoutRender {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
-      draftScope: this.presentationId,
-      expanded: hasPanelSlot("workspace"),
-      narrowLayout: false,
-    });
-    const sessionWorkspace = {
-      ...sessionWorkspaceBase,
-      collapsed: !hasPanelSlot("workspace"),
-      narrowLayout: false,
-      onToggleCollapsed: () => togglePanelSlot("workspace"),
-      onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
-      onToggleBrowser: state.browserPanelAvailable ? () => togglePanelSlot("browser") : undefined,
-      onToggleDesktop: isDesktopPanelAvailable(gatewaySnapshot)
-        ? () => togglePanelSlot("desktop")
-        : undefined,
-    };
-    const backgroundTasksBase = createBackgroundTasksProps(state, {
-      narrowLayout: false,
-      openTaskId:
-        state.sidebarContent?.kind === "task" && detailSlotOpen(sidebarLayout)
-          ? state.sidebarContent.taskId
-          : undefined,
-      onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
-    });
-    const backgroundTasks = {
-      ...backgroundTasksBase,
-      collapsed: !hasPanelSlot("tasks"),
-      narrowLayout: false,
-      onToggleCollapsed: () => togglePanelSlot("tasks"),
-    };
+    const { backgroundTasks, closePanelSlot, openPanelSlot, progressCardInRail, sessionWorkspace } =
+      createChatPaneRails({
+        state,
+        sidebarLayout,
+        paneWidth: this.paneWidth,
+        presentationId: this.presentationId,
+        gatewaySnapshot,
+        setObserverVisibility: this.setSessionObserverVisibility,
+      });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
@@ -271,6 +238,13 @@ export class ChatPane extends ChatPaneLayoutRender {
     const historyHasMore = catalogKey
       ? Boolean(this.catalogCursor)
       : state.chatHistoryPagination.hasMore;
+    const fetchLinkFavicon = state.automaticallyFetchFavicons
+      ? createLinkFaviconFetcher({
+          auth: { hello: state.hello, settings: state.settings, password: state.password },
+          basePath: state.basePath,
+          gatewayUrl: state.client?.gatewayUrl ?? state.settings.gatewayUrl,
+        })
+      : undefined;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       hasLocalRun: () => Boolean(state.chatRunId),
@@ -309,13 +283,13 @@ export class ChatPane extends ChatPaneLayoutRender {
       persistCommentary: state.settings.chatPersistCommentary !== false,
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
       sending:
-        cloudStartupPending ||
+        placementStartupPending ||
         state.chatSending ||
         this.recoveringSession ||
         this.sessionSuggestionAddOperation !== undefined,
-      cloudStartup,
-      onRetryCloudStartup: cloudStartup?.retryable
-        ? () => this.context.cloudStartup.retry(state.sessionKey)
+      placementStartup,
+      onRetrySessionPlacementStartup: placementStartup?.retryable
+        ? () => this.context.placementStartup.retry(state.sessionKey)
         : undefined,
       canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
@@ -324,6 +298,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       progressCard: progressCardInRail ? null : this.progressCard.card,
+      onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
@@ -378,7 +353,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           !selectedSessionArchived &&
           !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&
-          !cloudStartupPending,
+          !placementStartupPending,
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner: this.sessionDisabledBanner({
         catalogDisabledReason,
@@ -397,6 +372,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
       approvalBusy: overlays?.snapshot?.approvalBusy,
+      approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
       approvalErrors: overlays?.snapshot?.approvalErrors,
       approvalNowMs: overlays?.snapshot?.approvalNowMs,
       onApprovalDecision:
@@ -572,6 +548,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
+      fetchLinkFavicon,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
@@ -584,6 +561,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       board,
       sidebarLayout,
       progressCardInRail,
+      onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,
       chatProps: props,

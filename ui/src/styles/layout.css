@@ -504,8 +504,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   color: var(--muted);
 }
 
-/* Settings rail entries are anchors but read as app chrome: default arrow,
-   not the UA link pointer. */
+/* Settings rail entries are navigation anchors and keep the link pointer. */
 .settings-sidebar__item {
   position: relative;
   display: flex;
@@ -517,7 +516,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: var(--cursor-action);
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -589,7 +587,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   padding: 0 9px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -1285,6 +1282,23 @@ body.update-dialog-open .sidebar-update-card__status {
   margin-top: 6px;
 }
 
+.sidebar-update-card__review {
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.sidebar-update-card__review:hover {
+  background: var(--bg-hover);
+}
+
 .sidebar-update-card__status--danger {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
   background: color-mix(in srgb, var(--danger) 10%, transparent);
@@ -1382,7 +1396,13 @@ body.update-dialog-open .sidebar-update-card__status {
   padding: 0;
 }
 
-.sidebar-sessions {
+.sidebar-sessions,
+.sidebar-online {
+  --sidebar-inset: 8px;
+  --sidebar-lead: 20px;
+  --sidebar-row-gap: 8px;
+  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
+
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1397,6 +1417,61 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-sessions--removal-drop {
   background: color-mix(in srgb, var(--muted) 8%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+.sidebar-session-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+  margin-inline: -8px 0;
+  padding: 0 10px 0 var(--sidebar-text-offset);
+}
+
+.sidebar-session-toolbar__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.55;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-session-toolbar__button:first-of-type {
+  margin-left: auto;
+}
+
+.sidebar-session-toolbar__button:hover,
+.sidebar-session-toolbar__button:focus-visible,
+.sidebar-session-toolbar__button[aria-expanded="true"],
+.sidebar-session-toolbar__button.sidebar-session-sort--filtered {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+  opacity: 1;
+}
+
+.sidebar-session-toolbar__button:disabled {
+  cursor: not-allowed;
+}
+
+.sidebar-session-toolbar__button svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-session-error {
@@ -1418,17 +1493,11 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-sessions {
-  --sidebar-inset: 8px;
-  --sidebar-lead: 20px;
-  --sidebar-row-gap: 8px;
-  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
-
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
   margin-inline: -8px 0;
-  /* Sessions are app chrome, not hyperlinks: the whole region follows the
-     base.css cursor policy so it tracks the window it is running in. */
+  /* Sessions are stateful app chrome, not navigation links. */
   cursor: var(--cursor-action);
 }
 
@@ -1663,19 +1732,6 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-sort {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  flex: 0 0 auto;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
 }
 
 .sidebar-session-sort--filtered::after {
@@ -1688,23 +1744,6 @@ body.update-dialog-open .sidebar-update-card__status {
   background: var(--accent);
   box-shadow: 0 0 0 1.5px var(--bg);
   content: "";
-}
-
-.sidebar-session-sort:hover,
-.sidebar-session-sort[aria-expanded="true"],
-.sidebar-session-sort[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  color: var(--text);
-}
-
-.sidebar-session-sort svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Group header kebab: hidden until hover/keyboard focus like row actions, but always
@@ -2182,7 +2221,6 @@ body.update-dialog-open .sidebar-update-card__status {
   display: inline-flex;
 }
 
-.viewer-facepile > openclaw-viewer-avatar:not(:first-child) .viewer-avatar,
 .viewer-facepile > .viewer-avatar:not(:first-child) {
   margin-left: -5px;
 }
@@ -2228,8 +2266,7 @@ body.update-dialog-open .sidebar-update-card__status {
   margin-left: 1px;
 }
 
-.viewer-avatar--footer,
-.viewer-facepile--footer .viewer-avatar--overflow {
+.viewer-avatar--footer {
   width: 20px;
   height: 20px;
   font-size: 8px;
@@ -2240,22 +2277,6 @@ body.update-dialog-open .sidebar-update-card__status {
   height: 40px;
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
   font-size: var(--control-ui-text-sm);
-}
-
-.viewer-facepile-trigger {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  margin: -2px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  cursor: var(--cursor-action);
-}
-
-.viewer-facepile-trigger:hover,
-.viewer-facepile-trigger:focus-visible {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .sidebar-recent-session__name {
@@ -2329,12 +2350,12 @@ body.update-dialog-open .sidebar-update-card__status {
   padding-right: 2px;
 }
 
-/* Actions overlay only the second line, preserving the title's full width.
-   The buttons re-enable their own pointer-events on hover/focus. */
+/* Actions overlay the row center. The buttons re-enable their own
+   pointer-events on hover/focus. */
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
-  bottom: 0;
-  right: 2px;
+  inset: 50% 2px auto auto;
+  transform: translateY(-50%);
   pointer-events: none;
 }
 
@@ -2355,9 +2376,9 @@ body.update-dialog-open .sidebar-update-card__status {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
-/* Hover actions replace the second-row endcap without shortening the title. */
+/* Centered actions overlap both lines, so the full text column yields their width. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
-  .sidebar-recent-session__details {
+  .sidebar-recent-session__text {
   padding-right: 52px;
 }
 
@@ -2369,7 +2390,7 @@ body.update-dialog-open .sidebar-update-card__status {
 
 /* Touch keeps the actions permanently visible beside the persistent endcap. */
 @media (hover: none), (pointer: coarse) {
-  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__details {
+  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
     padding-right: 52px;
   }
 }
@@ -2422,6 +2443,90 @@ body.update-dialog-open .sidebar-update-card__status {
 .nav-section__items {
   display: grid;
   gap: 2px;
+}
+
+.sidebar-online {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 12px;
+  margin: 12px 0 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+}
+
+.sidebar-online__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-online__facepile {
+  display: inline-flex;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+}
+
+.sidebar-online__person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    background var(--duration-fast) ease,
+    filter var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.sidebar-online__person:hover,
+.sidebar-online__person:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  text-decoration: none;
+}
+
+.sidebar-online__person--away {
+  filter: grayscale(0.8);
+  opacity: 0.45;
+}
+
+.sidebar-online__person .viewer-avatar {
+  flex: none;
+}
+
+.sidebar-online__person-name {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-online__person-action {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-online__person:hover .sidebar-online__person-action,
+.sidebar-online__person:focus-visible .sidebar-online__person-action {
+  opacity: 1;
+}
+
+.sidebar-online__person-action svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
 }
 
 .sidebar-zone-entry {
@@ -2527,8 +2632,6 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   font: inherit;
   font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
-  /* More-menu route rows are anchors acting as chrome (see base.css cursor policy). */
-  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -2994,8 +3097,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   outline-offset: -2px;
 }
 
-/* Nav rail entries are anchors (for middle-click/new-tab) but read as app
-   chrome: override the UA link pointer back to the default arrow. */
+/* Nav rail entries are anchors so middle-click/new-tab keeps link behavior. */
 .nav-item {
   position: relative;
   display: flex;
@@ -3008,7 +3110,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  cursor: var(--cursor-action);
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -3500,74 +3601,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   font-size: var(--control-ui-text-sm);
   line-height: 1.35;
   text-align: left;
-}
-
-.sidebar-hover-card__region {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.sidebar-hover-card__heading {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.sidebar-hover-card__people {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  max-height: min(240px, 45vh);
-  overflow-y: auto;
-}
-
-.sidebar-hover-card__person {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.sidebar-hover-card__person .viewer-avatar {
-  width: 24px;
-  height: 24px;
-  flex: none;
-  border-color: var(--card);
-  font-size: 9px;
-}
-
-.sidebar-hover-card__person-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.sidebar-hover-card__person-name,
-.sidebar-hover-card__person-email {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-hover-card__person-name {
-  color: var(--text);
-  font-weight: 550;
-}
-
-.sidebar-hover-card__person-email {
-  color: var(--muted);
-  font-weight: 400;
-  font-size: var(--control-ui-text-xs);
-}
-
-.sidebar-hover-card__divider {
-  height: 1px;
-  margin: 10px 0;
-  background: color-mix(in srgb, var(--border-strong) 68%, transparent);
 }
 
 .sidebar-hover-card__server-details {
@@ -4191,6 +4224,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
+  transition: padding-right var(--duration-fast) ease;
 }
 
 .sidebar-recent-session__details {
@@ -4199,7 +4233,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   gap: 6px;
   height: 18px;
   min-width: 0;
-  transition: padding-right var(--duration-fast) ease;
 }
 
 .sidebar-recent-session__subtitle {

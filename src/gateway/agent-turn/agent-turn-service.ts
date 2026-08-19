@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
@@ -70,6 +71,7 @@ function replayAgentTurnIfCached(params: {
       typeof cached.payload.agentId === "string" && cached.payload.agentId.trim()
         ? cached.payload.agentId.trim()
         : undefined;
+    const cachedRuntime = asOptionalRecord(cached.payload.runtime);
     params.io.emitAcceptance(
       [
         true,
@@ -78,6 +80,7 @@ function replayAgentTurnIfCached(params: {
           status: "in_flight" as const,
           ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
           ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
+          ...(cachedRuntime ? { runtime: cachedRuntime } : {}),
         },
         undefined,
       ],
@@ -250,6 +253,7 @@ export function createAgentTurnService({
       let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
+      let resolvedStorePath: string | undefined;
       let admittedSessionId = resolvedSessionId ?? runId;
       const admissionController = createAgentAdmissionController({
         cfg,
@@ -343,6 +347,7 @@ export function createAgentTurnService({
           failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
         } = preparedSession;
         cfgForAgent = cfgLocal;
+        resolvedStorePath = storePath;
         // Authorize the canonical session the run will actually target — covering
         // keyless requests whose default/effective session is resolved only here —
         // before any run side effects (admission, dispatch).
@@ -370,6 +375,7 @@ export function createAgentTurnService({
           // string and numeric threadIds (e.g., Matrix uses integers).
           threadId: recipientThreadId,
         });
+        const explicitSessionKey = normalizeOptionalString(request.sessionKey);
         const buildSessionPatch = (freshEntry: SessionEntry | undefined) =>
           buildAgentSessionPatch({
             freshEntry,
@@ -381,6 +387,7 @@ export function createAgentTurnService({
             normalizedSpawned,
             requestDeliveryHint,
             requestLabel: request.label,
+            ...(explicitSessionKey ? { explicitSessionKey } : {}),
             pluginOwnerId:
               freshEntry === undefined
                 ? normalizeOptionalString(principal?.internal?.pluginRuntimeOwnerId)
@@ -563,8 +570,8 @@ export function createAgentTurnService({
         return;
       }
       resolvedSessionId = admittedSessionId;
-      // Sessionless and persistence-suppressed runs transfer prepared media to
-      // execution only after dispatch is fully admitted.
+      // The prepared dispatch now owns either transcript-persisted media or its
+      // closed unpersisted ref set; admission must not retain a second owner.
       preparedOffloadedRefs = [];
       gatewayAdmissionTransferred = true;
       // This captures ambient root admission synchronously, then settles the final
@@ -579,6 +586,7 @@ export function createAgentTurnService({
         resolvedSessionKey,
         requestedSessionKey,
         resolvedSessionId,
+        storePath: resolvedStorePath,
         agentId,
         activeSessionAgentId,
         delivery,

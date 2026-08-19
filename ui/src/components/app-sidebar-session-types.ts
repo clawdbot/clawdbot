@@ -90,6 +90,7 @@ export type SidebarRecentSession = {
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
+  channelAvatarUrl?: string;
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
@@ -290,8 +291,8 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   try {
     const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
     if (raw == null) {
-      // First run: the Coding zone starts collapsed so dev sessions stay muted
-      // until the user opts in; expanding persists an empty entry for "work".
+      // First run: Coding stays muted while Online preserves its expanded
+      // default until the user explicitly collapses it.
       return new Set(["work"]);
     }
     const parsed: unknown = JSON.parse(raw);

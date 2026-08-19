@@ -12,6 +12,7 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 export { controlUiSessionPath, controlUiSessionUrl, waitForConfirmModal };
 
@@ -70,6 +71,12 @@ const environmentMetadataProofArtifactDir = path.join(
   "control-ui-e2e",
   "environment-metadata",
 );
+const deviceRuntimeProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "device-runtime-gating",
+);
 
 export async function prepareProjectUiProof() {
   if (captureUiProofEnabled) {
@@ -121,7 +128,7 @@ export function createdSessionListResult(sessionKey: string) {
   };
 }
 
-export async function expectPendingCloudStartupBeforeRuntime(
+export async function expectPendingSessionPlacementStartupBeforeRuntime(
   page: Page,
   gateway: MockGatewayControls,
   sessionKey: string,
@@ -177,6 +184,18 @@ export async function captureEnvironmentMetadataUiProof(page: Page) {
   });
 }
 
+export async function captureDeviceRuntimeUiProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(deviceRuntimeProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(deviceRuntimeProofArtifactDir, fileName),
+  });
+}
+
 export async function pastePng(target: Locator, count = 1) {
   await target.evaluate(
     (element, { base64, fileCount }) => {
@@ -194,15 +213,20 @@ export async function pastePng(target: Locator, count = 1) {
   );
 }
 
-export async function waitForPersistedNewSessionDraft(
+export async function waitForCommittedNewSessionDraft(
   page: Page,
   expectedText: string | null,
   expectedAttachmentCount: number,
 ): Promise<void> {
   // Filling only proves DOM state. The durable read waits for the IndexedDB
   // transaction so reload or navigation cannot beat the snapshot write.
-  await page.waitForFunction(
-    async ({ text, attachmentCount }) => {
+  await waitForCommittedState(
+    page,
+    async (expected) => {
+      const { text, attachmentCount } = expected;
+      if ((typeof text !== "string" && text !== null) || typeof attachmentCount !== "number") {
+        return false;
+      }
       try {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime?: {

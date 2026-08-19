@@ -130,14 +130,16 @@ suite.define(() => {
       await pollLocatorText(where.locator(".new-session-page__trigger-label")).toBe("aws");
       await expect.poll(() => project.getAttribute("data-project-id")).toBe("registered");
       await pollLocatorText(project.locator(".new-session-page__trigger-label")).toBe("Registered");
-      await expect.poll(() => detail.getAttribute("data-worktree")).toBe("true");
-      await detail.click();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("release/next");
-      await expect.poll(() => page.getByLabel("Worktree name").inputValue()).toBe("identity-task");
-      await page
-        .locator("wa-popover.new-session-page__detail-popover")
-        .getByText("Cloud workers require a managed worktree", { exact: true })
-        .waitFor();
+      expect(await detail.count()).toBe(0);
+      await project.click();
+      const projectPopover = page.locator("wa-popover.new-session-page__project-popover");
+      await projectPopover.getByText("Advanced", { exact: true }).click();
+      await expect
+        .poll(() => projectPopover.getByLabel("Base branch").inputValue())
+        .toBe("release/next");
+      await expect
+        .poll(() => projectPopover.getByLabel("Checkout name").inputValue())
+        .toBe("identity-task");
     } finally {
       await context.close();
     }

@@ -185,7 +185,7 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
 // by user attention: personal/look-and-feel first, system plumbing last.
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
-export const SETTINGS_NAVIGATION_GROUPS = [
+const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
@@ -204,6 +204,41 @@ export const SETTINGS_NAVIGATION_GROUPS = [
     routes: ["infrastructure", "advanced", "debug", "logs", "updates", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
+
+const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
+  { labelKey: null, routes: ["profile", "appearance", "notifications"] },
+  {
+    labelKey: "nav.settingsGroupConnections",
+    routes: ["connection", "channels", "talk", "devices"],
+  },
+  {
+    labelKey: "nav.settingsGroupAgents",
+    routes: ["agents", "model-providers", "memory"],
+  },
+  { labelKey: "nav.settingsGroupSecurity", routes: ["approvals"] },
+  {
+    labelKey: "nav.settingsGroupSystem",
+    routes: ["advanced", "debug", "logs", "about"],
+  },
+] as const satisfies readonly SettingsNavigationGroup[];
+
+export function isSettingsNavigationRouteVisible(
+  routeId: NavigationRouteId,
+  canAdmin: boolean,
+): boolean {
+  return (
+    canAdmin ||
+    NON_ADMIN_SETTINGS_NAVIGATION_GROUPS.some((group) =>
+      group.routes.some((candidate) => candidate === routeId),
+    )
+  );
+}
+
+export function visibleSettingsNavigationGroups(
+  canAdmin: boolean,
+): readonly SettingsNavigationGroup[] {
+  return canAdmin ? SETTINGS_NAVIGATION_GROUPS : NON_ADMIN_SETTINGS_NAVIGATION_GROUPS;
+}
 
 // Settings subpages render with settings chrome but stay out of the sidebar.
 // Subpages with a visible owner keep that owner selected so users retain

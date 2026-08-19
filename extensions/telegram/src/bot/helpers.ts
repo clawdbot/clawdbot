@@ -69,10 +69,6 @@ const TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS = 1024;
 const TELEGRAM_FORUM_FLAG_CACHE_TTL_MS = 10 * 60_000;
 const telegramForumFlagByChatId = new Map<string, { expiresAtMs: number; isForum: boolean }>();
 
-export function resetTelegramForumFlagCacheForTest(): void {
-  telegramForumFlagByChatId.clear();
-}
-
 function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs = Date.now()) {
   const cacheKey = String(chatId);
   const expiresAtMs = resolveExpiresAtMsFromDurationMs(TELEGRAM_FORUM_FLAG_CACHE_TTL_MS, {

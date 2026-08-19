@@ -247,6 +247,7 @@ describe("sessions.send completed subagent follow-up status", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
+      status: "running",
       task: "follow-up",
     });
   });

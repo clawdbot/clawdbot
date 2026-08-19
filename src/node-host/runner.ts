@@ -20,6 +20,7 @@ import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
@@ -302,7 +303,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
 
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
-  let workerRunsAvailable = false;
+  let workerCapacity: NodeWorkerCapacitySnapshot | undefined;
   let gatewayHelloReceived = false;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
@@ -518,19 +519,20 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       NODE_RUNNER_INVENTORY_UPDATE_METHOD,
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: preparedRuntime.workerHostingEnabled
-          ? {
-              enabled: true,
-              capacity: workerRunsAvailable ? "available" : "full",
-              bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
-              ...(gatewaySupportsBundleRetention
-                ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
-                : {}),
-              ...(gatewaySupportsBundleRetention && gatewaySupportsBundleStatus
-                ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
-                : {}),
-            }
-          : { enabled: false },
+        workerHost:
+          preparedRuntime.workerHostingEnabled && workerCapacity
+            ? {
+                enabled: true,
+                capacity: workerCapacity,
+                bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
+                ...(gatewaySupportsBundleRetention
+                  ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
+                  : {}),
+                ...(gatewaySupportsBundleRetention && gatewaySupportsBundleStatus
+                  ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
+                  : {}),
+              }
+            : { enabled: false },
       },
       "runner inventory",
     );
@@ -650,8 +652,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       inventory = nextInventory;
       publishInventory();
     },
-    onRunnerAvailabilityChanged: (available) => {
-      workerRunsAvailable = available;
+    onRunnerCapacityChanged: (capacity) => {
+      workerCapacity = capacity;
       publishRunnerInventory();
     },
     onManifestChanged: (manifest) => {

@@ -38,7 +38,6 @@ import {
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -811,10 +810,10 @@ async function loadModelCatalog(
   }
 }
 
-async function resolveSteerTarget(
+function resolveCommandMessage(
   sessionKey: string,
   args: string,
-): Promise<{ key: string; message: string } | { error: string }> {
+): { key: string; message: string } | { error: string } {
   const trimmed = args.trim();
   if (!trimmed) {
     return { error: "empty" };
@@ -823,12 +822,6 @@ async function resolveSteerTarget(
     key: sessionKey,
     message: trimmed,
   };
-}
-
-function isActiveSteerSession(
-  session: GatewaySessionRow | undefined,
-): session is GatewaySessionRow & { activeRunIds: [string] } {
-  return Boolean(session && isSessionRunActive(session) && session.activeRunIds?.length === 1);
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
@@ -871,19 +864,10 @@ async function executeSteer(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(sessionKey, args);
+    const resolved = resolveCommandMessage(sessionKey, args);
     if ("error" in resolved) {
       return {
         content: resolved.error === "empty" ? t("chat.commandResults.steer.usage") : resolved.error,
-      };
-    }
-    const sessions =
-      context.sessionsResult ??
-      (await listSessions(context, selectedGlobalScope(sessionKey, context)));
-    const targetSession = resolveCurrentSession(sessions, resolved.key);
-    if (!isActiveSteerSession(targetSession)) {
-      return {
-        content: t("chat.commandResults.steer.noActiveRun"),
       };
     }
     assertCurrentSlashCommand(context);
@@ -894,10 +878,6 @@ async function executeSteer(
         message: resolved.message,
         deliver: false,
         queueMode: "steer",
-        expectedRunId: targetSession.activeRunIds[0],
-        ...(targetSession.activeLeafEntryId !== undefined
-          ? { expectedLeafEntryId: targetSession.activeLeafEntryId }
-          : {}),
         idempotencyKey: generateUUID(),
       }),
     );
@@ -926,7 +906,7 @@ async function executeRedirect(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(sessionKey, args);
+    const resolved = resolveCommandMessage(sessionKey, args);
     if ("error" in resolved) {
       return {
         content:
