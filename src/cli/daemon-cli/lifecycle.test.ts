@@ -37,7 +37,15 @@ const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<(port: number) => number
 const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SIGUSR1") => void>();
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
-const throwIfGatewayPortBusyWithoutOwner = vi.fn<(port: number) => Promise<void>>(async () => {});
+const resolveGatewayServiceProbeHosts = vi.fn<
+  (params: {
+    env?: Record<string, string | undefined>;
+    command?: unknown;
+  }) => Promise<readonly string[]>
+>(async () => ["127.0.0.1"]);
+const probePortUsage = vi.fn<(port: number, hosts?: readonly string[]) => Promise<"free" | "busy">>(
+  async () => "free",
+);
 const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
 const probeGateway = vi.fn<
   (opts: {
@@ -173,8 +181,15 @@ vi.mock("./lifecycle-audit.js", () => ({
     createGatewayLifecycleMutationAudit(params),
 }));
 
-vi.mock("./lifecycle-port-probe.js", () => ({
-  throwIfGatewayPortBusyWithoutOwner: (port: number) => throwIfGatewayPortBusyWithoutOwner(port),
+vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({
+  resolveGatewayServiceProbeHosts: (params: {
+    env?: Record<string, string | undefined>;
+    command?: unknown;
+  }) => resolveGatewayServiceProbeHosts(params),
+}));
+
+vi.mock("../../infra/ports-probe.js", () => ({
+  probePortUsage: (port: number, hosts?: readonly string[]) => probePortUsage(port, hosts),
 }));
 
 vi.mock("./restart-health.js", () => ({
@@ -277,7 +292,8 @@ describe("runDaemonRestart health checks", () => {
     isTerminalInteractive.mockReset().mockReturnValue(true);
     appendGatewayLifecycleAudit.mockClear();
     createGatewayLifecycleMutationAudit.mockClear();
-    throwIfGatewayPortBusyWithoutOwner.mockReset().mockResolvedValue(undefined);
+    resolveGatewayServiceProbeHosts.mockReset().mockResolvedValue(["127.0.0.1"]);
+    probePortUsage.mockReset().mockResolvedValue("free");
     isDefaultInstallIdentity.mockReset().mockReturnValue(true);
 
     service.readCommand.mockResolvedValue({
@@ -808,7 +824,6 @@ describe("runDaemonRestart health checks", () => {
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(39_471);
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
-    expect(service.readCommand).not.toHaveBeenCalled();
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {
@@ -1126,25 +1141,40 @@ describe("runDaemonRestart health checks", () => {
   it("throws when gateway-configured port is busy without an identified owner", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
     readActiveGatewayLockIdentity.mockResolvedValue(undefined);
-    throwIfGatewayPortBusyWithoutOwner.mockRejectedValue(
-      new Error("Port 18789 is in use but the owning process could not be identified."),
-    );
+    probePortUsage.mockResolvedValue("busy");
 
     await expect(runUnmanagedStop()).rejects.toThrow(
       /Port 18789 is in use but the owning process could not be identified/,
     );
-    expect(throwIfGatewayPortBusyWithoutOwner).toHaveBeenCalledWith(18789);
+    expect(probePortUsage).toHaveBeenCalledWith(18789, ["127.0.0.1"]);
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 
   it("does not false-positive when port probe reports free", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
     readActiveGatewayLockIdentity.mockResolvedValue(undefined);
-    throwIfGatewayPortBusyWithoutOwner.mockResolvedValue(undefined);
+    probePortUsage.mockResolvedValue("free");
 
     const outcome = await runUnmanagedStop();
 
-    expect(throwIfGatewayPortBusyWithoutOwner).toHaveBeenCalledWith(18789);
+    expect(probePortUsage).toHaveBeenCalledWith(18789, ["127.0.0.1"]);
     expect(outcome).toBeNull();
+  });
+
+  it("passes service command/env to probe hosts resolver for scoped probe", async () => {
+    const serviceCommand = {
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      environment: { OPENCLAW_STATE_DIR: "/tmp/service-state" },
+    };
+    service.readCommand.mockResolvedValue(serviceCommand);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    probePortUsage.mockResolvedValue("free");
+
+    await runUnmanagedStop();
+
+    expect(resolveGatewayServiceProbeHosts).toHaveBeenCalledWith(
+      expect.objectContaining({ command: serviceCommand }),
+    );
   });
 });

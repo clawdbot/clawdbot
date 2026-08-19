@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
@@ -30,6 +31,7 @@ import {
   isGatewayExternallySupervised,
   resolveGatewayServiceMutationError,
 } from "../../infra/gateway-supervision.js";
+import { probePortUsage } from "../../infra/ports-probe.js";
 import {
   clearGatewayRestartIntentSync,
   type GatewayRestartIntent,
@@ -53,7 +55,6 @@ import {
   runServiceStop,
   runServiceUninstall,
 } from "./lifecycle-core.js";
-import { throwIfGatewayPortBusyWithoutOwner } from "./lifecycle-port-probe.js";
 import {
   runSafeGatewayRestart,
   resolveGatewayRestartIntentOptions,
@@ -110,23 +111,12 @@ function formatRestartFailure(params: {
   };
 }
 
-async function resolveGatewayLifecycleContext(service = resolveGatewayService()): Promise<{
-  port: number;
-  env: NodeJS.ProcessEnv;
-}> {
+async function resolveGatewayLifecycleContext(service = resolveGatewayService()) {
   const command = await service.readCommand(process.env).catch(() => null);
-  const mergedEnv = mergeGatewayServiceEnv(process.env, command);
-
-  const portFromArgs = parsePortFromArgs(command?.programArguments);
+  const env = mergeGatewayServiceEnv(process.env, command);
   const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
-  return {
-    port: portFromArgs ?? resolveGatewayPort(config, mergedEnv),
-    env: mergedEnv,
-  };
-}
-
-async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
-  return (await resolveGatewayLifecycleContext(service)).port;
+  const port = parsePortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
+  return { port, env, command };
 }
 
 function resolveGatewayPortFallback(): Promise<number> {
@@ -207,7 +197,11 @@ async function handleSystemScopeSystemdGateway(
   };
 }
 
-async function stopGatewayWithoutServiceManager(port: number, lockOwnerPid: number | undefined) {
+async function stopGatewayWithoutServiceManager(
+  port: number,
+  lockOwnerPid: number | undefined,
+  serviceContext?: Parameters<typeof resolveGatewayServiceProbeHosts>[0],
+) {
   const managed = await handleSystemScopeSystemdGateway("stop");
   if (managed) {
     return managed;
@@ -218,7 +212,13 @@ async function stopGatewayWithoutServiceManager(port: number, lockOwnerPid: numb
   // reporting the gateway as not running while it keeps serving.
   const pids = listenerPids.length > 0 ? listenerPids : lockOwnerPid ? [lockOwnerPid] : [];
   if (pids.length === 0) {
-    await throwIfGatewayPortBusyWithoutOwner(port);
+    // Probe only the interfaces the selected service binds, not the caller's.
+    const probeHosts = await resolveGatewayServiceProbeHosts(serviceContext ?? {});
+    if ((await probePortUsage(port, probeHosts)) === "busy") {
+      throw new Error(
+        `Port ${port} is in use but the owning process could not be identified. Run ${formatCliCommand("openclaw gateway status --deep")} to diagnose.`,
+      );
+    }
     return null;
   }
   for (const pid of pids) {
@@ -546,10 +546,9 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
       // for discovery the way restart already does; otherwise a valid port
       // override makes the running gateway look like it is already stopped.
       const lockIdentity = await readActiveGatewayLockIdentity().catch(() => undefined);
-      const port =
-        lockIdentity?.port ??
-        (await resolveGatewayLifecyclePort(service).catch(() => resolveGatewayPortFallback()));
-      return await stopGatewayWithoutServiceManager(port, lockIdentity?.pid);
+      const ctx = await resolveGatewayLifecycleContext(service).catch(() => null);
+      const port = lockIdentity?.port ?? ctx?.port ?? (await resolveGatewayPortFallback());
+      return await stopGatewayWithoutServiceManager(port, lockIdentity?.pid, ctx ?? undefined);
     },
   });
 }
