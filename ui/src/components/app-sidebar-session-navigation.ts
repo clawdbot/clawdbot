@@ -7,11 +7,7 @@ import { isSessionRouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import {
-  filterVisibleSessionRows,
-  sessionMatchesArchivedFilter,
-  sessionMatchesVisibleSessionScope,
-} from "../lib/sessions/index.ts";
+import { filterVisibleSessionRows, sessionMatchesArchivedFilter } from "../lib/sessions/index.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import {
   composerDraftSearch,
@@ -23,7 +19,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
-  resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
 import {
@@ -34,6 +29,7 @@ import {
   applySidebarSessionOwnerFilter,
   buildReconciledSidebarZone,
   buildSidebarSessionNavigationState,
+  collectCategorizedChildRootRows,
   collectPromotedMainChildRows,
   compareSidebarSessionRowsByMode,
   collectKnownSidebarSessionCatalogIds,
@@ -593,10 +589,17 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const selected = this.expandedAgentId();
     const loadedAgentId = normalizeAgentId(this.sessionData.sessionsAgentId ?? "");
     const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);
-    const defaultAgentId = resolveUiDefaultAgentId({
-      agentsList: this.context?.agents.state.agentsList,
-      hello: this.context?.gateway.snapshot.hello,
-    });
+    const visibilityOptions = {
+      agentId: selected,
+      defaultAgentId: resolveUiDefaultAgentId({
+        agentsList: this.context?.agents.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      }),
+      filterByAgent: true,
+      showCron: this.sessionsShowCron,
+      showSystem: this.sessionsShowSystem,
+      archivedFilter: this.sessionsStatusFilter,
+    } as const;
     const rows =
       selected === loadedAgentId
         ? (this.sessionData.sessionsResult?.sessions ?? [])
@@ -608,14 +611,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
             const row = rowsByKey.get(session.key);
             return row ? [row] : [];
           })
-        : filterVisibleSessionRows(rows, {
-            agentId: selected,
-            defaultAgentId,
-            filterByAgent: true,
-            showCron: this.sessionsShowCron,
-            showSystem: this.sessionsShowSystem,
-            archivedFilter: this.sessionsStatusFilter,
-          }).toSorted(this.compareSidebarSessionRows);
+        : filterVisibleSessionRows(rows, visibilityOptions).toSorted(
+            this.compareSidebarSessionRows,
+          );
     // The identity card replaces the main row; promote children under all equivalent aliases.
     const mainSessionKey = this.selectedAgentMainSessionKey(selected);
     const lineageRoot = this.sessionData.activeSessionLineageRoot;
@@ -655,27 +653,13 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     ) {
       scopedRootRows.push(lineageRoot);
     }
+    const categorizedChildRows = collectCategorizedChildRootRows({
+      rows,
+      scopedRoots: scopedRootRows,
+      visibilityOptions,
+    });
+    scopedRootRows.push(...categorizedChildRows);
     const scopedRootKeys = new Set(scopedRootRows.map((row) => row.key));
-    let addedCategorizedChildRoot = false;
-    for (const row of rows) {
-      if (
-        !scopedRootKeys.has(row.key) &&
-        normalizeOptionalString(row.category) &&
-        resolveUiSessionNavigationParentKey(row) &&
-        sessionMatchesVisibleSessionScope(row, {
-          agentId: selected,
-          defaultAgentId,
-          filterByAgent: true,
-          showCron: this.sessionsShowCron,
-          showSystem: this.sessionsShowSystem,
-          archivedFilter: this.sessionsStatusFilter,
-        })
-      ) {
-        scopedRootKeys.add(row.key);
-        scopedRootRows.push(row);
-        addedCategorizedChildRoot = true;
-      }
-    }
     const promotedRows = collectPromotedMainChildRows({
       rows,
       childRowsByParent: this.sessionData.childSessionRowsByParent,
@@ -691,7 +675,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       }
     }
     const orderedRootRows =
-      promotedRows.length > 0 || addedCategorizedChildRoot
+      promotedRows.length > 0 || categorizedChildRows.length > 0
         ? scopedRootRows.toSorted(this.compareSidebarSessionRows)
         : scopedRootRows;
     // `adopted` holds only catalog-bound keys (adoptedCatalogSessionKeys), not

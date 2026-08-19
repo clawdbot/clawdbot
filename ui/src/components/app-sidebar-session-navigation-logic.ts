@@ -23,6 +23,7 @@ import {
   filterVisibleSessionRows,
   isSystemCreatedSessionRow,
   resolveSessionNavigation,
+  sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
 import {
   resolveSessionPreferredFace,
@@ -518,6 +519,21 @@ export function collectPromotedMainChildRows(input: {
       (input.showSystem || !isSystemCreatedSessionRow(row))
     );
   });
+}
+
+export function collectCategorizedChildRootRows(input: {
+  rows: readonly GatewaySessionRow[];
+  scopedRoots: readonly GatewaySessionRow[];
+  visibilityOptions: Parameters<typeof filterVisibleSessionRows>[1];
+}): GatewaySessionRow[] {
+  const scopedRootKeys = new Set(input.scopedRoots.map((row) => row.key));
+  return input.rows.filter(
+    (row) =>
+      !scopedRootKeys.has(row.key) &&
+      normalizeOptionalString(row.category) != null &&
+      resolveUiSessionNavigationParentKey(row) != null &&
+      sessionMatchesVisibleSessionScope(row, input.visibilityOptions),
+  );
 }
 
 export function resolveSidebarAgentResumeKey(
