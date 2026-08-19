@@ -109,6 +109,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
       expect(checkout.with?.["persist-credentials"]).toBe(false);
     }
+    const proofCheckout = workflow.jobs?.run_telegram_desktop_proof?.steps?.find(
+      (step) => step.name === "Checkout harness ref",
+    );
+    const validationCheckout = workflow.jobs?.validate_refs?.steps?.find(
+      (step) => step.name === "Checkout harness ref",
+    );
+    expect(proofCheckout?.with?.["fetch-depth"]).toBe(1);
+    expect(validationCheckout?.with?.["fetch-depth"]).toBe(0);
   });
 
   it("serializes on the shared credential rather than on other runs", () => {
@@ -417,11 +425,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(installRun).not.toContain("${RUNNER_TEMP}/mantis-uv");
     expect(installRun).toContain("/usr/local/bin/openclaw-telegram-mantis-lane");
     expect(installRun).toContain("/usr/local/bin/openclaw-telegram-desktop-recorder");
+    expect(installRun).toContain("node_modules/.bin/esbuild scripts/e2e/telegram-mantis-lane.ts");
     expect(installRun).toContain(
-      "node node_modules/esbuild/bin/esbuild scripts/e2e/telegram-mantis-lane.ts",
-    );
-    expect(installRun).toContain(
-      "node node_modules/esbuild/bin/esbuild scripts/e2e/telegram-desktop-recorder.ts",
+      "node_modules/.bin/esbuild scripts/e2e/telegram-desktop-recorder.ts",
     );
     expect(installRun).toContain(
       "/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-mantis-lane.mjs",
@@ -529,6 +535,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
 
     expect(createRun).toContain('git cat-file -e "${BASELINE_SHA}^{commit}"');
+    expect(createRun).toContain('git fetch --no-tags --depth 1 origin "$BASELINE_SHA"');
     expect(createRun).toContain('git fetch --no-tags origin "pull/${MANTIS_PR_NUMBER}/head"');
     expect(createRun).toContain('git worktree add --detach "$baseline_root" "$BASELINE_SHA"');
     expect(createRun).toContain('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"');

@@ -201,7 +201,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -233,10 +233,10 @@ jobs:
           recorder_user="$(id -un)"
           toolchain_build="${RUNNER_TEMP}/mantis-toolchain-build"
           mkdir -p "$toolchain_build/scripts/e2e"
-          node node_modules/esbuild/bin/esbuild scripts/e2e/telegram-mantis-lane.ts \
+          node_modules/.bin/esbuild scripts/e2e/telegram-mantis-lane.ts \
             --bundle --platform=node --format=esm --target=node24 \
             --outfile="$toolchain_build/scripts/e2e/telegram-mantis-lane.mjs"
-          node node_modules/esbuild/bin/esbuild scripts/e2e/telegram-desktop-recorder.ts \
+          node_modules/.bin/esbuild scripts/e2e/telegram-desktop-recorder.ts \
             --bundle --platform=node --format=esm --target=node24 \
             --outfile="$toolchain_build/scripts/e2e/telegram-desktop-recorder.mjs"
           cp scripts/windows-cmd-helpers.mjs "$toolchain_build/scripts/windows-cmd-helpers.mjs"
@@ -413,6 +413,9 @@ jobs:
           toolchain_dir=/usr/local/lib/mantis-toolchain
           corepack_home="${RUNNER_TEMP}/mantis-corepack"
           mkdir -p "$worktree_root" "$corepack_home"
+          if ! git cat-file -e "${BASELINE_SHA}^{commit}"; then
+            git fetch --no-tags --depth 1 origin "$BASELINE_SHA"
+          fi
           git cat-file -e "${BASELINE_SHA}^{commit}"
           if ! git cat-file -e "${CANDIDATE_SHA}^{commit}"; then
             git fetch --no-tags origin "pull/${MANTIS_PR_NUMBER}/head"
