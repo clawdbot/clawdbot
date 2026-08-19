@@ -665,15 +665,59 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(tasksAuditCommand).not.toHaveBeenCalled();
   });
 
-  it("routes tasks flow commands through the TaskFlow handlers", async () => {
-    await runCli(["tasks", "flow", "list", "--json", "--status", "blocked"]);
-    expectCommandOptions(flowsListCommand, {});
+  it.each([
+    {
+      label: "child options",
+      args: ["tasks", "flow", "list", "--json", "--status", "blocked"],
+      expected: { json: true, status: "blocked" },
+    },
+    {
+      label: "parent JSON",
+      args: ["tasks", "--json", "flow", "list"],
+      expected: { json: true, status: undefined },
+    },
+    {
+      label: "parent status",
+      args: ["tasks", "--status", "running", "flow", "list"],
+      expected: { json: false, status: "running" },
+    },
+    {
+      label: "child status precedence",
+      args: ["tasks", "--status", "running", "flow", "list", "--status", "blocked"],
+      expected: { json: false, status: "blocked" },
+    },
+    {
+      label: "defaults",
+      args: ["tasks", "flow", "list"],
+      expected: { json: false, status: undefined },
+    },
+  ])("routes tasks flow list with $label", async ({ args, expected }) => {
+    await runCli(args);
+    expectCommandOptions(flowsListCommand, expected);
+  });
 
-    await runCli(["tasks", "flow", "show", "flow-123", "--json"]);
-    expectCommandOptions(flowsShowCommand, {
-      lookup: "flow-123",
-    });
+  it.each([
+    {
+      label: "child JSON",
+      args: ["tasks", "flow", "show", "flow-123", "--json"],
+      json: true,
+    },
+    {
+      label: "parent JSON",
+      args: ["tasks", "--json", "flow", "show", "flow-123"],
+      json: true,
+    },
+    {
+      label: "defaults",
+      args: ["tasks", "flow", "show", "flow-123"],
+      json: false,
+    },
+  ])("routes tasks flow show with $label", async ({ args, json }) => {
+    await runCli(args);
+    expectCommandOptions(flowsShowCommand, { lookup: "flow-123", json });
+  });
 
+  it("routes tasks flow cancellation through the TaskFlow handler", async () => {
     await runCli(["tasks", "flow", "cancel", "flow-123"]);
     expectCommandOptions(flowsCancelCommand, {
       lookup: "flow-123",
