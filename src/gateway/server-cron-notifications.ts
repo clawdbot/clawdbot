@@ -599,7 +599,10 @@ function dispatchCronFailureDestinationNotifications(params: {
 
   const failureAlertText = [
     `Automation "${job.name}" ${params.evt.status === "error" ? "failed" : "delivery failed"}`,
-    ...cronFailureDetailLines(job.state.lastErrorReason),
+    ...cronFailureDetailLines(
+      job.state.lastErrorReason,
+      params.evt.error ?? params.evt.deliveryError,
+    ),
   ].join("\n");
   dispatchDetachedCronNotification({
     jobId: job.id,

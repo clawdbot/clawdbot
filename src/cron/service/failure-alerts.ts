@@ -183,7 +183,7 @@ function emitFailureAlert(
           ...(errorReason ? [`Cause: ${errorReason}`] : []),
           `${detailLabel}: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`,
         ]
-      : cronFailureDetailLines(errorReason);
+      : cronFailureDetailLines(errorReason, params.error, detailLabel);
   const text = [
     `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
     ...detailLines,

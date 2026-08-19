@@ -658,7 +658,7 @@ describe("CronService failure alerts", () => {
           throw new Error("expected failure alert text");
         }
         expect(alertText).toBe(
-          'Automation "gateway restart" skipped 2 times\nCheck automation history for details.',
+          'Automation "gateway restart" skipped 2 times\nSkip reason: disabled',
         );
 
         const skippedJob = cron.getJob(job.id);
@@ -766,13 +766,13 @@ describe("CronService failure alerts", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         expect(alertCallArg(sendCronFailureAlert).text).toBe(
           'Automation "permanent script alert" failed 1 times\n' +
-            "Check automation history for details.",
+            "Last error: cron script failed after a tool side effect: request timed out",
         );
       },
     );
   });
 
-  it("keeps skipped alert text unchanged when the skip reason looks classifiable", async () => {
+  it("labels skipped detail without classifying a timeout-like reason", async () => {
     await withFailureAlertCron(
       {
         failureAlert: { enabled: true, after: 1, includeSkipped: true },
@@ -789,7 +789,7 @@ describe("CronService failure alerts", () => {
         const alertText = alertCallArg(sendCronFailureAlert).text;
         expect(alertText).toBe(
           'Automation "skipped timeout" skipped 1 times\n' +
-            "Check automation history for details.",
+            "Skip reason: cron: job execution timed out",
         );
       },
     );

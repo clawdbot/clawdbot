@@ -710,7 +710,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         jobId: announceJob.id,
         action: "finished",
         status: "error",
-        error: "script failed permanently after request timed out",
+        error: "command exited with code 2 token=opaque-secret-value\nError: stack body",
       },
       job: announceJob,
       deps: {} as CliDeps,
@@ -718,7 +718,9 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
     expect(mocks.sendFailureNotificationAnnounce.mock.calls[0]?.[5]).toEqual({
-      text: '⚠️ Automation "notification admission" failed\nCheck automation history for details.',
+      text:
+        '⚠️ Automation "notification admission" failed\n' +
+        "Last error: command exited with code 2 token=opaque…alue",
     });
 
     vi.clearAllMocks();
@@ -900,7 +902,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         inheritSessionThread: false,
       },
       {
-        text: '⚠️ Automation "channel fd no mode" failed\nCheck automation history for details.',
+        text: '⚠️ Automation "channel fd no mode" failed\nLast error: boom',
       },
     );
     expect(logger.warn).not.toHaveBeenCalledWith(
