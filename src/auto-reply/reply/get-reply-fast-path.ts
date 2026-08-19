@@ -42,7 +42,10 @@ import {
   usesFullReplyRuntime,
 } from "./reply-config-runtime-mode.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
-import { resolveSessionResetCommand } from "./session-reset-command.js";
+import {
+  explicitResetPreservesSessionCategory,
+  resolveSessionResetCommand,
+} from "./session-reset-command.js";
 import type { SessionInitResult } from "./session.js";
 
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -237,6 +240,10 @@ export function initFastReplySessionState(params: {
     ...(resetTriggered && existingEntry
       ? {
           previousSessionId: existingEntry.sessionId,
+          // `/reset` stays in the user's sidebar group; `/new` starts ungrouped.
+          ...(explicitResetPreservesSessionCategory(resetCommand.matchedResetTriggerLower)
+            ? { category: existingEntry.category }
+            : {}),
           spawnedBy: existingEntry.spawnedBy,
           spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
           spawnedCwd: existingEntry.spawnedCwd,

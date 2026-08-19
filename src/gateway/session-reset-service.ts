@@ -1582,6 +1582,7 @@ export async function performGatewaySessionReset(params: {
             subagentControlScope: currentEntry?.subagentControlScope,
             label: currentEntry?.label,
             displayName: currentEntry?.displayName,
+            category: params.reason === "reset" ? currentEntry?.category : undefined,
             delivery: currentEntry?.delivery,
             pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,
             groupId: currentEntry?.groupId,
