@@ -371,6 +371,8 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     params.abortOrigin === "stop-command"
       ? agentEndCancellation.reserve(cancellationSessionKey, reservedRunIds)
       : undefined;
+  let workerReservation: ReturnType<typeof agentEndCancellation.reserve> | undefined;
+  let workerRunIds: string[] = [];
   const runIds: string[] = [];
   let didAbort = false;
   try {
@@ -426,10 +428,21 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
       didAbort = true;
     }
     if (params.requester.isAdmin && canCancelWorkerSession) {
-      for (const runId of cancelWorkerInferenceForSession({
+      workerRunIds = cancelWorkerInferenceForSession({
         context: params.context,
         sessionId: params.sessionId,
-      })) {
+        ...(params.abortOrigin === "stop-command"
+          ? {
+              onRunsResolved: (resolvedRunIds: readonly string[]) => {
+                workerReservation = agentEndCancellation.reserve(
+                  cancellationSessionKey,
+                  resolvedRunIds,
+                );
+              },
+            }
+          : {}),
+      });
+      for (const runId of workerRunIds) {
         if (!runIds.includes(runId)) {
           runIds.push(runId);
         }
@@ -449,6 +462,9 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   } finally {
     if (cancellationReservation) {
       agentEndCancellation.reconcile(cancellationReservation, runIds, didAbort);
+    }
+    if (workerReservation) {
+      agentEndCancellation.reconcile(workerReservation, workerRunIds, workerRunIds.length > 0);
     }
   }
 }
