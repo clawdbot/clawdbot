@@ -100,6 +100,51 @@ export const POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV =
 export const POST_CORE_UPDATE_STARTED_AT_ENV = "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS";
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 
+type UpdateFinalizePhase =
+  | "configSnapshot"
+  | "doctor"
+  | "plugins"
+  | "targetConfigValidation"
+  | "targetConfigConvergence"
+  | "completionCache";
+
+type UpdateFinalizePhaseOutcome = "completed" | "failed" | "warning" | "skipped" | "deferred";
+
+type UpdateFinalizePhaseTiming = {
+  phase: UpdateFinalizePhase;
+  startedOffsetMs: number;
+  durationMs: number;
+  outcome: UpdateFinalizePhaseOutcome;
+};
+
+async function runTimedFinalizePhase<T>(params: {
+  finalizationStartedAt: number;
+  phaseTimings: UpdateFinalizePhaseTiming[];
+  phase: UpdateFinalizePhase;
+  run: () => Promise<T>;
+  outcome?: (result: T) => UpdateFinalizePhaseOutcome;
+}): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    const result = await params.run();
+    params.phaseTimings.push({
+      phase: params.phase,
+      startedOffsetMs: Math.max(0, Math.round(startedAt - params.finalizationStartedAt)),
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      outcome: params.outcome?.(result) ?? "completed",
+    });
+    return result;
+  } catch (err) {
+    params.phaseTimings.push({
+      phase: params.phase,
+      startedOffsetMs: Math.max(0, Math.round(startedAt - params.finalizationStartedAt)),
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      outcome: "failed",
+    });
+    throw err;
+  }
+}
+
 export async function reportPreMutationUpdateFailure(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -140,6 +185,7 @@ type UpdateFinalizeResult = {
   root: string;
   channel: UpdateChannel;
   restart: false;
+  phaseTimings: UpdateFinalizePhaseTiming[];
   postUpdate: {
     doctor: {
       status: "ok";
@@ -150,6 +196,8 @@ type UpdateFinalizeResult = {
 
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
   suppressDeprecations();
+  const finalizationStartedAt = performance.now();
+  const phaseTimings: UpdateFinalizePhaseTiming[] = [];
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {
     return;
@@ -169,7 +217,12 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   });
 
   const root = await resolveUpdateRoot();
-  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  let configSnapshot = await runTimedFinalizePhase({
+    finalizationStartedAt,
+    phaseTimings,
+    phase: "targetConfigValidation",
+    run: async () => await readConfigFileSnapshot({ skipPluginValidation: true }),
+  });
   const preFinalizeConfig =
     (await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
@@ -221,59 +274,113 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
 
   const completedPluginUpdate = await withPluginLifecycleLease({}, async () => {
     const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
-      await createUpdateConfigSnapshot();
-      await doctorCommand(defaultRuntime, {
-        nonInteractive: true,
-        repair: true,
-        yes: opts.yes === true,
+      await runTimedFinalizePhase({
+        finalizationStartedAt,
+        phaseTimings,
+        phase: "configSnapshot",
+        run: createUpdateConfigSnapshot,
       });
-      configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-      if (requestedChannel) {
-        configSnapshot = await persistRequestedUpdateChannel({
-          configSnapshot,
-          requestedChannel,
-        });
-      }
-      const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
-      configSnapshot = restoredConfig.snapshot;
-      const postDoctorStoredChannel = configSnapshot.valid
-        ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-        : null;
-      const postDoctorChannel =
-        requestedChannel ??
-        postDoctorStoredChannel ??
-        storedChannel ??
-        effectiveChannel ??
-        DEFAULT_PACKAGE_CHANNEL;
-      const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-      return await updatePluginsAfterCoreUpdate({
-        root,
-        channel: postDoctorChannel,
-        configSnapshot,
-        configChanged: restoredConfig.changed,
-        restoredAuthoredChannels: restoredConfig.authoredChannels,
-        opts: {
-          json: opts.json,
-          timeout: opts.timeout,
-          yes: opts.yes,
-          restart: false,
-          acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+      const doctorPreparation = await runTimedFinalizePhase({
+        finalizationStartedAt,
+        phaseTimings,
+        phase: "doctor",
+        run: async () => {
+          await doctorCommand(defaultRuntime, {
+            nonInteractive: true,
+            repair: true,
+            yes: opts.yes === true,
+          });
+          configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+          if (requestedChannel) {
+            configSnapshot = await persistRequestedUpdateChannel({
+              configSnapshot,
+              requestedChannel,
+            });
+          }
+          const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
+          configSnapshot = restoredConfig.snapshot;
+          const postDoctorStoredChannel = configSnapshot.valid
+            ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+            : null;
+          const postDoctorChannel =
+            requestedChannel ??
+            postDoctorStoredChannel ??
+            storedChannel ??
+            effectiveChannel ??
+            DEFAULT_PACKAGE_CHANNEL;
+          const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+          return { restoredConfig, postDoctorChannel, pluginInstallRecords };
         },
-        timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-        pluginInstallRecords,
+      });
+      return await runTimedFinalizePhase({
+        finalizationStartedAt,
+        phaseTimings,
+        phase: "plugins",
+        run: async () =>
+          await updatePluginsAfterCoreUpdate({
+            root,
+            channel: doctorPreparation.postDoctorChannel,
+            configSnapshot,
+            configChanged: doctorPreparation.restoredConfig.changed,
+            restoredAuthoredChannels: doctorPreparation.restoredConfig.authoredChannels,
+            opts: {
+              json: opts.json,
+              timeout: opts.timeout,
+              yes: opts.yes,
+              restart: false,
+              acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+            },
+            timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+            pluginInstallRecords: doctorPreparation.pluginInstallRecords,
+          }),
+        outcome: (result) =>
+          result.status === "error"
+            ? "failed"
+            : result.status === "warning"
+              ? "warning"
+              : "completed",
       });
     });
-    return await completePostCorePluginUpdate({
-      root,
-      pluginUpdate: initialPluginUpdate,
-      freshDoctorRequired: initialPluginUpdate.changed,
-      yes: opts.yes === true,
-      json: opts.json === true,
-      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+    return await runTimedFinalizePhase({
+      finalizationStartedAt,
+      phaseTimings,
+      phase: "targetConfigConvergence",
+      run: async () =>
+        await completePostCorePluginUpdate({
+          root,
+          pluginUpdate: initialPluginUpdate,
+          freshDoctorRequired: initialPluginUpdate.changed,
+          yes: opts.yes === true,
+          json: opts.json === true,
+          timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+        }),
+      outcome: (result) =>
+        result.pluginUpdate.status === "error"
+          ? "failed"
+          : result.pluginUpdate.status === "warning"
+            ? "warning"
+            : "completed",
     });
   });
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   configSnapshot = completedPluginUpdate.configSnapshot;
+
+  if (opts.deferCompletionCache) {
+    phaseTimings.push({
+      phase: "completionCache",
+      startedOffsetMs: Math.max(0, Math.round(performance.now() - finalizationStartedAt)),
+      durationMs: 0,
+      outcome: "deferred",
+    });
+  } else {
+    await runTimedFinalizePhase({
+      finalizationStartedAt,
+      phaseTimings,
+      phase: "completionCache",
+      run: async () => await tryWriteCompletionCache(root, Boolean(opts.json)),
+      outcome: (result) => result,
+    });
+  }
 
   const result: UpdateFinalizeResult = {
     status:
@@ -291,6 +398,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         : null) ??
       channel,
     restart: false,
+    phaseTimings,
     postUpdate: {
       doctor: {
         status: "ok",
@@ -298,8 +406,6 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       plugins: pluginUpdate,
     },
   };
-
-  await tryWriteCompletionCache(root, Boolean(opts.json));
   if (opts.json) {
     defaultRuntime.writeJson(result);
   } else if (result.status === "ok") {

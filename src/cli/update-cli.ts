@@ -14,7 +14,11 @@ import type {
   UpdateWizardOptions,
 } from "./update-cli/shared.js";
 import { updateStatusCommand } from "./update-cli/status.js";
-import { updateCommand, updateFinalizeCommand } from "./update-cli/update-command.js";
+import {
+  POST_CORE_UPDATE_ENV,
+  updateCommand,
+  updateFinalizeCommand,
+} from "./update-cli/update-command.js";
 import { updateWizardCommand } from "./update-cli/wizard.js";
 
 export { updateCommand, updateFinalizeCommand, updateStatusCommand, updateWizardCommand };
@@ -125,6 +129,7 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           timeout: inheritedUpdateTimeout(opts, actionCommand),
           yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(actionCommand, "yes")),
           restart: false,
+          deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
           acknowledgeClawHubRisk:
             normalizeCommanderClawHubRiskOption(opts) || inheritedUpdateClawHubRisk(actionCommand),
         });

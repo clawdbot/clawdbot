@@ -7647,6 +7647,12 @@ describe("update-cli", () => {
               status?: string;
               mode?: string;
               restart?: boolean;
+              phaseTimings?: Array<{
+                phase?: string;
+                startedOffsetMs?: number;
+                durationMs?: number;
+                outcome?: string;
+              }>;
               postUpdate?: { doctor?: { status?: string }; plugins?: { status?: string } };
             }
           | undefined;
@@ -7655,8 +7661,74 @@ describe("update-cli", () => {
         expect(output?.restart).toBe(false);
         expect(output?.postUpdate?.doctor?.status).toBe("ok");
         expect(output?.postUpdate?.plugins?.status).toBe("ok");
+        expect(output?.phaseTimings?.map((timing) => timing.phase)).toEqual([
+          "targetConfigValidation",
+          "configSnapshot",
+          "doctor",
+          "plugins",
+          "targetConfigConvergence",
+          "completionCache",
+        ]);
+        for (const timing of output?.phaseTimings ?? []) {
+          expect(timing.startedOffsetMs).toEqual(expect.any(Number));
+          expect(timing.durationMs).toEqual(expect.any(Number));
+        }
+        expect(output?.phaseTimings?.map((timing) => timing.outcome)).toEqual([
+          "completed",
+          "completed",
+          "completed",
+          "completed",
+          "completed",
+          "skipped",
+        ]);
       },
     );
+  });
+
+  it("updateFinalizeCommand can defer only the best-effort completion cache", async () => {
+    pathExists.mockResolvedValue(true);
+    vi.mocked(spawnSync).mockClear();
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateFinalizeCommand({
+      json: true,
+      yes: true,
+      restart: false,
+      deferCompletionCache: true,
+    } as Parameters<typeof updateFinalizeCommand>[0] & { deferCompletionCache: boolean });
+
+    expect(spawnSync).not.toHaveBeenCalled();
+    const output = lastWriteJsonCall() as
+      | { phaseTimings?: Array<{ phase?: string; outcome?: string }> }
+      | undefined;
+    expect(output?.phaseTimings?.at(-1)).toEqual(
+      expect.objectContaining({ phase: "completionCache", outcome: "deferred" }),
+    );
+  });
+
+  it("updateFinalizeCommand capability env applies only to the hidden finalizer", async () => {
+    pathExists.mockResolvedValue(false);
+    await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE: "1" }, async () => {
+      const run = async (command: "repair" | "finalize") => {
+        vi.mocked(defaultRuntime.writeJson).mockClear();
+        const program = new Command();
+        program.name("openclaw");
+        program.exitOverride();
+        registerUpdateCli(program);
+        await program.parseAsync(["node", "openclaw", "update", command, "--json", "--yes"]);
+        const output = lastWriteJsonCall() as
+          | { phaseTimings?: Array<{ phase?: string; outcome?: string }> }
+          | undefined;
+        return output?.phaseTimings?.at(-1);
+      };
+
+      expect(await run("repair")).toEqual(
+        expect.objectContaining({ phase: "completionCache", outcome: "skipped" }),
+      );
+      expect(await run("finalize")).toEqual(
+        expect.objectContaining({ phase: "completionCache", outcome: "deferred" }),
+      );
+    });
   });
 
   it("updateFinalizeCommand rejects extended-stable on Git before persistence", async () => {
