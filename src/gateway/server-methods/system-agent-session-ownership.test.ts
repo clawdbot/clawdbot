@@ -47,6 +47,7 @@ type FakeEngine = {
   dispose: ReturnType<typeof vi.fn>;
   loadOverview: ReturnType<typeof vi.fn>;
   noteAssistantMessage: ReturnType<typeof vi.fn>;
+  decorateRejoinReply: ReturnType<typeof vi.fn>;
 };
 
 function makeEngine(): FakeEngine {
@@ -66,18 +67,24 @@ function makeEngine(): FakeEngine {
     dispose: vi.fn(async () => undefined),
     loadOverview: vi.fn(async () => ({})),
     noteAssistantMessage: vi.fn(),
+    decorateRejoinReply: vi.fn((reply: unknown) => reply),
   };
 }
 
 const createdEngines = vi.hoisted(() => [] as FakeEngine[]);
+const createdEngineOptions = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
 vi.mock("../../system-agent/chat-engine.js", () => {
   class FakeSystemAgentWizardAnswerError extends Error {}
   return {
     SystemAgentWizardAnswerError: FakeSystemAgentWizardAnswerError,
-    SystemAgentChatEngine: function FakeSystemAgentChatEngine(this: FakeEngine) {
+    SystemAgentChatEngine: function FakeSystemAgentChatEngine(
+      this: FakeEngine,
+      options: Record<string, unknown>,
+    ) {
       const engine = makeEngine();
       createdEngines.push(engine);
+      createdEngineOptions.push(options);
       Object.assign(this, engine);
     },
   };
@@ -142,6 +149,7 @@ async function callChat(
 
 beforeEach(() => {
   createdEngines.length = 0;
+  createdEngineOptions.length = 0;
   inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
     ok: true,
     binding: {},
@@ -315,6 +323,11 @@ describe("openclaw.chat session ownership", () => {
     expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledWith({
       requestingAgentId: "main",
       runtime: expect.anything(),
+    });
+    expect(createdEngineOptions[0]).toMatchObject({
+      operatorApprovalOnly: true,
+      requesterAgentId: "main",
+      surface: "gateway",
     });
     const handle = expectDefined(createdEngines[0], "created delegated engine").handle;
 

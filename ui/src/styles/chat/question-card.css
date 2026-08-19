@@ -101,14 +101,6 @@ openclaw-chat-question-panel {
   white-space: nowrap;
 }
 
-.chat-question-panel__countdown {
-  margin-left: auto;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: calc(var(--control-ui-text-sm) - 1px);
-  font-variant-numeric: tabular-nums;
-}
-
 .chat-question-panel__collapse {
   display: inline-flex;
   align-items: center;

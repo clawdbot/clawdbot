@@ -4,9 +4,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import {
+  resolveCurrentSessionAgentRuntimeMetadata,
+  resolveModelAgentRuntimeMetadata,
+} from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   findModelCatalogEntry,
@@ -25,7 +28,6 @@ import {
 import { resolveThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   concretizeAgentRuntime,
   resolveEffectiveAgentRuntime,
@@ -37,6 +39,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -46,6 +49,7 @@ import {
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
 import type { GatewaySessionsDefaults, SessionsPatchResult } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 type ThinkingProviderPolicySource = NonNullable<
   Parameters<typeof resolveThinkingProfile>[0]["providerPolicySource"]
@@ -232,29 +236,16 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     (params.entry && cachedAcpMeta?.has(params.entry)
       ? cachedAcpMeta.get(params.entry)
       : readAcpSessionMeta({ sessionKey: params.sessionKey, agentId: params.agentId }));
-  const configuredAgentRuntime = resolveModelAgentRuntimeMetadata({
+  const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId,
     provider: params.provider,
     model: params.model,
     sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
     acpRuntime: acpMeta != null,
     acpBackend: acpMeta?.backend,
   });
-  const persistedAgentRuntime = resolveSessionRuntimeOverrideForProvider({
-    provider: params.provider,
-    entry: params.entry,
-    cfg: params.cfg,
-  });
-  const persistedAgentRuntimeSource: "session" | "session-key" =
-    params.entry?.modelSelectionLocked === true ? "session" : "session-key";
-  const agentRuntime =
-    acpMeta || !persistedAgentRuntime
-      ? configuredAgentRuntime
-      : {
-          id: persistedAgentRuntime,
-          source: persistedAgentRuntimeSource,
-        };
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
         provider: params.provider,
@@ -326,19 +317,23 @@ export function getSessionDefaults(
         allowPluginNormalization: options?.allowPluginNormalization,
       });
   const contextTokens =
-    resolveAgentConfig(cfg, agentId)?.contextTokens ??
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
-    DEFAULT_CONTEXT_TOKENS;
+    resolveContextTokensForModel({
+      cfg,
+      provider: resolved.provider,
+      model: resolved.model,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-  const agentRuntime = resolveModelAgentRuntimeMetadata({
-    cfg,
-    agentId,
-    provider: resolved.provider,
-    model: resolved.model,
-    sessionKey,
-    acpRuntime: false,
-  });
+  const agentRuntime = projectWorkerPlacementAgentRuntime(
+    resolveModelAgentRuntimeMetadata({
+      cfg,
+      agentId,
+      provider: resolved.provider,
+      model: resolved.model,
+      sessionKey,
+      acpRuntime: false,
+    }),
+  );
   const thinkingProfile = resolveGatewayModelThinkingProfile({
     cfg,
     provider: resolved.provider,
@@ -662,7 +657,9 @@ export async function projectSessionPatchResult(params: {
   });
   return {
     ok: true,
-    path: params.storePath,
+    path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.targetAgentId,
+    }).path,
     key: params.canonicalKey,
     entry: params.entry,
     resolved: {

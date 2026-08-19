@@ -500,28 +500,6 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("preserves per-agent contextTokens through config validation", () => {
-    const result = validateConfigObject({
-      agents: {
-        entries: {
-          ops: {
-            default: true,
-            contextTokens: 1_048_576,
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected config validation to succeed");
-    }
-    const config = result.config as {
-      agents?: { entries?: Record<string, { contextTokens?: number }> };
-    };
-    expect(config.agents?.entries?.ops?.contextTokens).toBe(1_048_576);
-  });
-
   it("accepts per-agent tools.codeMode config", () => {
     expectSchemaSuccess(
       AgentEntrySchema.safeParse({
@@ -566,21 +544,5 @@ describe("agent defaults schema", () => {
       AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: { unknownKey: 1 } } }),
       "tools.swarm",
     );
-  });
-
-  it("rejects non-positive contextTokens on agent entries and defaults", () => {
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "ops", contextTokens: 0 }),
-      "contextTokens",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "ops", contextTokens: -1 }),
-      "contextTokens",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "ops", contextTokens: 1.5 }),
-      "contextTokens",
-    );
-    expectSchemaFailurePath(AgentDefaultsSchema.safeParse({ contextTokens: 0 }), "contextTokens");
   });
 });

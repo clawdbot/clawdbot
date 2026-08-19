@@ -59,6 +59,14 @@ function firstGatewayRequest(): { method?: string; url?: string; token?: string 
   return call[0] as { method?: string; url?: string; token?: string };
 }
 
+function gatewayRequest(method: string): { method?: string; url?: string; token?: string } {
+  const call = mocks.callGateway.mock.calls.find(([request]) => request?.method === method);
+  if (!call) {
+    throw new Error(`expected ${method} gateway call`);
+  }
+  return call[0] as { method?: string; url?: string; token?: string };
+}
+
 type ChannelsTableCall = [
   unknown,
   {
@@ -121,7 +129,11 @@ describe("collectStatusScanOverview", () => {
       resolveTailscaleHttpsUrl: vi.fn(async () => "https://box.tail.ts.net"),
       skipColdStartNetworkChecks: false,
     });
-    mocks.callGateway.mockResolvedValue({ channelAccounts: {} });
+    mocks.callGateway.mockImplementation(async ({ method }: { method?: string }) =>
+      method === "status"
+        ? { degradedSecretOwners: [], degradedPlugins: [] }
+        : { channelAccounts: {} },
+    );
     mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
     mocks.buildChannelsTable.mockResolvedValue({ rows: [], details: [] });
   });
@@ -138,11 +150,10 @@ describe("collectStatusScanOverview", () => {
       observe: false,
       skipPluginValidation: undefined,
     });
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    const gatewayRequest = firstGatewayRequest();
-    expect(gatewayRequest?.method).toBe("channels.status");
-    expect(gatewayRequest?.url).toBe("ws://127.0.0.1:18789");
-    expect(gatewayRequest?.token).toBe("tok");
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    const channelsRequest = gatewayRequest("channels.status");
+    expect(channelsRequest?.url).toBe("ws://127.0.0.1:18789");
+    expect(channelsRequest?.token).toBe("tok");
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
     const channelTableCall = firstChannelsTableCall();
     expect(typeof channelTableCall?.[0]).toBe("object");
@@ -161,7 +172,8 @@ describe("collectStatusScanOverview", () => {
       includeChannelSetupRuntimeFallback: false,
     });
 
-    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(firstGatewayRequest().method).toBe("status");
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
     const channelTableCall = firstChannelsTableCall();
     expect(typeof channelTableCall?.[0]).toBe("object");
@@ -207,5 +219,58 @@ describe("collectStatusScanOverview", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.channelsStatus).toBeNull();
     expect(result.channelIssues).toStrictEqual([]);
+  });
+
+  it("returns the base overview when a reachable gateway lacks read scope", async () => {
+    mocks.createStatusScanCoreBootstrap.mockResolvedValueOnce({
+      tailscaleMode: "off",
+      tailscaleDnsPromise: Promise.resolve(null),
+      updatePromise: Promise.resolve({ installKind: "git" }),
+      agentStatusPromise: Promise.resolve({
+        defaultId: "main",
+        agents: [],
+        totalSessions: 0,
+        bootstrapPendingCount: 0,
+      }),
+      gatewayProbePromise: Promise.resolve({
+        gatewayConnection: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "default",
+        },
+        remoteUrlMissing: false,
+        gatewayMode: "local",
+        gatewayProbeAuth: {},
+        gatewayProbeAuthWarning: undefined,
+        gatewayProbe: {
+          ok: false,
+          connectLatencyMs: 12,
+          error: "missing scope: operator.read",
+          auth: {
+            role: "operator",
+            scopes: [],
+            capability: "connected_no_operator_scope",
+          },
+        },
+        gatewayReachable: true,
+        gatewaySelf: null,
+      }),
+      resolveTailscaleHttpsUrl: vi.fn(async () => null),
+      skipColdStartNetworkChecks: false,
+    });
+    mocks.callGateway.mockRejectedValueOnce(new Error("missing scope: operator.read"));
+
+    const result = await collectStatusScanOverview({
+      commandName: "status",
+      opts: {},
+      showSecrets: false,
+      includeChannelsData: false,
+    });
+
+    expect(result.gatewaySnapshot.gatewayReachable).toBe(true);
+    expect(result.gatewaySnapshot.gatewayProbe).toMatchObject({
+      ok: false,
+      error: "missing scope: operator.read",
+    });
+    expect(result.runtimeDegradation).toBeNull();
   });
 });

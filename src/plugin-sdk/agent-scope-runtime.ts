@@ -2,8 +2,10 @@
 
 export {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveSessionAgentIds,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";

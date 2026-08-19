@@ -470,9 +470,10 @@ and troubleshooting see the main [FAQ](/help/faq).
     2. **Workspace** - location + bootstrap files.
     3. **Gateway** - port, bind address, auth mode, Tailscale exposure.
     4. **Channels** - built-in and official plugin chat channels: iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
-    5. **Daemon** - LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task.
-    6. **Health check** - starts the Gateway and verifies it is running.
-    7. **Skills** - installs recommended skills and optional dependencies.
+    5. **Web search** - configures an optional search provider.
+    6. **Skills** - installs recommended skills and optional dependencies.
+    7. **Daemon** - LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task.
+    8. **Health check** - starts the Gateway and verifies it is running.
 
     It sets duration expectations up front and warns if your configured model is unknown
     or missing auth. Full breakdown: [Onboarding (CLI)](/start/wizard).

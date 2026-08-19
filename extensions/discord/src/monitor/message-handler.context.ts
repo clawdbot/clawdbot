@@ -287,14 +287,14 @@ export async function buildDiscordMessageProcessContext(params: {
     if (threadParentId) {
       parentSessionKey = buildAgentSessionKey({
         agentId: route.agentId,
+        mainKey: cfg.session?.mainKey,
         channel: route.channel,
         peer: { kind: "channel", id: threadParentId },
+        groupScope: route.groupScope,
       });
-      modelParentSessionKey = parentSessionKey;
+      modelParentSessionKey = parentSessionKey === baseSessionKey ? undefined : parentSessionKey;
     }
-    if (!threadParentInheritanceEnabled) {
-      parentSessionKey = undefined;
-    }
+    parentSessionKey = threadParentInheritanceEnabled ? modelParentSessionKey : undefined;
   }
   const preflightAudioIndex =
     preflightAudioTranscript === undefined
@@ -322,6 +322,8 @@ export async function buildDiscordMessageProcessContext(params: {
     agentId: route.agentId,
     channel: route.channel,
     cfg,
+    parentSessionKey: route.sessionKey,
+    groupScope: route.groupScope,
     threadParentInheritanceEnabled,
   });
   const deliverTarget = replyPlan.deliverTarget;
@@ -399,8 +401,11 @@ export async function buildDiscordMessageProcessContext(params: {
       kind: isDirectMessage ? "direct" : "channel",
       id: messageChannelId,
       nativeChannelId: messageChannelId,
+      avatar: ctx.conversationAvatar,
       label: fromLabel,
-      spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+      spaceId: isGuildMessage
+        ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined
+        : undefined,
       parentId: threadChannel ? threadParentId : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },

@@ -8,6 +8,12 @@ export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
 const githubApiRetryStatuses = new Set([502, 503, 504]);
 const githubApiRetryDelaysMs = [1_000, 2_000, 4_000];
 
+export function sanitizeGuardDisplayValue(value) {
+  return String(value)
+    .replace(/[\p{Cc}]/gu, "?")
+    .slice(0, 240);
+}
+
 /**
  * @param {string | null | undefined} value
  * @param {string} [fallback]

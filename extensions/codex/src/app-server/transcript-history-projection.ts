@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexThread, JsonValue } from "./protocol.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -37,22 +38,6 @@ type ProjectedCodexHistoryMessage = {
   responseItem: JsonValue;
   textBytes: number;
 };
-
-function isUtf8ContinuationByte(byte: number | undefined): boolean {
-  return byte !== undefined && (byte & 0xc0) === 0x80;
-}
-
-function truncateUtf8Prefix(value: string, maxBytes: number): string {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength <= maxBytes) {
-    return value;
-  }
-  let end = Math.max(0, maxBytes);
-  while (end > 0 && isUtf8ContinuationByte(bytes[end])) {
-    end -= 1;
-  }
-  return bytes.subarray(0, end).toString("utf8");
-}
 
 function normalizeImportedHistoryText(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -141,7 +126,7 @@ function projectCodexThreadHistory(params: {
   let itemOffset = 0;
   for (const turn of selectTurnsThroughBoundary(params.thread, params.throughTurnId)) {
     for (const value of turn.items) {
-      const item = value as unknown as Record<string, unknown>;
+      const item = value;
       const itemId = normalizeOptionalString(item.id);
       const identity = `${turn.id}:${itemId ?? itemOffset}`;
       const timestampSeconds =

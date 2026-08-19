@@ -73,6 +73,8 @@ export const GATEWAY_EVENTS = [
   "node.invoke.request",
   "device.pair.requested",
   "device.pair.resolved",
+  "device.pair.setup.completed",
+  "device.pair.setup.deliveryUncertain",
   "skills.changed",
   "voicewake.changed",
   "voicewake.routing.changed",
@@ -88,4 +90,5 @@ export const GATEWAY_EVENTS = [
   "terminal.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   "portal.changed",
+  "progressCard.changed",
 ];

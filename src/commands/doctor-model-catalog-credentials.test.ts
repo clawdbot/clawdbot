@@ -195,6 +195,38 @@ describe("doctor model catalog credential migration", () => {
     expect(loadPersistedAuthProfileStore(childAgentDir)).toBeNull();
   });
 
+  it("scans an explicit multi-agent roster without requiring a legacy default", async () => {
+    const state = createState();
+    const helperAgentDir = path.join(state.stateDir, "agents", "helper", "agent");
+    const thirdAgentDir = path.join(state.stateDir, "agents", "third", "agent");
+    fs.mkdirSync(helperAgentDir, { recursive: true });
+    fs.mkdirSync(thirdAgentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(helperAgentDir, "models.json"),
+      `${JSON.stringify({ providers: { custom: provider("helper-catalog-secret") } })}\n`,
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { agentDir: state.agentDir },
+          helper: { agentDir: helperAgentDir },
+          third: { agentDir: thirdAgentDir },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    await expect(maybeMigrateModelCatalogCredentials(migrationParams(state, cfg))).resolves.toEqual(
+      { detected: 1, migrated: 1, warnings: [] },
+    );
+    expect(loadPersistedAuthProfileStore(helperAgentDir)?.profiles["custom:default"]).toMatchObject(
+      {
+        key: "helper-catalog-secret",
+      },
+    );
+  });
+
   it("allocates a global config profile that child stores cannot shadow", async () => {
     const state = createState();
     const childAgentDir = path.join(state.stateDir, "agents", "child", "agent");

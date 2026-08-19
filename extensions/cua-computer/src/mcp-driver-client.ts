@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { ActionResult } from "@trycua/cua-driver";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ClickButton,
   EscalationReason,
@@ -67,12 +68,6 @@ function driverUnavailable(message: string, cause?: unknown): Error {
 
 function driverProtocolError(message: string, cause?: unknown): Error {
   return new Error(`COMPUTER_DRIVER_ERROR: ${message}`, { cause });
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function mappedEnum(value: unknown, values: readonly string[], label: string): number {
@@ -484,10 +479,12 @@ function sessionState(value: CuaToolResult): import("@trycua/cua-driver").Sessio
 
 class McpCuaDriverSession implements CuaDriverSession {
   readonly generation = randomUUID();
-  private readonly publicSession = `openclaw-${randomUUID()}`;
-  private startPromise: Promise<void> | undefined;
-  private captureScope: "window" | "desktop" | undefined;
-  private started = false;
+  private readonly windowPublicSession = `openclaw-window-${randomUUID()}`;
+  private readonly desktopPublicSession = `openclaw-desktop-${randomUUID()}`;
+  private windowStartPromise: Promise<void> | undefined;
+  private desktopStartPromise: Promise<void> | undefined;
+  private windowStarted = false;
+  private desktopStarted = false;
   private disposed = false;
 
   constructor(private readonly client: CuaMcpProxyClient) {}
@@ -500,26 +497,20 @@ class McpCuaDriverSession implements CuaDriverSession {
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
     await this.ensureStarted("window", signal);
-    return await this.client.callTool(name, { ...args, session: this.publicSession }, signal);
+    return await this.client.callTool(name, { ...args, session: this.windowPublicSession }, signal);
   }
 
-  async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
-    await this.ensureStarted("window", signal);
+  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+    return await this.desktopTool(name, args, signal);
+  }
+
+  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
+    await this.ensureStarted("desktop", signal);
     const result = await this.client.callTool(
-      "escalate_session",
-      {
-        session: this.publicSession,
-        reason: [
-          "ax_tree_pixel_mismatch",
-          "background_delivery_failed",
-          "foreground_ineffective",
-          "no_window_target",
-          "other",
-        ][reason],
-      },
+      "get_session_state",
+      { session: this.desktopPublicSession },
       signal,
     );
-    this.captureScope = "desktop";
     return sessionState(result);
   }
 
@@ -610,13 +601,30 @@ class McpCuaDriverSession implements CuaDriverSession {
     }
     this.disposed = true;
     let failure: unknown;
-    try {
-      await this.startPromise;
-      if (this.started && this.client.isAvailable()) {
-        await this.client.callTool("end_session", { session: this.publicSession });
+    const startResults = await Promise.allSettled([
+      this.windowStartPromise,
+      this.desktopStartPromise,
+    ]);
+    for (const result of startResults) {
+      if (result.status === "rejected") {
+        failure ??= result.reason;
       }
-    } catch (error) {
-      failure = error;
+    }
+    if (this.client.isAvailable()) {
+      if (this.windowStarted) {
+        try {
+          await this.client.callTool("end_session", { session: this.windowPublicSession });
+        } catch (error) {
+          failure ??= error;
+        }
+      }
+      if (this.desktopStarted) {
+        try {
+          await this.client.callTool("end_session", { session: this.desktopPublicSession });
+        } catch (error) {
+          failure ??= error;
+        }
+      }
     }
     try {
       await this.client.stop();
@@ -636,38 +644,43 @@ class McpCuaDriverSession implements CuaDriverSession {
     signal?: AbortSignal,
   ): Promise<CuaToolResult> {
     await this.ensureStarted("desktop", signal);
-    return await this.client.callTool(name, { ...args, session: this.publicSession }, signal);
+    return await this.client.callTool(
+      name,
+      { ...args, session: this.desktopPublicSession },
+      signal,
+    );
   }
 
   private async ensureStarted(scope: "window" | "desktop", signal?: AbortSignal): Promise<void> {
     if (this.disposed) {
       throw driverUnavailable("cua-computer is stopping");
     }
-    if (!this.startPromise) {
-      this.captureScope = scope;
+    const isWindow = scope === "window";
+    const startedKey = isWindow ? "windowStarted" : "desktopStarted";
+    const startPromiseKey = isWindow ? "windowStartPromise" : "desktopStartPromise";
+    const current = this[startPromiseKey];
+    if (!current) {
+      const publicSession = isWindow ? this.windowPublicSession : this.desktopPublicSession;
       const start = this.client
-        .callTool("start_session", { session: this.publicSession, capture_scope: scope }, signal)
+        .callTool("start_session", { session: publicSession, capture_scope: scope }, signal)
         .then((result) => {
           if (result.isError) {
             throw driverProtocolError(result.text || "CUA MCP start_session failed");
           }
-          this.started = true;
+          this[startedKey] = true;
         });
-      this.startPromise = start;
+      this[startPromiseKey] = start;
       try {
         await start;
       } catch (error) {
-        if (this.startPromise === start) {
-          this.startPromise = undefined;
+        if (this[startPromiseKey] === start) {
+          this[startPromiseKey] = undefined;
         }
         throw error;
       }
       return;
     }
-    await this.startPromise;
-    if (scope === "desktop" && this.captureScope !== "desktop") {
-      await this.escalateScope(EscalationReason.Other, signal);
-    }
+    await current;
   }
 }
 

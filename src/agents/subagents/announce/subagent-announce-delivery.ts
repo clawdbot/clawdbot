@@ -25,7 +25,6 @@ import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
 import {
   hasAnnounceSendEvidence,
-  hasWriterClaimReboundAnnounceError,
   isWriterClaimReboundAnnounceError,
   resolveSubagentAnnounceTimeoutMs,
   runAnnounceDeliveryWithRetry,
@@ -100,6 +99,7 @@ export async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const sourceOwnerChanged = () => params.isSourceSessionEffectsAllowed?.() === false;
   if (sourceOwnerChanged()) {
@@ -259,6 +259,7 @@ export async function deliverSubagentAnnouncement(params: {
         onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
+        resolveGatewayContext: params.resolveGatewayContext,
       });
     },
   });
@@ -269,7 +270,6 @@ const testing = {
     setSubagentAnnounceDeliveryDepsForTest(overrides);
   },
   hasAnnounceSendEvidence,
-  hasWriterClaimReboundAnnounceError,
   isWriterClaimReboundAnnounceError,
 };
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

@@ -8,6 +8,7 @@ import {
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { getCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
@@ -29,6 +30,8 @@ import type {
   PluginSetupAutoEnableProbe,
   ProviderPlugin,
 } from "./types.js";
+
+const log = createSubsystemLogger("plugins/setup-registry");
 
 const SETUP_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
@@ -58,10 +61,11 @@ type SetupAutoEnableProbeEntry = {
 
 type PluginSetupRegistryDiagnosticCode =
   | "setup-descriptor-runtime-disabled"
-  | "setup-descriptor-provider-missing-runtime"
   | "setup-descriptor-provider-runtime-undeclared"
   | "setup-descriptor-cli-backend-missing-runtime"
-  | "setup-descriptor-cli-backend-runtime-undeclared";
+  | "setup-descriptor-cli-backend-runtime-undeclared"
+  | "setup-entry-load-failed"
+  | "setup-registration-failed";
 
 type PluginSetupRegistryDiagnostic = {
   pluginId: string;
@@ -271,7 +275,10 @@ function resolveDeclaredSetupRuntimeSource(record: PluginManifestRecord): string
   );
 }
 
-function resolveSetupRegistration(record: PluginManifestRecord): {
+function resolveSetupRegistration(
+  record: PluginManifestRecord,
+  diagnostics?: PluginSetupRegistryDiagnostic[],
+): {
   setupSource: string;
   register: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>;
 } | null {
@@ -286,7 +293,14 @@ function resolveSetupRegistration(record: PluginManifestRecord): {
   let mod: OpenClawPluginModule;
   try {
     mod = getModuleLoader(setupSource)(setupSource) as OpenClawPluginModule;
-  } catch {
+  } catch (error) {
+    // A broken setup entry silently removes the plugin's providers/CLI
+    // backends/migrations from onboarding; record why instead of vanishing.
+    diagnostics?.push({
+      pluginId: record.id,
+      code: "setup-entry-load-failed",
+      message: `setup entry failed to load from ${setupSource}: ${String(error)}`,
+    });
     return null;
   }
 
@@ -336,11 +350,13 @@ function ignoreAsyncSetupRegisterResult(result: void | Promise<void>): void {
 function runSetupRegistration(
   register: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>,
   api: ReturnType<typeof buildPluginApi>,
+  onError: (error: unknown) => void,
 ): boolean {
   try {
     ignoreAsyncSetupRegisterResult(register(api));
     return true;
-  } catch {
+  } catch (error) {
+    onError(error);
     return false;
   }
 }
@@ -536,16 +552,6 @@ function pushSetupDescriptorDriftDiagnostics(params: {
 }): void {
   const declaredProviderIds = params.record.setup?.providers?.map((entry) => entry.id);
   if (declaredProviderIds) {
-    for (const declaredId of declaredProviderIds) {
-      if (!params.providers.some((provider) => matchesProvider(provider, declaredId))) {
-        params.diagnostics.push({
-          pluginId: params.record.id,
-          code: "setup-descriptor-provider-missing-runtime",
-          declaredId,
-          message: `setup.providers declares "${declaredId}" but setup runtime did not register a matching provider.`,
-        });
-      }
-    }
     for (const provider of params.providers) {
       if (!declaredProviderIds.some((declaredId) => matchesProvider(provider, declaredId))) {
         params.diagnostics.push({
@@ -644,7 +650,7 @@ export function resolvePluginSetupRegistry(params?: {
       });
       continue;
     }
-    const setupRegistration = resolveSetupRegistration(record);
+    const setupRegistration = resolveSetupRegistration(record, diagnostics);
     if (!setupRegistration) {
       continue;
     }
@@ -703,7 +709,13 @@ export function resolvePluginSetupRegistry(params?: {
       },
     });
 
-    const registered = runSetupRegistration(setupRegistration.register, api);
+    const registered = runSetupRegistration(setupRegistration.register, api, (error) => {
+      diagnostics.push({
+        pluginId: record.id,
+        code: "setup-registration-failed",
+        message: `setup registration threw: ${String(error)}`,
+      });
+    });
     acceptingRegistrations = false;
     if (!registered) {
       continue;
@@ -729,6 +741,12 @@ export function resolvePluginSetupRegistry(params?: {
     autoEnableProbes,
     diagnostics,
   } satisfies PluginSetupRegistry;
+  // The diagnostics array has no other operator surface; warn once per
+  // (uncached) build so broken setup entries and descriptor drift are
+  // visible instead of silently narrowing onboarding.
+  for (const diagnostic of diagnostics) {
+    log.warn(`plugin setup [${diagnostic.pluginId}] ${diagnostic.code}: ${diagnostic.message}`);
+  }
   if (resultCacheKey === null) {
     return registry;
   }
@@ -786,7 +804,11 @@ export function resolvePluginSetupProviderCore(params: {
     },
   });
 
-  if (!runSetupRegistration(setupRegistration.register, api)) {
+  if (
+    !runSetupRegistration(setupRegistration.register, api, (error) => {
+      log.warn(`plugin setup [${record.id}] setup-registration-failed: ${String(error)}`);
+    })
+  ) {
     return undefined;
   }
 
@@ -846,7 +868,11 @@ export function resolvePluginSetupCliBackend(params: {
     },
   });
 
-  if (!runSetupRegistration(setupRegistration.register, api)) {
+  if (
+    !runSetupRegistration(setupRegistration.register, api, (error) => {
+      log.warn(`plugin setup [${record.id}] setup-registration-failed: ${String(error)}`);
+    })
+  ) {
     return undefined;
   }
 

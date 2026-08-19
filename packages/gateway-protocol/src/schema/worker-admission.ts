@@ -29,6 +29,7 @@ export {
 
 // Additive RPCs require exact build-bound features; bump only for an incompatible base set.
 export const WORKER_RPC_SET_VERSION = 1;
+export const WORKER_BUNDLE_PREWARM_VERSION = 1;
 export const WORKER_HEARTBEAT_INTERVAL_MS = 15_000;
 export const WORKER_PROTOCOL_METHODS = [
   "worker.heartbeat",
@@ -40,7 +41,7 @@ export const WORKER_PROTOCOL_METHODS = [
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
 export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
-export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v1";
+export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v2";
 export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   "worker-heartbeat-v1",
@@ -86,6 +87,7 @@ export const WorkerAdmissionHandshakeSchema = withSince(
       maxItems: WORKER_PROTOCOL_MAX_FEATURES,
       uniqueItems: true,
     }),
+    bundlePrewarm: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
   }),
 );
 

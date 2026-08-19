@@ -705,6 +705,23 @@ export async function loadChatRoute(
     ? ({ kind: "unique", session: cached.row } as const)
     : await resolveShortSessionReference(context, target, signal);
   if (resolution.kind === "not-found") {
+    // A mechanically composed literal, notably a full UUID, can match the short grammar.
+    // Only after the authoritative short lookup misses may its exact decoded key win.
+    const literalResolution = await querySessionReference(
+      context,
+      { kind: "exact", value: target.literalSessionKey, agentId: target.agentId },
+      signal,
+    );
+    if (literalResolution?.kind === "unique") {
+      const literal = resolvedSessionRouteData({
+        context,
+        location: routeLocation,
+        face,
+        row: literalResolution.session,
+        preferenceDerived,
+      });
+      return literal ?? notFound({ routeId: face });
+    }
     return notFound({ routeId: face });
   }
   if (resolution.kind === "ambiguous") {

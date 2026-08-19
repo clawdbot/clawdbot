@@ -81,7 +81,6 @@ const configureGatewayForSetup = vi.hoisted(() =>
       authMode: "token",
       gatewayToken: "test-token",
       tailscaleMode: "off",
-      tailscaleResetOnExit: false,
     },
   })),
 );
@@ -343,7 +342,8 @@ function expectMockCallArgNotNull(
   }
 }
 
-vi.mock("../commands/onboard-channels.js", () => ({
+vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
   setupChannels,
 }));
 
@@ -650,7 +650,6 @@ describe("runSetupWizard", () => {
         authMode: "token",
         gatewayToken: "test-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
     }));
     let authoredConfig: OpenClawConfig | undefined;
@@ -986,9 +985,7 @@ describe("runSetupWizard", () => {
       if (writeAttempts === 1) {
         diskConfig = { ...diskConfig, ui: { ...diskConfig.ui, seamColor: "green" } };
         diskHash = "external-edit";
-        throw new ConfigMutationConflictError("config changed since last load", {
-          currentHash: diskHash,
-        });
+        throw new ConfigMutationConflictError("config changed since last load");
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `committed-${writeAttempts}`;
@@ -1070,7 +1067,10 @@ describe("runSetupWizard", () => {
         }),
       }),
       expect.any(Object),
-      { secretInputMode: undefined },
+      {
+        secretInputMode: undefined,
+        edgeAuthOriginUrl: "wss://stored.example.com:18789",
+      },
     );
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
   });
@@ -1099,6 +1099,33 @@ describe("runSetupWizard", () => {
       url: "wss://gateway.example.test",
       token: undefined,
       password: remotePassword,
+    });
+  });
+
+  it("passes configured remote edge auth to the setup reachability probe", async () => {
+    const config: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example.test",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
+
+    await runSetupWizard(
+      { acceptRisk: true, flow: "advanced", mode: "remote" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      config: expect.objectContaining({
+        gateway: config.gateway,
+      }),
+      token: undefined,
     });
   });
 
@@ -1183,6 +1210,7 @@ describe("runSetupWizard", () => {
             url: "wss://stored.example.com:18789",
             token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
             password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
           },
         },
       },
@@ -1209,6 +1237,14 @@ describe("runSetupWizard", () => {
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://flag.example.com:18789",
+      config: expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: expect.objectContaining({
+            url: "wss://stored.example.com:18789",
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
+          }),
+        }),
+      }),
       token: undefined,
     });
     expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
@@ -1218,11 +1254,15 @@ describe("runSetupWizard", () => {
             url: "wss://flag.example.com:18789",
             token: undefined,
             password: undefined,
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
           },
         }),
       }),
       expect.any(Object),
-      { secretInputMode: undefined },
+      {
+        secretInputMode: undefined,
+        edgeAuthOriginUrl: "wss://stored.example.com:18789",
+      },
     );
   });
 
@@ -1894,9 +1934,7 @@ describe("runSetupWizard", () => {
       if (writeAttempts === 2) {
         diskConfig = { ...diskConfig, ui: { seamColor: "green" } };
         diskHash = "external-pending-edit";
-        throw new ConfigMutationConflictError("config changed since last load", {
-          currentHash: diskHash,
-        });
+        throw new ConfigMutationConflictError("config changed since last load");
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `pending-${writeAttempts + 1}`;
@@ -2295,6 +2333,56 @@ describe("runSetupWizard", () => {
         quickstartDefaults: true,
       },
       "channel setup options",
+    );
+  });
+
+  it("persists classic channel setup before hooks and Gateway finalization", async () => {
+    const beforeConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
+    const configured = {
+      ...beforeConfig,
+      channels: { matrix: { accounts: { ops: { enabled: true } } } },
+    } satisfies OpenClawConfig;
+    const hook = vi.fn();
+    const isConfiguredWrite = (value: OpenClawConfig) =>
+      value.channels?.matrix?.accounts?.ops?.enabled === true;
+    setupChannels.mockImplementationOnce(async (_cfg, _runtime, _prompter, options) => {
+      const setupOptions = options as {
+        onPostWriteHook?: (value: {
+          channel: "matrix";
+          accountId: string;
+          run: typeof hook;
+        }) => void;
+      };
+      setupOptions.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run: hook });
+      return configured;
+    });
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(beforeConfig));
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    const configuredWriteIndex = replaceConfigFile.mock.calls.findIndex(([params]) =>
+      isConfiguredWrite(params.nextConfig),
+    );
+    expect(configuredWriteIndex).toBeGreaterThanOrEqual(0);
+    expect(replaceConfigFile.mock.invocationCallOrder[configuredWriteIndex]).toBeLessThan(
+      hook.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(hook).toHaveBeenCalledWith({ cfg: configured, runtime: expect.any(Object) });
+    expect(hook.mock.invocationCallOrder[0]).toBeLessThan(
+      finalizeSetupWizard.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 
@@ -2705,7 +2793,6 @@ describe("runSetupWizard", () => {
         gatewayToken: "manual-gateway-token-placeholder",
         gatewayPassword: "manual-gateway-password-placeholder",
         tailscale: "off" as const,
-        tailscaleResetOnExit: false,
       },
       expectedPort: 19511,
       expectedProbeAuth: {
@@ -2761,7 +2848,6 @@ describe("runSetupWizard", () => {
           token: "manual-gateway-token-placeholder",
           password: "manual-gateway-password-placeholder",
           tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         });
       }
     },
@@ -2811,7 +2897,7 @@ describe("runSetupWizard", () => {
           port: 19111,
           bind: "loopback",
           auth: { mode: "token", token: "stored-token" },
-          tailscale: { mode: "off", resetOnExit: false },
+          tailscale: { mode: "off" },
         },
       }),
     );
@@ -2831,7 +2917,6 @@ describe("runSetupWizard", () => {
           tailscale: {
             ...args.nextConfig.gateway?.tailscale,
             mode: args.quickstartGateway.tailscaleMode,
-            resetOnExit: args.quickstartGateway.tailscaleResetOnExit,
           },
         },
       },
@@ -2841,7 +2926,6 @@ describe("runSetupWizard", () => {
         authMode: args.quickstartGateway.authMode,
         gatewayToken: undefined,
         tailscaleMode: args.quickstartGateway.tailscaleMode,
-        tailscaleResetOnExit: args.quickstartGateway.tailscaleResetOnExit,
       },
     }));
 

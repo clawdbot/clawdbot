@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   asNullableRecord,
   normalizeOptionalString,
@@ -18,6 +19,7 @@ import {
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
 import {
   browserExtensionStatus,
+  FOUNDATION_CHROME_WEB_STORE_URL,
   repairOwnedChromeExtensionNativeHosts,
 } from "./browser/extension-install.js";
 import { listSystemProfiles } from "./browser/system-profiles.js";
@@ -125,16 +127,6 @@ function resolveManagedBrowserUserDataDir(configDir: string, profileName: string
   return path.join(resolveManagedBrowserProfileDir(configDir, profileName), "user-data");
 }
 
-function normalizeComparablePath(targetPath: string): string {
-  return path.resolve(targetPath);
-}
-
-function isSameOrChildPath(candidatePath: string, parentPath: string): boolean {
-  const candidate = normalizeComparablePath(candidatePath);
-  const parent = normalizeComparablePath(parentPath);
-  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
-}
-
 function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: string): boolean {
   const browser = asNullableRecord(cfg.browser);
   if (!browser) {
@@ -155,7 +147,7 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
   for (const rawProfile of Object.values(configuredProfiles)) {
     const profile = asNullableRecord(rawProfile);
     const userDataDir = normalizeOptionalString(profile?.userDataDir);
-    if (userDataDir && isSameOrChildPath(resolveUserPath(userDataDir), legacyProfileDir)) {
+    if (userDataDir && isPathInside(legacyProfileDir, resolveUserPath(userDataDir))) {
       return true;
     }
   }
@@ -272,7 +264,8 @@ export async function noteChromeMcpBrowserReadiness(
           [
             "- The Chrome extension native bootstrap is not fully registered.",
             `- Run ${formatCliCommand("openclaw browser extension status --json")} for the redacted registration report.`,
-            `- Run ${formatCliCommand("openclaw browser extension install")} after loading the printed unpacked directory.`,
+            `- Run ${formatCliCommand("openclaw browser extension install")} before adding OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL}.`,
+            "- Load unpacked from the printed stable path only as a development fallback.",
           ].join("\n"),
           "Browser extension bootstrap",
         );

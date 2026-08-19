@@ -24,6 +24,8 @@ const repositoryScriptEntries = [
   "scripts/check-package-dist-imports.mjs!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
   "scripts/cloudflare/src/index.ts!",
+  // Invoked by the documented macOS Computer Use live-proof shell rig.
+  "scripts/dev/computer-use-macos-live-proof.ts!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
@@ -68,7 +70,6 @@ const repositoryScriptEntries = [
   "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
-  "scripts/lib/openclaw-test-state.mts!",
   "scripts/list-prod-store-packages.mjs!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
@@ -151,12 +152,15 @@ const rootEntries = [
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
-  "src/audit/audit-event-writer.worker.ts!",
   // Loaded by URL from the SQLite lifecycle archive owner.
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
+  // Loaded by URL from tailscale.ts to outlive abrupt Gateway process exit.
+  "src/infra/tailscale-route-owner.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   "src/agents/prepared-model-catalog.worker.ts!",
+  // Spawned through computed sibling URLs by the service-child host and relay.
+  "src/process/supervisor/{service-child-relay,service-child-group-anchor}.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
@@ -261,7 +265,6 @@ const bundledPluginIgnoredRuntimeDependencies = [
 
 const rootBundledPluginRuntimeDependencies = [
   "@anthropic-ai/sdk",
-  "@anthropic-ai/vertex-sdk",
   "@google/genai",
   "@grammyjs/runner",
   "@grammyjs/transformer-throttler",
@@ -269,16 +272,11 @@ const rootBundledPluginRuntimeDependencies = [
   "@mozilla/readability",
   "@silvia-odwyer/photon-node",
   "@trycua/cua-driver",
-  "@slack/bolt",
-  "@slack/types",
-  "@slack/web-api",
   "grammy",
   "linkedom",
   "minimatch",
   "node-edge-tts",
-  "openshell",
   "clawpdf",
-  "tokenjuice",
 ] as const;
 
 // Root installation and build workflows deliberately mirror these dependencies from their
@@ -426,6 +424,7 @@ const config = {
     "src/system-agent/greeting.ts": ["exports", "types"],
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
+    "extensions/google-meet/src/plugin-registration.ts": ["exports"],
     "extensions/signal/src/setup-core.ts": ["exports"],
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
@@ -576,6 +575,7 @@ const config = {
         "src/index.ts!",
         "src/agent-id.ts!",
         "src/boolean-coercion.ts!",
+        "src/browser-error-runtime.ts!",
         "src/error-coercion.ts!",
         "src/expect.ts!",
         "src/json-coercion.ts!",
@@ -703,6 +703,7 @@ const config = {
       // Rolldown consumes this config and its browser bootstrap entry.
       "src/host/a2ui-app/rolldown.config.mjs!",
       "src/host/a2ui-app/bootstrap.js!",
+      "src/host/a2ui-app/bootstrap-v0.9.js!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),
@@ -810,6 +811,8 @@ const config = {
       "web/vite.config.ts!",
       // Imported directly from the GitHub Actions smoke-plan script.
       "src/ci-smoke-plan.ts!",
+      // Imported directly from the GitHub Actions evidence workflow.
+      "src/profile-evidence-sharding.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),

@@ -78,6 +78,16 @@ function parseOrigin(
   }
 }
 
+/** Whether a browser document was loaded from the Gateway's advertised HTTP host. */
+export function isGatewayHostBrowserOrigin(params: {
+  requestHost?: string;
+  origin?: string;
+}): boolean {
+  const parsedOrigin = parseOrigin(params.origin);
+  const requestHost = normalizeHostHeader(params.requestHost);
+  return Boolean(parsedOrigin && requestHost && parsedOrigin.host === requestHost);
+}
+
 /** Return a canonical Chrome extension origin for pairing-bound authorization. */
 export function normalizeChromeExtensionOrigin(originRaw?: string): string | undefined {
   const parsed = parseOrigin(originRaw);

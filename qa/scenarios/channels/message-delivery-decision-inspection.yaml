@@ -1,0 +1,281 @@
+title: Message delivery decision inspection
+
+scenario:
+  id: message-delivery-decision-inspection
+  surface: qa-channel
+  coverage:
+    primary:
+      - gateway.identity-and-presence-apis
+    secondary:
+      - channels.qa-channel-final-reply
+  objective: Verify a channel-admitted run exposes redacted queued, platform-started, delivered, and intentional-suppression receipts through JSON and human CLI inspection across restart.
+  gatewayConfigPatch:
+    logging:
+      audit:
+        enabled: true
+        executionIdentity: true
+        messages: all
+    channels:
+      qa-channel:
+        allowFrom: ["*"]
+    tools:
+      alsoAllow: [message]
+    plugins:
+      allow: [qa-lab, qa-channel]
+      slots:
+        memory: null
+      entries:
+        acpx: null
+        memory-core:
+          enabled: false
+    agents:
+      entries:
+        qa:
+          tools:
+            alsoAllow: [message]
+  successCriteria:
+    - A QA Channel reply records queued, platform-started, and delivered as attribution-only owner-native receipts.
+    - A message-tool metadata echo records one exact intentional-suppression fact without a visible outbound message.
+    - JSON and human CLI inspection expose no raw sender, conversation, message content, or platform message id.
+    - Both receipt sets remain stable after a lifecycle-owned Gateway restart.
+  docsRefs:
+    - docs/gateway/audit.md
+    - docs/cli/audit.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/infra/outbound/deliver-queue.ts
+    - src/infra/outbound/deliver-queue-execute.ts
+    - src/audit/message-delivery-receipts.ts
+    - src/agents/tools/message-tool-execution.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    suiteIsolation: isolated
+    isolationReason: Enables execution identity plus all-message audit and verifies the same state database across restart.
+    retryCount: 0
+    summary: Drive delivered and intentionally suppressed channel turns through an ephemeral Gateway and mock provider, then inspect exact decision receipts before and after restart.
+    config:
+      requiredProviderMode: mock-openai
+
+flow:
+  steps:
+    - name: records owner-native delivery lifecycle
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: message delivery decision proof requires mock-openai
+        - assert:
+            expr: "env.cfg.logging?.audit?.enabled === true && env.cfg.logging?.audit?.executionIdentity === true && env.cfg.logging?.audit?.messages === 'all'"
+            message:
+              expr: "`message audit config missing from staged Gateway: ${JSON.stringify(env.cfg.logging?.audit)}`"
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 60000]
+        - set: activeConfig
+          value:
+            expr: "await env.gateway.call('config.get', {}, { timeoutMs: 60000 })"
+        - assert:
+            expr: "activeConfig.config?.logging?.audit?.enabled === true && activeConfig.config?.logging?.audit?.executionIdentity === true && activeConfig.config?.logging?.audit?.messages === 'all'"
+            message:
+              expr: "`active Gateway message audit config missing: ${JSON.stringify(activeConfig.config?.logging?.audit)}`"
+        - call: reset
+        - set: deliveryEventsBefore
+          value:
+            expr: "(await runQaCli(env, ['audit', '--kind', 'message', '--direction', 'outbound', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.eventId)"
+        - sendInbound:
+            conversation: { id: qa-message-delivery-room, kind: direct }
+            senderId: qa-message-delivery-person
+            text: "Message delivery decision send QA check."
+          saveAs: deliveryInbound
+        - waitForOutbound:
+            conversation: { id: qa-message-delivery-room, kind: direct }
+            textIncludes: QA-MESSAGE-DELIVERY-OK
+            timeoutMs: 60000
+          saveAs: deliveryOutbound
+        - set: deliveryPrivacySentinels
+          value:
+            expr: "[deliveryInbound.senderId, deliveryInbound.conversation.id, deliveryInbound.id, deliveryOutbound.id, deliveryInbound.text, deliveryOutbound.text]"
+        - assert:
+            expr: "deliveryPrivacySentinels.every((value) => typeof value === 'string' && value.length > 0)"
+            message: delivery QA messages did not expose complete real privacy sentinels
+        - call: waitForCondition
+          saveAs: deliveryActivity
+          args:
+            - lambda:
+                async: true
+                expr: >-
+                  runQaCli(env, ['audit', '--kind', 'message', '--direction', 'outbound', '--limit', '500', '--json'], { timeoutMs: 60000, json: true }).then((value) => {
+                    const terminal = value.events.find((event) => !deliveryEventsBefore.includes(event.eventId) && event.outcome === 'sent' && typeof event.runId === 'string');
+                    return terminal ? value : undefined;
+                  }).catch(() => undefined)
+            - 60000
+            - 250
+        - set: deliveryRunId
+          value:
+            expr: "deliveryActivity.events.find((event) => !deliveryEventsBefore.includes(event.eventId) && event.outcome === 'sent' && typeof event.runId === 'string')?.runId"
+        - assert:
+            expr: "typeof deliveryRunId === 'string'"
+            message:
+              expr: "`terminal outbound audit row with run id missing: ${JSON.stringify(deliveryActivity)}`"
+        - call: waitForCondition
+          saveAs: deliveryInspect
+          args:
+            - lambda:
+                async: true
+                expr: >-
+                  runQaCli(env, ['audit', '--run', deliveryRunId, '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => {
+                    const decisions = Array.isArray(value.decisions) ? value.decisions : [];
+                    const receiptIds = decisions.map((receipt) => receipt.receiptId);
+                    const exactLifecycle = ['message_queued', 'message_platform_started', 'message_delivered'].every((reason) => decisions.filter((receipt) => receipt.decision?.reasonCode === reason).length === 1);
+                    const uniqueReceiptIds = receiptIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(receiptIds).size === decisions.length;
+                    return exactLifecycle && uniqueReceiptIds ? value : undefined;
+                  }).catch(() => undefined)
+            - 60000
+            - 250
+        - set: deliveryMessageReceipts
+          value:
+            expr: "deliveryInspect.decisions.filter((receipt) => receipt.action?.family === 'message')"
+        - set: deliveryReceiptIds
+          value:
+            expr: "deliveryInspect.decisions.map((receipt) => receipt.receiptId)"
+        - assert:
+            expr: "['message_queued', 'message_platform_started', 'message_delivered'].every((reason) => deliveryInspect.decisions.filter((receipt) => receipt.decision?.reasonCode === reason).length === 1)"
+            message: delivery lifecycle receipt cardinality was not exactly one per required stage
+        - assert:
+            expr: "deliveryReceiptIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(deliveryReceiptIds).size === deliveryInspect.decisions.length"
+            message: delivery receipt ids were empty or duplicated
+        - set: deliveryText
+          value:
+            expr: "await runQaCli(env, ['audit', '--run', deliveryRunId, '--explain'], { timeoutMs: 60000 })"
+        - assert:
+            expr: "deliveryMessageReceipts.every((receipt) => receipt.enforcement.coverageState === 'attribution-only') && deliveryText.includes('message.send: allowed') && deliveryText.includes('message_delivered')"
+            message: delivery lifecycle did not remain attribution-only in JSON and human output
+        - assert:
+            expr: "deliveryPrivacySentinels.every((sentinel) => !JSON.stringify(deliveryInspect).includes(sentinel) && !deliveryText.includes(sentinel))"
+            message: delivery JSON or human inspection exposed a raw sender, conversation, message id, or content sentinel
+      detailsExpr: "`delivery lifecycle counts=1/1/1; receiptIds=nonempty-unique; privacy=json+human-pass`"
+
+    - name: records intentional message-tool suppression
+      actions:
+        - set: suppressionRunsBefore
+          value:
+            expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+        - set: suppressionOutboundStart
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: qa-message-suppression-room, kind: direct }
+            senderId: qa-message-suppression-person
+            text: "Message delivery decision suppression QA check."
+          saveAs: suppressionInbound
+        - set: suppressionPrivacySentinels
+          value:
+            expr: "[suppressionInbound.senderId, suppressionInbound.conversation.id, suppressionInbound.id, suppressionInbound.text, 'Final assistant text']"
+        - assert:
+            expr: "suppressionPrivacySentinels.every((value) => typeof value === 'string' && value.length > 0)"
+            message: suppression QA message did not expose complete real privacy sentinels
+        - waitForNoOutbound:
+            sinceIndex: { ref: suppressionOutboundStart }
+            quietMs: 1500
+        - assert:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart"
+            message: suppression interval produced a visible outbound QA message
+        - call: waitForCondition
+          saveAs: suppressionRunId
+          args:
+            - lambda:
+                async: true
+                expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string' && !suppressionRunsBefore.includes(id)))][0]"
+            - 60000
+            - 250
+        - call: waitForCondition
+          saveAs: suppressionInspect
+          args:
+            - lambda:
+                async: true
+                expr: >-
+                  runQaCli(env, ['audit', '--run', suppressionRunId, '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => {
+                    const decisions = Array.isArray(value.decisions) ? value.decisions : [];
+                    const suppression = decisions.filter((receipt) => receipt.decision?.reasonCode === 'message_suppressed_inbound_metadata_echo');
+                    const receiptIds = decisions.map((receipt) => receipt.receiptId);
+                    const uniqueReceiptIds = receiptIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(receiptIds).size === decisions.length;
+                    return suppression.length === 1 && suppression[0]?.action?.family === 'message' && suppression[0]?.decision?.outcome === 'not-applicable' && suppression[0]?.enforcement?.coverageState === 'attribution-only' && uniqueReceiptIds ? value : undefined;
+                  }).catch(() => undefined)
+            - 60000
+            - 250
+        - set: suppressionReceipts
+          value:
+            expr: "suppressionInspect.decisions.filter((receipt) => receipt.decision?.reasonCode === 'message_suppressed_inbound_metadata_echo')"
+        - set: suppressionReceiptIds
+          value:
+            expr: "suppressionInspect.decisions.map((receipt) => receipt.receiptId)"
+        - assert:
+            expr: "suppressionReceipts.length === 1 && suppressionReceipts[0].action?.family === 'message' && suppressionReceipts[0].decision?.outcome === 'not-applicable' && suppressionReceipts[0].enforcement?.coverageState === 'attribution-only'"
+            message: suppression receipt cardinality or semantics were incorrect
+        - assert:
+            expr: "suppressionReceiptIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(suppressionReceiptIds).size === suppressionInspect.decisions.length"
+            message: suppression receipt ids were empty or duplicated
+        - set: suppressionText
+          value:
+            expr: "await runQaCli(env, ['audit', '--run', suppressionRunId, '--explain'], { timeoutMs: 60000 })"
+        - assert:
+            expr: "suppressionText.includes('message_suppressed_inbound_metadata_echo')"
+            message: intentional suppression receipt missing from JSON or human output
+        - assert:
+            expr: "suppressionPrivacySentinels.every((sentinel) => !JSON.stringify(suppressionInspect).includes(sentinel) && !suppressionText.includes(sentinel))"
+            message: suppression JSON or human inspection exposed a raw sender, conversation, inbound message id, or content sentinel
+        - assert:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart"
+            message: suppression path did not retain exact zero visible outbound messages
+      detailsExpr: "`suppression receipts=1; receiptIds=nonempty-unique; visibleOutbound=0; privacy=json+human-pass`"
+
+    - name: preserves delivery and suppression receipts across restart
+      actions:
+        - set: deliveryDecisionsBeforeRestart
+          value:
+            expr: "JSON.stringify(deliveryInspect.decisions)"
+        - set: suppressionDecisionsBeforeRestart
+          value:
+            expr: "JSON.stringify(suppressionInspect.decisions)"
+        - assert:
+            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
+            message: QA Gateway does not expose lifecycle-owned restart
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: "Promise.resolve()"
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 60000]
+        - set: deliveryAfterRestart
+          value:
+            expr: "await runQaCli(env, ['audit', '--run', deliveryRunId, '--explain', '--json'], { timeoutMs: 60000, json: true })"
+        - set: suppressionAfterRestart
+          value:
+            expr: "await runQaCli(env, ['audit', '--run', suppressionRunId, '--explain', '--json'], { timeoutMs: 60000, json: true })"
+        - set: deliveryTextAfterRestart
+          value:
+            expr: "await runQaCli(env, ['audit', '--run', deliveryRunId, '--explain'], { timeoutMs: 60000 })"
+        - set: suppressionTextAfterRestart
+          value:
+            expr: "await runQaCli(env, ['audit', '--run', suppressionRunId, '--explain'], { timeoutMs: 60000 })"
+        - assert:
+            expr: "JSON.stringify(deliveryAfterRestart.decisions) === deliveryDecisionsBeforeRestart && JSON.stringify(suppressionAfterRestart.decisions) === suppressionDecisionsBeforeRestart && deliveryTextAfterRestart.includes('message_delivered') && suppressionTextAfterRestart.includes('message_suppressed_inbound_metadata_echo')"
+            message: message delivery decisions changed across Gateway restart
+        - assert:
+            expr: "['message_queued', 'message_platform_started', 'message_delivered'].every((reason) => deliveryAfterRestart.decisions.filter((receipt) => receipt.decision?.reasonCode === reason).length === 1) && deliveryAfterRestart.decisions.every((receipt) => typeof receipt.receiptId === 'string' && receipt.receiptId.length > 0) && new Set(deliveryAfterRestart.decisions.map((receipt) => receipt.receiptId)).size === deliveryAfterRestart.decisions.length"
+            message: restarted delivery inspection lost exact lifecycle cardinality or unique receipt ids
+        - assert:
+            expr: "suppressionAfterRestart.decisions.filter((receipt) => receipt.decision?.reasonCode === 'message_suppressed_inbound_metadata_echo' && receipt.action?.family === 'message' && receipt.decision?.outcome === 'not-applicable' && receipt.enforcement?.coverageState === 'attribution-only').length === 1 && suppressionAfterRestart.decisions.every((receipt) => typeof receipt.receiptId === 'string' && receipt.receiptId.length > 0) && new Set(suppressionAfterRestart.decisions.map((receipt) => receipt.receiptId)).size === suppressionAfterRestart.decisions.length"
+            message: restarted suppression inspection lost exact receipt semantics or unique receipt ids
+        - assert:
+            expr: "deliveryPrivacySentinels.every((sentinel) => !JSON.stringify(deliveryAfterRestart).includes(sentinel) && !deliveryTextAfterRestart.includes(sentinel)) && suppressionPrivacySentinels.every((sentinel) => !JSON.stringify(suppressionAfterRestart).includes(sentinel) && !suppressionTextAfterRestart.includes(sentinel))"
+            message: restarted JSON or human inspection exposed a raw sender, conversation, message id, or content sentinel
+        - assert:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart"
+            message: suppression path produced a visible outbound message after restart
+      detailsExpr: "`restart-stable decisions=byte-identical; receiptIds=nonempty-unique; privacy=json+human-pass`"

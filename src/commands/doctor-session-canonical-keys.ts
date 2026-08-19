@@ -4,6 +4,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   applySessionEntryLifecycleMutation,
   copySessionOwnedStateForCanonicalRepair,
+  ensureTranscriptGenerationsForCanonicalRepair,
   listSessionGenerationIdsForCanonicalRepair,
   loadTranscriptEvents,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
@@ -455,6 +456,7 @@ async function repairCanonicalSessionGroupsInSingleDatabase(
   if (!first) {
     return [];
   }
+  await ensureTranscriptGenerationsForCanonicalRepair(groups.flatMap((group) => group.candidates));
   const destination = first.selected.destination;
   const result = await applySessionEntryLifecycleMutation({
     agentId: destination.agentId,
@@ -498,6 +500,7 @@ async function repairCanonicalSessionGroup(
   if (!selected) {
     return [];
   }
+  await ensureTranscriptGenerationsForCanonicalRepair(candidates);
   const winner = selected.winner;
   const destination = selected.destination;
   const byDatabase = new Map<string, CanonicalSessionCandidate[]>();

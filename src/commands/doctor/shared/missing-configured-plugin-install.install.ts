@@ -149,6 +149,7 @@ export async function installCandidate(params: {
           ? parseRegistryNpmSpec(candidate.npmSpec)?.name
           : undefined,
         coreVersion: resolveCompatibilityHostVersion(params.env),
+        versionBoundToCore: candidate.versionBoundToOpenClaw,
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;
@@ -452,6 +453,7 @@ export function resolveCandidateInstallSpec(params: {
         ? parseRegistryNpmSpec(params.candidate.npmSpec)?.name
         : undefined,
       coreVersion: params.coreVersion,
+      versionBoundToCore: params.candidate.versionBoundToOpenClaw,
     }).installSpec;
   }
   if (params.candidate.clawhubSpec) {

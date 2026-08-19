@@ -469,22 +469,20 @@ function wrapRetryStreamWithRecoveryNotification(
       wrapRetryStreamWithRecoveryNotification(resolved as ReturnType<StreamFn>, notify),
     ) as ReturnType<StreamFn>;
   }
-  const streamWithResult = retryStream as unknown as {
-    result?: () => Promise<AssistantMessage>;
-  };
-  if (typeof streamWithResult.result !== "function") {
+  const resultMethod = Reflect.get(retryStream, "result");
+  if (typeof resultMethod !== "function") {
     return retryStream;
   }
-  const result = streamWithResult.result.bind(streamWithResult);
+  const result = resultMethod.bind(retryStream) as () => Promise<AssistantMessage>;
   let notified = false;
-  streamWithResult.result = async () => {
+  Reflect.set(retryStream, "result", async () => {
     const message = await result();
     if (!notified && isSuccessfulRecoveryRetryResult(message)) {
       notified = true;
       await notify();
     }
     return message;
-  };
+  });
   return retryStream;
 }
 
@@ -584,16 +582,15 @@ export function wrapAnthropicStreamWithRecovery(
       id: sessionMeta.id,
       onRecoveredAnthropicThinking: sessionMeta.onRecoveredAnthropicThinking,
     };
-    const contextRecord = context as unknown as { messages?: unknown };
-    const originalMessages = Array.isArray(contextRecord.messages)
-      ? (contextRecord.messages as AgentMessage[])
+    const originalMessages = Array.isArray(context.messages)
+      ? (context.messages as AgentMessage[])
       : [];
     const retry = () => {
       const cleanedMessages = stripAllThinkingBlocks(originalMessages);
       const nextContext = {
-        ...(context as unknown as Record<string, unknown>),
-        messages: cleanedMessages,
-      } as typeof context;
+        ...context,
+        messages: cleanedMessages as typeof context.messages,
+      };
       return innerStreamFn(model, nextContext, options);
     };
     const notify = () =>

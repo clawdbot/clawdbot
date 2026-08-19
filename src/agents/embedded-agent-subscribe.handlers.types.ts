@@ -29,8 +29,7 @@ import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import type { AgentSessionEvent } from "./sessions/index.js";
-import type { ToolErrorSummary } from "./tool-error-summary.js";
+import type { ToolErrorSummary, ToolRecoverySummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
 type EmbeddedSubscribeLogger = {
@@ -51,6 +50,7 @@ export type ToolCallSummary = {
   instanceReplaySafe: boolean;
   replaySafe: boolean;
   mutatingAction: boolean;
+  ownerKey?: string;
   actionFingerprint?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
@@ -105,6 +105,7 @@ export type EmbeddedAgentSubscribeState = {
    */
   assistantTurnCount: number;
   lastToolError?: ToolErrorSummary;
+  lastToolRecovery?: ToolRecoverySummary;
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;
 
@@ -331,6 +332,7 @@ type ToolHandlerParams = Pick<
   | "sessionId"
   | "agentId"
   | "replaySafeToolNames"
+  | "sideEffectToolOwners"
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
@@ -349,6 +351,7 @@ type ToolHandlerState = Pick<
   | "itemStartedCount"
   | "itemCompletedCount"
   | "lastToolError"
+  | "lastToolRecovery"
   | "latestMcpAppChannelView"
   | "latestMcpConnectAction"
   | "pendingMessagingTargets"
@@ -393,8 +396,3 @@ export type ToolHandlerContext = {
   trimMessagingToolSent: () => void;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };
-
-export type EmbeddedAgentSubscribeEvent =
-  | AgentSessionEvent
-  | { type: string; [k: string]: unknown }
-  | { type: "message_start"; message: AgentMessage };

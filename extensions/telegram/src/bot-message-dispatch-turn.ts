@@ -1,6 +1,7 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   readAgentRunTerminalOutcome,
+  hasFinalInboundReplyDispatch,
   runChannelInboundEvent,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -230,16 +231,12 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onReasoningEnd: turn.reasoningLane.stream
               ? () => {
                   const queued = enqueueDraftEvent(turn, async () => {
-                    turn.progressSummary.closeReasoningBurst();
                     turn.splitReasoningOnNextStream = turn.reasoningLane.hasStreamedMessage;
                     turn.progressCompositor.reset();
                   });
                   return queued.then(() => false);
                 }
-              : () => {
-                  turn.progressSummary.closeReasoningBurst();
-                  return false;
-                },
+              : () => false,
             onQueuedFollowupAdmitted: () => {
               beginDraftQueuedFollowup(turn);
               turn.finalAnswerDeliveryStarted = false;
@@ -313,11 +310,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     if (!turnResult.dispatched) {
       return false;
     }
-    turn.queuedFinal ||= turnResult.dispatchResult.queuedFinal;
+    turn.queuedFinal ||= hasFinalInboundReplyDispatch(turnResult.dispatchResult);
     turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
     turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
-    if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {
+    if (hasFinalInboundReplyDispatch(turnResult.dispatchResult)) {
       turn.sawProgressFinal = true;
     }
     turn.suppressSilentReplyFallback =

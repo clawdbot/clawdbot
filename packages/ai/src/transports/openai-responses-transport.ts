@@ -23,9 +23,7 @@ import {
 import {
   createResponsesStreamWithEncryptedContentRetry,
   isInvalidEncryptedContentError,
-  prepareOpenAIResponsesReasoningItemForReplay,
   resolveAzureOpenAIApiVersion,
-  tagOpenAIResponsesReasoningReplayItem,
 } from "./openai-responses-replay-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import {
@@ -58,10 +56,8 @@ const responsesTesting = {
   buildOpenAIResponsesReasoningReplayMetadata,
   isInvalidEncryptedContentError,
   normalizeResponsesFailedEvent,
-  prepareOpenAIResponsesReasoningItemForReplay,
   createResponsesStreamWithEncryptedContentRetry,
   resolveAzureOpenAIApiVersion,
-  tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,

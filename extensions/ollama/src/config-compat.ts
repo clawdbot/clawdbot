@@ -87,7 +87,7 @@ function migrateLegacyOllamaLocalConfig(config: OpenClawConfig): {
   changes: string[];
 } | null {
   const provider = config.models?.providers?.[OLLAMA_PROVIDER_ID];
-  if (!isLegacyOllamaLocalConfig(provider, config as unknown as Record<string, unknown>)) {
+  if (!isLegacyOllamaLocalConfig(provider, { ...config })) {
     return null;
   }
 

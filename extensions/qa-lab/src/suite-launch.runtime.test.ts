@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteScenarioResult } from "./suite.js";
-import { qaSuiteProgressTesting, throwQaSuiteCleanupErrors } from "./suite.js";
+import { throwQaSuiteCleanupErrors } from "./suite.js";
 import type {
   QaTestFileScenario,
   QaTestFileScenarioRunResult,
@@ -1307,7 +1308,7 @@ describe("qa suite runtime launcher", () => {
         failedFileName: fileName,
         outputDir,
         publish: async () =>
-          await qaSuiteProgressTesting.writeQaSuiteArtifacts({
+          await writeQaSuiteArtifacts({
             outputDir,
             startedAt: new Date("2026-08-12T00:00:00.000Z"),
             finishedAt: new Date("2026-08-12T00:01:00.000Z"),

@@ -7,7 +7,7 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/openclaw-mascot.ts";
-import "../components/tooltip.ts";
+import { installNativeTitleGuard } from "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -17,9 +17,11 @@ import { isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
+import { dashboardDocumentSession, isDashboardOnlyView } from "./dashboard-document-mode.ts";
 import { desktopDocumentOptions, isDesktopOnlyView } from "./desktop-document-mode.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
+  DASHBOARD_DOCUMENT_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
   preloadOptionalElement,
@@ -33,10 +35,16 @@ export function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
 
-function renderConnectingSplash() {
+function renderConnectingSplash(status?: string) {
   return html`
-    <main class="connect-splash" role="status" aria-live="polite" aria-label=${t("common.loading")}>
+    <main
+      class="connect-splash"
+      role="status"
+      aria-live="polite"
+      aria-label=${status ?? t("common.loading")}
+    >
       <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
+      ${status ? html`<span class="connect-splash__status">${status}</span>` : nothing}
     </main>
   `;
 }
@@ -80,6 +88,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
     globalThis.location,
     resolveControlUiBasePath(globalThis.location?.pathname ?? "/"),
   );
+  private readonly dashboardOnly = isDashboardOnlyView(globalThis.location);
+  private readonly dashboardSession = dashboardDocumentSession(globalThis.location);
   private readonly desktopOptions = desktopDocumentOptions(globalThis.location);
   private runtime: ApplicationRuntime | undefined;
   private readonly contextProvider = new ContextProvider(this, {
@@ -108,12 +118,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
       .watch(
         () => (this.terminalOnly ? this.context?.agentSelection : undefined),
         (selection, notify) => selection.subscribe(notify),
-      );
+      )
+      .effect(() => this.ownerDocument, installNativeTitleGuard);
   }
 
   override connectedCallback() {
     super.connectedCallback();
     void import("../components/app-sidebar.ts");
+    void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
     if (this.terminalOnly) {
@@ -121,6 +133,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     if (this.desktopOnly) {
       preloadOptionalElement(this, DESKTOP_PANEL_ELEMENT);
+    }
+    if (this.dashboardOnly) {
+      preloadOptionalElement(this, DASHBOARD_DOCUMENT_ELEMENT);
     }
     if (this.runtime.documentMode?.kind === "approval") {
       preloadOptionalElement(this, APPROVAL_PAGE_ELEMENT);
@@ -149,6 +164,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.pendingGatewayUrl = null;
     this.resetLoginSensitivePresentation();
     super.disconnectedCallback();
+  }
+
+  protected override firstUpdated(): void {
+    if (this.runtime) {
+      globalThis.dispatchEvent(new Event("openclaw-control-ui-rendered"));
+    }
   }
 
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
@@ -187,6 +208,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.loginShowGatewayPassword = false;
   }
 
+  private closeDocument(basePath: string): void {
+    if (globalThis.history.length > 1) {
+      globalThis.history.back();
+    } else {
+      globalThis.location.assign(basePath || "/");
+    }
+  }
+
   override render() {
     const context = this.context;
     const runtime = this.runtime;
@@ -195,6 +224,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     const gatewaySnapshot = context.gateway.snapshot;
     const gatewayConnected = gatewaySnapshot.phase === "connected";
+    const gatewayStartupStatus =
+      gatewaySnapshot.phase === "starting" ? t("common.gatewayStarting") : undefined;
     const gatewayUrlConfirmation = this.pendingGatewayUrl
       ? html`
           <openclaw-gateway-url-confirmation
@@ -231,8 +262,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .themeMode=${resolveTerminalThemeMode()}
           fullscreen
         ></openclaw-terminal-panel>
+        ${!gatewayConnected && gatewaySnapshot.lastError === null
+          ? renderConnectingSplash(gatewayStartupStatus)
+          : nothing}
         ${!isOptionalElementDefined(TERMINAL_PANEL_ELEMENT) && terminalAvailable
-          ? renderConnectingSplash()
+          ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
         ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
@@ -252,22 +286,33 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .documentSource=${this.desktopOptions.source}
           .documentSession=${this.desktopOptions.session}
           .documentControl=${this.desktopOptions.control}
-          .onDocumentClose=${() => {
-            if (globalThis.history.length > 1) {
-              globalThis.history.back();
-            } else {
-              globalThis.location.assign(context.basePath || "/");
-            }
-          }}
+          .onDocumentClose=${() => this.closeDocument(context.basePath)}
         ></openclaw-desktop-panel>
         ${!gatewayConnected && gatewaySnapshot.lastError === null
-          ? renderConnectingSplash()
+          ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
         ${!isOptionalElementDefined(DESKTOP_PANEL_ELEMENT) && desktopAvailable
-          ? renderConnectingSplash()
+          ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
         ${!desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="desktop-view-unavailable">${t("desktop.unavailable")}</div>`
+          : nothing}
+      `;
+    }
+    // Dashboard documents reuse the live board provider and widget bridge while
+    // keeping the application shell, transcript, and navigation chrome unmounted.
+    if (this.dashboardOnly) {
+      return html`
+        <openclaw-board-document
+          .gatewaySnapshot=${gatewaySnapshot}
+          .sessionKey=${this.dashboardSession}
+          .onDocumentClose=${() => this.closeDocument(context.basePath)}
+        ></openclaw-board-document>
+        ${!gatewayConnected && gatewaySnapshot.lastError === null
+          ? renderConnectingSplash(gatewayStartupStatus)
+          : nothing}
+        ${!isOptionalElementDefined(DASHBOARD_DOCUMENT_ELEMENT) && gatewayConnected
+          ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
       `;
     }
@@ -277,18 +322,19 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // loginGatePinned protects manual submissions.
     const initialConnectPending =
       runtime.documentMode === null &&
-      gatewaySnapshot.phase === "connecting" &&
-      !this.loginGatePinned &&
-      gatewaySnapshot.lastError === null;
+      gatewaySnapshot.lastError === null &&
+      (gatewaySnapshot.phase === "starting" ||
+        (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>
-          ${renderConnectingSplash()} ${gatewayUrlConfirmation}
+          ${renderConnectingSplash(gatewayStartupStatus)} ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
       `;
     }
-    const showLoginGate =
-      !gatewayConnected && (this.loginGatePinned || gatewaySnapshot.phase !== "reconnecting");
+    const shellOwnsRecovery =
+      gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
+    const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
     if (showLoginGate) {
       return html`
         <openclaw-tooltip-provider>
@@ -344,11 +390,17 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return html`
       <openclaw-tooltip-provider>
         <openclaw-github-link-hovercard-provider .client=${gatewaySnapshot.client}>
-          ${gatewayUrlConfirmation}
-          <openclaw-app-shell
-            .runtime=${runtime}
-            .onboarding=${this.onboarding}
-          ></openclaw-app-shell>
+          <openclaw-session-progress-hovercard-provider
+            .client=${gatewaySnapshot.client}
+            .context=${context}
+            .gateway=${context.gateway}
+          >
+            ${gatewayUrlConfirmation}
+            <openclaw-app-shell
+              .runtime=${runtime}
+              .onboarding=${this.onboarding}
+            ></openclaw-app-shell>
+          </openclaw-session-progress-hovercard-provider>
         </openclaw-github-link-hovercard-provider>
       </openclaw-tooltip-provider>
     `;

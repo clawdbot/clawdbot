@@ -36,11 +36,12 @@ import {
   type ToolTranscriptResultInput,
 } from "./event-projector-tool-progress.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
-import type {
-  CodexDynamicToolCallOutputContentItem,
-  CodexThreadItem,
-  JsonObject,
-  JsonValue,
+import {
+  isJsonObject,
+  type CodexDynamicToolCallOutputContentItem,
+  type CodexThreadItem,
+  type JsonObject,
+  type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
@@ -64,6 +65,24 @@ const CODE_MODE_NATIVE_PATCH_SOURCE_RE =
   /^\s*(?:\/\/[^\r\n]*\r?\n\s*)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.apply_patch\(\s*("(?:\\[\s\S]|[^"\\])*")\s*\)\s*;?\s*text\(\s*\1\s*\)\s*;?\s*$/u;
 const CODE_MODE_NATIVE_PATCH_RESULT_RE =
   /^\s*Script (completed|failed)\s*\r?\nWall time\s+\d+(?:\.\d+)?\s+seconds\s*\r?\nOutput:\s*([\s\S]*?)\s*$/iu;
+const MAX_TOOL_APPROVAL_REVIEWS = 16;
+
+type ToolApprovalReviewOutcome = "approved" | "denied" | "reviewing";
+
+type ToolApprovalReviewState = {
+  reviews: JsonObject[];
+  denied: boolean;
+  /** `null` means more unresolved IDs existed than the bounded set could retain. */
+  unresolvedReviewIds: Set<string> | null;
+};
+
+function toolApprovalReviewOutcome(state: ToolApprovalReviewState): ToolApprovalReviewOutcome {
+  return state.denied
+    ? "denied"
+    : state.unresolvedReviewIds === null || state.unresolvedReviewIds.size > 0
+      ? "reviewing"
+      : "approved";
+}
 
 function readCodeModeNativePatchInput(source: unknown): string | undefined {
   if (typeof source !== "string") {
@@ -129,6 +148,7 @@ export class CodexToolTranscriptProjection {
   private readonly afterToolCallObservedItemIds = new Set<string>();
   private readonly nativeMcpAppResultDetails = new Map<string, unknown>();
   private readonly nativeMcpAppResultDetailsAttempted = new Set<string>();
+  private readonly approvalReviewsByCallId = new Map<string, ToolApprovalReviewState>();
   private readonly rawNativeToolOutputByCallId = new Map<string, string>();
   private readonly codeModeNativePatchInputsByCallId = new Map<string, string>();
 
@@ -147,6 +167,44 @@ export class CodexToolTranscriptProjection {
 
   get transcriptMessages(): readonly AgentMessage[] {
     return this.messages;
+  }
+
+  recordToolApprovalReview(
+    toolCallId: string,
+    reviewId: string,
+    status: string,
+    review: JsonObject,
+  ): ToolApprovalReviewOutcome {
+    const state = this.approvalReviewsByCallId.get(toolCallId) ?? {
+      reviews: [],
+      denied: false,
+      unresolvedReviewIds: new Set<string>(),
+    };
+    state.reviews = [
+      ...state.reviews.filter((candidate) => candidate.id !== reviewId),
+      review,
+    ].slice(-MAX_TOOL_APPROVAL_REVIEWS);
+    state.denied ||= ["denied", "timed_out", "aborted"].includes(status);
+    const unresolved = state.unresolvedReviewIds;
+    if (status === "in_progress") {
+      state.unresolvedReviewIds =
+        unresolved && (unresolved.size < MAX_TOOL_APPROVAL_REVIEWS || unresolved.has(reviewId))
+          ? unresolved.add(reviewId)
+          : null;
+    } else {
+      unresolved?.delete(reviewId);
+    }
+    this.approvalReviewsByCallId.set(toolCallId, state);
+    return toolApprovalReviewOutcome(state);
+  }
+
+  finalizeToolApprovalReviews(toolCallId: string): ToolApprovalReviewOutcome | undefined {
+    const state = this.approvalReviewsByCallId.get(toolCallId);
+    if (!state) {
+      return undefined;
+    }
+    state.unresolvedReviewIds = new Set();
+    return toolApprovalReviewOutcome(state);
   }
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
@@ -188,21 +246,25 @@ export class CodexToolTranscriptProjection {
   }
 
   recordNativeToolResult(item: CodexThreadItem | undefined, details?: unknown): void {
-    if (!item || !shouldRecordNativeToolTranscript(item)) {
+    if (!item || !shouldRecordNativeToolTranscript(item) || this.resultIds.has(item.id)) {
       return;
     }
     const name = itemName(item);
     if (name) {
+      const status = itemStatus(item);
+      const approvalTimeoutExplanation = this.progress.approvalTimeoutExplanation(item.id, status);
       this.recordToolResult({
         id: item.id,
         name,
         text:
+          approvalTimeoutExplanation ??
           this.rawNativeToolOutputByCallId.get(item.id) ??
           itemTranscriptResultText(item, this.progress.outputTextByItem),
-        isError: isNonSuccessItemStatus(itemStatus(item)),
+        isError: isNonSuccessItemStatus(status),
         details,
         ...(item.type === "webSearch" ? { resultContentSource: "network" } : {}),
       });
+      this.progress.approvalTimeoutKinds.delete(item.id);
     }
   }
 
@@ -313,9 +375,8 @@ export class CodexToolTranscriptProjection {
     }
     this.rawNativeToolOutputByCallId.set(callId, text);
     const result = this.messages.find(
-      (message) =>
-        message.role === "toolResult" &&
-        (message as unknown as { toolCallId?: unknown }).toolCallId === callId,
+      (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
+        message.role === "toolResult" && message.toolCallId === callId,
     );
     if (!result) {
       if (NATIVE_PATCH_REJECTION_RE.test(text)) {
@@ -336,15 +397,31 @@ export class CodexToolTranscriptProjection {
       id: callId,
       name: "apply_patch",
       text,
-      isError: (result as unknown as { isError?: unknown }).isError === true,
+      isError: result.isError,
     });
-    (result as unknown as { content: unknown }).content = (
-      replacement as unknown as { content: unknown }
-    ).content;
+    result.content = replacement.content;
   }
 
   async recordNativeToolResultWithDetails(item: CodexThreadItem | undefined): Promise<void> {
-    this.recordNativeToolResult(item, await this.prepareNativeMcpAppResultDetails(item));
+    const preparedDetails = await this.prepareNativeMcpAppResultDetails(item);
+    const approvalReviewState = item ? this.approvalReviewsByCallId.get(item.id) : undefined;
+    // The terminal tool result is the durable owner for its reviews. Live
+    // review events disappear with the run snapshot; details survive history.
+    const reviewDetails = approvalReviewState
+      ? {
+          approvalReviews: approvalReviewState.reviews,
+          approvalReviewOutcome: toolApprovalReviewOutcome(approvalReviewState),
+        }
+      : undefined;
+    const details = reviewDetails
+      ? isJsonObject(preparedDetails)
+        ? { ...preparedDetails, ...reviewDetails }
+        : {
+            ...(preparedDetails !== undefined ? { toolDetails: preparedDetails } : {}),
+            ...reviewDetails,
+          }
+      : preparedDetails;
+    this.recordNativeToolResult(item, details);
   }
 
   private async prepareNativeMcpAppResultDetails(
@@ -401,7 +478,9 @@ export class CodexToolTranscriptProjection {
     }
     this.trajectoryResultIds.add(params.item.id);
     const toolResult = itemToolResult(params.item).result;
-    const output = itemOutputText(params.item, this.progress.outputTextByItem);
+    const output =
+      this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
+      itemOutputText(params.item, this.progress.outputTextByItem);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
       threadId: this.threadId,
       turnId: this.turnId,
@@ -426,7 +505,9 @@ export class CodexToolTranscriptProjection {
     }
     this.afterToolCallObservedItemIds.add(item.id);
     const result = itemToolResult(item).result;
-    const error = itemToolError(item, status, this.progress.outputTextByItem);
+    const error =
+      this.progress.approvalTimeoutExplanation(item.id, status) ??
+      itemToolError(item, status, this.progress.outputTextByItem);
     const startedAt = resolveStartedAtFromDurationMs(item.durationMs);
     const hookParams = {
       toolName: name,
@@ -467,6 +548,7 @@ export class CodexToolTranscriptProjection {
           name,
           text: formatMissingToolResultError({ id, name }),
           isError: true,
+          details: { reason: "missing_tool_result" },
         });
       }
     }
@@ -599,7 +681,9 @@ export class CodexToolTranscriptProjection {
     } as unknown as AgentMessage;
   }
 
-  private createToolResultMessage(params: ToolTranscriptResultInput): AgentMessage {
+  private createToolResultMessage(
+    params: ToolTranscriptResultInput,
+  ): Extract<AgentMessage, { role: "toolResult" }> {
     const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
     return {
       role: "toolResult",
@@ -624,7 +708,7 @@ export class CodexToolTranscriptProjection {
         ? { __openclaw: { resultContentSource: params.resultContentSource } }
         : {}),
       timestamp: this.nextTranscriptTimestamp(),
-    } as unknown as AgentMessage;
+    } as unknown as Extract<AgentMessage, { role: "toolResult" }>;
   }
 }
 

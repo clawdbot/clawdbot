@@ -37,6 +37,7 @@ import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { withPluginCommandAccountStartScope } from "../plugins/plugin-command-account-start-scope.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -496,7 +497,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const startChannelInternal = async (
+  const startChannelProcessOwned = async (
     channelId: ChannelId,
     accountId?: string,
     optsValue: StartChannelOptions = {},
@@ -1067,6 +1068,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       throw startup.firstError;
     }
   };
+
+  // Channel lifetimes outlive the RPC or timer requesting startup, so their
+  // provider, approval, cleanup, and restart descendants must be process-owned.
+  const startChannelInternal = (...args: Parameters<typeof startChannelProcessOwned>) =>
+    runOutsideGatewayRootWorkAdmission(() => startChannelProcessOwned(...args));
 
   const startChannel = async (
     channelId: ChannelId,

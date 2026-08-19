@@ -6,7 +6,7 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
-import { tagOpenAIResponsesReasoningReplayItem } from "../transports/openai-responses-replay-internal.js";
+import { OPENAI_RESPONSES_REASONING_REPLAY_META_KEY } from "../transports/openai-responses-contracts.js";
 import type { AssistantMessage, Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -45,18 +45,16 @@ function createReplayContext(kind: "compaction" | "mixed"): Context {
     content.push({
       type: "thinking",
       thinking: "prior reasoning",
-      thinkingSignature: JSON.stringify(
-        tagOpenAIResponsesReasoningReplayItem(
-          {
-            type: "reasoning",
-            id: "rs_retry",
-            encrypted_content: REASONING_CIPHERTEXT,
-            summary: [],
-          },
+      thinkingSignature: JSON.stringify({
+        type: "reasoning",
+        id: "rs_retry",
+        encrypted_content: REASONING_CIPHERTEXT,
+        summary: [],
+        [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: buildOpenAIResponsesReasoningReplayMetadata(
           model,
           REPLAY_IDENTITY,
         ),
-      ),
+      }),
     });
   }
   const prior: AssistantMessage = {

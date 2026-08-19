@@ -467,6 +467,15 @@ struct ChatSessionSidebarModelTests {
         #expect(details.worktreeBranch == "feature/review")
     }
 
+    @Test func `queued sessions keep their distinct inspector and sidebar state`() {
+        let session = self.entry(key: "queued", status: "queued", hasActiveRun: true)
+
+        #expect(ChatSessionInspectorDetails(session: session).runState == "Queued")
+        #expect(
+            ChatSessionSidebarModel.subtitle(for: session, workSubtitle: "Work") ==
+                "Waiting for a concurrency slot")
+    }
+
     @Test func `tree nests children and bubbles run failure and unread badges`() {
         let nodes = ChatSessionSidebarModel.tree(from: [
             self.entry(key: "parent", childSessions: ["child"]),
@@ -481,8 +490,26 @@ struct ChatSessionSidebarModelTests {
         #expect(nodes.map(\.id) == ["parent"])
         #expect(nodes[0].children.map(\.id) == ["child"])
         #expect(nodes[0].children[0].children.map(\.id) == ["grandchild"])
-        #expect(nodes[0].badges == .init(runningCount: 1, failedCount: 1, hasUnread: true))
+        #expect(nodes[0].badges == .init(queuedCount: 0, runningCount: 1, failedCount: 1, hasUnread: true))
         #expect(nodes[0].children.contains { $0.badges.hasUnread })
+    }
+
+    @Test func `tree keeps queued work separate from running work`() {
+        let nodes = ChatSessionSidebarModel.tree(from: [
+            self.entry(key: "parent", childSessions: ["queued", "running"]),
+            self.entry(
+                key: "queued",
+                parentSessionKey: "parent",
+                status: "queued",
+                hasActiveRun: true),
+            self.entry(
+                key: "running",
+                parentSessionKey: "parent",
+                status: "running",
+                hasActiveRun: true),
+        ])
+
+        #expect(nodes[0].badges == .init(queuedCount: 1, runningCount: 1, failedCount: 0, hasUnread: false))
     }
 
     @Test func `tree breaks cycles without dropping or duplicating sessions`() {

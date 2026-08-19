@@ -830,7 +830,7 @@ struct MacNodeRuntimeTests {
 
         #expect(!response.ok)
         #expect(response.error?.code == .unavailable)
-        #expect(response.error?.message.contains("lifecycle changed") == true)
+        #expect(response.error?.message.contains("COMPUTER_STALE_OBSERVATION") == true)
         #expect(generations.perform == [0])
         #expect(generations.release == [1])
     }

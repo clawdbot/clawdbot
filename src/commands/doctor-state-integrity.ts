@@ -41,6 +41,7 @@ import {
   applySessionEntryReplacements,
   listSessionEntriesReadOnly,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
@@ -1329,6 +1330,9 @@ export async function noteStateIntegrity(
   }
 
   const sqliteEntries = listSessionEntriesReadOnly({ agentId, storePath: absoluteStorePath });
+  const sqliteStorePath = resolveSqliteTargetFromSessionStorePath(absoluteStorePath, {
+    agentId,
+  }).path;
   const sqliteSessionKeys = new Set(sqliteEntries.map(({ sessionKey }) => sessionKey));
   // A successful SQLite import archives sessions.json. Its continued presence
   // is therefore the explicit signal that pre-import rows still need inspection.
@@ -1378,9 +1382,9 @@ export async function noteStateIntegrity(
       warnings.push(
         [
           `- ${missing.length}/${recentTranscriptCandidates.length} recent sessions are missing transcripts.`,
-          `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${absoluteStorePath}"`)}`,
-          `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --dry-run --fix-missing`)}`,
-          `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --enforce --fix-missing`)}`,
+          `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${sqliteStorePath}"`)}`,
+          `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${sqliteStorePath}" --dry-run --fix-missing`)}`,
+          `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${sqliteStorePath}" --enforce --fix-missing`)}`,
         ].join("\n"),
       );
     }

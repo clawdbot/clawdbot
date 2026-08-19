@@ -4,7 +4,7 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { preflightManualSessionCompaction } from "../../agents/sessions/manual-compaction-preflight.js";
-import type { SessionEntry as AgentSessionEntry } from "../../agents/sessions/session-manager.js";
+import { isIndexedSessionEntry } from "../../agents/sessions/session-manager-codec.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -14,7 +14,6 @@ import {
   resolveSessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import {
-  isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../../config/sessions/transcript-tree.js";
@@ -71,7 +70,7 @@ export async function preflightGatewaySessionCompaction(
     const tree = scanSessionTranscriptTree(transcriptEvents);
     const branch = selectSessionTranscriptTreePathNodes(tree, tree.leafId)
       .map((node) => node.entry)
-      .filter(isCanonicalSessionTranscriptEntry) as unknown as AgentSessionEntry[];
+      .filter(isIndexedSessionEntry);
     const preflight = preflightManualSessionCompaction(branch, {
       enabled: true,
       reserveTokens: 0,
@@ -101,6 +100,7 @@ export async function runGatewaySessionCompaction(
     cfg: params.cfg,
   });
   return await compactEmbeddedAgentSession({
+    contextEngineAgentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,

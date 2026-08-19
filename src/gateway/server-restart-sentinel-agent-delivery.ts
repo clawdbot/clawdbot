@@ -33,7 +33,8 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "./server-recovery-runtime-context.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
@@ -312,9 +313,12 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
 /** Runs durable generated-media handoffs through the normal owning-session agent loop. */
 export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   canonicalKey: string;
+  agentId: string;
+  storePath: string;
   entry: QueuedSessionDelivery;
   sessionEntry?: SessionEntry;
   stateDir?: string;
+  resolveGatewayContext?: GatewayContextResolver;
 }): Promise<boolean> {
   if (params.entry.kind !== "agentTurn") {
     return false;
@@ -342,7 +346,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             throw new Error("queued internal generated-media delivery has no owning session");
           }
           const appended = await appendAssistantMessageToSessionTranscript({
+            agentId: params.agentId,
             sessionKey: params.canonicalKey,
+            storePath: params.storePath,
             expectedSessionId: sessionId,
             ...(params.sessionEntry?.cronRunContinuation?.lifecycleRevision
               ? {
@@ -449,6 +455,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: entry.expectedMediaUrls ?? [],
         ...(entry.suppressTextDelivery === true ? { internalDeliverySuppressText: true } : {}),
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
         onAccepted: () => {
           accepted = true;
         },

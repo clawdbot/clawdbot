@@ -22,6 +22,7 @@ function waitThroughGateway(
         chatAbortControllers: activeKind
           ? new Map([[params.runId, { kind: activeKind }]])
           : new Map(),
+        chatQueuedTurns: new Map(),
       },
     } as unknown as Parameters<typeof handler>[0]),
   );

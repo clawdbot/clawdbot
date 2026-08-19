@@ -290,6 +290,7 @@ describe("restart health", () => {
     expect(createConfigIO).toHaveBeenCalledWith(
       expect.objectContaining({
         env: serviceEnv,
+        observe: false,
         pluginValidation: "skip",
         suppressFutureVersionWarning: true,
       }),

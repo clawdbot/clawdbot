@@ -1183,11 +1183,14 @@ describe("spawnSubagentDirect seam flow", () => {
       completionOwnerSessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
       createdVia: "spawn",
-      createdActor: { type: "agent", id: "agent:main:main" },
+      createdActor: { type: "agent", id: "main" },
       createdAt: expect.any(Number),
     });
     const registerInput = firstRegisteredSubagentRun();
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
+    // Out-of-process dispatch leaves the Gateway-owned task row in place, so
+    // registration must not also claim it (contrast with the in-process case above).
+    expect(registerInput.taskRowOwnership).toBe("gateway_best_effort");
     expect(registerInput.runId).toBe("run-1");
     expect(registerInput.childSessionKey).toBe(childSessionKey);
     expect(registerInput.requesterSessionKey).toBe("agent:main:main");
@@ -1269,6 +1272,9 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.provider).toBeUndefined();
     expect(agentParams.model).toBeUndefined();
     expect(agentOptions.allowSyntheticModelOverride).toBeUndefined();
+    // In-process dispatch claims the task row directly, unlike ACP's best-effort
+    // registration (see acp-spawn.test.ts).
+    expect(firstRegisteredSubagentRun().taskRowOwnership).toBe("required");
   });
 
   it("authorizes explicit model overrides for in-process child launches", async () => {

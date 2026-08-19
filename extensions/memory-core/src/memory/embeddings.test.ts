@@ -63,8 +63,6 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   },
   listMemoryEmbeddingProviders: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviderAdapters: () => [...mockEmbeddingRegistry.adapters],
-  listRegisteredMemoryEmbeddingProviders: () =>
-    mockEmbeddingRegistry.adapters.map((adapter) => ({ adapter })),
 }));
 
 const missingBedrockCredentialsError = new Error(
@@ -116,7 +114,7 @@ function createMissingCredentialsAdapter(
   };
 }
 
-function clearMemoryEmbeddingProviders(): void {
+function clearTestMemoryAdapters(): void {
   mockEmbeddingRegistry.genericAdapters = [];
   mockEmbeddingRegistry.adapters = [];
   mockEmbeddingRegistry.genericLookupConfigs = [];
@@ -129,7 +127,7 @@ function registerGenericEmbeddingProvider(adapter: EmbeddingProviderAdapter): vo
   mockEmbeddingRegistry.genericAdapters.push(adapter);
 }
 
-function registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter): void {
+function registerTestMemoryAdapter(adapter: MemoryEmbeddingProviderAdapter): void {
   mockEmbeddingRegistry.adapters = mockEmbeddingRegistry.adapters.filter(
     (candidate) => candidate.id !== adapter.id,
   );
@@ -138,17 +136,17 @@ function registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter
 
 describe("createEmbeddingProvider", () => {
   beforeEach(() => {
-    clearMemoryEmbeddingProviders();
+    clearTestMemoryAdapters();
     mockEmbeddingRegistry.acquireLocalService.mockReset();
   });
 
   afterEach(() => {
-    clearMemoryEmbeddingProviders();
+    clearTestMemoryAdapters();
   });
 
   it("normalizes legacy auto mode to OpenAI", async () => {
-    registerMemoryEmbeddingProvider(createMissingCredentialsAdapter({ id: "bedrock" }));
-    registerMemoryEmbeddingProvider({
+    registerTestMemoryAdapter(createMissingCredentialsAdapter({ id: "bedrock" }));
+    registerTestMemoryAdapter({
       id: "openai",
       transport: "remote",
       autoSelectPriority: 20,
@@ -169,7 +167,7 @@ describe("createEmbeddingProvider", () => {
   });
 
   it("still throws missing credentials for an explicit provider request", async () => {
-    registerMemoryEmbeddingProvider(createMissingCredentialsAdapter());
+    registerTestMemoryAdapter(createMissingCredentialsAdapter());
 
     await expect(createEmbeddingProvider(createOptions("bedrock"))).rejects.toThrow(
       missingBedrockCredentialsError.message,
@@ -191,7 +189,7 @@ describe("createEmbeddingProvider", () => {
     const create = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async () => {
       throw new Error("synthetic primary provider unavailable");
     });
-    registerMemoryEmbeddingProvider({ id: "openai", create });
+    registerTestMemoryAdapter({ id: "openai", create });
 
     await expect(
       createEmbeddingProvider({ ...createOptions("openai"), fallback: "openai" }),
@@ -214,8 +212,8 @@ describe("createEmbeddingProvider", () => {
           embedBatch: async (texts) => texts.map(() => [1]),
         },
       }));
-      registerMemoryEmbeddingProvider({ id: "openai", create: primaryCreate });
-      registerMemoryEmbeddingProvider({ id: fallback, create: fallbackCreate });
+      registerTestMemoryAdapter({ id: "openai", create: primaryCreate });
+      registerTestMemoryAdapter({ id: fallback, create: fallbackCreate });
 
       const sharedRemote = {
         nonBatchConcurrency: 3,
@@ -292,8 +290,8 @@ describe("createEmbeddingProvider", () => {
   );
 
   it("does not run priority-based auto-selection after a skippable setup failure", async () => {
-    registerMemoryEmbeddingProvider(createMissingCredentialsAdapter({ autoSelectPriority: 10 }));
-    registerMemoryEmbeddingProvider({
+    registerTestMemoryAdapter(createMissingCredentialsAdapter({ autoSelectPriority: 10 }));
+    registerTestMemoryAdapter({
       id: "openai",
       transport: "remote",
       autoSelectPriority: 20,
@@ -396,7 +394,7 @@ describe("createEmbeddingProvider", () => {
         },
       }),
     });
-    registerMemoryEmbeddingProvider({
+    registerTestMemoryAdapter({
       id: "openai-compatible",
       create: async () => ({
         provider: {
@@ -421,7 +419,7 @@ describe("createEmbeddingProvider", () => {
   });
 
   it("does not auto-select generic providers by priority policy", async () => {
-    registerMemoryEmbeddingProvider({
+    registerTestMemoryAdapter({
       id: "openai-compatible",
       transport: "remote",
       autoSelectPriority: 20,

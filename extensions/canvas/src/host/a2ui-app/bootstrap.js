@@ -381,6 +381,10 @@ class OpenClawA2UIHost extends LitElement {
       globalThis.addEventListener(eventName, this.#statusListener);
     }
     this.#syncSurfaces();
+    const bootMessages = globalThis.openclawA2UIBoot?.messages;
+    if (Array.isArray(bootMessages)) {
+      this.applyMessages(bootMessages);
+    }
   }
 
   disconnectedCallback() {
@@ -502,6 +506,26 @@ class OpenClawA2UIHost extends LitElement {
     };
 
     globalThis["__openclawLastA2UIAction"] = userAction;
+
+    const boardApi = globalThis.openclaw;
+    if (boardApi?.state?.emit) {
+      const request =
+        globalThis.openclawA2UIBoot?.actionTier === "prompt" && boardApi.prompt?.send
+          ? boardApi.prompt.send(
+              Object.keys(context).length
+                ? `A2UI action ${name}: ${JSON.stringify(context)}`
+                : `A2UI action ${name}`,
+            )
+          : boardApi.state.emit({ eventType: "a2ui.action", action: userAction });
+      void Promise.resolve(request).then(
+        () => this.#handleActionStatus({ detail: { id: actionId, ok: true } }),
+        (/** @type {unknown} */ error) =>
+          this.#handleActionStatus({
+            detail: { id: actionId, ok: false, error: String(error?.message ?? error) },
+          }),
+      );
+      return;
+    }
 
     const handler =
       globalThis.webkit?.messageHandlers?.openclawCanvasA2UIAction ??

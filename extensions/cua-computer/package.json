@@ -11,6 +11,35 @@
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
+  "cuaDriverArtifacts": {
+    "darwin-universal-binary": {
+      "archiveSha256": "733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e"
+    },
+    "linux-arm64-gnu": {
+      "files": {
+        "cua_driver_node_runtime.node": "8347edcfd0a6e842d2e76bd90f465b228f36bf402c0e59da90bfac3fe6004d58",
+        "libcua_driver_sdk.so": "7263f8980f91585d5a02e0001042b619322bfc5cc56ca9fb626ae56fcccceb2a"
+      }
+    },
+    "linux-x64-gnu": {
+      "files": {
+        "cua_driver_node_runtime.node": "52b70432d2eb167e69632246a38d895c9e7aa61618a31638d393ad6838117293",
+        "libcua_driver_sdk.so": "31c142f5c67443a1fa933160bfa20d93b9914220fb9a47f2884d38df20ab0671"
+      }
+    },
+    "win32-arm64-msvc": {
+      "files": {
+        "cua_driver_node_runtime.node": "fe025669d1614b1ac9a82d1b6a331acd15b44caef81e5bda6a0b02e1d9a4b71f",
+        "cua_driver_sdk.dll": "f1f25699dbdcc05169230b8286800b69a10407abb20effd5b767629fe725f21b"
+      }
+    },
+    "win32-x64-msvc": {
+      "files": {
+        "cua_driver_node_runtime.node": "fa9231bfa0c3c9d6deb8ed32d29dd0ef96921b51ea6864c963fd36c99b716b1c",
+        "cua_driver_sdk.dll": "d7e67baef87fac1a315d86113eeb485fbf8e03e5906797f0bf79d24a990fa38b"
+      }
+    }
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

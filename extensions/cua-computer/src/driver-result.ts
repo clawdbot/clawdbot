@@ -8,6 +8,13 @@ import { z } from "zod";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
 import {
   adoptGeneration,
+  clearDialogRef,
+  invalidateBrowserReferences,
+  issueBrowserElementRef,
+  issueBrowserObservation,
+  issueBrowserRef,
+  issueDialogRef,
+  issuePageRef,
   issueAppRef,
   issueElementRef,
   issueObservation,
@@ -29,7 +36,20 @@ const CUA_COMMON_ACTION_NAMES = [
   "bring_to_front",
   "set_value",
   "zoom",
+  "get_browser_state",
+  "browser_prepare",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_dialog",
+  "browser_set_input_files",
+  "browser_download",
+  "browser_pointer",
   "escalate_scope",
+  "get_recording_state",
+  "start_recording",
+  "stop_recording",
+  "replay_trajectory",
   "invoke_menu",
 ] as const;
 
@@ -74,7 +94,26 @@ const NativeElementSchema = z.object({
     })
     .optional(),
 });
+const NativeBrowserTabSchema = z.object({
+  tab_id: z.string().min(1),
+  title: z.string().optional(),
+  url: z.string().optional(),
+  active: z.boolean().optional(),
+});
+const NativeBrowserRefSchema = z.object({
+  ref: z.string().min(1),
+  node: z.string().optional(),
+  role: z.string().optional(),
+  label: z.string().optional(),
+  name: z.string().optional(),
+  value: z.string().optional(),
+  states: z.array(z.string()).optional(),
+  actions: z.array(z.string()).optional(),
+  frame: z.string().optional(),
+  visibility: z.string().optional(),
+});
 const MAX_DISCOVERY_ITEMS = 500;
+const MAX_BROWSER_ELEMENTS = 2_000;
 const PARTIAL_EFFECT = 1 as import("@trycua/cua-driver").ActionEffect;
 const VALUE_READBACK_EVIDENCE = 0 as import("@trycua/cua-driver").ActionEvidenceKind;
 
@@ -188,15 +227,49 @@ export async function callWindowTool(
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<CuaToolResult> {
+  const callGeneration = driver.generation;
+  const stateWasCurrent = state.generation === callGeneration;
   const result = await driver.callTool(name, args, signal);
+  if (stateWasCurrent && driver.generation !== callGeneration) {
+    adoptGeneration(state, driver.generation);
+    throw new Error("COMPUTER_STALE_OBSERVATION: computer driver generation changed during action");
+  }
   adoptGeneration(state, driver.generation);
-  if (result.isError) {
-    const code = result.errorCode
-      ? `COMPUTER_REFUSED_${result.errorCode}`
-      : "COMPUTER_DRIVER_ERROR";
+  const refusalCode = result.errorCode ?? structuredRefusalCode(result);
+  if (result.isError || refusalCode) {
+    if (
+      refusalCode &&
+      [
+        "browser_binding_stale",
+        "browser_tab_not_found",
+        "browser_ref_stale",
+        "browser_reconnect_exhausted",
+      ].includes(refusalCode)
+    ) {
+      invalidateBrowserReferences(state);
+      throw new Error("COMPUTER_STALE_OBSERVATION: take a fresh browser observation and retry");
+    }
+    const code = refusalCode ? `COMPUTER_REFUSED_${refusalCode}` : "COMPUTER_DRIVER_ERROR";
     throw new Error(`${code}: ${result.text || `${name} failed`}`);
   }
   return result;
+}
+
+function structuredRefusalCode(result: CuaToolResult): string | undefined {
+  if (!result.structuredJson) {
+    return undefined;
+  }
+  try {
+    const value = JSON.parse(result.structuredJson) as {
+      status?: unknown;
+      refusal?: { code?: unknown };
+    };
+    return value.status === "refused" && typeof value.refusal?.code === "string"
+      ? value.refusal.code
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function projectedToolDetails(result: CuaToolResult, tool: string): Record<string, unknown> {
@@ -361,4 +434,271 @@ export function windowObservation(
       ? { escalation: { recommended: "window-pixel", reasonCode: "ax_tree_unavailable" } }
       : {}),
   };
+}
+
+export function browserBinding(
+  result: CuaToolResult,
+  state: CuaFrameState,
+  windowRef: string,
+): ComputerActResult {
+  const structured = projectedToolDetails(result, "get_browser_state");
+  if (
+    structured.mode !== "bind" ||
+    typeof structured.target_id !== "string" ||
+    structured.target_id.length === 0 ||
+    !Array.isArray(structured.tabs)
+  ) {
+    throw new Error("COMPUTER_DRIVER_ERROR: invalid browser bind result");
+  }
+  const browserRef = issueBrowserRef(state, { targetId: structured.target_id, windowRef });
+  const pages = structured.tabs.flatMap((entry) => {
+    const parsed = NativeBrowserTabSchema.safeParse(entry);
+    if (!parsed.success) {
+      return [];
+    }
+    return [
+      {
+        pageRef: issuePageRef(state, browserRef, parsed.data.tab_id),
+        ...(parsed.data.title !== undefined ? { title: parsed.data.title } : {}),
+        ...(parsed.data.url !== undefined ? { url: parsed.data.url } : {}),
+        ...(parsed.data.active !== undefined ? { active: parsed.data.active } : {}),
+      },
+    ];
+  });
+  const bounded = boundedItems(pages);
+  return {
+    ok: true,
+    details: {
+      browserRef,
+      pages: bounded.items,
+      ...(bounded.truncated ? { truncatedPages: bounded.truncated } : {}),
+      ...(typeof structured.binding_quality === "string"
+        ? { bindingQuality: structured.binding_quality }
+        : {}),
+      ...(typeof structured.binding_route === "string"
+        ? { bindingRoute: structured.binding_route }
+        : {}),
+      ...(typeof structured.mutation_allowed === "boolean"
+        ? { mutationAllowed: structured.mutation_allowed }
+        : {}),
+      ...(typeof structured.native_title === "string"
+        ? { nativeTitle: structured.native_title }
+        : {}),
+    },
+  };
+}
+
+export function browserObservation(
+  result: CuaToolResult,
+  state: CuaFrameState,
+  target: {
+    browserRef: string;
+    pageRef: string;
+    targetId: string;
+    tabId: string;
+  },
+): ComputerActResult {
+  const structured = projectedToolDetails(result, "get_browser_state");
+  if (
+    structured.mode !== "snapshot" ||
+    structured.target_id !== target.targetId ||
+    structured.tab_id !== target.tabId
+  ) {
+    throw new Error("COMPUTER_DRIVER_ERROR: invalid browser snapshot result");
+  }
+  const observation = issueBrowserObservation(state, target.browserRef, target.pageRef);
+  const rawRefs = [
+    ...(Array.isArray(structured.refs)
+      ? structured.refs.map((value) => ({ value, kind: "action" }))
+      : []),
+    ...(Array.isArray(structured.content_refs)
+      ? structured.content_refs.map((value) => ({ value, kind: "content" }))
+      : []),
+  ];
+  const seen = new Set<string>();
+  const elements = rawRefs.flatMap(({ value, kind }) => {
+    const parsed = NativeBrowserRefSchema.safeParse(value);
+    if (!parsed.success || seen.has(parsed.data.ref)) {
+      return [];
+    }
+    seen.add(parsed.data.ref);
+    return [
+      {
+        elementRef: issueBrowserElementRef(observation, parsed.data.ref),
+        kind,
+        ...(parsed.data.node !== undefined ? { node: parsed.data.node } : {}),
+        ...(parsed.data.role !== undefined ? { role: parsed.data.role } : {}),
+        ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
+        ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+        ...(parsed.data.value !== undefined ? { value: parsed.data.value } : {}),
+        ...(parsed.data.states !== undefined ? { states: parsed.data.states } : {}),
+        ...(parsed.data.actions !== undefined ? { actions: parsed.data.actions } : {}),
+        ...(parsed.data.frame !== undefined ? { frame: parsed.data.frame } : {}),
+        ...(parsed.data.visibility !== undefined ? { visibility: parsed.data.visibility } : {}),
+      },
+    ];
+  });
+  const boundedElements = elements.slice(0, MAX_BROWSER_ELEMENTS);
+  const image = result.images.find((entry) => entry.mimeType === "image/png");
+  const base64 = image ? canonicalizeBase64(image.dataBase64) : undefined;
+  if (image && !base64) {
+    throw new Error("COMPUTER_DRIVER_ERROR: CUA Driver returned malformed browser PNG base64");
+  }
+  const width =
+    typeof structured.screenshot_width === "number" && structured.screenshot_width > 0
+      ? Math.trunc(structured.screenshot_width)
+      : undefined;
+  const height =
+    typeof structured.screenshot_height === "number" && structured.screenshot_height > 0
+      ? Math.trunc(structured.screenshot_height)
+      : undefined;
+  const page =
+    structured.page && typeof structured.page === "object" && !Array.isArray(structured.page)
+      ? (structured.page as Record<string, unknown>)
+      : undefined;
+  return {
+    ok: true,
+    observation: {
+      kind: "browser",
+      ...(base64 ? { base64, format: "png" as const } : {}),
+      ...(width ? { width } : {}),
+      ...(height ? { height } : {}),
+      observationId: observation.id,
+    },
+    details: {
+      browserRef: target.browserRef,
+      pageRef: target.pageRef,
+      elements: boundedElements,
+      ...(elements.length > MAX_BROWSER_ELEMENTS
+        ? { truncatedElements: elements.length - MAX_BROWSER_ELEMENTS }
+        : {}),
+      ...(typeof structured.snapshot_id === "string"
+        ? { snapshot: { format: "dom_refs_v1" } }
+        : structured.snapshot &&
+            typeof structured.snapshot === "object" &&
+            !Array.isArray(structured.snapshot)
+          ? {
+              snapshot: projectSemanticBrowserSnapshot(
+                structured.snapshot as Record<string, unknown>,
+              ),
+            }
+          : {}),
+      ...(typeof structured.url === "string" ? { url: structured.url } : {}),
+      ...(page
+        ? {
+            page: {
+              ...(typeof page.url === "string" ? { url: page.url } : {}),
+              ...(typeof page.title === "string" ? { title: page.title } : {}),
+            },
+          }
+        : {}),
+      ...(typeof structured.truncated === "boolean" ? { truncated: structured.truncated } : {}),
+    },
+  };
+}
+
+export function browserToolEnvelope(
+  result: CuaToolResult,
+  tool:
+    | "browser_prepare"
+    | "browser_navigate"
+    | "browser_click"
+    | "browser_type"
+    | "browser_set_input_files"
+    | "browser_download"
+    | "browser_pointer",
+): ComputerActResult {
+  if (tool === "browser_click" || tool === "browser_type" || tool === "browser_pointer") {
+    return actionEnvelope(result);
+  }
+  const structured = projectedToolDetails(result, tool);
+  const details: Record<string, unknown> = {};
+  if (tool === "browser_prepare") {
+    for (const [source, destination] of [
+      ["prepared", "prepared"],
+      ["action", "action"],
+      ["message", "message"],
+      ["side_effects", "sideEffects"],
+    ] as const) {
+      if (structured[source] !== undefined) {
+        details[destination] = structured[source];
+      }
+    }
+    const endpointOwnership = structured.endpoint_ownership;
+    if (
+      endpointOwnership &&
+      typeof endpointOwnership === "object" &&
+      !Array.isArray(endpointOwnership) &&
+      typeof (endpointOwnership as Record<string, unknown>).method === "string"
+    ) {
+      details.endpointOwnership = {
+        method: (endpointOwnership as Record<string, unknown>).method,
+      };
+    }
+  } else if (tool === "browser_navigate") {
+    if (typeof structured.url === "string") {
+      details.url = structured.url;
+    }
+    if (typeof structured.refs_invalidated === "boolean") {
+      details.refsInvalidated = structured.refs_invalidated;
+    }
+  } else if (tool === "browser_set_input_files") {
+    if (typeof structured.file_count === "number") {
+      details.fileCount = structured.file_count;
+    }
+    if (typeof structured.frame === "string") {
+      details.frame = structured.frame;
+    }
+  } else if (tool === "browser_download") {
+    if (typeof structured.status === "string") {
+      details.status = structured.status;
+    }
+    if (typeof structured.bytes === "number") {
+      details.bytes = structured.bytes;
+    }
+  }
+  return { ok: true, ...(Object.keys(details).length ? { details } : {}) };
+}
+
+function projectSemanticBrowserSnapshot(snapshot: Record<string, unknown>) {
+  return {
+    format: "semantic_v2",
+    ...(typeof snapshot.complete === "boolean" ? { complete: snapshot.complete } : {}),
+    ...(typeof snapshot.selected_nodes === "number"
+      ? { selectedNodes: snapshot.selected_nodes }
+      : {}),
+    ...(typeof snapshot.total_nodes === "number" ? { totalNodes: snapshot.total_nodes } : {}),
+    ...(snapshot.omitted && typeof snapshot.omitted === "object" && !Array.isArray(snapshot.omitted)
+      ? { omitted: snapshot.omitted }
+      : {}),
+    ...(typeof snapshot.continuation === "string" ? { continuation: snapshot.continuation } : {}),
+  };
+}
+
+export function browserDialogEnvelope(
+  result: CuaToolResult,
+  state: CuaFrameState,
+  target: { browserRef: string; pageRef: string },
+): ComputerActResult {
+  const structured = projectedToolDetails(result, "browser_dialog");
+  const present = structured.present === true;
+  if (!present) {
+    clearDialogRef(state);
+  }
+  const details: Record<string, unknown> = { present };
+  if (typeof structured.kind === "string") {
+    details.kind = structured.kind;
+  }
+  if (present && typeof structured.dialog_id === "string") {
+    details.dialogRef = issueDialogRef(
+      state,
+      structured.dialog_id,
+      target.browserRef,
+      target.pageRef,
+    );
+  }
+  if (typeof structured.action === "string") {
+    details.action = structured.action;
+  }
+  return { ok: true, details };
 }

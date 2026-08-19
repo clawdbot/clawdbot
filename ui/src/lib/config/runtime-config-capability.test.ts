@@ -52,6 +52,127 @@ describe("runtime config capability", () => {
     runtimeConfig.dispose();
   });
 
+  it.each([
+    {
+      label: "read-only same-client reconnect",
+      replaceClient: false,
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["config.get", "config.schema"] },
+      } as GatewayHelloOk,
+    },
+    { label: "client replacement", replaceClient: true, hello: undefined },
+  ])("refreshes config and schema after a $label", async ({ replaceClient, hello }) => {
+    let snapshot = {
+      config: { endpoint: "initial" },
+      hash: "hash-initial",
+      valid: true,
+      issues: [],
+    };
+    let schema = {
+      schema: { type: "object" },
+      uiHints: {},
+      version: "schema-initial",
+      generatedAt: "2026-08-15T00:00:00.000Z",
+    };
+    const requestA = vi.fn(async (method: string) =>
+      method === "config.get" ? snapshot : method === "config.schema" ? schema : {},
+    );
+    const requestB = vi.fn(async (method: string) =>
+      method === "config.get" ? snapshot : method === "config.schema" ? schema : {},
+    );
+    const clientA = { request: requestA } as unknown as GatewayBrowserClient;
+    const clientB = { request: requestB } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(clientA);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    if (hello) {
+      publish(true, clientA, hello);
+    }
+    await runtimeConfig.ensureLoaded();
+    await runtimeConfig.ensureSchemaLoaded();
+
+    snapshot = {
+      config: { endpoint: "current" },
+      hash: "hash-current",
+      valid: true,
+      issues: [],
+    };
+    schema = { ...schema, version: "schema-current" };
+    publish(false, clientA);
+    publish(true, replaceClient ? clientB : clientA, hello);
+
+    await vi.waitFor(() => expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-current"));
+    expect(runtimeConfig.state.configForm).toEqual({ endpoint: "current" });
+    expect(runtimeConfig.state.configSchemaVersion).toBe("schema-current");
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
+    expect(requestB).not.toHaveBeenCalledWith("config.set", expect.anything());
+    if (replaceClient) {
+      expect(requestA.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
+      expect(requestB).toHaveBeenCalledWith("config.get", {});
+      expect(requestB).toHaveBeenCalledWith("config.schema", {});
+    } else {
+      expect(requestA.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(2);
+      expect(requestA).toHaveBeenCalledWith("config.schema", {});
+    }
+    runtimeConfig.dispose();
+  });
+
+  it.each([
+    {
+      label: "replacement without config.schema",
+      replaceClient: true,
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+        features: { methods: ["config.get"] },
+      } as GatewayHelloOk,
+    },
+  ])("refreshes config but skips schema after a $label", async ({ replaceClient, hello }) => {
+    let current = false;
+    const createRequest = () =>
+      vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          return {
+            config: { endpoint: current ? "current" : "initial" },
+            hash: current ? "hash-current" : "hash-initial",
+            valid: true,
+            issues: [],
+          };
+        }
+        return method === "config.schema"
+          ? { schema: {}, uiHints: {}, version: "schema-initial", generatedAt: "" }
+          : {};
+      });
+    const requestA = createRequest();
+    const requestB = createRequest();
+    const clientA = { request: requestA } as unknown as GatewayBrowserClient;
+    const clientB = { request: requestB } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(clientA);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    await runtimeConfig.ensureLoaded();
+    await runtimeConfig.ensureSchemaLoaded();
+
+    current = true;
+    publish(false, clientA);
+    publish(true, replaceClient ? clientB : clientA, hello);
+
+    await vi.waitFor(() => expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-current"));
+    expect(runtimeConfig.state.configForm).toEqual({ endpoint: "current" });
+    expect(runtimeConfig.state.configSchemaVersion).toBe("schema-initial");
+    expect(runtimeConfig.state.lastError).toBeNull();
+    const activeRequest = replaceClient ? requestB : requestA;
+    expect(activeRequest.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(
+      replaceClient ? 1 : 2,
+    );
+    expect(activeRequest.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(
+      replaceClient ? 0 : 1,
+    );
+    runtimeConfig.dispose();
+  });
+
   it("ignores a save completion from an earlier connection epoch", async () => {
     const save = deferred<unknown>();
     let getCount = 0;
@@ -467,7 +588,7 @@ describe("runtime config capability", () => {
       }
       return { ok: true };
     });
-    const requestB = vi.fn(async () => ({ ok: true }));
+    const requestB = vi.fn(async (_method: string) => ({ ok: true }));
     const clientA = { request: requestA } as unknown as GatewayBrowserClient;
     const clientB = { request: requestB } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(clientA);
@@ -490,7 +611,8 @@ describe("runtime config capability", () => {
       error: "Connection changed before the configuration update started.",
     });
     expect(requestA).not.toHaveBeenCalled();
-    expect(requestB).not.toHaveBeenCalled();
+    expect(requestB.mock.calls.map(([method]) => method)).toEqual(["config.get"]);
+    expect(requestB).not.toHaveBeenCalledWith("config.patch", expect.anything());
     runtimeConfig.dispose();
   });
 

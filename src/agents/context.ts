@@ -2,7 +2,6 @@
 // agent reports a model id. This includes custom models.json entries.
 
 import { getRuntimeConfig } from "../config/config.js";
-import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "./agent-scope.js";
@@ -321,14 +320,8 @@ export function resolveContextTokensForModel(
     skipRuntimeConfigLoad: Boolean(params.cfg),
   };
   prepareContextWindowCache(lookupOptions);
-  const sourceCfg =
-    params.sourceCfg !== undefined
-      ? params.sourceCfg
-      : params.cfg
-        ? projectConfigOntoRuntimeSourceSnapshot(params.cfg)
-        : undefined;
   return resolveContextTokensForModelFromCache(
-    { ...params, sourceCfg },
+    params,
     (modelId) => lookupCachedContextTokens(modelId),
     (modelId) => lookupCachedContextWindow(modelId),
   );

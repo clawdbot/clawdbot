@@ -1489,7 +1489,7 @@ export function validateReleaseRunEvidence(
   });
 }
 
-export function parseReleaseCiSummaryArgs(argv) {
+function parseReleaseCiSummaryArgs(argv) {
   const options = {
     intervalMs: 30_000,
     json: false,
@@ -1558,7 +1558,7 @@ function printUsage() {
   );
 }
 
-export function releaseCiWatchFingerprint(parent) {
+function releaseCiWatchFingerprint(parent) {
   return JSON.stringify({
     attempt: parent.attempt,
     conclusion: parent.conclusion ?? "",
@@ -1573,7 +1573,7 @@ export function releaseCiWatchFingerprint(parent) {
   });
 }
 
-export function terminalParentJobFailures(parent) {
+function terminalParentJobFailures(parent) {
   return (parent.jobs ?? [])
     .filter(
       (job) =>
@@ -1598,32 +1598,21 @@ function summarizeReleaseCiRun(options) {
   );
 }
 
-export async function watchReleaseCiRun(options, overrides = {}) {
-  const fetchParent =
-    overrides.fetchParent ??
-    (() =>
-      jsonGh([
-        "run",
-        "view",
-        options.runId,
-        "--repo",
-        options.repository,
-        "--json",
-        "status,conclusion,attempt,jobs",
-      ]));
-  const summarize = overrides.summarize ?? (() => summarizeReleaseCiRun(options));
-  const sleep =
-    overrides.sleep ??
-    ((milliseconds) =>
-      new Promise((complete) => {
-        setTimeout(complete, milliseconds);
-      }));
+async function watchReleaseCiRun(options) {
   let previousFingerprint;
   while (true) {
-    const parent = fetchParent();
+    const parent = jsonGh([
+      "run",
+      "view",
+      options.runId,
+      "--repo",
+      options.repository,
+      "--json",
+      "status,conclusion,attempt,jobs",
+    ]);
     const fingerprint = releaseCiWatchFingerprint(parent);
     if (fingerprint !== previousFingerprint) {
-      summarize();
+      summarizeReleaseCiRun(options);
       previousFingerprint = fingerprint;
     }
     const failedJobs = terminalParentJobFailures(parent);
@@ -1640,7 +1629,9 @@ export async function watchReleaseCiRun(options, overrides = {}) {
       }
       return;
     }
-    await sleep(options.intervalMs);
+    await new Promise((complete) => {
+      setTimeout(complete, options.intervalMs);
+    });
   }
 }
 

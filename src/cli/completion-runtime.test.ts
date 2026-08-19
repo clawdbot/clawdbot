@@ -706,15 +706,45 @@ describe("completion-runtime", () => {
     },
   );
 
-  it("detects PowerShell shell names from Windows paths", () => {
-    expect(resolveShellFromEnv({ SHELL: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" })).toBe(
-      "powershell",
-    );
-    expect(
-      resolveShellFromEnv({
-        SHELL: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      }),
-    ).toBe("powershell");
+  it.each([
+    {
+      name: "native Windows without SHELL",
+      env: {},
+      platform: "win32" as const,
+      expected: "powershell",
+    },
+    {
+      name: "native Windows with an unknown SHELL",
+      env: { SHELL: "C:\\Windows\\System32\\cmd.exe" },
+      platform: "win32" as const,
+      expected: "powershell",
+    },
+    {
+      name: "PowerShell Core from a Windows path",
+      env: { SHELL: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" },
+      platform: "win32" as const,
+      expected: "powershell",
+    },
+    {
+      name: "Windows PowerShell from a Windows path",
+      env: { SHELL: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" },
+      platform: "win32" as const,
+      expected: "powershell",
+    },
+    {
+      name: "recognized Bash on Windows",
+      env: { SHELL: "C:\\Program Files\\Git\\bin\\bash.exe" },
+      platform: "win32" as const,
+      expected: "bash",
+    },
+    {
+      name: "non-Windows without SHELL",
+      env: {},
+      platform: "linux" as const,
+      expected: "zsh",
+    },
+  ])("detects $name", ({ env, platform, expected }) => {
+    expect(resolveShellFromEnv(env, platform)).toBe(expected);
   });
 
   it("resolves Windows PowerShell and pwsh profile directories", () => {

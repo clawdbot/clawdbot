@@ -103,7 +103,7 @@ import { ensurePluginRegistryLoaded } from "./runtime-registry-loader.js";
 
 function useMemoryProviderOwner(params: {
   adapterId: string;
-  contract: "embeddingProviders" | "memoryEmbeddingProviders";
+  contract: "embeddingProviders";
   pluginId: string;
 }): void {
   mocks.resolvePluginMetadataSnapshot.mockReturnValue({
@@ -218,7 +218,7 @@ describe("ensurePluginRegistryLoaded", () => {
   it.each([
     {
       adapterId: "gemini",
-      contract: "memoryEmbeddingProviders" as const,
+      contract: "embeddingProviders" as const,
       pluginId: "google",
     },
     {
@@ -255,7 +255,7 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["gemini"]));
     useMemoryProviderOwner({
       adapterId: "gemini",
-      contract: "memoryEmbeddingProviders",
+      contract: "embeddingProviders",
       pluginId: "google",
     });
 

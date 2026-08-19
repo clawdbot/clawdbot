@@ -157,6 +157,7 @@ class ChatTimelineTest {
     val unknown =
       textMessage(id = "unknown", role = "system", text = "Unknown")
         .copy(transcriptMarker = ChatTranscriptMarker("reset ", "unknown-1", null, null))
+    val plainSystem = textMessage(id = "plain-system", role = "system", text = "Maintenance begins soon")
     val reset =
       textMessage(id = "reset", role = "system", text = "Reset")
         .copy(transcriptMarker = ChatTranscriptMarker("reset", "reset-1", null, null))
@@ -167,6 +168,7 @@ class ChatTimelineTest {
           listOf(
             textMessage(id = "user-1", role = "user", text = "before"),
             compaction,
+            plainSystem,
             unknown,
             reset,
             textMessage(id = "assistant-1", role = "assistant", text = "after"),
@@ -177,8 +179,20 @@ class ChatTimelineTest {
       )
 
     assertEquals(
-      listOf("message:assistant-1", "divider:reset:reset-1", "divider:compaction:checkpoint-1", "message:user-1"),
+      listOf(
+        "message:assistant-1",
+        "divider:reset:reset-1",
+        "message:plain-system",
+        "divider:compaction:checkpoint-1",
+        "message:user-1",
+      ),
       timeline.items.map(::chatTimelineItemKey),
+    )
+    assertEquals(
+      "system",
+      timeline.items
+        .filterIsInstance<ChatTimelineItem.Message>()[1]
+        .message.role,
     )
     val dividers = timeline.items.filterIsInstance<ChatTimelineItem.SystemDivider>()
     assertEquals(

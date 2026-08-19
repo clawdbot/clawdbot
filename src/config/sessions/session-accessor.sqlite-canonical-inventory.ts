@@ -89,6 +89,7 @@ function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
     ...(row.label ? { label: row.label } : {}),
     ...(row.display_name ? { displayName: row.display_name } : {}),
     ...(row.category ? { category: row.category } : {}),
+    ...(row.icon ? { icon: row.icon } : {}),
     ...(row.pinned_at !== null ? { pinnedAt: row.pinned_at } : {}),
     ...(row.archived_at !== null ? { archivedAt: row.archived_at } : {}),
     ...(row.last_read_at !== null ? { lastReadAt: row.last_read_at } : {}),

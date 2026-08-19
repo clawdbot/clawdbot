@@ -9,7 +9,16 @@ import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const artifactMocks = vi.hoisted(() => ({
+  verify: vi.fn(),
+}));
+
+vi.mock("./src/driver-artifacts.js", () => ({
+  verifyInstalledCuaDriverArtifacts: artifactMocks.verify,
+}));
+
 import plugin from "./index.js";
 
 function validateManifestConfig(value: unknown) {
@@ -24,6 +33,10 @@ function validateManifestConfig(value: unknown) {
 }
 
 describe("cua-computer plugin registration", () => {
+  beforeEach(() => {
+    artifactMocks.verify.mockReset().mockReturnValue({ ok: true, applicable: false });
+  });
+
   it("defaults on only for the app-gated macOS provider path", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
@@ -36,10 +49,18 @@ describe("cua-computer plugin registration", () => {
   it("registers the screen and dangerous computer node-host commands", () => {
     const commands: OpenClawPluginNodeHostCommand[] = [];
     const policies: OpenClawPluginNodeInvokePolicy[] = [];
+    const registerTool = vi.fn();
+    const registerCli = vi.fn();
+    const registerNodeCliFeature = vi.fn();
+    const registerService = vi.fn();
     plugin.register({
       pluginConfig: {},
       registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => commands.push(command),
       registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => policies.push(policy),
+      registerTool,
+      registerCli,
+      registerNodeCliFeature,
+      registerService,
     } as unknown as OpenClawPluginApi);
 
     expect(commands.map(({ command, cap, dangerous }) => ({ command, cap, dangerous }))).toEqual([
@@ -49,6 +70,11 @@ describe("cua-computer plugin registration", () => {
     expect(policies).toHaveLength(1);
     expect(policies[0]).toMatchObject({ commands: ["computer.act"], dangerous: true });
     expect(policies[0]?.defaultPlatforms).toBeUndefined();
+    expect(commands.every((command) => command.agentTool === undefined)).toBe(true);
+    expect(registerTool).not.toHaveBeenCalled();
+    expect(registerCli).not.toHaveBeenCalled();
+    expect(registerNodeCliFeature).not.toHaveBeenCalled();
+    expect(registerService).not.toHaveBeenCalled();
   });
 
   it("accepts the retired driver path as a no-op while keeping both schemas strict", () => {
@@ -74,6 +100,28 @@ describe("cua-computer plugin registration", () => {
     ]);
   });
 
+  it("logs the typed artifact diagnostic during plugin startup", () => {
+    const error = vi.fn();
+    artifactMocks.verify.mockReturnValue({
+      ok: false,
+      code: "COMPUTER_DRIVER_PACKAGE_MISSING",
+      diagnostic:
+        "COMPUTER_DRIVER_PACKAGE_MISSING: native package absent. Fix: reinstall OpenClaw.",
+      fixHint: "Reinstall OpenClaw.",
+    });
+
+    plugin.register({
+      pluginConfig: {},
+      logger: { error },
+      registerNodeHostCommand: () => {},
+      registerNodeInvokePolicy: () => {},
+    } as unknown as OpenClawPluginApi);
+
+    expect(error).toHaveBeenCalledWith(
+      "COMPUTER_DRIVER_PACKAGE_MISSING: native package absent. Fix: reinstall OpenClaw.",
+    );
+  });
+
   it("forwards an explicitly armed computer action and preserves node refusals", async () => {
     const policies: OpenClawPluginNodeInvokePolicy[] = [];
     plugin.register({
@@ -89,7 +137,10 @@ describe("cua-computer plugin registration", () => {
     const invokeNode = vi.fn(async () => refusal);
 
     await expect(
-      policies[0]!.handle({ invokeNode } as unknown as OpenClawPluginNodeInvokePolicyContext),
+      policies[0]!.handle({
+        invokeNode,
+        risk: { level: "ordinary", family: "input" },
+      } as unknown as OpenClawPluginNodeInvokePolicyContext),
     ).resolves.toEqual(refusal);
     expect(invokeNode).toHaveBeenCalledOnce();
   });

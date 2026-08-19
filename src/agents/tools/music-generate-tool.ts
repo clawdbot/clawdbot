@@ -19,8 +19,8 @@ import {
   generateMusic,
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
-import type { MusicGenerationOutputFormat } from "../../music-generation/types.js";
 import type {
+  MusicGenerationOutputFormat,
   MusicGenerationProvider,
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";

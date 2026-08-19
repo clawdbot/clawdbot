@@ -33,6 +33,7 @@ export function cronRunLogEntryFromEvent(
     jobId: event.jobId,
     action: "finished",
     status: event.status,
+    completionStatus: event.completionStatus,
     error: event.error,
     errorReason,
     summary: event.summary,

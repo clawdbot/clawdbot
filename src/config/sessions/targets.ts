@@ -423,26 +423,19 @@ export function resolveExistingAgentSessionStoreTargetsSync(
     }
     return [];
   }
-  const requestedTarget = {
-    agentId: requested,
-    storePath: resolveSessionStorePathCore(storeConfig, { agentId: requested, env }),
-  };
-  // Directory discovery cannot enumerate arbitrary templates. Keep an existing retired store
-  // visible by checking the requested agent's deterministic target alongside discovered stores.
-  const discoveredTargets = resolveAllAgentSessionStoreTargetsSync(cfg, { env }).flatMap(
-    (target) => {
-      if (normalizeAgentId(target.agentId) !== requested) {
-        return [];
-      }
-      const validated = resolveValidatedExistingSessionStoreTargetSync(target);
-      return validated ? [validated] : [];
-    },
-  );
-  const validatedRequestedTarget = resolveValidatedExistingSessionStoreTargetSync(requestedTarget);
-  return dedupeSessionStoreTargetsBySqliteTarget(
-    [...(validatedRequestedTarget ? [validatedRequestedTarget] : []), ...discoveredTargets],
-    { defaultAgentId, env },
-  );
+  const targets = resolveAgentSessionStoreTargetsSync(cfg, requested, { env }).flatMap((target) => {
+    const validated = resolveValidatedExistingSessionStoreTargetSync(target);
+    return validated ? [validated] : [];
+  });
+  if (isConfiguredSessionStoreAgentId(cfg, requested)) {
+    return targets;
+  }
+  // Always run sqlite-target dedupe for retired/manual agents: it probes the agent database
+  // registry, so an unreadable registry surfaces as an ambiguous-ownership result rather than a
+  // silent "absent" verdict in placement evidence (see server-worker-placement-session-evidence
+  // "keeps a placement when the agent database registry is unreadable"). Retired/manual lookups are
+  // not the configured-agent hot path, so the registry probe cost is acceptable here.
+  return dedupeSessionStoreTargetsBySqliteTarget(targets, { defaultAgentId, env });
 }
 
 /**
@@ -575,6 +568,12 @@ export function resolveAgentSessionStoreTargetsSync(
     }
   }
 
+  // Configured agents own canonical direct paths; broad discovery is retired/manual-only.
+  // Falling through here makes per-agent Gateway prewarm scan the full roster quadratically.
+  if (isConfiguredSessionStoreAgentId(cfg, requested)) {
+    return dedupeTargetsByStorePath(targets);
+  }
+
   const { agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
   for (const agentsDir of agentsRoots) {
     try {
@@ -582,12 +581,15 @@ export function resolveAgentSessionStoreTargetsSync(
       if (!realAgentsRoot) {
         continue;
       }
-      for (const sessionsDir of resolveAgentSessionDirsFromAgentsDirSync(agentsDir)) {
+      for (const sessionsDir of resolveAgentSessionDirsFromAgentsDirSync(
+        agentsDir,
+        (dirName) => normalizeAgentId(dirName) === requested,
+      )) {
         const target = toDiscoveredSessionStoreTarget(
           sessionsDir,
           path.join(sessionsDir, "sessions.json"),
         );
-        if (!target || normalizeAgentId(target.agentId) !== requested) {
+        if (!target) {
           continue;
         }
         const validatedStorePath = resolveValidatedDiscoveredStorePathSync({

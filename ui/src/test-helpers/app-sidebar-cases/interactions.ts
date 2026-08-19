@@ -10,7 +10,6 @@ import {
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
-import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -220,7 +219,7 @@ describe("AppSidebar multi-select", () => {
     expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });
 
-  it("archives serially when an older Gateway omits method metadata and rejects patchMany", async () => {
+  it("disables batch archive when method metadata is missing", async () => {
     const rejection = new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "unknown method: sessions.patchMany",
@@ -235,36 +234,14 @@ describe("AppSidebar multi-select", () => {
 
     const menu = await sessionMenu(sidebar);
     const archive = menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]');
-    expect(archive?.disabled).toBe(false);
+    expect(archive?.disabled).toBe(true);
     archive?.click();
+    await Promise.resolve();
 
-    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      1,
-      "agent:main:a",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:a",
-        deferListRefresh: true,
-      },
-    );
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      2,
-      "agent:main:b",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:b",
-        deferListRefresh: true,
-      },
-    );
-    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toHaveLength(
-      1,
-    );
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
     expect(harness.patchMany).not.toHaveBeenCalled();
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
+    expect(harness.refreshReplacement).not.toHaveBeenCalled();
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
@@ -287,8 +264,18 @@ describe("AppSidebar multi-select", () => {
 
       await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
       expect(harness.deleteMany).toHaveBeenCalledWith([
-        { key: "agent:main:a", agentId: "main", deleteTranscript: true },
-        { key: "agent:main:b", agentId: "main", deleteTranscript: true },
+        {
+          key: "agent:main:a",
+          agentId: "main",
+          deleteTranscript: true,
+          expectedSessionId: "session:agent:main:a",
+        },
+        {
+          key: "agent:main:b",
+          agentId: "main",
+          deleteTranscript: true,
+          expectedSessionId: "session:agent:main:b",
+        },
       ]);
     } finally {
       restoreDialogPolyfill();
@@ -510,12 +497,16 @@ describe("AppSidebar catalog session rows", () => {
       window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
       try {
         await sidebar.updateComplete;
+        // The rendered row owns this catalog even if the global selection changes
+        // before its already-rendered click handler runs.
+        (sidebar as unknown as { newSessionAgentId: string }).newSessionAgentId = "jarvis";
         (sidebar.querySelector('[data-session-key*="thread-1"] a') as HTMLElement).click();
       } finally {
         window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
       }
       expect(detail).toEqual({
         open: true,
+        agentId: "main",
         catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
       });
       expect(navigate).not.toHaveBeenCalled();
@@ -623,7 +614,7 @@ describe("AppSidebar catalog session rows", () => {
       const state = row?.querySelector(".session-row-state");
 
       expect(link?.getAttribute("aria-describedby")).toBe(state?.id);
-      expect(link?.getAttribute("title")).toBe("Running catalog · Local Codex · Active run");
+      expect(link?.hasAttribute("title")).toBe(false);
       expect(state?.querySelector('.session-run-spinner[aria-label="Active run"]')).not.toBeNull();
       expect(state?.querySelector(".session-run-spinner")?.hasAttribute("title")).toBe(false);
     } finally {
@@ -650,63 +641,6 @@ describe("AppSidebar catalog session rows", () => {
       expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
       // Live-row parity: the adopted row exposes the regular session actions.
       expect(rows[0]?.querySelector("[data-session-menu]")).not.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps a selected adopted catalog session as one row", async () => {
-    vi.useFakeTimers();
-    try {
-      const { sidebar } = await mountWithCatalog(
-        catalogList([
-          {
-            threadId: "thread-1",
-            name: "Release checklist",
-            sessionKey: "agent:main:adopted-codex",
-          },
-        ]),
-        ["agent:main:main", "agent:main:adopted-codex"],
-      );
-      // Selecting the adopted session must not re-insert it as a thread row:
-      // the catalog section already renders it live.
-      sidebar.sessionKey = "agent:main:adopted-codex";
-      await sidebar.updateComplete;
-
-      const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("binds the adopted session immediately on the catalog-continued event", async () => {
-    vi.useFakeTimers();
-    try {
-      const { sidebar } = await mountWithCatalog(
-        catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
-        ["agent:main:main", "agent:main:adopted-codex"],
-      );
-      expect(
-        sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]'),
-      ).toHaveLength(1);
-
-      document.dispatchEvent(
-        new CustomEvent(CATALOG_SESSION_CONTINUED_EVENT, {
-          detail: {
-            catalogId: "codex",
-            hostId: "gateway:local",
-            threadId: "thread-1",
-            sessionKey: "agent:main:adopted-codex",
-          },
-        }),
-      );
-      await sidebar.updateComplete;
-
-      const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }

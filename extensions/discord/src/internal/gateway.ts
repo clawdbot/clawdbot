@@ -118,7 +118,7 @@ export class GatewayPlugin extends Plugin {
     return null;
   }
 
-  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
+  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] | null {
     return this.voiceStateCache.listVoiceChannelStates(guildId, channelId);
   }
 

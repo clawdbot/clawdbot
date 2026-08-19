@@ -91,7 +91,6 @@ export const zh_TW = {
       remotePasswordMode: "你想如何提供這個 Gateway 密碼？",
       remoteTokenMode: "你想如何提供這個 Gateway 權杖？",
       tailscaleExposure: "Tailscale 暴露方式",
-      tailscaleReset: "離開時重置 Tailscale serve/funnel？",
       tokenPlaceholder: "多機器或非 loopback 存取需要使用",
       tokenPrompt: "Gateway 權杖",
       tokenPromptGenerate: "Gateway 權杖（留空則產生）",
@@ -113,6 +112,8 @@ export const zh_TW = {
       cacheFailed: "產生 completion 快取失敗。稍後執行 `{command}`。",
       enable: "為 {cli} 啟用 {shell} shell completion？",
       installed: "Shell completion 已安裝。{reloadHint}",
+      profileNotWritable:
+        "Shell completion 未變更：{profile} 無法寫入。請對可寫入的 profile 檔案執行 `{command}`。",
       reloadPowerShell: "重新啟動 shell 或執行：{command}",
       reloadShell: "重新啟動 shell 或執行：source {profile}",
       title: "Shell completion",
@@ -901,6 +902,12 @@ export const zh_TW = {
       outgoingWebhookPathKeep: "Outgoing webhook path 已設定（{value}）。保留？",
       outgoingWebhookPathPrompt: "Outgoing webhook path（可選）",
       outgoingWebhookPathTitle: "Synology Chat outgoing webhook path",
+      publicWebhookUrlHelp:
+        "使用在 Synology Chat 中設定、可從外部存取的確切 HTTPS outgoing webhook 回呼 URL。",
+      publicWebhookUrlKeep: "已設定公開附件 webhook URL。保留目前值？",
+      publicWebhookUrlPrompt: "公開附件 webhook URL（可選）",
+      publicWebhookUrlScope: "僅公開此 webhook 路由；OpenClaw 使用它提供短期附件下載。",
+      publicWebhookUrlTitle: "Synology Chat 公開附件路由",
       setupTitle: "Synology Chat webhook 設定",
       tokenEnvPrompt: "偵測到 SYNOLOGY_CHAT_TOKEN。使用環境變數？",
       tokenInput: "輸入 Synology Chat outgoing webhook token",
@@ -1061,14 +1068,9 @@ export const zh_TW = {
       controlUiTitle: "Control UI",
       controlUiDocs: "文件：https://docs.openclaw.ai/web/control-ui",
       dashboardCopyPaste: "在本機瀏覽器中複製/貼上這個 URL 來控制 OpenClaw。",
-      dashboardLinkWithToken: "Dashboard 連結（含權杖）：{url}",
       dashboardOpened: "已在瀏覽器中開啟。保留該分頁以控制 OpenClaw。",
       dashboardOpenAnytime: "隨時開啟 dashboard：{command}",
       dashboardReady: "Dashboard 已就緒",
-      dashboardTokenMemory:
-        "Web UI 會把 dashboard URL 中的權杖保存在目前分頁記憶體中，並在載入後從 URL 中移除。",
-      dashboardTokenPrompt:
-        "如果被提示：把權杖貼到 Control UI 設定中（或使用帶權杖的 dashboard URL）。",
       dashboardWhenReady: "準備好後執行：{command}",
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
@@ -1104,6 +1106,10 @@ export const zh_TW = {
       healthCheckHelp: "健康檢查說明",
       installGateway: "安裝 Gateway 服務（建議）",
       laterTitle: "稍後",
+      managedGatewaySetupFailed:
+        "受管理的 {service} 設定失敗：{error}\n檢查服務狀態和日誌：{statusCommand}\n重試受管理服務安裝：{recoveryCommand}",
+      managedGatewayUnreachable:
+        "受管理的 {service} 在設定後仍無法存取。\n檢查服務狀態和日誌：{statusCommand}\n重試受管理服務：{recoveryCommand}",
       managedWebSearchSkipped: "已略過託管 web search provider。",
       noBackgroundGatewayExpected: "本次設定未安裝 Gateway 服務，因此不會有背景 Gateway。",
       noModelAuth: "提供商「{provider}」尚未設定憑證，聊天將失敗，直到新增認證。",
@@ -1160,7 +1166,6 @@ export const zh_TW = {
       webSearchUnavailableAction:
         "重新啟用該 provider 或選擇其他 provider 前，web_search 無法運作。",
       webUiUrl: "Web UI：{url}",
-      webUiWithTokenUrl: "Web UI（含權杖）：{url}",
       whatNow: '下一步：https://openclaw.ai/showcase（"What People Are Building"）。',
       whatNowTitle: "下一步",
       workspaceBackupTitle: "工作區備份",

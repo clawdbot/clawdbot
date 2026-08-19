@@ -3,7 +3,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { VERSION } from "../../version.js";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -13,7 +13,7 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("projects live tunnel status and fences the tunnel before provider teardown", async () => {
+  it("projects live workspace transport status and fences it before provider teardown", async () => {
     support.seedReady("worker-tunnel", undefined, true);
     const order: string[] = [];
     let tunnelStatus: "stopped" | "connected" = "stopped";
@@ -24,7 +24,6 @@ describe("worker environment service", () => {
         return {
           environmentId: request.environmentId,
           ownerEpoch: request.ownerEpoch,
-          launchTurn: vi.fn(),
           runWorkspaceCommand: vi.fn(),
           syncWorkspace: vi.fn(),
           stop: async () => {},
@@ -55,7 +54,6 @@ describe("worker environment service", () => {
     expect(tunnelManager.start).toHaveBeenCalledWith(
       expect.objectContaining({
         bundleHash: support.BUNDLE_HASH,
-        gateway: { host: "127.0.0.1", port: 18_789 },
         sharedHost: true,
       }),
     );
@@ -69,17 +67,50 @@ describe("worker environment service", () => {
     });
   });
 
-  it("starts a local-install node tunnel without entering SSH", async () => {
+  it.each([
+    ["stale receipt", { ...support.BOOTSTRAP_RECEIPT, bundleHash: "c".repeat(64) }, undefined],
+    ["unavailable current bundle", support.BOOTSTRAP_RECEIPT, new Error("bundle unavailable")],
+  ] as const)("rejects SSH tunnel startup with %s", async (_name, receipt, prepareError) => {
+    const environmentId = "worker-tunnel-current-bundle";
+    const bootstrapping = support.seedBootstrapping(environmentId, undefined, true);
+    support.testState.store.transition({
+      environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: support.readyPatch(environmentId, receipt),
+    });
+    if (prepareError) {
+      support.testState.prepareInstallation = vi.fn(async () => {
+        throw prepareError;
+      });
+    }
     const tunnelManager = {
       status: () => "stopped" as const,
       start: vi.fn(),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => {}),
     } as unknown as WorkerTunnelManager;
-    support.testState.config.cloudWorkers!.profiles!.development!.provider = "device";
-    support.testState.config.cloudWorkers!.profiles!.development!.settings = {
-      device: "device-1",
-    };
+    const workerService = support.createService(support.createProvider(), { tunnelManager });
+
+    await expect(workerService.startTunnel({ environmentId, ownerEpoch: 1 })).rejects.toMatchObject(
+      {
+        code: "invalid_state",
+        message: prepareError
+          ? "Current worker build identity is unavailable"
+          : STALE_WORKER_BUILD_REASON,
+      } satisfies Partial<WorkerEnvironmentServiceError>,
+    );
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+  });
+
+  it("selects a node tunnel from the persisted transport instead of provider id", async () => {
+    const tunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    support.testState.config.cloudWorkers!.profiles!.development!.provider = "crabbox";
     const nodeHandle = {
       environmentId: "pending",
       ownerEpoch: 0,
@@ -103,28 +134,27 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
-        id: "device",
+        supportedExecutionModes: ["worker-turn"],
+        id: "crabbox",
         provision: async () => ({
-          leaseId: "device-lease",
+          leaseId: "cloud-lease",
           node: { deviceId: "device-1" },
         }),
       }),
       {
         tunnelManager,
         nodeTunnelManager,
-        resolveNodeWorkerBuild: async () => ({
-          bundleHash: "c".repeat(64),
-          openclawVersion: VERSION,
-          protocolFeatures: ["worker-heartbeat-v1"],
-        }),
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       },
     );
-    const environment = await workerService.create("development", "device-tunnel-gate");
+    const environment = await workerService.create("development", "cloud-node-tunnel-gate");
     const credential = await workerService.attachSession({
       environmentId: environment.environmentId,
       ownerEpoch: environment.ownerEpoch,
       sessionId: "session-device",
     });
+    const prepareInstallation = vi.mocked(support.testState.prepareInstallation);
+    const prepareCallsBeforeTunnel = prepareInstallation.mock.calls.length;
 
     await expect(
       workerService.startTunnel({
@@ -133,11 +163,12 @@ describe("worker environment service", () => {
       }),
     ).resolves.toMatchObject({ environmentId: environment.environmentId });
     expect(tunnelManager.start).not.toHaveBeenCalled();
+    expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeTunnel + 1);
     expect(nodeTunnelManager.start).toHaveBeenCalledWith(
       expect.objectContaining({
         deviceId: "device-1",
         sessionId: "session-device",
-        expectedBuild: expect.objectContaining({ bundleHash: "c".repeat(64) }),
+        expectedBuild: expect.objectContaining({ bundleHash: support.BUNDLE_HASH }),
       }),
     );
   });
@@ -171,6 +202,7 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         id: "device",
         provision: async () => ({
           leaseId: "device-lease",
@@ -180,11 +212,7 @@ describe("worker environment service", () => {
       {
         tunnelManager,
         nodeTunnelManager,
-        resolveNodeWorkerBuild: async () => ({
-          bundleHash: "c".repeat(64),
-          openclawVersion: VERSION,
-          protocolFeatures: ["worker-heartbeat-v1"],
-        }),
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       },
     );
     const environment = await workerService.create("development", "device-tunnel-timeout");

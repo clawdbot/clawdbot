@@ -117,6 +117,34 @@ describe("createDockPanelLayout", () => {
 });
 
 describe("DockLayoutController inline columns", () => {
+  it("does not reserve the viewport for an embedded dock", () => {
+    const layout = createLayout("right");
+    layout.save({ open: true, dock: "right", height: 320, width: 520 });
+    const host = Object.assign(document.createElement("div"), {
+      addController: vi.fn((_controller: ReactiveController) => undefined),
+      removeController: vi.fn((_controller: ReactiveController) => undefined),
+      requestUpdate: vi.fn(),
+      updateComplete: Promise.resolve(true),
+    });
+    host.setAttribute("embedded", "");
+    const controller = new DockLayoutController(host, {
+      layout,
+      reservationPrefix: "test-embedded",
+      isAvailable: () => true,
+    });
+
+    controller.hostConnected();
+    controller.syncReservation();
+
+    expect(
+      document.documentElement.style.getPropertyValue("--oc-test-embedded-reserve-bottom"),
+    ).toBe("0px");
+    expect(
+      document.documentElement.style.getPropertyValue("--oc-test-embedded-reserve-right"),
+    ).toBe("0px");
+    controller.hostDisconnected();
+  });
+
   it("resizes and restores a width without reserving the global viewport", () => {
     const layout = createDockPanelLayout({
       storageKey: "test.dock-panel.inline",

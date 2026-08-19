@@ -5,16 +5,19 @@ import {
   errorShape,
   formatValidationErrors,
   validateUsersLinkEmailParams,
+  validateUsersClearGitHubIdentityParams,
   validateUsersListParams,
   validateUsersPrefsGetParams,
   validateUsersPrefsSetParams,
   validateUsersSelfParams,
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
+  validateUsersSetGitHubIdentityParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import {
+  clearGitHubIdentity,
   ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem,
@@ -23,8 +26,12 @@ import {
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
+  setGitHubIdentity,
+  UserProfileGitHubIdentityConflictError,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
+import { ControlUiGitHubError } from "../control-ui-github-api.js";
+import { resolveGitHubUserIdentity } from "../github-user-identity.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
@@ -60,10 +67,33 @@ function invalidParams(name: string, errors: Parameters<typeof formatValidationE
 }
 
 function profileError(error: unknown) {
+  if (error instanceof UserProfileGitHubIdentityConflictError) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
+  }
   if (error instanceof UserProfileNotFoundError) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+}
+
+function githubLookupError(error: unknown) {
+  if (error instanceof TypeError) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
+  }
+  if (error instanceof ControlUiGitHubError) {
+    if (error.statusCode === 404) {
+      return errorShape(ErrorCodes.INVALID_REQUEST, "GitHub user not found");
+    }
+    if (error.statusCode === 429) {
+      return errorShape(ErrorCodes.UNAVAILABLE, "GitHub rate limit reached; try again later", {
+        retryable: true,
+      });
+    }
+    return errorShape(ErrorCodes.UNAVAILABLE, "GitHub user lookup is unavailable", {
+      retryable: true,
+    });
+  }
+  return profileError(error);
 }
 
 function resolveAuthenticatedProfileId(
@@ -316,6 +346,59 @@ export const usersHandlers: GatewayRequestHandlers = {
       }
       const display = refreshConnectedProfile(context, result.value);
       respond(true, { profile: result.value, avatarRevision: display.avatarRevision });
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.setGitHubIdentity": async ({ client, context, params, respond }) => {
+    if (!validateUsersSetGitHubIdentityParams(params)) {
+      respond(
+        false,
+        undefined,
+        invalidParams("users.setGitHubIdentity", validateUsersSetGitHubIdentityParams.errors),
+      );
+      return;
+    }
+    const profileId = resolveAuthenticatedProfileId(client);
+    if (!profileId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "GitHub identity changes require an authenticated user"),
+      );
+      return;
+    }
+    try {
+      const identity = await resolveGitHubUserIdentity(params.username);
+      const profile = setGitHubIdentity(profileId, identity);
+      refreshConnectedProfile(context, profile);
+      respond(true, { profile });
+    } catch (error) {
+      respond(false, undefined, githubLookupError(error));
+    }
+  },
+  "users.clearGitHubIdentity": ({ client, context, params, respond }) => {
+    if (!validateUsersClearGitHubIdentityParams(params)) {
+      respond(
+        false,
+        undefined,
+        invalidParams("users.clearGitHubIdentity", validateUsersClearGitHubIdentityParams.errors),
+      );
+      return;
+    }
+    const profileId = resolveAuthenticatedProfileId(client);
+    if (!profileId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "GitHub identity changes require an authenticated user"),
+      );
+      return;
+    }
+    try {
+      const profile = clearGitHubIdentity(profileId);
+      refreshConnectedProfile(context, profile);
+      respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

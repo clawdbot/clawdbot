@@ -92,7 +92,7 @@ export function runDatabaseVerifyWorker(
       }
       settle(() => {
         if (protocolError) {
-          reject(protocolError);
+          reject(toStructuredErrorObject(protocolError));
         } else if (completedExit.code !== 0) {
           reject(
             new Error(

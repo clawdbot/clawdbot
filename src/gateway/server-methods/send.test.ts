@@ -14,6 +14,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
+import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
+import { loadWebMediaRaw } from "../../media/web-media.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
@@ -94,14 +96,24 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
 let sendHandlers: typeof import("./send.js").sendHandlers;
 
-function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
+function resolveAgentIdFromSessionKeyForTests(params: {
+  sessionKey?: string;
+  agentId?: string;
+}): string {
+  const explicitAgentId = params.agentId?.trim().toLowerCase();
   if (typeof params.sessionKey === "string") {
     const match = params.sessionKey.match(/^agent:([^:]+)/i);
     if (match?.[1]) {
-      return match[1];
+      const sessionAgentId = match[1].toLowerCase();
+      if (explicitAgentId && explicitAgentId !== sessionAgentId) {
+        throw new Error(
+          `agent "${explicitAgentId}" does not match session key agent "${sessionAgentId}"`,
+        );
+      }
+      return sessionAgentId;
     }
   }
-  return "main";
+  return explicitAgentId ?? "main";
 }
 
 function messageActionContextFromSessionKeyForTests(sessionKey: string): {
@@ -139,11 +151,12 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveSessionAgentId: ({
     sessionKey,
+    agentId,
   }: {
     sessionKey?: string;
     config?: unknown;
     agentId?: string;
-  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
+  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey, agentId }),
   resolveAgentConfig: () => undefined,
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
@@ -308,6 +321,9 @@ async function runMessageActionRequest(
           sourceReplyToolCallId?: string;
           requesterAccountId?: string;
           requesterSenderId?: string;
+          requesterSenderName?: string;
+          requesterSenderUsername?: string;
+          requesterSenderE164?: string;
           toolContext?: Record<string, unknown>;
         };
       };
@@ -1393,8 +1409,8 @@ describe("gateway send mirroring", () => {
   });
 
   it("does not send after delegated authority closes during session preparation", async () => {
-    const preparation = createDeferred<undefined>();
-    mocks.ensureOutboundSessionEntry.mockReturnValueOnce(preparation.promise);
+    const preparation = createDeferred<null>();
+    mocks.resolveOutboundSessionRoute.mockReturnValueOnce(preparation.promise);
     let authorityActive = true;
     const context = {
       ...makeContext(),
@@ -1411,14 +1427,15 @@ describe("gateway send mirroring", () => {
       agentRuntimeClient("agent:main:slack:channel:C1"),
       context,
     );
-    await vi.waitFor(() => expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledOnce());
     authorityActive = false;
-    preparation.resolve(undefined);
+    preparation.resolve(null);
 
     const { respond } = await request;
     expect(firstRespondCall(respond)[0]).toBe(false);
     expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
   });
 
   it("cancels a prepared terminal receipt when authority closes before action dispatch", async () => {
@@ -4053,7 +4070,7 @@ describe("gateway send mirroring", () => {
     expect(mocks.completeRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
   });
 
-  it("passes agent-scoped media roots to gateway message actions", async () => {
+  it("passes reader-free agent-scoped media access to gateway attachment actions", async () => {
     registerMessageActionPlugin({
       action: "sendAttachment",
       registrySuffix: "message-action-media-roots",
@@ -4073,7 +4090,12 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
     const actionCall = lastDispatchChannelMessageActionCall();
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
-    expect(actionCall).not.toHaveProperty("mediaAccess");
+    expect(actionCall?.mediaAccess).toMatchObject({
+      localRoots: expect.arrayContaining([TEST_AGENT_WORKSPACE]),
+      workspaceDir: TEST_AGENT_WORKSPACE,
+    });
+    expect(actionCall?.mediaAccess.localRoots).toBe(actionCall?.mediaLocalRoots);
+    expect(actionCall?.mediaAccess).not.toHaveProperty("readFile");
     expect(actionCall).not.toHaveProperty("mediaReadFile");
     expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
   });
@@ -4156,6 +4178,103 @@ describe("gateway send mirroring", () => {
     expect(actionCall?.mediaAccess).not.toHaveProperty("readFile");
     expect(actionCall).not.toHaveProperty("mediaReadFile");
   });
+
+  it.each([
+    {
+      action: "send" as const,
+      params: { to: "123", message: "chart" },
+    },
+    {
+      action: "sendAttachment" as const,
+      params: { chatId: "123" },
+    },
+  ])(
+    "applies signed sender aliases to gateway $action media policy",
+    async ({ action, params }) => {
+      registerMessageActionPlugin({
+        action,
+        registrySuffix: `message-action-signed-sender-alias-policy-${action}`,
+      });
+      const sessionKey = "agent:work:telegram:direct:123";
+
+      await withTempOpenClawStateDir(async (stateDir) => {
+        const workspaceFile = path.join(
+          TEST_AGENT_WORKSPACE,
+          `gateway-alias-denied-${process.pid}.bin`,
+        );
+        const managedFile = path.join(stateDir, "media", "outbound", "managed.bin");
+        await fs.mkdir(TEST_AGENT_WORKSPACE, { recursive: true });
+        await fs.mkdir(path.dirname(managedFile), { recursive: true });
+        await fs.writeFile(workspaceFile, "private");
+        await fs.writeFile(managedFile, "managed");
+
+        try {
+          const { respond } = await runMessageActionRequest(
+            {
+              channel: "telegram",
+              action,
+              params: { ...params, mediaUrl: workspaceFile },
+              requesterSenderId: "forged-allowed-sender",
+              sessionKey,
+              agentId: "work",
+              idempotencyKey: `idem-message-action-signed-sender-alias-policy-${action}`,
+            },
+            {
+              internal: {
+                agentRuntimeIdentity: {
+                  kind: "agentRuntime",
+                  agentId: "work",
+                  sessionKey,
+                  messageActionContext: {
+                    expiresAtMs: Date.now() + 60_000,
+                    requesterSenderId: "allowed-id",
+                    requesterSenderName: "Blocked Sender",
+                    requesterSenderUsername: "blocked-user",
+                    requesterSenderE164: "+15551234567",
+                  },
+                },
+              },
+            },
+            {
+              ...makeContext(),
+              getRuntimeConfig: () => ({
+                agents: { list: [{ id: "main" }, { id: "work" }] },
+                tools: {
+                  allow: ["read"],
+                  toolsBySender: { "username:blocked-user": { deny: ["read"] } },
+                },
+              }),
+            } as GatewayRequestContext,
+          );
+
+          expect(firstRespondCall(respond)[0]).toBe(true);
+          const actionCall = lastDispatchChannelMessageActionCall();
+          expect(actionCall).toMatchObject({
+            requesterSenderId: "allowed-id",
+            requesterSenderName: "Blocked Sender",
+            requesterSenderUsername: "blocked-user",
+            requesterSenderE164: "+15551234567",
+          });
+          if (action === "send") {
+            expect(actionCall?.params).toMatchObject({ mediaUrl: workspaceFile });
+            expect(actionCall?.params).not.toHaveProperty("buffer");
+          }
+          const mediaAccess = actionCall?.mediaAccess;
+          expect(mediaAccess.localRoots).not.toContain(TEST_AGENT_WORKSPACE);
+          await expect(
+            loadWebMediaRaw(workspaceFile, buildOutboundMediaLoadOptions({ mediaAccess })),
+          ).rejects.toThrow(/not under an allowed directory/i);
+          const managed = await loadWebMediaRaw(
+            managedFile,
+            buildOutboundMediaLoadOptions({ mediaAccess }),
+          );
+          expect(managed.buffer.toString()).toBe("managed");
+        } finally {
+          await fs.rm(workspaceFile, { force: true });
+        }
+      });
+    },
+  );
 
   it("materializes buffer-only message.action sends on the gateway before plugin dispatch", async () => {
     registerMessageActionPlugin({ registrySuffix: "message-action-buffer-materialize" });

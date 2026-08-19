@@ -422,10 +422,11 @@ describe("google web search provider", () => {
     );
   });
 
-  it("passes provider execution abort signals into the Gemini fetch", async () => {
+  it("does not contact Gemini for an already-cancelled search", async () => {
     const mockFetch = installGeminiFetch();
     const controller = new AbortController();
-    controller.abort();
+    const reason = new Error("Gemini search cancelled before billing");
+    controller.abort(reason);
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool({
       config: {
@@ -444,10 +445,46 @@ describe("google web search provider", () => {
       searchConfig: { provider: "gemini" },
     });
 
-    await tool?.execute({ query: "OpenClaw docs" }, { signal: controller.signal });
+    await expect(
+      tool?.execute({ query: "OpenClaw cancelled docs" }, { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 
-    const [, init] = requireFirstGeminiFetchCall(mockFetch);
-    expect(init?.signal?.aborted).toBe(true);
+  it("does not cache a Gemini result completed after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gemini search cancelled after response");
+    const mockFetch = installGeminiFetch();
+    mockFetch.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: { parts: [{ text: "Cancelled grounded answer" }] },
+              groundingMetadata: {},
+            },
+          ],
+        }),
+      );
+    });
+    const tool = createGeminiWebSearchProvider().createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: { config: { webSearch: { apiKey: "AIza-plugin-test" } } },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+    const query = "OpenClaw late-cancel Gemini cache";
+
+    await expect(tool?.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
+    await tool?.execute({ query });
+
+    const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+    expect(postCalls).toHaveLength(2);
   });
 
   it("reuses the Google model provider key when no web search key or env key is set", async () => {

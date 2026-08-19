@@ -25,8 +25,10 @@ import {
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
+import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
+import { stopTimer } from "./timer.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
 const children = new Set<ChildProcess>();
@@ -201,6 +203,22 @@ async function waitForExit(child: ChildProcess): Promise<void> {
     child.once("exit", () => resolve());
     child.once("error", reject);
   });
+}
+
+async function waitForImmediate(
+  predicate: () => boolean,
+  description: string,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${description}`);
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
 }
 
 function makeParentService(storePath: string, runCommandJob = vi.fn()) {
@@ -510,6 +528,7 @@ describe("cron durable run ownership", () => {
     let second: ChildProcess | undefined;
     try {
       await replacement.start();
+      const replacementState = (replacement as unknown as { state: CronServiceState }).state;
       replacement.pauseScheduling();
       first.kill("SIGKILL");
       await waitForExit(first);
@@ -521,22 +540,31 @@ describe("cron durable run ownership", () => {
         outputPath: path.join(scriptRoot, `second-output-${now}`),
       });
       await waitForLine(second, "started");
+      const secondReceiptId = receipts(storePath, job.id)[0]?.receiptId;
+      expect(secondReceiptId).toBeDefined();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       replacement.resumeScheduling();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 2_500);
-      });
+      // Isolate the lifecycle-owned foreign receipt monitor from the ordinary job timer.
+      stopTimer(replacementState);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitForImmediate(
+        () => listForeignReceipts(replacementState)[0]?.receiptId === secondReceiptId,
+        "replacement foreign receipt enrollment",
+      );
       second.kill("SIGKILL");
       await waitForExit(second);
+      await vi.advanceTimersByTimeAsync(2_000);
 
       await vi.waitFor(
         async () => {
           expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
           expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
         },
-        { timeout: 6_000, interval: 50 },
+        { timeout: 1_000, interval: 10 },
       );
     } finally {
       replacement.stop();
+      vi.useRealTimers();
       for (const child of [first, second]) {
         if (child && child.exitCode === null && child.signalCode === null) {
           child.kill("SIGKILL");

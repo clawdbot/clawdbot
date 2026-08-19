@@ -6,6 +6,13 @@
   },
   "name": "Reef",
   "description": "Guarded end-to-end encrypted claw channel",
+  "cliCommands": [
+    {
+      "name": "reef",
+      "description": "Register on a Reef relay and manage guarded claw-to-claw friendships",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": true,
     "onCommands": [

@@ -424,6 +424,10 @@ const SLACK_CHART_PROMPT = [
   `Call the message tool exactly once with these exact arguments: ${JSON.stringify(SLACK_CHART_MESSAGE_TOOL_ARGS)}.`,
   `After the chart send succeeds, reply with only this exact marker: ${SLACK_CHART_DONE_TOKEN}`,
 ].join(" ");
+const MESSAGE_DECISION_SUPPRESSION_PROMPT = "Message delivery decision suppression QA check.";
+const MESSAGE_DECISION_SEND_PROMPT = "Message delivery decision send QA check.";
+const MESSAGE_DECISION_SUPPRESSION_TEXT =
+  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.";
 const WHATSAPP_AGENT_REACT_PROMPT =
   "React to this WhatsApp message with thumbs up for QA action check WHATSAPP_QA_AGENT_REACT_TEST.";
 const WHATSAPP_GROUP_AGENT_REACT_PROMPT =
@@ -725,6 +729,30 @@ describe("qa mock openai server", () => {
     });
     expect(outputText(finalBody)).toBe("QA-MSTEAMS-THREAD-DEDUPE-OK");
     expect(outputItems(finalBody).some((item) => item.type === "function_call")).toBe(false);
+  });
+
+  it("returns a distinct final after the ambiguous Teams message-tool send", async () => {
+    const server = await startMockServer();
+    const prompt = "qa msteams ambiguous gateway timeout. exact marker: `QA-MSTEAMS-AMBIGUOUS-504`";
+
+    const initialBody = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const toolCall = outputToolCall(initialBody, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: "QA-MSTEAMS-AMBIGUOUS-504",
+    });
+
+    const finalBody = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutputWithCallId(outputToolCallId(toolCall, "call_msteams_timeout"), "failed"),
+      ],
+    });
+    expect(outputText(finalBody)).toBe("QA-MSTEAMS-AMBIGUOUS-FINAL");
   });
 
   it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
@@ -1803,6 +1831,45 @@ describe("qa mock openai server", () => {
       ),
     ).toBe(false);
     expect(outputText(afterToolPayload)).toBe(SLACK_CHART_DONE_TOKEN);
+  });
+
+  it("emits the deterministic message-decision suppression fixture", async () => {
+    const server = await startMockServer();
+    const initial = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(MESSAGE_DECISION_SUPPRESSION_PROMPT)],
+    });
+    const toolCall = outputToolCall(initial, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: MESSAGE_DECISION_SUPPRESSION_TEXT,
+    });
+
+    const afterTool = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(MESSAGE_DECISION_SUPPRESSION_PROMPT),
+        makeToolOutputWithCallId(
+          outputToolCallId(toolCall, "call_mock_message_suppression"),
+          '{"status":"suppressed"}',
+        ),
+      ],
+    });
+    expect(outputText(afterTool)).toBe("NO_REPLY");
+  });
+
+  it("emits the deterministic durable message-decision send fixture", async () => {
+    const server = await startMockServer();
+    const initial = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(MESSAGE_DECISION_SEND_PROMPT)],
+    });
+    expect(outputToolArgsFromItem(outputToolCall(initial, "message"))).toEqual({
+      action: "send",
+      message: "QA-MESSAGE-DELIVERY-OK",
+      final: true,
+      presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+    });
   });
 
   it("emits WhatsApp agent reaction message tool calls only when the tool is declared", async () => {
@@ -6647,7 +6714,7 @@ Update and merge these partial structured summaries.`,
     const toolUseBlock = body.content.find((block) => block.type === "tool_use") as
       | { id: string; name: string; input: Record<string, unknown> }
       | undefined;
-    expect(toolUseBlock?.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(toolUseBlock?.id).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(toolUseBlock?.id.length).toBeLessThanOrEqual(64);
     expect(toolUseBlock?.name).toBe("read");
     expect(toolUseBlock?.input).toEqual({ path: "repo/docs/help/testing.md" });
@@ -6665,6 +6732,7 @@ Update and merge these partial structured summaries.`,
   it("preserves already-native Anthropic tool IDs while adapting shared generated IDs", () => {
     const nativeId = "toolu_native_123";
     const generatedId = "call_mock_read_generated_1";
+    const secondGeneratedId = "call_mock_read_generated_2";
     const events: StreamEvent[] = [
       {
         type: "response.output_item.added",
@@ -6690,6 +6758,7 @@ Update and merge these partial structured summaries.`,
           output: [
             { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
             { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
+            { type: "function_call", name: "read", call_id: secondGeneratedId, arguments: "{}" },
           ],
           usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
         },
@@ -6730,9 +6799,13 @@ Update and merge these partial structured summaries.`,
     });
 
     expect(callIds.filter((id) => id === nativeId)).toHaveLength(3);
-    expect(new Set(adaptedGeneratedIds).size).toBe(1);
+    expect(adaptedGeneratedIds.slice(0, 3)).toEqual(
+      Array.from({ length: 3 }, () => "toolu51ca7fb8ca8ab1910ae2815b4e69a38ac71"),
+    );
+    expect(adaptedGeneratedIds[3]).toMatch(/^toolu[a-f0-9]{35}$/);
+    expect(adaptedGeneratedIds[3]).not.toBe(adaptedGeneratedIds[0]);
     expect(repeatedGeneratedIds).toEqual(adaptedGeneratedIds);
-    expect(adaptedGeneratedIds[0]).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(adaptedGeneratedIds[0]).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(adaptedGeneratedIds[0]?.length).toBeLessThanOrEqual(64);
   });
 
@@ -6790,7 +6863,7 @@ Update and merge these partial structured summaries.`,
       if (!toolUse || typeof toolUse.id !== "string" || typeof toolUse.name !== "string") {
         throw new Error("Expected Anthropic tool_use block");
       }
-      expect(toolUse.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+      expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
       expect(toolUse.id.length).toBeLessThanOrEqual(64);
       emittedToolUseIds.push(toolUse.id);
       return toolUse;
@@ -7069,6 +7142,72 @@ Update and merge these partial structured summaries.`,
 
     expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
     expect(outputText(payload)).not.toBe("Protocol note: replay unsafe after write.");
+  });
+
+  it("derives three restart checkpoints from request history without server counters", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
+    const recoveryPrompt =
+      "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
+    const tools = [
+      {
+        type: "function",
+        name: "exec",
+        parameters: {
+          type: "object",
+          properties: {
+            language: { type: "string" },
+            code: { type: "string" },
+            restartSafe: { type: "boolean" },
+          },
+          required: ["code"],
+        },
+      },
+      {
+        type: "function",
+        name: "wait",
+        parameters: {
+          type: "object",
+          properties: { runId: { type: "string" } },
+          required: ["runId"],
+        },
+      },
+    ];
+    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
+
+    for (const checkpoint of [1, 2, 3]) {
+      const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      const execCall = outputToolCall(execPayload, "exec");
+      const execArgs = outputToolArgsFromItem(execCall);
+      expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
+      expect(execArgs.code).toContain("qa_restart_wait");
+      expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+
+      const runId = `restart-checkpoint-${checkpoint}`;
+      input.push(
+        execCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(execCall, `checkpoint-exec-${checkpoint}`),
+          JSON.stringify({ status: "waiting", runId }),
+        ),
+      );
+      const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      const waitCall = outputToolCall(waitPayload, "wait");
+      expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
+      input.push(waitCall, makeUserInput(recoveryPrompt));
+    }
+
+    const finalPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputText(finalPayload)).toBe("unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK");
+
+    const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools,
+      input: [makeUserInput(prompt)],
+    });
+    expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec")).code).toContain(
+      "CHECKPOINT-1",
+    );
   });
 
   it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {
@@ -7838,7 +7977,7 @@ Update and merge these partial structured summaries.`,
       toolUseStart?.content_block,
       "Anthropic SSE tool_use content block",
     );
-    expect(toolUse.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(String(toolUse.id).length).toBeLessThanOrEqual(64);
     const debug = requireRecord(await getJson(server, "/debug/last-request"), "debug request");
     expect(debug.plannedToolCallId).toBe(toolUse.id);

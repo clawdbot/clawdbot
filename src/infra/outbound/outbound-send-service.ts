@@ -1,6 +1,7 @@
 // Outbound send service chooses plugin-handled message actions or the core
 // message/poll path while preserving media policy and transcript mirrors.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
@@ -71,6 +72,8 @@ type OutboundSendContext = {
   /** Known destination conversation kind prepared by the caller. */
   conversationType?: ChatType;
   sessionId?: string;
+  runId?: string;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -95,6 +98,8 @@ type OutboundSendContext = {
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
   /** Runs on identified platform evidence before queue acknowledgement. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** Runs once a plugin action accepted the send, before transcript mirroring. */
+  onPluginSendAccepted?: () => Promise<void>;
 };
 
 type PluginHandledResult = {
@@ -176,6 +181,8 @@ async function sendCoreMessage(params: {
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
     idempotencyKey: params.ctx.idempotencyKey,
+    runId: params.ctx.runId,
+    executionIdentityToken: params.ctx.executionIdentityToken,
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
@@ -420,6 +427,9 @@ export async function executeSendAction(params: {
         ctx: pluginCtx,
         action: "send",
         onHandled: async () => {
+          // The accepted-send commit must precede the transcript mirror below:
+          // first-contact outbound routes create their session row in it.
+          await params.ctx.onPluginSendAccepted?.();
           if (!params.ctx.mirror) {
             return;
           }

@@ -2,10 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="0.19.3"
+ARTIFACT_MANIFEST="$ROOT_DIR/extensions/cua-computer/package.json"
+VERSION="$(node -e 'const manifest = require(process.argv[1]); process.stdout.write(manifest.dependencies["@trycua/cua-driver"]);' "$ARTIFACT_MANIFEST")"
 TAG="cua-driver-rs-v${VERSION}"
 ASSET="cua-driver-rs-${VERSION}-darwin-universal-binary.tar.gz"
-EXPECTED_SHA256="733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e"
+EXPECTED_SHA256="$(node -e 'const manifest = require(process.argv[1]); process.stdout.write(manifest.cuaDriverArtifacts["darwin-universal-binary"].archiveSha256);' "$ARTIFACT_MANIFEST")"
 DOWNLOAD_URL="https://github.com/trycua/cua/releases/download/${TAG}/${ASSET}"
 CACHE_DIR="$ROOT_DIR/apps/macos/.build/cua-driver/${TAG}"
 ARCHIVE="$CACHE_DIR/$ASSET"

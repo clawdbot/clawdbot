@@ -172,7 +172,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
-    help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+    help: "Voice channels to auto-join (list of guildId/channelId entries). Set whenOccupied on an entry to connect only while humans are present.",
+  },
+  "voice.autoJoin.*.whenOccupied": {
+    label: "Discord Voice Auto-Join When Occupied",
+    help: "Join and remain in this auto-managed voice channel only while at least one human is present. The OpenClaw bot and other bots do not count. Default: false.",
   },
   "voice.allowedChannels": {
     label: "Discord Voice Allowed Channels",

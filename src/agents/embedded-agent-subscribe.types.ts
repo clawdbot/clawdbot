@@ -17,6 +17,7 @@ import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types
 import type { BlockReplyFlushContext } from "./embedded-agent-runner/types.js";
 import type {
   BlockReplyChunking,
+  EmbeddedAgentEvent,
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
@@ -74,11 +75,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
     toolCallId?: string;
     source?: string;
   }) => void;
-  onAgentEvent?: (evt: {
-    stream: string;
-    data: Record<string, unknown>;
-    sessionKey?: string;
-  }) => void | Promise<void>;
+  onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
   onToolStreamBoundary?: () => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   /** "finishing" defers both success and error terminal ownership to the caller. */
@@ -134,6 +131,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   builtinToolNames?: ReadonlySet<string>;
   /** Exact registered tool names whose concrete instances are safe to replay. */
   replaySafeToolNames?: ReadonlySet<string>;
+  /** Canonical owner keys for unique plugin tools that can change durable state. */
+  sideEffectToolOwners?: ReadonlyMap<string, string>;
   /**
    * Exact raw names allowed to emit local media paths for this run.
    * Includes core trusted tools plus bundled plugin tools proven from the

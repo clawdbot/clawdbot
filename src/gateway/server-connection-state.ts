@@ -17,8 +17,18 @@ export function createGatewayConnectionState(params: {
 }) {
   const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
   const clients = new Set<GatewayWsClient>();
-  const sessionEventSubscribers = createSessionEventSubscriberRegistry();
-  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+  // Detached RPC dispatch can resume after close cleanup, so connection-owned
+  // producers must validate against the live transport owner before mutation.
+  const isConnectionActive = (connId: string) => {
+    for (const client of clients) {
+      if (client.connId === connId && !client.invalidated) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry(isConnectionActive);
+  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(isConnectionActive);
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     sessionMessageSubscribers,
@@ -44,6 +54,7 @@ export function createGatewayConnectionState(params: {
 
   return {
     clients,
+    isConnectionActive,
     ...gatewayBroadcaster,
     agentRunSeq,
     dedupe,

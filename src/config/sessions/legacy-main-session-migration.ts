@@ -38,7 +38,6 @@ import type {
 import { resolveSessionStorePathCore } from "./paths.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
 import {
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAgentSessionStoreTargetsSync,
@@ -73,9 +72,7 @@ function resolveArmingDecision(cfg: OpenClawConfig, legacyAgentId: string): Armi
   if (sole && roster.has(normalizeAgentId(sole))) {
     return { armed: true, ownerAgentId: normalizeAgentId(sole) };
   }
-  const sessionStoreOwner = !isPerAgentSessionStoreConfig(cfg.session?.store)
-    ? cfg.agents?.defaults?.sessionStore?.agentId?.trim()
-    : undefined;
+  const sessionStoreOwner = cfg.agents?.defaults?.sessionStore?.agentId?.trim();
   if (sessionStoreOwner) {
     const normalized = normalizeAgentId(sessionStoreOwner);
     if (roster.has(normalized)) {

@@ -30,7 +30,7 @@ import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
 } from "../../../utils/message-channel.js";
-import { resolveRuntimeServiceVersion } from "../../../version.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import {
@@ -57,6 +57,7 @@ import type { GatewayWsClient } from "../ws-types.js";
 import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
+import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -93,6 +94,7 @@ export async function attachAuthenticatedGatewayConnect(
     pluginSurfaceBaseUrl,
     pluginNodeCapabilities = [],
     buildRequestContext,
+    getRequiredSharedGatewaySessionGeneration,
     close,
     isClosed,
     clearHandshakeTimer,
@@ -102,6 +104,8 @@ export async function attachAuthenticatedGatewayConnect(
     setCloseCause,
     logGateway,
     logWsControl,
+    requestHost,
+    requestOrigin,
   } = context.handler;
   const {
     connectParams,
@@ -311,6 +315,37 @@ export async function attachAuthenticatedGatewayConnect(
       return;
     }
   }
+  const controlUiBuildMismatch = resolveControlUiBuildMismatch({
+    clientId: connectParams.client.id,
+    clientBuildId: connectParams.client.buildId,
+    gatewayBuildId: resolveRuntimeServiceBuildId(),
+    configuredControlUiRoot: context.configSnapshot.gateway?.controlUi?.root,
+    requestHost,
+    requestOrigin,
+  });
+  if (controlUiBuildMismatch) {
+    // Build identity predates this rejection. Frozen clients recognize the shipped
+    // protocol-mismatch signal and surface its literal reload guidance.
+    const message = "protocol mismatch: Control UI updated; reload this page to continue";
+    markHandshakeFailure("control-ui-build-mismatch", {
+      clientBuildId: controlUiBuildMismatch.clientBuildId ?? "legacy",
+      gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
+    });
+    sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message, {
+      retryable: false,
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
+        reloadRequired: true,
+      },
+    });
+    logWsControl.warn(
+      `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
+    );
+    await releasePendingNodePairingCleanup();
+    close(1008, truncateCloseReason(message));
+    return;
+  }
   const internal =
     isLocalClient || isTrustedApprovalRuntime || trustedAgentRuntimeIdentity
       ? {
@@ -343,17 +378,10 @@ export async function attachAuthenticatedGatewayConnect(
   clearHandshakeTimer();
   const nextClient: GatewayWsClient = {
     socket,
-    connect: state.controlUiDeviceAuthMigrationPending
-      ? { ...connectParams, scopes }
-      : connectParams,
+    connect: connectParams,
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
-    isControlUiDeviceAuthMigrationSession: state.controlUiDeviceAuthMigrationPending,
-    // Only identity-bearing migration sessions may use bounded self-pairing.
-    // Device-less sessions remain pairing-scoped until reopened securely.
-    isControlUiDeviceAuthMigration:
-      state.controlUiDeviceAuthMigrationPending && Boolean(connectParams.device),
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id
       : undefined,
@@ -437,31 +465,18 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
+  // Authentication may finish before pairing/profile work does. Revalidate at
+  // the registration boundary so a credential rotation cannot miss this client.
   if (
-    state.controlUiDeviceAuthMigrationPending &&
-    context.handler.isControlUiDeviceAuthMigrationPending?.() !== true
+    sessionUsesSharedGatewayAuth &&
+    getRequiredSharedGatewaySessionGeneration &&
+    sessionSharedGatewaySessionGeneration !== getRequiredSharedGatewaySessionGeneration()
   ) {
-    const hasDeviceIdentity = Boolean(device);
-    const message = "device auth migration completed during connect; reconnect";
-    markHandshakeFailure("control-ui-device-auth-migration-completed", {
-      device: hasDeviceIdentity ? "yes" : "no",
-    });
-    sendHandshakeErrorResponse(
-      hasDeviceIdentity ? ErrorCodes.NOT_PAIRED : ErrorCodes.INVALID_REQUEST,
-      message,
-      {
-        details: {
-          code: hasDeviceIdentity
-            ? ConnectErrorDetailCodes.PAIRING_REQUIRED
-            : ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-        },
-      },
-    );
+    setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
     await releasePendingNodePairingCleanup();
-    close(1008, truncateCloseReason(message));
+    close(4001, "gateway auth changed");
     return;
   }
-
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {
@@ -490,8 +505,9 @@ export async function attachAuthenticatedGatewayConnect(
   }
 
   if (isWebchatConnect(connectParams)) {
+    const clientBuildId = connectParams.client.buildId?.trim();
     logWsControl.info(
-      `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
+      `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} build=${formatForLog(clientBuildId ?? "legacy")}`,
     );
   }
 

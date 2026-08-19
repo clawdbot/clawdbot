@@ -48,9 +48,26 @@ describe("tryListenOnPort", () => {
       throw err;
     }
     expect(port).toBeGreaterThan(0);
+    // Release proof stays tied to the allocated port: a lingering listener
+    // would accept this probe, a released port refuses it. A rebind assertion
+    // instead collides with any foreign outbound socket occupying the port on
+    // busy runners (EADDRINUSE flake) without detecting leaks any better.
     await expect(
-      tryListenOnPort({ port, host: "127.0.0.1", exclusive: true }),
-    ).resolves.toBeUndefined();
+      new Promise<"accepted" | "refused">((resolve, reject) => {
+        const socket = net.connect({ port, host: "127.0.0.1" });
+        socket.once("connect", () => {
+          socket.destroy();
+          resolve("accepted");
+        });
+        socket.once("error", (err) => {
+          if ((err as NodeJS.ErrnoException).code === "ECONNREFUSED") {
+            resolve("refused");
+            return;
+          }
+          reject(err);
+        });
+      }),
+    ).resolves.toBe("refused");
   });
 
   it("rejects when the port is already in use", async () => {

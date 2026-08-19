@@ -1200,11 +1200,7 @@ jobs:
           fi
           current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
           current_selector_ref="v${current_selector_version}"
-          if ! git rev-parse --verify "${current_selector_ref}^{commit}" >/dev/null 2>&1; then
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
-              "refs/tags/${current_selector_ref}:refs/tags/${current_selector_ref}"
-          fi
-          current_selector_sha="$(git rev-parse "${current_selector_ref}^{commit}")"
+          current_selector_sha="$(git -C trusted-workflow rev-parse --verify "refs/tags/${current_selector_ref}^{commit}")"
           node trusted-workflow/scripts/plugin-sdk-api-release-evidence.mjs \
             --manifest "$MANIFEST_FILE" \
             --head "$EXPECTED_RELEASE_SHA" \

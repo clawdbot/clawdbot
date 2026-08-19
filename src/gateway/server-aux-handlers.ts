@@ -6,6 +6,7 @@ import {
   type AgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
 } from "../infra/agent-run-registry.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import {
@@ -157,11 +158,17 @@ export function createGatewayAuxHandlers(params: {
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       onLifecycle: params.onApprovalLifecycle,
-      ...(params.validateAgentRuntimeDelegatedAuthority
-        ? {
-            validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
-          }
-        : {}),
+      // Timeout expiry is gateway-clock truth: publish the terminal like a
+      // resolve so reviewer surfaces need not infer it from their own clocks.
+      // system-agent approvals have no forwarder/push route to notify.
+      onExpired: (record, liveRecord) => {
+        if (approvalKind === "system-agent") {
+          return;
+        }
+        const publication = { kind: approvalKind, record, liveRecord };
+        publishAuthorityClosure(publication as PendingAuthorityPublication);
+      },
+      validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
       onError: (error, context) =>
         params.log.error?.(
           `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
@@ -198,7 +205,7 @@ export function createGatewayAuxHandlers(params: {
   );
   const pluginApprovalIosPushDelivery = createPluginApprovalIosPushDelivery({ log: params.log });
   type PendingAuthorityPublication = {
-    kind: "exec" | "plugin";
+    kind: ChannelApprovalKind;
     record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"];
     liveRecord: Parameters<typeof publishAppliedApprovalResolution>[0]["liveRecord"];
   };
@@ -285,7 +292,7 @@ export function createGatewayAuxHandlers(params: {
   };
   const cancelRunBoundApprovals = (runId: string, context: GatewayRequestContext): number => {
     const publish = (
-      kind: "exec" | "plugin",
+      kind: ChannelApprovalKind,
       record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"],
       liveRecord: Parameters<typeof publishAppliedApprovalResolution>[0]["liveRecord"],
     ) => {

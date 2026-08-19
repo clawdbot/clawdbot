@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
-import { prepareWorkerSsh, runWorkerSshCandidates, workerSshOptions } from "./ssh.js";
+import {
+  prepareWorkerSsh,
+  resolveWorkerSshSandboxSettings,
+  runWorkerSshCandidates,
+  workerSshOptions,
+} from "./ssh.js";
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 const SSH: WorkerSshEndpoint = {
@@ -22,6 +27,27 @@ function prepareTestWorkerSsh() {
 }
 
 describe("worker SSH preparation", () => {
+  it("adapts pinned endpoint identity and every advertised port for sandbox SSH", () => {
+    expect(
+      resolveWorkerSshSandboxSettings({
+        ssh: SSH,
+        identity: { kind: "path", path: "/keys/worker" },
+      }),
+    ).toEqual({
+      target: "worker@worker.example.test:2202",
+      command: "ssh",
+      strictHostKeyChecking: true,
+      updateHostKeys: false,
+      identityFile: "/keys/worker",
+      knownHostsData: [
+        `[worker.example.test]:2202 ${HOST_KEY}`,
+        `worker.example.test ${HOST_KEY}`,
+        `[worker.example.test]:2200 ${HOST_KEY}`,
+        "",
+      ].join("\n"),
+    });
+  });
+
   it("shares the pinned trust context while disabling only unrequested forwardings", async () => {
     let identityResolutions = 0;
     const prepared = await prepareWorkerSsh({

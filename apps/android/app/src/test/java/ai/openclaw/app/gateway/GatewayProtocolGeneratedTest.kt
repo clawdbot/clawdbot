@@ -63,5 +63,6 @@ class GatewayProtocolGeneratedTest {
     assertTrue(events.size > 20)
     assertEquals(methods.size, methods.toSet().size)
     assertEquals(events.size, events.toSet().size)
+    assertEquals("sessions.move", GatewayMethod.SessionsMove.rawValue)
   }
 }

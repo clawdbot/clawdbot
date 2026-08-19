@@ -91,6 +91,29 @@ describe("sessions.changed coalescing", () => {
     expect(mocks.invalidate).toHaveBeenCalledTimes(3);
   });
 
+  it("emits the latest trailing row by the sustained-mutation deadline", () => {
+    const context = createContext();
+    const sessionKey = "agent:main:chat";
+
+    emitSessionsChanged(context, { reason: "leading", sessionKey });
+    emitSessionsChanged(context, { reason: "update-0", sessionKey });
+    for (let index = 1; index <= 5; index += 1) {
+      vi.advanceTimersByTime(90);
+      mocks.rowLabel = `state-${index}`;
+      emitSessionsChanged(context, { reason: `update-${index}`, sessionKey });
+    }
+
+    vi.advanceTimersByTime(49);
+    expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(1);
+    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1]).toMatchObject({
+      label: "state-5",
+      reason: "update-5",
+    });
+  });
+
   it("keeps different session keys independent", () => {
     const context = createContext();
 

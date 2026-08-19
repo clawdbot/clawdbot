@@ -25,10 +25,10 @@ import {
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
+import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
-import { createApplicationCloudStartup } from "./cloud-session-startup.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationNavigationOptions,
@@ -39,6 +39,7 @@ import type {
   ApplicationThemeServerSelection,
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import { isDashboardOnlyView } from "./dashboard-document-mode.ts";
 import { isDesktopDocumentPath, isDesktopOnlyView } from "./desktop-document-mode.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
@@ -46,6 +47,7 @@ import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
   loadSettings,
   patchSettings,
@@ -54,7 +56,7 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
-import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
+import { createSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { isTerminalDocumentPath, isTerminalOnlyView } from "./terminal-document-mode.ts";
@@ -272,9 +274,11 @@ export function bootstrapApplication(
   const basePath = resolveControlUiBasePath(
     startup.location.pathname || globalThis.location?.pathname || "/",
   );
+  const dashboardDocument = isDashboardOnlyView(startup.location);
   const standaloneDocument =
     isTerminalDocumentPath(startup.location.pathname, basePath) ||
-    isDesktopDocumentPath(startup.location.pathname, basePath);
+    isDesktopDocumentPath(startup.location.pathname, basePath) ||
+    dashboardDocument;
   const firstRunDefaultLanding =
     documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
   // A `?view=` document mode still lands on the chat path, so it counts as the default landing
@@ -283,10 +287,11 @@ export function bootstrapApplication(
   const firstRunRedirectEnabled =
     firstRunDefaultLanding &&
     !isTerminalOnlyView(startup.location, basePath) &&
-    !isDesktopOnlyView(startup.location, basePath);
+    !isDesktopOnlyView(startup.location, basePath) &&
+    !dashboardDocument;
   const sessionPathBuilderReady =
     dependencies.sessionPathBuilderReady ??
-    (documentMode
+    (documentMode || dashboardDocument
       ? Promise.resolve()
       : import("@openclaw/session-url-contract").then((contract) => {
           setSessionPathBuilder(contract.buildControlUiSessionPath);
@@ -319,7 +324,7 @@ export function bootstrapApplication(
     firstRunDefaultLanding &&
     !parseAgentSessionKey(settings.sessionKey);
   const initialLocationReady = (
-    documentMode
+    documentMode || dashboardDocument
       ? Promise.resolve(startup.location)
       : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
           ([, location]) =>
@@ -368,17 +373,26 @@ export function bootstrapApplication(
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
-  const nativeLinkRouting = startNativeLinkRouting();
+  const nativeLinkRouting = startNativeLinkRouting({
+    shouldOpenInControlUiBrowser: () =>
+      loadSettings().openLinksInControlUiBrowser === true &&
+      isBrowserPanelAvailable(gateway.snapshot) &&
+      document.querySelector("openclaw-app-shell")?.isConnected === true,
+  });
   const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
-  const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
+  const skillWorkshopRevisionAdmissions = createSkillWorkshopRevisionAdmissions();
   const initialUserMessage = createInitialUserMessageHandoff();
-  const cloudStartup = createApplicationCloudStartup({ gateway, sessions, initialUserMessage });
+  const placementStartup = createApplicationPlacementStartup({
+    gateway,
+    sessions,
+    initialUserMessage,
+  });
   const chatAttachmentHandoff = createChatAttachmentHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
-  // Standalone terminal and desktop paths render before the shell; starting
-  // the page router would rewrite these special documents to /chat.
+  // Standalone terminal, desktop, and dashboard documents render before the
+  // shell; starting the page router would rewrite them to an application route.
   const startsApplicationRouter = documentMode === null && !standaloneDocument;
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
@@ -422,7 +436,7 @@ export function bootstrapApplication(
       return;
     }
     lastRecoveryClient = snapshot.client;
-    cloudStartup.resumeRecovery();
+    placementStartup.resumeRecovery();
   });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
@@ -493,7 +507,7 @@ export function bootstrapApplication(
     config,
     runtimeConfig,
     sessions,
-    cloudStartup,
+    placementStartup,
     workboard,
     overlays,
     navigation,
@@ -501,7 +515,7 @@ export function bootstrapApplication(
     nativeChatDrafts,
     nativeNotifications,
     webPush,
-    skillWorkshopRevision,
+    skillWorkshopRevisionAdmissions,
     initialUserMessage,
     chatAttachmentHandoff,
     navigate: (routeId, options) => {
@@ -594,7 +608,7 @@ export function bootstrapApplication(
       stopPostConnect();
       agents.dispose();
       channels.dispose();
-      cloudStartup.dispose();
+      placementStartup.dispose();
       sessions.dispose();
       workboard.dispose();
       stopConfigWriteSuspension();
@@ -605,7 +619,7 @@ export function bootstrapApplication(
       nativeLinkRouting.dispose();
       nativeNotifications?.dispose();
       webPush.dispose();
-      skillWorkshopRevision.clear();
+      skillWorkshopRevisionAdmissions.dispose();
       initialUserMessage.clear();
       chatAttachmentHandoff.dispose();
     },

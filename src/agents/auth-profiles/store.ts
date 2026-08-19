@@ -16,6 +16,7 @@ import {
   syncPersistedExternalCliAuthProfiles,
 } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
+import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
@@ -131,19 +132,20 @@ function resolveRuntimeAuthProfileLoadOptions(
   return { ...options, inheritedAuthDir: mode.agentDir };
 }
 
-function hasInlineOAuthTokenMaterial(credential: Record<string, unknown>): boolean {
-  return INLINE_OAUTH_TOKEN_FIELDS.some((field) => credential[field] !== undefined);
+function hasInlineOAuthTokenMaterial(credential: object): boolean {
+  return INLINE_OAUTH_TOKEN_FIELDS.some((field) => Reflect.get(credential, field) !== undefined);
 }
 
 function hasChangedInlineOAuthTokenMaterial(params: {
-  credential: Record<string, unknown>;
-  existingCredential: Record<string, unknown>;
+  credential: object;
+  existingCredential: object;
 }): boolean {
   return INLINE_OAUTH_TOKEN_FIELDS.some((field) => {
-    if (params.credential[field] === undefined) {
+    const credentialValue = Reflect.get(params.credential, field);
+    if (credentialValue === undefined) {
       return false;
     }
-    return !isDeepStrictEqual(params.credential[field], params.existingCredential[field]);
+    return !isDeepStrictEqual(credentialValue, Reflect.get(params.existingCredential, field));
   });
 }
 
@@ -155,16 +157,14 @@ function preserveLegacyOAuthRefsOnSave(params: {
     return params.payload;
   }
   let nextProfiles: typeof params.payload.profiles | undefined;
-  for (const [profileId, credential] of Object.entries(
-    params.payload.profiles as Record<string, unknown>,
-  )) {
-    if (!isRecord(credential) || credential.oauthRef !== undefined || credential.type !== "oauth") {
+  for (const [profileId, credential] of Object.entries(params.payload.profiles)) {
+    if (credential.type !== "oauth" || credential.oauthRef !== undefined) {
       continue;
     }
     const existingCredential = params.existingRaw.profiles[profileId];
     if (
       !isRecord(existingCredential) ||
-      existingCredential.oauthRef === undefined ||
+      !isLegacyOAuthRef(existingCredential.oauthRef) ||
       existingCredential.type !== "oauth"
     ) {
       continue;
@@ -181,7 +181,7 @@ function preserveLegacyOAuthRefsOnSave(params: {
     nextProfiles[profileId] = {
       ...credential,
       oauthRef: existingCredential.oauthRef,
-    } as unknown as (typeof nextProfiles)[string];
+    };
   }
   return nextProfiles ? { ...params.payload, profiles: nextProfiles } : params.payload;
 }
