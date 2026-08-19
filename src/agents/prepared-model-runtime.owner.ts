@@ -380,6 +380,7 @@ function resolveConfiguredRuntimePluginSelections(
   const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
   return resolveModelCandidateChain({
     cfg: config,
+    agentId,
     manifestPlugins: [],
     provider: configured.provider || DEFAULT_PROVIDER,
     model: configured.model || DEFAULT_MODEL,
