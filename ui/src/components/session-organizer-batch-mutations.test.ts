@@ -518,7 +518,7 @@ describe("session organizer destructive confirmations", () => {
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, retryError);
     expect(retryError).not.toContain("GatewayRequestError");
     expect(alertSpy).toHaveBeenCalledWith(
-      "1 session worktree(s) need attention:\nopenclaw/busy — still in use by a live run or another cleanup\nManage them under Settings -> Worktrees.",
+      "Managed Worktrees:\nopenclaw/busy — live run or cleanup active",
     );
     alertSpy.mockRestore();
   });
@@ -595,8 +595,7 @@ describe("session organizer destructive confirmations", () => {
     // The session delete already landed; the worktree just stays put, same as
     // the no-access branch, so the operator learns where it went.
     expect(showToast).toHaveBeenCalledWith({
-      message:
-        "1 session worktree(s) need attention:\nfeature — cleanup did not finish normally\nManage them under Settings -> Worktrees.",
+      message: "Managed Worktrees:\nfeature — cleanup failed",
     });
   });
 
@@ -623,7 +622,7 @@ describe("session organizer destructive confirmations", () => {
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     const worktreeActions = await waitForConfirmDialogActions();
     expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "Reason: OpenClaw could not create a safety snapshot",
+      "OpenClaw could not create a safety snapshot",
     );
     answerConfirmDialog(worktreeActions, "confirm");
     await pending;

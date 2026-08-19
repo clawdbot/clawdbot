@@ -941,12 +941,10 @@ export const en: TranslationMap = {
     actionRequiresRead: "This action requires operator.read access.",
     actionRequiresWrite: "This action requires operator.write access.",
     actionRequiresAdmin: "This action requires operator.admin access.",
-    deletePreservedWorktreeConfirm:
-      "The session worktree {branch} needs attention. Reason: {reason}. Delete the checkout anyway?",
     deletePreservedReasons: {
       "owner-mismatch": "owned elsewhere",
-      busy: "in use by a live run or cleanup",
-      "foreign-lock": "locked in Git outside OpenClaw",
+      busy: "live run or cleanup active",
+      "foreign-lock": "foreign Git lock",
       "snapshot-failed": "OpenClaw could not create a safety snapshot",
       "cleanup-failed": "cleanup failed",
     },

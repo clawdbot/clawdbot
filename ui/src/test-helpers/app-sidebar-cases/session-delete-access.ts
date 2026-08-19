@@ -78,9 +78,7 @@ describe("AppSidebar session delete access", () => {
       await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
       await waitForFast(() => expect(alertSpy).toHaveBeenCalledOnce());
 
-      expect(alertSpy).toHaveBeenCalledWith(
-        "1 session worktree(s) need attention:\nfeature — registered to another owner\nManage them under Settings -> Worktrees.",
-      );
+      expect(alertSpy).toHaveBeenCalledWith("Managed Worktrees:\nfeature — owned elsewhere");
 
       expect(request).not.toHaveBeenCalledWith("worktrees.remove", expect.anything());
     } finally {
