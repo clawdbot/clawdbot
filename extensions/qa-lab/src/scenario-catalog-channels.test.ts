@@ -205,7 +205,8 @@ describe("qa scenario catalog channel contracts", () => {
     ]);
     expect(flow).toContain("env.gateway.call('tasks.list'");
     expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
-    expect(flow).toContain("task.status === 'completed'");
+    expect(flow).toContain("terminalTask.status === 'completed'");
+    expect(flow).toContain("emptyTask.status === 'failed'");
     expect(flow).toContain("task.deliveryStatus === 'delivered'");
     expect(flow).toContain("readSettledTerminalTask('restart')");
     expect(flow).toContain("readSettledTerminalTask('empty')");
