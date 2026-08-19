@@ -113,6 +113,22 @@ type SessionRetainedChunk = {
   provenance: MemoryEntryProvenance;
 };
 
+function readRequiredSqliteText(row: Record<string, unknown>, column: string): string {
+  const value = row[column];
+  if (typeof value !== "string") {
+    throw new TypeError(`Expected SQLite column ${column} to be text`);
+  }
+  return value;
+}
+
+function readRequiredSqliteNumber(row: Record<string, unknown>, column: string): number {
+  const value = row[column];
+  if (typeof value !== "number") {
+    throw new TypeError(`Expected SQLite column ${column} to be numeric`);
+  }
+  return value;
+}
+
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
   source: MemorySource;
@@ -1029,12 +1045,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         const insertIds = chunks.map((chunk) => this.chunkRowId(source, entry.path, chunk, model));
         const desiredIds = new Set([...sessionKeepIds, ...insertIds]);
         const liveIds = new Set(
-          (
-            this.db
-              .prepare(`SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?`)
-              // SAFETY: the query selects the schema's non-null TEXT id column only.
-              .all(entry.path, source) as Array<{ id: string }>
-          ).map((row) => row.id),
+          this.db
+            .prepare(`SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?`)
+            .all(entry.path, source)
+            .map((row) => readRequiredSqliteText(row, "id")),
         );
         const staleIds = [...liveIds].filter((id) => !desiredIds.has(id));
         staleCount = staleIds.length;
@@ -1180,8 +1194,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         `SELECT id, embedding = '[]' AS empty_embedding
          FROM memory_index_chunks WHERE path = ? AND source = ?`,
       )
-      // SAFETY: id is non-null TEXT and the SQLite comparison expression returns 0 or 1.
-      .all(entry.path, source) as Array<{ id: string; empty_embedding: number }>;
+      .all(entry.path, source)
+      .map((row) => ({
+        id: readRequiredSqliteText(row, "id"),
+        emptyEmbedding: readRequiredSqliteNumber(row, "empty_embedding"),
+      }));
     if (existing.length === 0) {
       return null;
     }
@@ -1202,7 +1219,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const row = existingById.get(id);
       if (!row) {
         newChunks.push(chunk);
-      } else if (hasProvider && row.empty_embedding) {
+      } else if (hasProvider && row.emptyEmbedding) {
         newChunks.push(chunk);
       } else {
         retainedChunks.push({
@@ -1269,9 +1286,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     const rows = this.db
       .prepare(`SELECT id FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
-      // SAFETY: the FTS schema defines id as the non-null text chunk identifier.
-      .all(path, source) as Array<{ id: string }>;
-    const actualIds = new Set(rows.map((row) => row.id));
+      .all(path, source);
+    const actualIds = new Set(rows.map((row) => readRequiredSqliteText(row, "id")));
     return rows.length === ids.length && ids.every((id) => actualIds.has(id));
   }
 
@@ -1282,9 +1298,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           `SELECT COUNT(*) AS c FROM ${tableName}
            WHERE ${idColumn} IN (SELECT value FROM json_each(?))`,
         )
-        // SAFETY: COUNT(*) always returns one row whose c value is an SQLite integer.
-        .get(JSON.stringify(ids)) as { c: number } | undefined;
-      return (row?.c ?? 0) === ids.length;
+        .get(JSON.stringify(ids));
+      return row?.c === ids.length;
     } catch {
       return false;
     }
