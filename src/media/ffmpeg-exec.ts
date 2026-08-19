@@ -34,6 +34,25 @@ function resolveExecOptions(
   };
 }
 
+const MEDIA_SYSTEM_BIN_MISSING_ERROR_CODE = "ERR_MEDIA_SYSTEM_BIN_MISSING";
+
+/**
+ * True when a media helper failed because its system binary is not installed,
+ * rather than because the media itself could not be processed. Callers branch
+ * on this identity instead of the human-facing message, which is free to change.
+ */
+export function isMissingMediaSystemBinError(value: unknown): boolean {
+  try {
+    return (
+      value instanceof Error &&
+      "code" in value &&
+      value.code === MEDIA_SYSTEM_BIN_MISSING_ERROR_CODE
+    );
+  } catch {
+    return false;
+  }
+}
+
 function requireSystemBin(name: string): string {
   const resolved = resolveSystemBin(name, { trust: "standard" });
   if (!resolved) {
@@ -41,10 +60,12 @@ function requireSystemBin(name: string): string {
       process.platform === "darwin"
         ? "e.g. brew install ffmpeg"
         : "e.g. apt install ffmpeg / dnf install ffmpeg";
-    throw new Error(
+    const error = new Error(
       `${name} not found in trusted system directories. ` +
         `Install it via your system package manager (${hint}).`,
-    );
+    ) as Error & { code: string };
+    error.code = MEDIA_SYSTEM_BIN_MISSING_ERROR_CODE;
+    throw error;
   }
   return resolved;
 }

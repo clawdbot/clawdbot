@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { logWarn } from "../logger.js";
-import { runFfprobe } from "./ffmpeg-exec.js";
+import { isMissingMediaSystemBinError, runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
 
@@ -156,13 +156,6 @@ function isMissingFdProtocolError(error: unknown): boolean {
   );
 }
 
-function isMissingFfprobeError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes("ffprobe not found in trusted system directories")
-  );
-}
-
 let warnedMissingFfprobe = false;
 
 /**
@@ -173,7 +166,8 @@ let warnedMissingFfprobe = false;
  * ffmpeg). Surface that one operator-fixable condition loudly, once.
  */
 function warnOnceOnMissingFfprobe(error: unknown): void {
-  if (warnedMissingFfprobe || !isMissingFfprobeError(error)) {
+  // Only runFfprobe reaches this owner, so a missing-binary identity is ffprobe.
+  if (warnedMissingFfprobe || !isMissingMediaSystemBinError(error)) {
     return;
   }
   warnedMissingFfprobe = true;

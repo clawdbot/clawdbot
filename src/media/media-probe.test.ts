@@ -8,7 +8,10 @@ const { runFfprobe } = vi.hoisted(() => ({
   runFfprobe: vi.fn(),
 }));
 
-vi.mock("./ffmpeg-exec.js", () => ({
+// Keep the real missing-binary error identity so the warning branch is exercised
+// against the producer contract rather than a test-local stand-in.
+vi.mock("./ffmpeg-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ffmpeg-exec.js")>()),
   runFfprobe,
 }));
 
@@ -295,9 +298,12 @@ describe("missing ffprobe operator warning", () => {
 
   it("warns once, with operator guidance, when ffprobe is not installed", async () => {
     runFfprobe.mockRejectedValue(
-      new Error(
-        "ffprobe not found in trusted system directories. " +
-          "Install it via your system package manager (e.g. apt install ffmpeg / dnf install ffmpeg).",
+      Object.assign(
+        new Error(
+          "ffprobe not found in trusted system directories. " +
+            "Install it via your system package manager (e.g. apt install ffmpeg / dnf install ffmpeg).",
+        ),
+        { code: "ERR_MEDIA_SYSTEM_BIN_MISSING" },
       ),
     );
 

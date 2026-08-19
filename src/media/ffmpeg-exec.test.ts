@@ -17,10 +17,11 @@ vi.mock("../infra/resolve-system-bin.js", () => ({
 let parseFfprobeCodecAndSampleRate: typeof import("./ffmpeg-exec.js").parseFfprobeCodecAndSampleRate;
 let resolveFfmpegBin: typeof import("./ffmpeg-exec.js").resolveFfmpegBin;
 let runFfprobe: typeof import("./ffmpeg-exec.js").runFfprobe;
+let isMissingMediaSystemBinError: typeof import("./ffmpeg-exec.js").isMissingMediaSystemBinError;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfprobe } =
+  ({ parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfprobe, isMissingMediaSystemBinError } =
     await import("./ffmpeg-exec.js"));
 });
 
@@ -141,5 +142,34 @@ describe("resolveFfmpegBin", () => {
 
     expect(resolveFfmpegBin()).toBe("/usr/bin/ffmpeg");
     expect(resolveSystemBinMock).toHaveBeenCalledWith("ffmpeg", { trust: "standard" });
+  });
+});
+
+describe("missing system binary error identity", () => {
+  it("marks an unresolvable binary with a stable code callers can branch on", () => {
+    resolveSystemBinMock.mockReturnValue(null);
+
+    let thrown: unknown;
+    try {
+      resolveFfmpegBin();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(isMissingMediaSystemBinError(thrown)).toBe(true);
+    expect((thrown as { code?: string }).code).toBe("ERR_MEDIA_SYSTEM_BIN_MISSING");
+    expect(String(thrown)).toContain("ffmpeg");
+  });
+
+  it("rejects unrelated failures and non-error values", async () => {
+    resolveSystemBinMock.mockReturnValue("/usr/bin/ffprobe");
+    runExecMock.mockRejectedValueOnce(new Error("Invalid data found when processing input"));
+
+    await expect(runFfprobe(["-version"])).rejects.toThrow("Invalid data found");
+    expect(isMissingMediaSystemBinError(new Error("ffprobe not found in trusted system"))).toBe(
+      false,
+    );
+    expect(isMissingMediaSystemBinError({ code: "ERR_MEDIA_SYSTEM_BIN_MISSING" })).toBe(false);
+    expect(isMissingMediaSystemBinError(undefined)).toBe(false);
   });
 });
