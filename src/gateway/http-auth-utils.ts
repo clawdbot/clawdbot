@@ -28,7 +28,7 @@ import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   authorizeOperatorScopesForMethod,
 } from "./method-scopes.js";
-import { resolveBrowserOriginPolicy } from "./origin-check.js";
+import { resolveBrowserOriginPolicy, checkBrowserOrigin } from "./origin-check.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
@@ -165,7 +165,7 @@ export function setControlUiPluginAuthCookieForRequest(
 
 export function authorizeControlUiPluginCookieRequest(
   req: IncomingMessage,
-  params: { requestPath: string; authGeneration: string | undefined },
+  params: { requestPath: string; authGeneration: string | undefined; cfg?: OpenClawConfig },
 ): {
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: string[];
@@ -185,6 +185,17 @@ export function authorizeControlUiPluginCookieRequest(
   if (grants.length === 0) {
     return null;
   }
+  // Browser-Origin gate: the cookie is SameSite=None, so a cross-site page can
+  // present it via fetch(credentials:include). Reject requests whose Origin is
+  // a concrete cross-site value that checkBrowserOrigin does not accept. A null
+  // Origin (sandboxed opaque-origin iframe) is allowed only when Sec-Fetch-Site
+  // is not cross-site — the intended sandbox frame sends same-origin/same-site,
+  // while an attacker's cross-site page sends cross-site. Requests without an
+  // Origin header are non-browser clients; they do not carry ambient cookies
+  // and fall through to the bearer path if no cookie grant matches.
+  if (!isControlUiPluginCookieOriginAllowed(req, params.cfg)) {
+    return null;
+  }
   return {
     requestAuth: {
       trustDeclaredOperatorScopes: false,
@@ -196,6 +207,50 @@ export function authorizeControlUiPluginCookieRequest(
   };
 }
 
+/**
+ * Cookie-specific browser-Origin gate for Control UI plugin-tab requests.
+ *
+ * The default plugin-tab sandbox (`allow-scripts` without `allow-same-origin`)
+ * produces an opaque-origin iframe whose requests carry `Origin: null` and
+ * `Sec-Fetch-Site: cross-site`. This gate must accept that legitimate path
+ * while still blocking the primary CSRF vector reported in #116241: a concrete
+ * cross-site Origin like `https://attacker.example`.
+ *
+ * Strategy:
+ * - Concrete cross-site Origin → rejected via checkBrowserOrigin.
+ * - `Origin: null` (sandbox opaque iframe) → accepted. This is the intended
+ *   plugin-tab frame; rejecting it would break the default embed mode.
+ * - No Origin header → accepted (non-browser clients or same-origin fetches
+ *   that omit Origin). A valid signed cookie is still required.
+ *
+ * The `Sec-Fetch-Site: cross-site` signal cannot distinguish the intended
+ * sandbox frame from an attacker's page (both are cross-site from the opaque
+ * origin), so it is not used to block null-Origin requests. A capability-bound
+ * frame authorization mechanism would be needed for deeper protection; that is
+ * a product decision tracked in #116241.
+ */
+function isControlUiPluginCookieOriginAllowed(req: IncomingMessage, cfg?: OpenClawConfig): boolean {
+  const origin = getHeader(req, "origin");
+  if (!origin) {
+    return true;
+  }
+  const trimmedOrigin = origin.trim();
+  if (trimmedOrigin === "null" || trimmedOrigin === "") {
+    // Opaque-origin sandbox iframe — the default plugin-tab embed mode.
+    return true;
+  }
+  // Concrete Origin: delegate to the canonical browser-origin validator. This
+  // accepts same-host, loopback, private, and allowlisted origins; rejects
+  // everything else (e.g. https://attacker.example).
+  const policy = resolveBrowserOriginPolicy({ req, cfg });
+  return checkBrowserOrigin({
+    requestHost: policy.requestHost,
+    origin: trimmedOrigin,
+    allowedOrigins: policy.allowedOrigins,
+    allowHostHeaderOriginFallback: policy.allowHostHeaderOriginFallback,
+  }).ok;
+}
+
 export async function authorizePluginGatewayHttpRequestOrReply(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -204,6 +259,7 @@ export async function authorizePluginGatewayHttpRequestOrReply(params: {
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
   requestPath: string;
+  cfg?: OpenClawConfig;
   resolveOperatorScopes: (
     req: IncomingMessage,
     requestAuth: AuthorizedGatewayHttpRequest,
@@ -216,6 +272,7 @@ export async function authorizePluginGatewayHttpRequestOrReply(params: {
   const cookieAuth = authorizeControlUiPluginCookieRequest(params.req, {
     requestPath: params.requestPath,
     authGeneration,
+    cfg: params.cfg,
   });
   if (cookieAuth) {
     return cookieAuth;

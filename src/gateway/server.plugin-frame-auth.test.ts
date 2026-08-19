@@ -701,4 +701,130 @@ describe("control ui plugin frame auth route boundaries", () => {
     expect(nestedHandler).toHaveBeenCalledOnce();
     expect(outerHandler).not.toHaveBeenCalled();
   });
+
+  test("rejects cookie auth from a cross-site Origin (#116241)", async () => {
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "csrf-origin-cookie",
+      path: "/csrf-hook",
+      method: "assistant.media.get",
+      observedRuntimeScopes: [],
+      allowedResults: [],
+    });
+    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+      pluginId: "csrf-origin-cookie",
+      path: "/csrf-hook",
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-cookie-csrf-origin-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/csrf-hook",
+      },
+      run: async (server) => {
+        // Cross-site Origin → cookie must NOT authorize even with a valid cookie.
+        const blocked = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/csrf-hook",
+            headers: { cookie, origin: "https://attacker.example.test" },
+          }),
+          blocked.res,
+        );
+        expect(blocked.res.statusCode).toBe(401);
+      },
+    });
+  });
+
+  test("allows cookie auth from null Origin (sandbox opaque iframe) regardless of Fetch Metadata", async () => {
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "sandbox-origin-cookie",
+      path: "/sandbox-hook",
+      method: "assistant.media.get",
+      observedRuntimeScopes: [],
+      allowedResults: [],
+    });
+    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+      pluginId: "sandbox-origin-cookie",
+      path: "/sandbox-hook",
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-cookie-sandbox-origin-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/sandbox-hook",
+      },
+      run: async (server) => {
+        // Null Origin + same-origin → sandbox iframe, allowed.
+        const sameOrigin = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/sandbox-hook",
+            headers: { cookie, origin: "null", "sec-fetch-site": "same-origin" },
+          }),
+          sameOrigin.res,
+        );
+        expect(sameOrigin.res.statusCode).toBe(200);
+
+        // Null Origin + cross-site → sandbox iframe default mode, also allowed
+        // (opaque origin is cross-site by spec; blocking it breaks the tab).
+        const crossSite = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/sandbox-hook",
+            headers: { cookie, origin: "null", "sec-fetch-site": "cross-site" },
+          }),
+          crossSite.res,
+        );
+        expect(crossSite.res.statusCode).toBe(200);
+
+        // Null Origin + no Fetch Metadata → allowed.
+        const noFetch = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/sandbox-hook", headers: { cookie, origin: "null" } }),
+          noFetch.res,
+        );
+        expect(noFetch.res.statusCode).toBe(200);
+      },
+    });
+  });
+
+  test("allows cookie auth without Origin header (non-browser client)", async () => {
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "no-origin-cookie",
+      path: "/no-origin-hook",
+      method: "assistant.media.get",
+      observedRuntimeScopes: [],
+      allowedResults: [],
+    });
+    const cookie = createControlUiPluginAuthCookieForTest(["operator.read"], {
+      pluginId: "no-origin-cookie",
+      path: "/no-origin-hook",
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-cookie-no-origin-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/no-origin-hook",
+      },
+      run: async (server) => {
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/no-origin-hook", headers: { cookie } }),
+          response.res,
+        );
+        expect(response.res.statusCode).toBe(200);
+      },
+    });
+  });
 });
