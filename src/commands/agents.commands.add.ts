@@ -418,6 +418,10 @@ export async function agentsAddCommand(
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
       agentId,
       agentDir,
+      pendingAuthProfiles: stagedAuthProfiles.map(({ profileId, credential }) => ({
+        profileId,
+        credential,
+      })),
       validateCatalog: false,
     });
 

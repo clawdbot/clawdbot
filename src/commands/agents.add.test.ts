@@ -793,6 +793,13 @@ describe("agents add command", () => {
         key: "sk-primary",
       });
       expect(authProfileMocks.persistBatch).toHaveBeenCalledOnce();
+      expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.any(Object),
+        expect.objectContaining({
+          pendingAuthProfiles: [expect.objectContaining({ profileId: "openai:primary" })],
+        }),
+      );
       expect(createAgentMock).toHaveBeenCalledWith(
         expect.objectContaining({
           stagedConfig: expect.objectContaining({ auth: expect.any(Object) }),
