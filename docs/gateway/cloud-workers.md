@@ -14,7 +14,7 @@ Enrollment is environment-owned and replay-safe. The Gateway persists one setup 
 When the work is done (or the box dies), the machine is discarded. The durable state — transcript, last-reconciled workspace files, and placement records — lives with the Gateway.
 
 <Note>
-Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud destination and the Gateway does not advertise `sessions.dispatch`. The `cloudWorkers` config schema and the read-only `environments.list` and `environments.status` methods remain available for configuration and environment discovery.
+Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud destination and profile dispatch is unavailable. `sessions.dispatch` may still be advertised for eligible paired-device targets. The `cloudWorkers` config schema and the read-only `environments.list` and `environments.status` methods remain available for configuration and environment discovery.
 </Note>
 
 ## What runs where
@@ -112,6 +112,22 @@ Profile fields:
 | `install`  | Installation preference for SSH-backed providers. The bundled Crabbox provider always installs the current Gateway bundle through the authenticated node channel.                                                                                                                                                                                                                                              |
 | `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional idempotent `setup`, and absolute `binary` path. While a session remains placed, OpenClaw heartbeats its lease at a safe fraction of `idleTimeout`; teardown stops the heartbeat before releasing the machine. Crabbox desktop profiles are not supported by the node transport. |
 
+### Per-project default profiles
+
+Use `cloudWorkers.projectProfiles` to select a default profile from a managed session worktree's `origin` remote. Keys use the normalized lowercase repository identity `host/owner/repo`, without a trailing `.git`:
+
+```json5 validate=false
+{
+  cloudWorkers: {
+    projectProfiles: {
+      "github.com/acme/app": "aws",
+    },
+  },
+}
+```
+
+An explicit `profileId` or `deviceId` in `sessions.dispatch` always wins. A target-less project-profile lookup requires `operator.admin`. If a configured mapping names a profile that is not present in `cloudWorkers.profiles`, dispatch fails closed and names both the repository key and missing profile. A worktree with no `origin` or no matching mapping returns a typed `INVALID_REQUEST` without provisioning or falling back to another target.
+
 The enrolled node stores its identity, durable device token, endpoint, worker bundles, and workspaces under an isolated per-lease state directory on the disposable box. Provision replay first adopts the fixed Crabbox lease, then either resumes that node state or reuses the still-pending setup credential. It never mints a second environment identity for the same operation.
 
 OpenClaw derives one canonical `cbx_...` lease ID from the durable provision operation and passes it to `crabbox warmup --lease-id`; the deterministic slug is display metadata only. If warmup commits but its response is lost, Gateway reconciliation repeats the same fixed-ID operation and Crabbox returns or adopts only the exactly attested lease. Intent drift, terminal ID reuse, and ambiguous unverified resources fail closed without allocating a replacement. A legacy dispatch interrupted before OpenClaw recorded a lease ID cannot be identified safely and fails visibly instead of falling back to slug adoption.
@@ -146,11 +162,11 @@ The `environments.list` response must include the configured id under `profiles`
 
 ## Dispatching a session
 
-Operators with `operator.write` can run an authorized managed-worktree session on shared runner infrastructure that a Team Gateway administrator has already provisioned and paired. Session ownership and participation checks are revalidated before placement lifecycle changes commit.
+Administrators can run an authorized managed-worktree session on a configured cloud profile. Session ownership and participation checks are revalidated before placement lifecycle changes commit.
 
 In the Control UI, open **New Session** and use the unified **Place** picker to choose both the working folder and a **Cloud · profile** destination. A cloud destination appears only when all four eligibility gates pass:
 
-1. The connected operator has `operator.write` scope.
+1. The connected operator has `operator.admin` scope.
 2. `environments.list` advertises at least one configured profile.
 3. The selected Gateway folder is a Git checkout that can use a managed worktree.
 4. The selected agent runtime advertises cloud placement support.
@@ -168,7 +184,7 @@ Other runtimes remain unavailable unless their harness explicitly declares a clo
 
 The equivalent RPC flow is:
 
-Create a session with a managed worktree, then dispatch it. The RPC requires `operator.write` and is advertised only while at least one worker profile is configured:
+Create a session with a managed worktree, then dispatch it. Profile dispatch requires `operator.admin` and is available only while at least one worker profile is configured:
 
 ```bash
 openclaw gateway call sessions.create \
@@ -181,7 +197,7 @@ openclaw gateway call sessions.dispatch \
 
 ### Choose a machine class per session
 
-A worker profile's `settings.class` remains its default. In the Control UI, selecting a **Cloud · profile** destination in the Place picker reveals a machine section listing the profile's advertised classes, each with a one-line description and the default marked; picking one updates the place chip (for example `hetzner · Fast`) and carries the choice into dispatch. To choose a different size for one new placement over RPC instead, pass `machineClass` with `profileId`:
+A worker profile's `settings.class` remains its default. In the Control UI, selecting a **Cloud · profile** destination in the Place picker reveals a machine section listing the profile's advertised classes, with reported vCPU and RAM when available and the default marked; picking one updates the place chip (for example `hetzner · Fast`) and carries the choice into dispatch. To choose a different size for one new placement over RPC instead, pass `machineClass` with `profileId`:
 
 ```bash
 openclaw gateway call sessions.dispatch \
@@ -189,7 +205,7 @@ openclaw gateway call sessions.dispatch \
   --params '{"key":"agent:main:big-refactor","profileId":"aws","machineClass":"large"}'
 ```
 
-The bundled Crabbox provider advertises `standard`, `fast`, `large`, and `beast` through `environments.list`. When the selected backend publishes machine shapes, the picker shows their vCPU and RAM; for AWS these classes are 32 vCPU · 64 GB, 64 vCPU · 128 GB, 96 vCPU · 192 GB, and 192 vCPU · 384 GB, respectively. You can also pass a provider-native server or instance type such as `c7a.24xlarge`; Crabbox treats any other non-empty class as that exact type. The selected value is fixed for that placement and reused by safe provisioning retries. `machineClass` is valid only with `profileId`, not `deviceId`.
+The bundled Crabbox provider advertises whatever machine classes the configured Crabbox binary reports for the selected backend, preserving Crabbox's size order. For example, a catalog containing `tiny`, `small`, `standard`, `fast`, `large`, and `beast` produces those six picker rows in that order; if Crabbox reports `standard` as 32 vCPU · 64 GB, that shape appears beside the class. Older binaries that publish no matching class catalog retain the label-only `standard`, `fast`, `large`, and `beast` fallback. You can also pass a provider-native server or instance type such as `c7a.24xlarge`; Crabbox treats any other non-empty class as that exact type. The selected value is fixed for that placement and reused by safe provisioning retries. `machineClass` is valid only with `profileId`, not `deviceId`.
 
 `sessions.dispatch` closes local turn admission, drains active work, validates the eligible Git workspace inventory, provisions the lease, runs setup, enrolls the node, pushes the Gateway bundle, syncs the workspace, and returns once the placement reaches `active` ownership. Inventory validation happens before provider allocation and reports an invalid request with an actionable size or entry limit when the workspace cannot be dispatched. Budget several minutes for the first dispatch; leases and content-addressed bundles are reused where safe. After that, talk to the session as usual. OpenClaw turns route to the worker process; supported SSH-backed providers may still carry Codex remote-exec.
 
@@ -199,7 +215,7 @@ Apply uses the dispatch-time manifest as the merge base. Cloud-only changes are 
 
 While a fenced result is still reconciling, a new turn waits up to 15 seconds for the prior claim to release. If it is still busy, the turn fails with an actionable “previous cloud turn's workspace result is still reconciling” message and can be retried shortly. On restart, recovery discovers pending and staged results before stale-claim cleanup, completes or retries their local apply, and reclaims dead environments only after preserving the result. The bounded SQLite rollback journal makes an interrupted filesystem apply recoverable without replaying already accepted mutations.
 
-To continue the same session somewhere else, an operator with `operator.write` can open the **Runs on Cloud** chip and choose **Move session…**. Select the Gateway, a paired device, or a configured cloud profile and, when available, its machine class. Moving to the current profile with a different class resizes the session by replacing its worker. The Gateway closes new admission, interrupts any active turn, reconciles the source workspace, destroys the old environment, and then activates the destination. An interrupted turn is never replayed: partial output may disappear, and you send the next turn again after the move. The exact target, including a machine override, and bounded errors are durable, so the Control UI shows **Moving to…** or the recovery error after a reconnect. If the Gateway restarts before the destination becomes active, request-bound authority is lost: recovery finishes safe source cleanup, marks the placement failed with a retry message, and does not provision the destination. Reconnect, then choose **Move session…** again.
+To continue the same session somewhere else, open the **Runs on Cloud** chip and choose **Move session…**. An operator with `operator.write` can select the Gateway or an eligible paired device; selecting a configured cloud profile requires `operator.admin`. Profiles may also offer a machine class. Moving to the current profile with a different class resizes the session by replacing its worker. The Gateway closes new admission, interrupts any active turn, reconciles the source workspace, destroys the old environment, and then activates the destination. An interrupted turn is never replayed: partial output may disappear, and you send the next turn again after the move. The exact target, including a machine override, and bounded errors are durable, so the Control UI shows **Moving to…** or the recovery error after a reconnect. If the Gateway restarts before the destination becomes active, request-bound authority is lost: recovery finishes safe source cleanup, marks the placement failed with a retry message, and does not provision the destination. Reconnect, then choose **Move session…** again.
 
 When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.
 
@@ -254,7 +270,7 @@ The bundled Crabbox provider does not support Cloud Worker Desktop after node tr
 ## Troubleshooting
 
 - **No cloud profile is advertised** — run the `operator.read`-scoped `openclaw gateway call environments.list --params '{}'`. If the response has no `profiles`, ask an administrator to validate `cloudWorkers.profiles`, inspect the provider plugin, and restart the Gateway. This is a configuration or provider-activation problem, not an authorization result.
-- **Cloud destinations are hidden or an RPC is denied** — placing, reclaiming, or moving a session requires `operator.write`; `operator.read` alone can discover profiles but cannot start, stop, or move a session. Profile configuration, infrastructure pairing, Connect machine, raw environment lifecycle, direct `execNode` execution, incognito sessions, and arbitrary host or node paths remain `operator.admin`.
+- **Cloud destinations are hidden or an RPC is denied** — cloud profile dispatch and profile-target moves require `operator.admin`. `operator.write` can dispatch or move to an eligible paired device, move to the Gateway, and reclaim a placement; `operator.read` alone can discover profiles but cannot start, stop, or move a session. Profile configuration, infrastructure pairing, Connect machine, raw environment lifecycle, direct `execNode` execution, incognito sessions, and arbitrary host or node paths remain `operator.admin`.
 - **The selected runtime lacks cloud placement support** — choose a model whose advertised runtime supports cloud placement. The bundled OpenClaw and Codex runtimes are supported; undeclared runtimes remain local-only.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
 - **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.41.1 or newer; older binaries do not satisfy the fixed-ID and authoritative `providerMetadata.instanceProfileAttached` contracts required for AWS admission.

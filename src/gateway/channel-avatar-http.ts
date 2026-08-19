@@ -10,19 +10,14 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
+import { sendMethodNotAllowed } from "./http-common.js";
 import {
   HTTP_IMAGE_MAX_BYTES,
   resolveHttpImageRepresentation,
   sendHttpImageResponse,
   type HttpImageRepresentation,
 } from "./http-image-response.js";
-import {
-  authorizeGatewayHttpRequestOrReply,
-  resolveOpenAiCompatibleHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
-} from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { authorizeControlUiSessionOwnerReadRequestOrReply } from "./http-utils.js";
 
 const CHANNEL_AVATAR_CACHE_MAX_ENTRIES = 128;
 
@@ -31,13 +26,8 @@ type ChannelAvatarCacheIndex = {
   imageKey: string;
 };
 
-let channelAvatarIndex = new Map<string, ChannelAvatarCacheIndex>();
-let channelAvatarBytes = new Map<string, HttpImageRepresentation>();
-
-export function clearChannelAvatarCacheForTest(): void {
-  channelAvatarIndex = new Map();
-  channelAvatarBytes = new Map();
-}
+const channelAvatarIndex = new Map<string, ChannelAvatarCacheIndex>();
+const channelAvatarBytes = new Map<string, HttpImageRepresentation>();
 
 const getSessionStoreModule = createLazyRuntimeModule(() => import("./session-utils-store.js"));
 
@@ -133,7 +123,7 @@ export async function handleChannelAvatarHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+  const requestAuth = await authorizeControlUiSessionOwnerReadRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -142,21 +132,6 @@ export async function handleChannelAvatarHttpRequest(
     rateLimiter: opts.rateLimiter,
   });
   if (!requestAuth) {
-    return true;
-  }
-  const scopeAuth = authorizeOperatorScopesForMethod(
-    "sessions.list",
-    resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth),
-  );
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
-    return true;
-  }
-  if (!resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
-    sendJson(res, 403, {
-      ok: false,
-      error: { message: "owner access required", type: "forbidden" },
-    });
     return true;
   }
   if (!parsed.sessionKey) {

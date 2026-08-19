@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
@@ -70,6 +71,7 @@ function replayAgentTurnIfCached(params: {
       typeof cached.payload.agentId === "string" && cached.payload.agentId.trim()
         ? cached.payload.agentId.trim()
         : undefined;
+    const cachedRuntime = asOptionalRecord(cached.payload.runtime);
     params.io.emitAcceptance(
       [
         true,
@@ -78,6 +80,7 @@ function replayAgentTurnIfCached(params: {
           status: "in_flight" as const,
           ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
           ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
+          ...(cachedRuntime ? { runtime: cachedRuntime } : {}),
         },
         undefined,
       ],

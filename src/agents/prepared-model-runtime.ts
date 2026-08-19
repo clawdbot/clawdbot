@@ -2,6 +2,7 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import { registerPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
@@ -286,6 +287,7 @@ export async function acquireAgentRunPreparedModelRuntime(
     retainIdleRunOwner?: boolean;
     catalogMode?: PreparedModelRuntimeCatalogMode;
     pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
   return await acquirePreparedModelRuntimeLeaseFromOwners(

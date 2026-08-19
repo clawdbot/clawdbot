@@ -83,6 +83,7 @@ import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-lo
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
+import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
@@ -1138,6 +1139,8 @@ export function runAgentAttempt(params: {
     sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
     trigger: "user",
+    // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
+    terminalReplyExpectation: params.opts.lane === AGENT_LANE_SUBAGENT ? "optional" : undefined,
     messageChannel: params.messageChannel,
     messageProvider: params.opts.messageProvider ?? params.messageChannel,
     agentAccountId: params.runContext.accountId,
@@ -1227,7 +1230,8 @@ export function runAgentAttempt(params: {
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     disableTools,
-    allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
+    allowEmptyAssistantReplyAsSilent:
+      params.opts.lane === AGENT_LANE_SUBAGENT || isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,

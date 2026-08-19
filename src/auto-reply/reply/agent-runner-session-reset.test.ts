@@ -500,7 +500,6 @@ describe("resetReplyRunSession", () => {
     });
 
     // The boundary reset keeps both the logical id and transcript in place.
-    expect(rotatedSessionId).toBeDefined();
     expect(rotatedSessionId).toBe("old-session");
     await fs.access(oldTranscriptPath);
   });

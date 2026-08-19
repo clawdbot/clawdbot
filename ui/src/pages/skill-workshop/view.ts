@@ -20,6 +20,7 @@ import {
   type SkillWorkshopEvaluationFinding,
   type SkillWorkshopEvaluationOutcome,
   type SkillWorkshopProposal,
+  type SkillWorkshopProposalDecision,
   type SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
 import {
@@ -143,6 +144,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
 
 function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const busy = props.actionBusy?.key === proposal.key && props.actionBusy.action === "revise";
+  const cancelDisabled = Boolean(props.actionBusy) || props.revisionRecoveryActive;
   const canSubmit =
     props.access.canRevise && props.revisionDraft.trim().length > 0 && !props.actionBusy;
   const verb =
@@ -153,7 +155,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
       .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
       .description=${t("skillWorkshop.revision.description")}
       style="--openclaw-modal-width: 560px"
-      @modal-cancel=${props.onRevisionCancel}
+      @modal-cancel=${cancelDisabled ? undefined : props.onRevisionCancel}
     >
       <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
         <div class="sw-revision-dialog__head">
@@ -168,7 +170,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
               type="button"
               class="sw-revision-dialog__close"
               aria-label=${t("skillWorkshop.actions.close")}
-              ?disabled=${Boolean(props.actionBusy)}
+              ?disabled=${cancelDisabled}
               @click=${props.onRevisionCancel}
             >
               ×
@@ -181,7 +183,9 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           autofocus
           placeholder=${t("skillWorkshop.revision.placeholder")}
           .value=${props.revisionDraft}
-          ?disabled=${!props.access.canRevise || Boolean(props.actionBusy)}
+          ?disabled=${!props.access.canRevise ||
+          Boolean(props.actionBusy) ||
+          props.revisionRecoveryActive}
           @input=${(event: Event) =>
             props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
         ></textarea>
@@ -197,7 +201,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           <button
             type="button"
             class="sw-btn sw-btn--ghost"
-            ?disabled=${Boolean(props.actionBusy)}
+            ?disabled=${cancelDisabled}
             @click=${props.onRevisionCancel}
           >
             ${t("skillWorkshop.actions.cancel")}
@@ -472,6 +476,13 @@ function renderActionNotice(notice: SkillWorkshopActionNotice) {
   `;
 }
 
+function proposalDecision(proposal: SkillWorkshopProposal): SkillWorkshopProposalDecision {
+  return {
+    proposalId: proposal.key,
+    expectedRevisionHash: proposal.revisionHash,
+  };
+}
+
 function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
   const disabled = Boolean(props.actionBusy);
@@ -489,7 +500,7 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
       <button
         class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
         ?disabled=${disabled || !props.access.canApply}
-        @click=${() => props.onApply(proposal.key)}
+        @click=${() => props.onApply(proposalDecision(proposal))}
       >
         ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
       </button>
@@ -505,7 +516,7 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
       <button
         class="sw-btn sw-btn--ghost sw-btn--danger ${busy === "reject" ? "is-busy" : ""}"
         ?disabled=${disabled || !props.access.canReject}
-        @click=${() => props.onReject(proposal.key)}
+        @click=${() => props.onReject(proposalDecision(proposal))}
       >
         ${busy === "reject"
           ? t("skillWorkshop.actions.rejecting")
@@ -643,7 +654,7 @@ function renderToday(
                 <button
                   class="sw-today__big sw-today__big--primary ${busy === "apply" ? "is-busy" : ""}"
                   ?disabled=${disabled || !props.access.canApply}
-                  @click=${() => props.onApply(hero.key)}
+                  @click=${() => props.onApply(proposalDecision(hero))}
                 >
                   ${busy === "apply"
                     ? t("skillWorkshop.actions.applying")
@@ -663,7 +674,7 @@ function renderToday(
                 <button
                   class="sw-today__big sw-today__big--skip ${busy === "reject" ? "is-busy" : ""}"
                   ?disabled=${disabled || !props.access.canReject}
-                  @click=${() => props.onReject(hero.key)}
+                  @click=${() => props.onReject(proposalDecision(hero))}
                 >
                   ${busy === "reject"
                     ? t("skillWorkshop.today.skipping")

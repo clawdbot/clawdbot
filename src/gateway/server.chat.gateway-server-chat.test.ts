@@ -10,6 +10,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -36,11 +37,6 @@ import {
 } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
-
-vi.mock("./session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-utils.js")>();
-  return { ...actual, resolveGatewayModelSupportsImages: vi.fn(async () => true) };
-});
 
 function createGatewayHistoryText(role: "user" | "assistant", text: unknown, timestamp: number) {
   return { role, content: [{ type: "text", text }], timestamp };
@@ -718,13 +714,27 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
       await waitForFast(() => expect(agentCommandMock).toHaveBeenCalled());
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
 
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      // The discovered model advertises image input, so the real capability
+      // resolver must keep these attachments inline; offloading here would mean
+      // the catalog lookup silently failed and returned false. Capability
+      // resolution happens before dispatch, so capturing dispatch args observes
+      // the real resolver's decision.
+      const inlineDispatches: { runId?: string; images?: unknown[] }[] = [];
+      const captureInlineDispatch = async (args: unknown) => {
+        const replyOptions = (args as { replyOptions?: { runId?: string; images?: unknown[] } })
+          .replyOptions;
+        inlineDispatches.push({ runId: replyOptions?.runId, images: replyOptions?.images });
+        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      };
 
+      dispatchInboundMessageMock.mockImplementationOnce(captureInlineDispatch);
       const imgRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "see image",
@@ -743,6 +753,8 @@ describe("gateway server chat", () => {
       expect(imgRes.ok).toBe(true);
       expectStringRunId(imgRes.payload);
       await waitForAgentRunDrained("idem-img");
+      expect(inlineDispatches).toEqual([{ runId: "idem-img", images: [expect.anything()] }]);
+      dispatchInboundMessageMock.mockImplementationOnce(captureInlineDispatch);
       const imgOnlyRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "",
@@ -759,6 +771,10 @@ describe("gateway server chat", () => {
       expect(imgOnlyRes.ok).toBe(true);
       expectStringRunId(imgOnlyRes.payload);
       await waitForAgentRunDrained("idem-img-only");
+      expect(inlineDispatches).toEqual([
+        { runId: "idem-img", images: [expect.anything()] },
+        { runId: "idem-img-only", images: [expect.anything()] },
+      ]);
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
@@ -910,6 +926,10 @@ describe("gateway server chat", () => {
       const persistSpy = vi
         .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
         .mockImplementation(async (params) => {
+          if (params.event.runId !== "idem-dispatch-error-1") {
+            await persistLifecycleEvent(params);
+            return;
+          }
           persistenceEntered.resolve();
           await releasePersistence.promise;
           await persistLifecycleEvent(params);
@@ -955,11 +975,23 @@ describe("gateway server chat", () => {
           rejectDispatch.resolve();
           await errorPromise;
           await persistenceEntered.promise;
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
+          const restartInspectors = {
+            getQueueSize: () => 0,
+            getPendingReplies: () => 0,
+            getEmbeddedRuns: () => 0,
+            getCronRuns: () => 0,
+            getBackgroundExecSessions: () => 0,
+            getActiveTasks: () => 0,
+            getTaskBlockers: () => [],
+          };
+          expect(createSafeGatewayRestartPreflight(restartInspectors)).toMatchObject({
+            safe: false,
+            counts: { rootRequests: 1 },
+          });
           releasePersistence.resolve();
           const changed = await sessionChangedPromise;
           await waitForFast(() => {
-            expect(getActiveGatewayRootWorkCount()).toBe(0);
+            expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
           });
           return changed;
         } finally {

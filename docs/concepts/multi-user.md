@@ -78,7 +78,7 @@ Start a session as a draft to keep work in progress out of teammates' sidebars u
 
 Turn sender attribution is best-effort. Steering can merge input into an active turn, so the transcript cannot always represent each person's contribution as a separate turn. Participant history records that an actor prompted the session, not which words were theirs.
 
-Authenticated people can link a GitHub account under **Settings → Profile → Identity**. Linking is an explicit opt-in to public `Co-authored-by` credit on commits an agent creates from sessions they have prompted. Attribution uses the durable profile participant records described above, not display names or the four-person facepile projection. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for privacy, eligibility, bounds, and unlink behavior.
+GitHub-backed sign-in through Cloudflare Access or Tailscale Serve automatically verifies the person's GitHub account under **Settings → Profile → Identity**. Public `Co-authored-by` credit remains a separate, default-off **Git co-author credit** toggle. Attribution uses that explicit preference plus the durable profile participant records described above, not display names or the four-person facepile projection. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for privacy, eligibility, bounds, account changes, and disabling future credit.
 
 ## Related
 

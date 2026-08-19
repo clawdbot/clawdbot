@@ -262,7 +262,7 @@ and paths outside the standard support folders.
 ## Agent tool
 
 The model uses `skill_workshop` with one required `action`:
-`create | read | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine`.
+`create | read | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | history | restore_collection`.
 Other parameters apply depending on the action:
 
 | Parameter                  | Used by                                                          | Notes                                                                |
@@ -275,10 +275,18 @@ Other parameters apply depending on the action:
 | `support_files`            | `create`, `update`, `revise`                                     | Array of `{ path, content }`                                         |
 | `goal`, `evidence`         | `create`, `update`, `revise`                                     | Free-text context                                                    |
 | `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
+| `artifact_path`            | `inspect`                                                        | `PROPOSAL.md` or one listed support-file path                        |
 | `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `quarantine`                      | Rejects a stale orchestration step                                   |
 | `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`            | External run or experiment correlation                               |
 | `reason`                   | `apply`, `reject`, `quarantine`                                  | Optional                                                             |
 | `query`, `status`, `limit` | `list`                                                           | Filter/paginate; `limit` max 50, default 20                          |
+
+`inspect` returns proposal metadata, a bounded artifact manifest, and one
+complete artifact when it fits the selected model's context budget. It selects
+`PROPOSAL.md` by default. Set `artifact_path` to read one support file
+separately. When the selected artifact does not fit, the result omits its body,
+reports the original size, and points to smaller per-artifact reads or the
+unbounded operator CLI command shown above.
 
 Agents must use `skill_workshop` for generated skill work and must not create or
 change skill or proposal files directly. This rule is advisory and

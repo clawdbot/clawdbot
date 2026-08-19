@@ -43,10 +43,11 @@ import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import {
+  CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+  CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
-  CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME,
-  createNodeExecDynamicTool,
-  createNodeProcessDynamicTool,
+  createExecAliasDynamicTool,
+  createGatewayProcessAliasDynamicTool,
   isCodexDynamicToolExcluded,
 } from "./shell-dynamic-tools.js";
 import { filterCodexVisionTools } from "./vision-tools.js";
@@ -242,9 +243,6 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   let agentHarnessModule: typeof import("openclaw/plugin-sdk/agent-harness") | undefined;
   const loadAgentHarnessModule = async () =>
     (agentHarnessModule ??= await import("openclaw/plugin-sdk/agent-harness"));
-  const createOpenClawCodingTools =
-    injectedOpenClawCodingToolsFactory ??
-    (await loadAgentHarnessModule()).createOpenClawCodingTools;
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
@@ -255,120 +253,134 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
   });
   const webFetchHostnameAllowlistRef: { value?: string[] } = {};
-  const buildOpenClawCodingTools = () =>
-    params.hostCapabilities.bindToolSurface(
-      createOpenClawCodingTools({
-        agentId: input.sessionAgentId,
-        ...buildEmbeddedAttemptToolRunContext(params),
-        exec: {
-          ...params.execOverrides,
-          ...resolveCodexNodeExecToolOverrides(nativeExecutionPolicy),
-          config: params.config,
-          elevated: params.bashElevated,
-        },
-        sandbox: input.sandbox,
-        messageProvider: resolveCodexMessageToolProvider(params),
-        toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
-        // Capability-gated tools (requiredClientCaps) need the originating client's
-        // declared caps in this sibling harness too, not only the embedded runner.
-        clientCaps: params.clientCaps,
-        chatType: params.chatType,
-        agentAccountId: params.agentAccountId,
-        messageTo: params.messageTo,
-        messageThreadId: params.messageThreadId,
-        nativeChannelId: params.chatId,
-        messageActionTurnCapability: params.messageActionTurnCapability,
-        groupId: params.groupId,
-        groupChannel: params.groupChannel,
-        groupSpace: params.groupSpace,
-        spawnedBy: params.spawnedBy,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-        senderIsOwner: params.senderIsOwner,
-        inputProvenance: params.inputProvenance,
-        trustedInternalHandoff: params.trustedInternalHandoff,
-        scheduledToolPolicy: params.scheduledToolPolicy,
-        allowGatewaySubagentBinding:
-          params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
-        ...sessionKeys,
-        sessionId: params.sessionId,
-        runId: params.runId,
-        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-        agentDir,
-        preparedModelRuntime: params.preparedModelRuntime,
-        cwd: input.effectiveCwd ?? input.effectiveWorkspace,
-        workspaceDir: input.effectiveWorkspace,
-        spawnWorkspaceDir:
-          input.effectiveCwd && input.effectiveCwd !== input.effectiveWorkspace
-            ? input.resolvedWorkspace
-            : resolveAttemptSpawnWorkspaceDir({
-                sandbox: input.sandbox,
-                resolvedWorkspace: input.resolvedWorkspace,
-              }),
+  const buildOpenClawCodingTools = () => {
+    const options: OpenClawCodingToolsOptions = {
+      agentId: input.sessionAgentId,
+      ...buildEmbeddedAttemptToolRunContext(params),
+      exec: {
+        ...params.execOverrides,
+        ...resolveCodexNodeExecToolOverrides(nativeExecutionPolicy),
         config: params.config,
-        authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
-        abortSignal: input.runAbortController.signal,
-        emitBeforeToolCallDiagnostics: false,
-        modelProvider: params.model.provider,
-        modelId: params.modelId,
-        modelCompat:
-          params.model.compat && typeof params.model.compat === "object"
-            ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
-            : undefined,
-        modelApi: params.model.api,
-        modelContextWindowTokens: params.model.contextWindow,
-        delegationCapability: params.delegationCapability,
-        modelAuthMode: resolveModelAuthMode(
-          params.model.provider,
-          params.config,
-          params.toolAuthProfileStore ?? params.authProfileStore,
-          {
-            workspaceDir: input.effectiveWorkspace,
-          },
-        ),
-        suppressManagedWebSearch: false,
-        webFetchHostnameAllowlistRef,
-        currentChannelId: params.currentChannelId,
-        currentMessagingTarget: params.currentMessagingTarget,
-        hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
-        currentThreadTs: params.currentThreadTs,
-        currentMessageId: params.currentMessageId,
-        replyToMode: params.replyToMode,
-        hasRepliedRef: params.hasRepliedRef,
-        modelHasVision,
-        computerContextEpoch: input.computerContextEpoch,
-        requireExplicitMessageTarget:
-          params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        // Same sibling-harness rule as clientCaps above: without this forward,
-        // suggest_task/dismiss_task silently never exist for Codex-harness runs.
-        taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-        disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
-        forceMessageTool: shouldForceMessageTool(messagePolicyParams),
-        enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
-        forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
-        onYield: (message, acknowledgment) => {
-          input.onYieldDetected(acknowledgment);
-          input.onCodexAppServerEvent?.({
-            stream: "codex_app_server.tool",
-            data: { name: "sessions_yield", message },
-          });
+        elevated: params.bashElevated,
+      },
+      sessionPermissionPolicy:
+        params.permissionMode && params.sessionRoot
+          ? { mode: params.permissionMode, root: params.sessionRoot }
+          : undefined,
+      sandbox: input.sandbox,
+      messageProvider: resolveCodexMessageToolProvider(params),
+      toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
+      // Capability-gated tools (requiredClientCaps) need the originating client's
+      // declared caps in this sibling harness too, not only the embedded runner.
+      clientCaps: params.clientCaps,
+      chatType: params.chatType,
+      agentAccountId: params.agentAccountId,
+      messageTo: params.messageTo,
+      messageThreadId: params.messageThreadId,
+      nativeChannelId: params.chatId,
+      messageActionTurnCapability: params.messageActionTurnCapability,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+      allowGatewaySubagentBinding:
+        params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
+      ...sessionKeys,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+      agentDir,
+      preparedModelRuntime: params.preparedModelRuntime,
+      cwd: input.effectiveCwd ?? input.effectiveWorkspace,
+      workspaceDir: input.effectiveWorkspace,
+      spawnWorkspaceDir:
+        input.effectiveCwd && input.effectiveCwd !== input.effectiveWorkspace
+          ? input.resolvedWorkspace
+          : resolveAttemptSpawnWorkspaceDir({
+              sandbox: input.sandbox,
+              resolvedWorkspace: input.resolvedWorkspace,
+            }),
+      config: params.config,
+      authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
+      abortSignal: input.runAbortController.signal,
+      emitBeforeToolCallDiagnostics: false,
+      modelProvider: params.model.provider,
+      modelId: params.modelId,
+      modelCompat:
+        params.model.compat && typeof params.model.compat === "object"
+          ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
+          : undefined,
+      modelApi: params.model.api,
+      modelContextWindowTokens: params.model.contextWindow,
+      delegationCapability: params.delegationCapability,
+      modelAuthMode: resolveModelAuthMode(
+        params.model.provider,
+        params.config,
+        params.toolAuthProfileStore ?? params.authProfileStore,
+        {
+          workspaceDir: input.effectiveWorkspace,
         },
-        claimYieldCompletion: input.claimYieldCompletion,
-        recordToolPrepStage: (name) => {
-          toolBuildStages.mark(name);
-        },
-        onToolOutcome: params.onToolOutcome,
-        isTurnTainted: params.isTurnTainted,
-        allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
-        cronCreatorToolAllowlistRef: input.cronCreatorToolAllowlistRef,
-        cronCreatorToolAllowlistCaptureRef: input.cronCreatorToolAllowlistCaptureRef,
-        cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
-      }),
-      { cwd: input.effectiveCwd ?? input.effectiveWorkspace },
-    );
+      ),
+      suppressManagedWebSearch: false,
+      webFetchHostnameAllowlistRef,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      replyToMode: params.replyToMode,
+      hasRepliedRef: params.hasRepliedRef,
+      modelHasVision,
+      computerContextEpoch: input.computerContextEpoch,
+      requireExplicitMessageTarget:
+        params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      // Same sibling-harness rule as clientCaps above: without this forward,
+      // suggest_task/dismiss_task silently never exist for Codex-harness runs.
+      taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+      disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
+      forceMessageTool: shouldForceMessageTool(messagePolicyParams),
+      enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
+      forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
+      onYield: (message, acknowledgment) => {
+        input.onYieldDetected(acknowledgment);
+        input.onCodexAppServerEvent?.({
+          stream: "codex_app_server.tool",
+          data: { name: "sessions_yield", message },
+        });
+      },
+      claimYieldCompletion: input.claimYieldCompletion,
+      recordToolPrepStage: (name) => {
+        toolBuildStages.mark(name);
+      },
+      onToolOutcome: params.onToolOutcome,
+      isTurnTainted: params.isTurnTainted,
+      allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
+      cronCreatorToolAllowlistRef: input.cronCreatorToolAllowlistRef,
+      cronCreatorToolAllowlistCaptureRef: input.cronCreatorToolAllowlistCaptureRef,
+      cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
+    };
+    const bindingOptions = { cwd: input.effectiveCwd ?? input.effectiveWorkspace };
+    if (injectedOpenClawCodingToolsFactory) {
+      return params.hostCapabilities.bindToolSurface(
+        injectedOpenClawCodingToolsFactory(options),
+        bindingOptions,
+      );
+    }
+    const createToolSurface = params.hostCapabilities.createToolSurface;
+    if (!createToolSurface) {
+      throw new Error("Codex tool construction requires a current host capability");
+    }
+    return createToolSurface(options, bindingOptions);
+  };
   const allTools = input.resolveCronCreatorToolAuthority
     ? runWithCronCreatorAuthorityCapabilityResolver({
         capability: params.cronCreatorAuthorityCapability,
@@ -395,12 +407,17 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       ? preserveRingZeroSystemAgentTool(readableAllTools, normallyProfiledTools)
       : normallyProfiledTools;
   const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
-    addSandboxShellDynamicToolsIfAvailable(
-      isCodexMemoryFlushRun(params)
-        ? filterCodexMemoryFlushDynamicTools(readableAllTools)
-        : profileFilteredTools,
+    addGatewayShellDynamicToolsIfAvailable(
+      addSandboxShellDynamicToolsIfAvailable(
+        isCodexMemoryFlushRun(params)
+          ? filterCodexMemoryFlushDynamicTools(readableAllTools)
+          : profileFilteredTools,
+        readableAllTools,
+        input,
+      ),
       readableAllTools,
       input,
+      nativeExecutionPolicy,
     ),
     readableAllTools,
     input,
@@ -522,6 +539,54 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     );
   }
   return exposedTools;
+}
+/** Keeps the OpenClaw Gateway execution path available beside Codex native shell. */
+function addGatewayShellDynamicToolsIfAvailable(
+  filteredTools: OpenClawDynamicTool[],
+  allTools: OpenClawDynamicTool[],
+  input: DynamicToolBuildParams,
+  executionPolicy: CodexNativeExecutionPolicy,
+): OpenClawDynamicTool[] {
+  if (
+    isCodexMemoryFlushRun(input.params) ||
+    input.nativeToolSurfaceEnabled !== true ||
+    input.sandbox?.enabled === true ||
+    !executionPolicy.nativeToolSurfaceAllowed ||
+    executionPolicy.effectiveExecHost !== "gateway"
+  ) {
+    return filteredTools;
+  }
+  const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
+  const processTool = allTools.find(
+    (tool) => normalizeCodexDynamicToolName(tool.name) === "process",
+  );
+  const existingNames = new Set(
+    filteredTools.map((tool) => normalizeCodexDynamicToolName(tool.name)),
+  );
+  const execExcluded = isCodexDynamicToolExcluded(input.pluginConfig, [
+    "exec",
+    CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+  ]);
+  if (!execTool || execExcluded || existingNames.has(CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME)) {
+    return filteredTools;
+  }
+  const processExcluded = isCodexDynamicToolExcluded(input.pluginConfig, [
+    "process",
+    CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
+  ]);
+  const processAliasAvailable = Boolean(
+    processTool && !processExcluded && !existingNames.has(CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME),
+  );
+  const toolsToAppend = [
+    createExecAliasDynamicTool(execTool, {
+      host: "gateway",
+      processAliasAvailable,
+    }),
+  ];
+  if (processAliasAvailable && processTool) {
+    toolsToAppend.push(createGatewayProcessAliasDynamicTool(processTool));
+  }
+  return [...filteredTools, ...toolsToAppend];
 }
 /** Preserves delivery-critical tools when a narrow allowlist would otherwise hide them. */
 function includeForcedCodexDynamicToolAllow(
@@ -808,33 +873,21 @@ function addNodeShellDynamicToolsIfNeeded(
     return filteredTools;
   }
   const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
-  const processTool = allTools.find(
-    (tool) => normalizeCodexDynamicToolName(tool.name) === "process",
-  );
-  if (!execTool || !processTool) {
+  if (!execTool) {
     return filteredTools;
   }
-  const toolsToAppend: OpenClawDynamicTool[] = [];
   if (
     !isCodexDynamicToolExcluded(input.pluginConfig, ["exec", CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME]) &&
     !filteredTools.some(
       (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     )
   ) {
-    toolsToAppend.push(createNodeExecDynamicTool(execTool, nodePolicy.node));
+    return [
+      ...filteredTools,
+      createExecAliasDynamicTool(execTool, { host: "node", node: nodePolicy.node }),
+    ];
   }
-  if (
-    !isCodexDynamicToolExcluded(input.pluginConfig, [
-      "process",
-      CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME,
-    ]) &&
-    !filteredTools.some(
-      (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME,
-    )
-  ) {
-    toolsToAppend.push(createNodeProcessDynamicTool(processTool));
-  }
-  return toolsToAppend.length > 0 ? [...filteredTools, ...toolsToAppend] : filteredTools;
+  return filteredTools;
 }
 function shouldKeepOpenClawShellDynamicTools(
   input: DynamicToolBuildParams,
@@ -885,9 +938,10 @@ function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
       allowSet.has(normalized) ||
       (normalized === "sandbox_exec" && allowSet.has("exec")) ||
       (normalized === "sandbox_process" && (allowSet.has("exec") || allowSet.has("process"))) ||
-      (normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec")) ||
-      (normalized === CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME &&
-        (allowSet.has("exec") || allowSet.has("process")))
+      (normalized === CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec")) ||
+      (normalized === CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME &&
+        (allowSet.has("exec") || allowSet.has("process"))) ||
+      (normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec"))
     );
   });
 }

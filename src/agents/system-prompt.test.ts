@@ -16,6 +16,7 @@ import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
 import { buildSubagentSystemPrompt } from "./subagents/spawn/subagent-system-prompt.js";
+import { buildSystemPromptParams } from "./system-prompt-params.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
@@ -1755,6 +1756,7 @@ describe("buildAgentSystemPrompt", () => {
         agentId: "work",
         sessionKey: "agent:main:main",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
+        sessionUrl: "https://gateway.example/control/chat/main",
         host: "host",
         os: "macOS",
         arch: "arm64",
@@ -1766,6 +1768,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("agent=work");
     expect(prompt).toContain("session=agent:main:main");
     expect(prompt).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
+    expect(prompt).toContain("sessionUrl=https://gateway.example/control/chat/main");
   });
 
   it("includes reasoning visibility hint", () => {
@@ -1818,25 +1821,40 @@ describe("buildAgentSystemPrompt", () => {
   it("keeps the runtime line cache-stable across isolated cron runs", () => {
     // Isolated cron run-scoped keys carry a fresh per-run id every run (forceNew). Rendering it
     // verbatim re-busts byte-exact prefix caching for the tool catalog after it (#96677 / #43148).
-    const buildForRun = (runId: string) =>
-      buildAgentSystemPrompt({
-        workspaceDir: "/tmp/openclaw",
-        runtimeInfo: {
-          agentId: "work",
+    const buildForRun = (runId: string) => {
+      const { runtimeInfo } = buildSystemPromptParams({
+        config: { gateway: { publicOrigin: "https://gateway.example" } },
+        agentId: "work",
+        runtime: {
           sessionKey: `agent:work:cron:nightly-job:run:${runId}`,
           sessionId: runId,
           host: "host",
           os: "linux",
+          arch: "x64",
+          node: "v24",
+          model: "test/model",
         },
       });
-    const promptA = buildForRun("11111111-1111-1111-1111-111111111111");
-    const promptB = buildForRun("22222222-2222-2222-2222-222222222222");
+      return {
+        runtimeInfo,
+        prompt: buildAgentSystemPrompt({
+          workspaceDir: "/tmp/openclaw",
+          runtimeInfo,
+        }),
+      };
+    };
+    const runA = buildForRun("11111111-1111-1111-1111-111111111111");
+    const runB = buildForRun("22222222-2222-2222-2222-222222222222");
 
-    expect(promptA).toContain("session=agent:work:cron:nightly-job");
-    expect(promptA).not.toContain(":run:");
-    expect(promptA).not.toContain("sessionId=");
+    expect(runA.runtimeInfo.sessionUrl).toBeUndefined();
+    expect(runB.runtimeInfo.sessionUrl).toBeUndefined();
+    expect(runA.prompt).toContain("session=agent:work:cron:nightly-job");
+    expect(runA.prompt).not.toContain(":run:");
+    expect(runB.prompt).not.toContain(":run:");
+    expect(runA.prompt).not.toContain("sessionId=");
+    expect(runB.prompt).not.toContain("sessionId=");
     // Two runs of the same job render identical bytes, so the cached prefix is reused.
-    expect(promptA).toBe(promptB);
+    expect(runA.prompt).toBe(runB.prompt);
   });
 
   it("preserves a stable session id that is not the run-scope id", () => {

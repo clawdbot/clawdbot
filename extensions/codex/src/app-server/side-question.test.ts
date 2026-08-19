@@ -625,6 +625,7 @@ describe("runCodexAppServerSideQuestion", () => {
         senderE164: "+15550001",
         senderIsOwner: true,
       }),
+      { runtimeModelId: "codex-side-execution-model" },
     );
 
     expect(result).toEqual({ text: "Side answer." });
@@ -654,7 +655,7 @@ describe("runCodexAppServerSideQuestion", () => {
       "threadSource",
     ]);
     expect(forkParams?.threadId).toBe("parent-thread");
-    expect(forkParams?.model).toBe("gpt-5.5");
+    expect(forkParams?.model).toBe("codex-side-execution-model");
     expect(forkParams).not.toHaveProperty("personality");
     expect(forkParams?.approvalPolicy).toBe("on-request");
     expect(forkParams?.sandbox).toBe("workspace-write");
@@ -705,13 +706,13 @@ describe("runCodexAppServerSideQuestion", () => {
         threadId: "side-thread",
         input: [{ type: "text", text: "What changed?", text_elements: [] }],
         cwd: "/tmp/workspace",
-        model: "gpt-5.5",
+        model: "codex-side-execution-model",
         personality: "none",
         effort: null,
         collaborationMode: {
           mode: "default",
           settings: {
-            model: "gpt-5.5",
+            model: "codex-side-execution-model",
             reasoning_effort: null,
             developer_instructions: null,
           },

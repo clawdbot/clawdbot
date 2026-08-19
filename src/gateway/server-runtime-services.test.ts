@@ -337,7 +337,11 @@ describe("server-runtime-services", () => {
   it("activates heartbeat, cron, and delivery recovery after sidecars are ready", async () => {
     vi.useFakeTimers();
     const log = createLog();
-    const { cronStart, services } = activateScheduledServicesForTest({ log });
+    const resolveGatewayContext = () => undefined;
+    const { cronStart, services } = activateScheduledServicesForTest({
+      log,
+      resolveGatewayContext,
+    });
 
     expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
     expect(cronStart).toHaveBeenCalledTimes(1);
@@ -360,6 +364,7 @@ describe("server-runtime-services", () => {
       deps: {},
       maxEnqueuedAt: 123,
       log: sessionDeliveryLog,
+      resolveGatewayContext,
     });
     const runtimeParams = hoisted.startSessionDeliveryRuntime.mock.calls[0]?.[0] as
       | {

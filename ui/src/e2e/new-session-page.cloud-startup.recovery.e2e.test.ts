@@ -298,7 +298,10 @@ suite.define(() => {
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
-          if (key.startsWith("openclaw.new-session.session-placement-recovery.v1:")) {
+          if (
+            key.startsWith("openclaw.new-session.session-placement-recovery.v1:") ||
+            key.startsWith("openclaw.control-ui-e2e.")
+          ) {
             originalSetItem(key, value);
             return;
           }
@@ -313,10 +316,10 @@ suite.define(() => {
         message: "send outcome unknown",
       });
 
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
       await pollLocatorText(page.locator(".chat-cloud-startup-error")).toContain(
         "send outcome unknown",
       );
-      expect(new URL(page.url()).pathname).toContain(controlUiSessionPath(sessionKey));
       await replaceGatewayClient(page);
       await expect.poll(async () => (await gateway.getRequests("sessions.send")).length).toBe(2);
 

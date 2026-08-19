@@ -871,18 +871,6 @@ export function buildGatewayCronService(params: {
         label: "command",
         traceResolvedFailure: true,
       });
-      if ("deliveryError" in completion) {
-        const { deliveryError, ...deliveryResult } = completion;
-        const requiredDeliveryFailed = job.delivery?.bestEffort === false && result.status === "ok";
-        return {
-          ...result,
-          // Default announce delivery is best-effort, but an explicit
-          // bestEffort:false keeps delivery inside the job's success contract.
-          status: requiredDeliveryFailed ? ("error" as const) : result.status,
-          ...(requiredDeliveryFailed ? { error: deliveryError } : { deliveryError }),
-          ...deliveryResult,
-        };
-      }
       return { ...result, ...completion };
     },
     sendCronWebhook: async ({ job, event, abortSignal, deadlineAtMs, onDeliveryAccepted }) => {
@@ -948,15 +936,6 @@ export function buildGatewayCronService(params: {
         logger: cronLogger,
         label: "script payload",
       });
-      if ("deliveryError" in completion) {
-        const { deliveryError, ...deliveryResult } = completion;
-        return {
-          ...base,
-          status: job.delivery?.bestEffort ? ("ok" as const) : ("error" as const),
-          ...(job.delivery?.bestEffort ? { deliveryError } : { error: deliveryError }),
-          ...deliveryResult,
-        };
-      }
       return { ...base, ...completion };
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
@@ -1045,6 +1024,7 @@ export function buildGatewayCronService(params: {
           "runAtMs",
           "durationMs",
           "status",
+          "completionStatus",
           "error",
           "delivered",
           "deliveryStatus",

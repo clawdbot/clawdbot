@@ -106,7 +106,7 @@ describe("session placement draft advancement", () => {
       }),
     ).resolves.toEqual({
       status: "cancelled",
-      cleanupError: "cloud recovery storage is unavailable",
+      cleanupError: "placement recovery storage is unavailable",
       recoveryPersisted: false,
     });
     expect(request).not.toHaveBeenCalled();
@@ -210,7 +210,7 @@ describe("session placement draft advancement", () => {
       }),
     ).resolves.toEqual({
       status: "dispatch-rejected",
-      error: "cloud recovery storage is unavailable",
+      error: "placement recovery storage is unavailable",
     });
     expect(setRecoveryPhase).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith("sessions.reclaim", {
@@ -563,7 +563,7 @@ describe("session placement draft advancement", () => {
       }),
     ).resolves.toEqual({
       status: "dispatch-rejected",
-      error: "cloud draft session no longer exists",
+      error: "placement draft session no longer exists",
     });
     expect(request).toHaveBeenCalledTimes(1);
     expect(clearRecovery).toHaveBeenCalledOnce();
@@ -607,7 +607,7 @@ describe("session placement draft advancement", () => {
       }),
     ).resolves.toEqual({
       status: "dispatch-rejected",
-      error: "cloud worker placement became failed",
+      error: "session placement became failed",
     });
     expect(request).not.toHaveBeenCalledWith("sessions.delete", expect.anything());
     expect(clearRecovery).toHaveBeenCalledOnce();

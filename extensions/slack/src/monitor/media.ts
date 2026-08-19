@@ -1,6 +1,7 @@
 // Slack plugin module implements media behavior.
 import fs from "node:fs/promises";
 import type { WebClient as SlackWebClient } from "@slack/web-api";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
@@ -8,7 +9,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap, { pMapSkip } from "p-map";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
@@ -332,9 +332,8 @@ export async function resolveSlackMedia(params: {
   const limitedFiles =
     files.length > MAX_SLACK_MEDIA_FILES ? files.slice(0, MAX_SLACK_MEDIA_FILES) : files;
 
-  const resolved = await pMap(
-    limitedFiles,
-    async (file): Promise<SlackMediaResult | typeof pMapSkip> => {
+  const { results } = await runTasksWithConcurrency({
+    tasks: limitedFiles.map((file) => async (): Promise<SlackMediaResult | null> => {
       // Audio preflight keys the original event file object so admission can
       // reuse that exact download without turning this into a persistent cache.
       const preloaded = params.preloadedMedia?.get(file);
@@ -344,7 +343,7 @@ export async function resolveSlackMedia(params: {
       const eventUrl = file.url_private_download ?? file.url_private;
       const url = eventUrl ?? (await fetchFreshSlackFileUrl({ file, client: params.client }));
       if (!url) {
-        return pMapSkip;
+        return null;
       }
       const result = await downloadSlackMediaFile({
         file,
@@ -357,12 +356,12 @@ export async function resolveSlackMedia(params: {
         govSlack,
       }).catch(() => null);
       if (result || !eventUrl) {
-        return result ?? pMapSkip;
+        return result;
       }
 
       const freshUrl = await fetchFreshSlackFileUrl({ file, client: params.client });
       if (!freshUrl) {
-        return pMapSkip;
+        return null;
       }
       const retryResult = await downloadSlackMediaFile({
         file,
@@ -374,10 +373,13 @@ export async function resolveSlackMedia(params: {
         abortSignal: params.abortSignal,
         govSlack,
       }).catch(() => null);
-      return retryResult ?? pMapSkip;
-    },
-    { concurrency: MAX_SLACK_MEDIA_CONCURRENCY, stopOnError: true },
-  );
+      return retryResult;
+    }),
+    limit: MAX_SLACK_MEDIA_CONCURRENCY,
+    errorMode: "stop",
+    throwOnError: true,
+  });
+  const resolved = results.filter((result): result is SlackMediaResult => result !== null);
 
   return resolved.length > 0 ? resolved : null;
 }

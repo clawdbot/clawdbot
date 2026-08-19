@@ -2,6 +2,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 
+function createDeferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("runTasksWithConcurrency", () => {
   it("preserves task order with bounded worker count", async () => {
     let running = 0;
@@ -106,5 +114,67 @@ describe("runTasksWithConcurrency", () => {
     expect(onTaskError).toHaveBeenCalledTimes(2);
     expect(onTaskError).toHaveBeenNthCalledWith(1, firstErr, 0);
     expect(onTaskError).toHaveBeenNthCalledWith(2, secondErr, 2);
+  });
+
+  it("rejects early and stops scheduling new work in stop mode", async () => {
+    const err = new Error("boom");
+    const releaseInFlight = createDeferred();
+    const inFlightSettled = createDeferred();
+    const started: number[] = [];
+    const run = runTasksWithConcurrency({
+      tasks: [
+        async () => {
+          started.push(0);
+          await releaseInFlight.promise;
+          inFlightSettled.resolve();
+          return 10;
+        },
+        async () => {
+          started.push(1);
+          throw err;
+        },
+        async () => {
+          started.push(2);
+          return 30;
+        },
+      ],
+      limit: 2,
+      errorMode: "stop",
+      throwOnError: true,
+    });
+
+    await expect(run).rejects.toBe(err);
+    releaseInFlight.resolve();
+    await inFlightSettled.promise;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(started).toEqual([0, 1]);
+  });
+
+  it("keeps scheduling after an early rejection in continue mode", async () => {
+    const err = new Error("boom");
+    const completed = createDeferred();
+    const started: number[] = [];
+    const run = runTasksWithConcurrency({
+      tasks: [
+        async () => {
+          started.push(0);
+          throw err;
+        },
+        async () => {
+          started.push(1);
+          completed.resolve();
+          return 20;
+        },
+      ],
+      limit: 1,
+      errorMode: "continue",
+      throwOnError: true,
+    });
+
+    await expect(run).rejects.toBe(err);
+    await completed.promise;
+    expect(started).toEqual([0, 1]);
   });
 });

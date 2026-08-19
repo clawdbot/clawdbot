@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   collectAmbiguousAutomaticMediaUrls,
   collectAutomaticDeliveredMediaUrls,
@@ -11,6 +12,7 @@ import {
 } from "../agents/embedded-agent-runner/delivery-evidence.js";
 import { formatGeneratedMediaDeliveryRetryForPrompt } from "../agents/internal-events.js";
 import { resolveDurableCompletionDeliveryMode } from "../auto-reply/reply/completion-delivery-policy.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   getRestartRecoveryTerminalDeliveryEvidence,
   hasRestartRecoveryTerminalRun,
@@ -23,6 +25,7 @@ import {
   failSessionDelivery,
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
+  mergeSessionDeliveryPreparedMediaBlocks,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
@@ -32,7 +35,14 @@ import {
 } from "../infra/session-delivery-queue-storage.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
+import { getMediaDir } from "../media/store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import {
+  attachManagedOutgoingMediaToMessage,
+  createManagedOutgoingMediaBlocks,
+} from "./managed-image-attachments.js";
+import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-transcript-inject.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "./server-recovery-runtime-context.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -62,8 +72,8 @@ async function deadLetterSessionDelivery(
 }
 
 function hasQueuedVisiblePayload(payload: unknown): boolean {
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const visible = (payload as { visible?: unknown }).visible;
+  if (isRecord(payload)) {
+    const visible = payload.visible;
     if (typeof visible === "boolean") {
       return visible;
     }
@@ -317,6 +327,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   entry: QueuedSessionDelivery;
   sessionEntry?: SessionEntry;
   stateDir?: string;
+  resolveGatewayContext?: GatewayContextResolver;
 }): Promise<boolean> {
   if (params.entry.kind !== "agentTurn") {
     return false;
@@ -343,6 +354,39 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
           if (!sessionId) {
             throw new Error("queued internal generated-media delivery has no owning session");
           }
+          const stateDir = params.stateDir ?? resolveStateDir();
+          const preparedMediaBlocks = { ...entry.preparedMediaBlocks };
+          const content: Array<Record<string, unknown>> = [];
+          for (const mediaUrl of mediaUrls) {
+            let blocks = preparedMediaBlocks[mediaUrl];
+            if (!blocks) {
+              blocks = await createManagedOutgoingMediaBlocks({
+                sessionKey: params.canonicalKey,
+                agentId: params.agentId,
+                mediaUrls: [mediaUrl],
+                attachments: [entry.expectedMediaAttachments?.[mediaUrl] ?? {}],
+                stateDir,
+                localRoots: [getMediaDir()],
+                allowLocalNonImage: true,
+              });
+              if (
+                !blocks.some(
+                  (block) =>
+                    block.type === "image" || block.type === "audio" || block.type === "video",
+                )
+              ) {
+                throw new Error("queued internal generated media could not be prepared");
+              }
+              blocks = await mergeSessionDeliveryPreparedMediaBlocks(
+                entry.id,
+                mediaUrl,
+                blocks,
+                stateDir,
+              );
+              preparedMediaBlocks[mediaUrl] = blocks;
+            }
+            content.push(...blocks);
+          }
           const appended = await appendAssistantMessageToSessionTranscript({
             agentId: params.agentId,
             sessionKey: params.canonicalKey,
@@ -354,7 +398,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                     params.sessionEntry.cronRunContinuation.lifecycleRevision,
                 }
               : {}),
-            mediaUrls,
+            content: prepareGatewayInjectedAssistantContent(content),
             idempotencyKey: `${queuedRunId}:generated-media-transcript`,
             updateMode: "inline",
           });
@@ -369,6 +413,14 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             throw new Error(
               `queued internal generated-media transcript persistence failed: ${appended.reason}`,
             );
+          }
+          const attached = attachManagedOutgoingMediaToMessage({
+            messageId: appended.messageId,
+            blocks: content,
+            stateDir,
+          });
+          if (!attached) {
+            throw new Error("queued internal generated-media artifact attachment failed");
           }
         }
       : undefined;
@@ -453,6 +505,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: entry.expectedMediaUrls ?? [],
         ...(entry.suppressTextDelivery === true ? { internalDeliverySuppressText: true } : {}),
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
         onAccepted: () => {
           accepted = true;
         },

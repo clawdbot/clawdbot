@@ -2277,6 +2277,80 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
+  it("keeps a persisted tool review icon-only until its command activity expands", () => {
+    const container = document.createElement("div");
+    const group = createToolGroup("reviewed-tool-group", [
+      createMessageEntry(
+        "reviewed-tool-message",
+        createToolResultMessage("call-reviewed", "run_command", "completed", {
+          details: {
+            approvalReviews: [
+              {
+                id: "review-1",
+                label: "Guardian",
+                status: "approved",
+                riskLevel: "low",
+                userAuthorization: "high",
+                rationale: "Narrowly scoped to the requested file.",
+              },
+            ],
+            approvalReviewOutcome: "approved",
+          },
+          timestamp: 1000,
+        }),
+      ),
+    ]);
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: (id) => (id === "activity:reviewed-tool-group" ? false : undefined),
+    });
+    expect(
+      container.querySelector('.chat-activity-group__review-status[data-outcome="approved"]'),
+    ).not.toBeNull();
+    expect(container.textContent).not.toContain("Guardian approved");
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: () => true,
+      isToolExpanded: () => true,
+    });
+    const review = container.querySelector('.chat-tool-review[data-review-status="approved"]');
+    expect(review?.textContent).toContain("Guardian approved");
+    expect(review?.textContent).toContain("Narrowly scoped to the requested file.");
+    expect(container.querySelector(".chat-tool-msg-body")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-tool-review")).toHaveLength(1);
+  });
+
+  it("renders a persisted denial shield after the denied row leaves bounded review details", () => {
+    const container = document.createElement("div");
+    const group = createToolGroup("bounded-review-group", [
+      createMessageEntry(
+        "bounded-review-message",
+        createToolResultMessage("call-bounded-review", "run_command", "completed", {
+          details: {
+            approvalReviews: [
+              {
+                id: "later-approved-review",
+                label: "Guardian",
+                status: "approved",
+              },
+            ],
+            approvalReviewOutcome: "denied",
+          },
+          timestamp: 1000,
+        }),
+      ),
+    ]);
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: () => false,
+    });
+
+    expect(
+      container.querySelector('.chat-activity-group__review-status[data-outcome="denied"]'),
+    ).not.toBeNull();
+    expect(container.querySelectorAll(".chat-tool-review")).toHaveLength(0);
+  });
+
   it("collapses paired parallel tool cards from one message into an activity group", () => {
     const container = document.createElement("div");
     const group = createToolGroup("parallel-tool-group", [

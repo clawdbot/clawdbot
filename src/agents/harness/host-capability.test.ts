@@ -171,6 +171,7 @@ describe("agent harness host capability", () => {
     host.close();
     expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(authority);
     expect(() => host.capabilities.bindToolSurface([tool])).toThrow("no longer active");
+    expect(() => host.capabilities.createToolSurface?.({} as never)).toThrow("no longer active");
     expect(() => host.capabilities.assertActive()).toThrow("no longer active");
     await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
     expect(execute).not.toHaveBeenCalled();

@@ -120,10 +120,11 @@ export class DraftGatewayState {
           this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
           this.gatewayConnectionEpochValue,
           hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null),
+          this.read().isAdmin,
           this.gatewayRecoveryScopeValue,
         ] as const,
-      task: ([client, _connectionEpoch, canWrite]) =>
-        client ? discoverPlaceCatalog(client, canWrite) : initialState,
+      task: ([client, _connectionEpoch, canWrite, isAdmin]) =>
+        client ? discoverPlaceCatalog(client, canWrite, isAdmin) : initialState,
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
         this.environmentsValue = placeCatalog.environments;
@@ -433,7 +434,7 @@ export class DraftGatewayState {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     void this.gatewayNameTask.run([null, false, -1]);
-    void this.cloudProfileTask.run([null, -1, false, ""]);
+    void this.cloudProfileTask.run([null, -1, false, false, ""]);
     this.resetCloudProfileRetry();
   }
 

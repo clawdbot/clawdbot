@@ -7,6 +7,10 @@ export default defineConfig({
   base: "./",
   resolve: {
     alias: {
+      "openclaw/plugin-sdk/error-runtime": path.resolve(
+        import.meta.dirname,
+        "../../../packages/normalization-core/src/browser-error-runtime.ts",
+      ),
       "openclaw/plugin-sdk/text-utility-runtime": path.resolve(
         import.meta.dirname,
         "../../../packages/normalization-core/src/utf16-slice.ts",

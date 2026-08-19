@@ -36,6 +36,11 @@ import {
   appendEvent,
 } from "./store-card-helpers.js";
 import { WorkboardChangeTracker } from "./store-change-tracker.js";
+import {
+  invertWorkboardCardMutation,
+  invertWorkboardWorkspaceMutation,
+  sameWorkboardCardState,
+} from "./store-compensation.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
 import type {
   WorkboardBoardInput,
@@ -73,6 +78,7 @@ import {
 } from "./store-normalizers.js";
 
 type WorkboardUpdateCardOptions = {
+  allowAutomationLaunch?: boolean;
   allowMetadataDependencyLinks?: boolean;
   enforceStatusHolds?: boolean;
   event?: Omit<WorkboardEvent, "id" | "at">;
@@ -82,6 +88,11 @@ type WorkboardUpdateCardOptions = {
   preserveProofId?: string;
 };
 
+type WorkboardMutationJournalEntry = {
+  before?: WorkboardCard;
+  after: WorkboardCard;
+};
+
 const WORKBOARD_CAS_ATTEMPTS = 3;
 
 export class WorkboardCoreStore {
@@ -89,6 +100,7 @@ export class WorkboardCoreStore {
   private lastNotificationSequence = 0;
   private readonly changes: WorkboardChangeTracker;
   private readonly cardStore?: WorkboardCardStore;
+  private compensationJournal?: WorkboardMutationJournalEntry[];
   protected readonly store: WorkboardKeyedStore;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
@@ -140,6 +152,129 @@ export class WorkboardCoreStore {
       () => undefined,
     );
     return await result;
+  }
+
+  protected async withCardCompensation<T>(run: () => Promise<T>): Promise<T> {
+    if (this.compensationJournal) {
+      return await run();
+    }
+    const journal: WorkboardMutationJournalEntry[] = [];
+    this.compensationJournal = journal;
+    try {
+      return await run();
+    } catch (operationError) {
+      const compensationErrors = await this.rollbackCardMutations(journal);
+      if (compensationErrors.length > 0) {
+        throw this.compensationError(operationError, compensationErrors);
+      }
+      throw operationError;
+    } finally {
+      this.compensationJournal = undefined;
+    }
+  }
+
+  private compensationError(operationError: unknown, cleanupErrors: unknown[]): AggregateError {
+    const message =
+      operationError instanceof Error ? operationError.message : String(operationError);
+    return new AggregateError([operationError, ...cleanupErrors], message, {
+      cause: operationError,
+    });
+  }
+
+  private recordCardMutation(before: WorkboardCard | undefined, after: WorkboardCard): void {
+    // Reverse replay needs every step: later inverses strip their fields before
+    // an operation-created row can be safely classified as host-adopted.
+    this.compensationJournal?.push({ before, after });
+  }
+
+  private async rollbackCardMutations(
+    journal: WorkboardMutationJournalEntry[],
+  ): Promise<unknown[]> {
+    const errors: unknown[] = [];
+    for (const entry of journal.toReversed()) {
+      try {
+        if (!entry.before) {
+          await this.rollbackCreatedCard(entry.after);
+          continue;
+        }
+        await this.rollbackUpdatedCard(entry.before, entry.after);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    return errors;
+  }
+
+  async compensateWorkspaceMutation(before: WorkboardCard, after: WorkboardCard): Promise<void> {
+    await this.enqueueMutation(
+      async () => await this.rollbackUpdatedCard(before, after, invertWorkboardWorkspaceMutation),
+    );
+  }
+
+  private async rollbackUpdatedCard(
+    before: WorkboardCard,
+    after: WorkboardCard,
+    invert = invertWorkboardCardMutation,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < WORKBOARD_CAS_ATTEMPTS; attempt += 1) {
+      const current = await this.get(after.id);
+      if (!current) {
+        return;
+      }
+      const merged = invert(before, after, current);
+      if (sameWorkboardCardState(current, merged)) {
+        return;
+      }
+      const compensation = {
+        ...merged,
+        updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+      };
+      if (await this.registerCardIfUpdatedAt(compensation, current.updatedAt)) {
+        return;
+      }
+    }
+    throw new Error(`card changed repeatedly during compensation: ${after.id}`);
+  }
+
+  private async rollbackCreatedCard(created: WorkboardCard): Promise<void> {
+    for (let attempt = 0; attempt < WORKBOARD_CAS_ATTEMPTS; attempt += 1) {
+      const current = await this.get(created.id);
+      if (!current || !sameWorkboardCardState(current, created)) {
+        return;
+      }
+      if (await this.deleteCardIfUpdatedAt(created.id, current.updatedAt)) {
+        return;
+      }
+    }
+    throw new Error(`card changed repeatedly during compensation: ${created.id}`);
+  }
+
+  private async registerCardIfUpdatedAt(
+    card: WorkboardCard,
+    expectedUpdatedAt: number,
+  ): Promise<boolean> {
+    if (this.cardStore) {
+      return await this.cardStore.registerIfUpdatedAt(
+        card.id,
+        { version: 1, card },
+        expectedUpdatedAt,
+      );
+    }
+    if ((await this.get(card.id))?.updatedAt !== expectedUpdatedAt) {
+      return false;
+    }
+    await this.store.register(card.id, { version: 1, card });
+    return true;
+  }
+
+  private async deleteCardIfUpdatedAt(id: string, expectedUpdatedAt: number): Promise<boolean> {
+    if (this.cardStore) {
+      return await this.cardStore.deleteIfUpdatedAt(id, expectedUpdatedAt);
+    }
+    if ((await this.get(id))?.updatedAt !== expectedUpdatedAt) {
+      return false;
+    }
+    return await this.store.delete(id);
   }
 
   protected async updateLatestCard(
@@ -374,7 +509,10 @@ export class WorkboardCoreStore {
     input: WorkboardLinkedCreateInput,
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => await this.createDirect(input, scope));
+    return await this.enqueueMutation(
+      async () =>
+        await this.withCardCompensation(async () => await this.createDirect(input, scope)),
+    );
   }
 
   protected async createDirect(
@@ -506,20 +644,16 @@ export class WorkboardCoreStore {
         }
         return winner;
       }
+      this.recordCardMutation(undefined, card);
     } else {
       await this.store.register(card.id, { version: 1, card });
+      this.recordCardMutation(undefined, card);
     }
-    try {
-      for (const parent of parentCards) {
-        card = await this.linkCardsDirect(parent.id, card.id, now, {
-          allowStatusOnlyActiveChild: true,
-          scope,
-        });
-      }
-    } catch (error) {
-      await this.store.delete(card.id);
-      await this.removeReferencesToCard(card.id);
-      throw error;
+    for (const parent of parentCards) {
+      card = await this.linkCardsDirect(parent.id, card.id, now, {
+        allowStatusOnlyActiveChild: true,
+        scope,
+      });
     }
     return card;
   }
@@ -653,6 +787,7 @@ export class WorkboardCoreStore {
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
+      allowAutomationLaunch: options.allowAutomationLaunch,
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
       preserveProofId: options.preserveProofId,
     });
@@ -770,6 +905,7 @@ export class WorkboardCoreStore {
           throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);
         }
         if (result === "updated") {
+          this.recordCardMutation(existing, next);
           await this.deleteDetachedAttachments(existing, next);
           return next;
         }
@@ -780,6 +916,7 @@ export class WorkboardCoreStore {
           expectedUpdatedAt,
         )
       ) {
+        this.recordCardMutation(existing, next);
         await this.deleteDetachedAttachments(existing, next);
         return next;
       }
@@ -790,6 +927,7 @@ export class WorkboardCoreStore {
       throw new WorkboardCardConflictError(current);
     }
     await this.store.register(next.id, { version: 1, card: next });
+    this.recordCardMutation(existing, next);
     await this.deleteDetachedAttachments(existing, next);
     return next;
   }
@@ -901,7 +1039,10 @@ export class WorkboardCoreStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(
-      async () => await this.linkCardsDirect(parentId, childId, Date.now(), { scope }),
+      async () =>
+        await this.withCardCompensation(
+          async () => await this.linkCardsDirect(parentId, childId, Date.now(), { scope }),
+        ),
     );
   }
 
@@ -961,12 +1102,18 @@ export class WorkboardCoreStore {
           targetCardId: parent.id,
           createdAt: now,
         });
-    await this.updateCard(parent.id, {
-      metadata: { ...parent.metadata, links: nextParentLinks },
-    });
-    const nextChild = await this.updateCard(child.id, {
-      metadata: { ...child.metadata, links: nextChildLinks },
-    });
+    await this.updateCard(
+      parent.id,
+      {
+        metadata: { ...parent.metadata, links: nextParentLinks },
+      },
+      { expectedUpdatedAt: parent.updatedAt },
+    );
+    const nextChild = await this.updateCard(
+      child.id,
+      { metadata: { ...child.metadata, links: nextChildLinks } },
+      { expectedUpdatedAt: child.updatedAt },
+    );
     return await this.promoteDependencyReady(nextChild.id);
   }
 

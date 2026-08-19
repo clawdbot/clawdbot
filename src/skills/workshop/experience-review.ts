@@ -17,6 +17,7 @@ import {
   formatSkillExperienceReviewTranscript,
   selectCurrentSkillTurnMessages,
 } from "./experience-review-prompt.js";
+import { resolveSkillWorkshopProjectionBudgets } from "./model-context-budget.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
 const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
@@ -51,6 +52,7 @@ type ExperienceReviewAgentContext = {
   workspaceDir?: string;
   modelProviderId?: string;
   modelId?: string;
+  modelContextWindowTokens?: number;
   authProfileId?: string;
   modelIterations?: number;
   skillWorkshopAvailable?: boolean;
@@ -404,6 +406,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           ...senderIdentity,
           params.ctx.modelProviderId ?? "",
           params.ctx.modelId ?? "",
+          params.ctx.modelContextWindowTokens ?? "",
           params.ctx.authProfileId ?? "",
         ]);
         let accumulator = shallowBySession.get(sessionKey);
@@ -473,6 +476,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             workspaceDir,
             modelProviderId: params.ctx.modelProviderId,
             modelId: params.ctx.modelId,
+            modelContextWindowTokens: params.ctx.modelContextWindowTokens,
             authProfileId: params.ctx.authProfileId,
             skillWorkshopAvailable: params.ctx.skillWorkshopAvailable,
             compacted: params.ctx.compacted,
@@ -493,7 +497,11 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             senderIsOwner: params.ctx.senderIsOwner,
           },
           ...(params.config ? { config: params.config } : {}),
-          transcript: formatSkillExperienceReviewTranscript(reviewMessages),
+          transcript: formatSkillExperienceReviewTranscript(
+            reviewMessages,
+            resolveSkillWorkshopProjectionBudgets(params.ctx.modelContextWindowTokens)
+              .reviewTranscriptChars,
+          ),
           modelIterations: reviewIterations,
           usedSkills: reviewUsedSkills,
           turnAborted: reviewAborted,

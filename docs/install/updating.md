@@ -74,6 +74,8 @@ See [Release channels](/install/development-channels) for channel semantics.
 
 ## Switch between npm and git installs
 
+Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
+
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
 code install the CLI and gateway use.

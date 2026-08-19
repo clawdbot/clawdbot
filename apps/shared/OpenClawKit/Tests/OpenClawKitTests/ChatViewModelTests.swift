@@ -149,7 +149,7 @@ private func lifecycleSessionEntry(
     updatedAt: Double,
     status: String,
     hasActiveRun: Bool,
-    activeRunIds: [String],
+    activeRunIds: [String]?,
     startedAt: Double? = nil,
     endedAt: Double? = nil,
     runtimeMs: Double? = nil,
@@ -2573,6 +2573,130 @@ struct ChatViewModelTests {
 
         #expect(viewModel.activeSessionRunIDs.isEmpty)
         #expect(!viewModel.hasAdvertisedLiveRun)
+    }
+
+    @Test @MainActor func `snapshot row omission clears stale exact run projection`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+        #expect(viewModel.activeSessionRunIDs == ["run-stale"])
+
+        var unavailable = sessionEntry(key: "main", updatedAt: 2)
+        unavailable.hasActiveRun = true
+        unavailable.activeRunIds = nil
+        viewModel.sessions = [unavailable]
+
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
+    }
+
+    @Test @MainActor func `history snapshot omission clears stale exact run ids`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+        let request = viewModel.beginHistoryRequest()
+
+        #expect(viewModel.applyHistoryPayload(
+            historyPayload(hasActiveRun: true, activeRunIds: nil),
+            for: request,
+            preservingOptimisticLocalMessages: true))
+
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
+    }
+
+    @Test @MainActor func `event tombstone clears stale exact run projection`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "run-progress",
+            updatedAt: 2,
+            hasActiveRun: true,
+            activeRunIds: nil,
+            activeRunIdsPresent: true)))
+
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
+    }
+
+    @Test @MainActor func `lifecycle tombstone clears instead of inferring an exact run id`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.status = "running"
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "run-progress",
+            phase: "start",
+            runId: "run-hidden",
+            session: lifecycleSessionEntry(
+                key: "main",
+                updatedAt: 2,
+                status: "running",
+                hasActiveRun: true,
+                activeRunIds: nil))))
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == ["run-stale"])
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "run-progress",
+            phase: "start",
+            runId: "run-hidden",
+            session: lifecycleSessionEntry(
+                key: "main",
+                updatedAt: 3,
+                status: "running",
+                hasActiveRun: true,
+                activeRunIds: nil),
+            hasActiveRun: true,
+            activeRunIds: nil,
+            activeRunIdsPresent: true)))
+
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
+    }
+
+    @Test @MainActor func `session message tombstone clears stale exact run ids`() throws {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+        let omitted = try JSONDecoder().decode(
+            OpenClawSessionMessageEventPayload.self,
+            from: Data(#"{"sessionKey":"main","hasActiveRun":true,"messageId":"message-1","message":{"role":"assistant","content":[{"type":"text","text":"working"}],"timestamp":2}}"#.utf8))
+        viewModel.handleTransportEvent(.sessionMessage(omitted))
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == ["run-stale"])
+
+        let payload = try JSONDecoder().decode(
+            OpenClawSessionMessageEventPayload.self,
+            from: Data(#"{"sessionKey":"main","hasActiveRun":true,"activeRunIds":null,"messageId":"message-2","message":{"role":"assistant","content":[{"type":"text","text":"still working"}],"timestamp":3}}"#.utf8))
+
+        viewModel.handleTransportEvent(.sessionMessage(payload))
+
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
     }
 
     @Test @MainActor func `remote lifecycle merges terminal recap metadata`() {

@@ -252,6 +252,7 @@ function updateWorkerRunnerInventory(
     nodeId: node.nodeId,
     connId: node.connId,
     pairingIdentity: node.pairingIdentity,
+    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeatures: [...params.declaration.protocolFeatures],
@@ -271,6 +272,7 @@ function updateWorkerRunnerInventory(
       : false;
   const changed =
     !previous ||
+    previous.pairingGeneration !== next.pairingGeneration ||
     !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
     !sameNodeWorkerHostDeclaration(previous.workerHost, next.workerHost) ||
     statusCleared;
@@ -615,11 +617,7 @@ export function isNodeRunnerSessionHost(params: {
     return false;
   }
   const proof = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
-  return Boolean(
-    proof &&
-    proof.pairingGeneration === params.pairingGeneration &&
-    proof.workerHost.capacity.available > 0,
-  );
+  return Boolean(proof && proof.pairingGeneration === params.pairingGeneration);
 }
 
 function getNodeRunnerInventoryIssue(params: {
@@ -706,7 +704,9 @@ export function settleNodeRegistryPairingGenerationChange(params: {
   if (!state) {
     return;
   }
-  if (state.bundleStatusByConn.delete(params.connId)) {
+  const inventoryChanged = state.runnerInventoryByConn.delete(params.connId);
+  const statusChanged = state.bundleStatusByConn.delete(params.connId);
+  if (inventoryChanged || statusChanged) {
     state.publishRunnerInventoryChanged(params.nodeId);
   }
   for (const pending of state.context.pendingInvokes.values()) {

@@ -26,7 +26,7 @@ import {
 } from "./control-ui-contract.js";
 import { respondNotFound as sendNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
-import { authorizeGatewayHttpRequestOrReply } from "./http-utils.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 
 const PLUGIN_ID_RE =
   /^(?:[a-z0-9][a-z0-9._-]{0,127}|@[a-z0-9][a-z0-9._-]{0,63}\/[a-z0-9][a-z0-9._-]{0,127})$/iu;
@@ -333,7 +333,7 @@ export async function handlePluginIconHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+  const requestAuth = await authorizeControlUiReadRequestOrReply({
     req,
     res,
     auth: opts.auth,

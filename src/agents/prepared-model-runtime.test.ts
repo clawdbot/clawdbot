@@ -11,6 +11,7 @@ import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
+  acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -46,6 +47,26 @@ describe("prepared model runtime snapshots", () => {
       pluginGeneration: expect.any(Object),
     });
     await expect(build.completion).resolves.toBeUndefined();
+  });
+
+  it("publishes a run owner from the caller-selected metadata generation", async () => {
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        config: {},
+        agentId: "main",
+        agentDir: "/tmp/selected-metadata-agent",
+        workspaceDir: "/tmp/selected-metadata-workspace",
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+      },
+      {
+        catalogMode: "static",
+        pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
+      },
+    );
+
+    expect(lease.snapshot.metadataSnapshot).toBe(mocks.pluginMetadataSnapshot);
+    lease.release();
   });
 
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {

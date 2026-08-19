@@ -7,6 +7,11 @@ import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
+import {
+  readToolApprovalReviewOutcome,
+  readToolApprovalReviews,
+  resolveToolApprovalReviewOutcome,
+} from "../../../lib/chat/tool-approval-reviews.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
@@ -252,6 +257,18 @@ export function renderActivityGroup(
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
+  const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
+  const recordedReviewOutcomes = cards.flatMap((card) => {
+    const outcome = readToolApprovalReviewOutcome(card.details);
+    return outcome ? [outcome] : [];
+  });
+  const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews, recordedReviewOutcomes);
+  const reviewer = approvalReviews[0]?.label ?? "Review";
+  const reviewAriaLabel = reviewOutcome
+    ? t(`chat.toolCards.review.${reviewOutcome === "reviewing" ? "reviewing" : reviewOutcome}`, {
+        reviewer,
+      })
+    : "";
   return html`
     <div
       class="chat-group tool chat-group--activity chat-group--with-footer"
@@ -280,6 +297,19 @@ export function renderActivityGroup(
                 >${groupSummaryLabel}</span
               >
             </span>
+            ${reviewOutcome
+              ? html`<span
+                  class="chat-activity-group__review-status"
+                  data-outcome=${reviewOutcome}
+                  role="img"
+                  aria-label=${reviewAriaLabel}
+                  >${reviewOutcome === "denied"
+                    ? icons.shieldX
+                    : reviewOutcome === "reviewing"
+                      ? icons.shieldQuestion
+                      : icons.shieldCheck}</span
+                >`
+              : nothing}
             <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </button>
           <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
@@ -363,7 +393,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ? group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key))
       : [];
 
-  if (normalizedRole === "tool" && (group.messages.length > 1 || groupedToolCards.length > 1)) {
+  if (
+    normalizedRole === "tool" &&
+    (group.messages.length > 1 ||
+      groupedToolCards.length > 1 ||
+      groupedToolCards.some((card) => readToolApprovalReviews(card.details).length > 0))
+  ) {
     return renderActivityGroup([group], opts);
   }
 

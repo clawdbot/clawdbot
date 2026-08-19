@@ -592,6 +592,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     applyPatchWorkspaceOnly,
     execDefaults: {
       ...execDefaults,
+      bypassHostApprovalFloors: sessionCoreToolPolicy?.bypassHostApprovalFloors,
       host: options?.exec?.host ?? execConfig.host,
       mode: effectiveExecPolicy.mode,
       security: effectiveExecPolicy.security,
@@ -822,6 +823,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
             modelProvider: options?.modelProvider,
             modelId: options?.modelId,
+            modelContextWindowTokens: options?.modelContextWindowTokens,
             skillWorkshop: options?.skillWorkshop,
             replyToMode: options?.replyToMode,
             hasRepliedRef: options?.hasRepliedRef,

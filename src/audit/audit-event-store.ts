@@ -548,39 +548,43 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<Au
 }
 
 function countAuditEvents(db: DatabaseSync): number {
-  const kysely = getAuditKysely(db);
   const row = executeSqliteQueryTakeFirstSync(
     db,
-    kysely
+    getAuditKysely(db)
       .selectFrom("audit_events")
       .select((expression) => expression.fn.countAll<number>().as("count")),
   );
   return normalizeSqliteNumber(row?.count ?? null) ?? 0;
 }
 
-function pruneAuditEventsAfterInsert(
-  db: DatabaseSync,
-  now: number,
-  limits: { maxRows: number; pruneBatchRows: number } = {
-    maxRows: AUDIT_EVENT_MAX_ROWS,
-    pruneBatchRows: AUDIT_EVENT_PRUNE_BATCH_ROWS,
-  },
-): void {
+function deleteExpiredAuditEvents(db: DatabaseSync, now: number) {
   const kysely = getAuditKysely(db);
-  const expired = executeSqliteQuerySync(
+  const expiredSequences = kysely
+    .selectFrom("audit_events")
+    .select("sequence")
+    .where("occurred_at", "<", now - AUDIT_EVENT_RETENTION_MS)
+    .orderBy("occurred_at", "asc")
+    .orderBy("sequence", "asc")
+    .limit(AUDIT_EVENT_PRUNE_BATCH_ROWS);
+  return executeSqliteQuerySync(
     db,
-    kysely.deleteFrom("audit_events").where("occurred_at", "<", now - AUDIT_EVENT_RETENTION_MS),
+    kysely.deleteFrom("audit_events").where("sequence", "in", expiredSequences),
   );
+}
+
+function pruneAuditEventsAfterInsert(db: DatabaseSync, now: number): void {
+  const kysely = getAuditKysely(db);
+  const expired = deleteExpiredAuditEvents(db, now);
   const cachedCount = auditEventRowCounts.get(db);
   let rowCount =
     cachedCount === undefined
       ? countAuditEvents(db)
       : Math.max(0, cachedCount + 1 - Number(expired.numAffectedRows ?? 0n));
-  if (rowCount <= limits.maxRows) {
+  if (rowCount <= AUDIT_EVENT_MAX_ROWS) {
     auditEventRowCounts.set(db, rowCount);
     return;
   }
-  const retainedRows = Math.max(0, limits.maxRows - limits.pruneBatchRows);
+  const retainedRows = Math.max(0, AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS);
   const overflowRow = executeSqliteQueryTakeFirstSync(
     db,
     kysely
@@ -720,20 +724,16 @@ export function listAuditEvents(params: {
   };
 }
 
-/** Delete expired metadata during Gateway startup and periodic worker maintenance. */
+/** Delete one bounded batch during Gateway startup and periodic audit maintenance. */
 export function pruneExpiredAuditEvents(
   params: {
     now?: number;
     database?: OpenClawStateDatabaseOptions;
   } = {},
-): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getAuditKysely(db)
-        .deleteFrom("audit_events")
-        .where("occurred_at", "<", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS),
-    );
+): number {
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
     auditEventRowCounts.delete(db);
+    return Number(deleted.numAffectedRows ?? 0n);
   }, params.database);
 }

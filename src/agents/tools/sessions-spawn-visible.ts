@@ -1,13 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
-import { buildControlUiSessionPath } from "../../../packages/session-url-contract/src/index.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
+import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
@@ -81,29 +80,6 @@ type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
 
 function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
-}
-
-function resolveVisibleSessionUrl(
-  cfg: OpenClawConfig,
-  childSessionKey: string,
-  targetAgentId: string,
-): string | undefined {
-  if (cfg.gateway?.controlUi?.enabled === false) {
-    return undefined;
-  }
-  const publicOrigin = resolveGatewayPublicOrigin(cfg);
-  const path = buildControlUiSessionPath({
-    namespace: "chat",
-    sessionKey: childSessionKey,
-    fallbackAgentId: targetAgentId,
-    basePath: cfg.gateway?.controlUi?.basePath,
-  });
-  if (!publicOrigin || !path) {
-    return undefined;
-  }
-  const url = new URL(publicOrigin);
-  url.pathname = path;
-  return url.toString();
 }
 
 async function deleteVisibleSession(
@@ -468,7 +444,10 @@ export async function maybeSpawnVisibleSession(params: {
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
     });
     const ownerLabel = normalizeOptionalString(resolveAgentIdentity(cfg, requesterAgentId)?.name);
-    const sessionUrl = resolveVisibleSessionUrl(cfg, childSessionKey, targetAgentId);
+    const sessionUrl = resolveControlUiSessionUrl(cfg, {
+      sessionKey: childSessionKey,
+      fallbackAgentId: targetAgentId,
+    });
     return {
       status: "accepted",
       childSessionKey,

@@ -439,6 +439,13 @@ function buildToolActionFingerprint(
     return undefined;
   }
   const normalizedTool = normalizeLowercaseStringOrEmpty(toolName);
+  // sessions_spawn has no stable target: retries adjust args (drop a rejected
+  // cwd, reword the task), so arg/meta identity never matches and a recovered
+  // failure keeps warning "Sub-agent failed". A later successful spawn in the
+  // same run is the recovery proof; keep the identity at tool level.
+  if (normalizedTool === "sessions_spawn") {
+    return `tool=${normalizedTool}`;
+  }
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
   const parts = [`tool=${normalizedTool}`];

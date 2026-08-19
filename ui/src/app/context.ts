@@ -16,6 +16,7 @@ import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
+import type { ApplicationSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -58,21 +59,6 @@ export type ApplicationNavigationOptions = Partial<
   Pick<RouteLocation, "pathname" | "search" | "hash">
 >;
 
-type SkillWorkshopRevisionHandoff = {
-  sessionKey: string;
-  instructions: string;
-  /** Stable for ordinary snapshots and session selection; rotates on reconnect. */
-  owner: object;
-  proposalId: string;
-  proposalAgentId: string;
-};
-
-export type ApplicationSkillWorkshopRevisionHandoff = {
-  prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
-  consume: (sessionKey: string, owner: object | null) => SkillWorkshopRevisionHandoff | null;
-  clear: (handoff?: SkillWorkshopRevisionHandoff) => void;
-};
-
 type ChatAttachmentHandoffKey = {
   owner: ApplicationGateway["snapshot"]["client"];
   paneId: string;
@@ -114,7 +100,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly nativeChatDrafts: NativeChatDrafts;
   readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;
-  readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
+  readonly skillWorkshopRevisionAdmissions: ApplicationSkillWorkshopRevisionAdmissions;
   readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
   readonly chatAttachmentHandoff: ApplicationChatAttachmentHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;

@@ -127,7 +127,11 @@ test("sessions.delete snapshots and removes session worktrees", async () => {
       dirtyWorktreeId &&
       getRegistryWorktree(process.env, dirtyWorktreeId)?.removedAt === undefined
     ) {
-      await managedWorktrees.remove({ id: dirtyWorktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: dirtyWorktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
@@ -257,7 +261,7 @@ test("sessions.delete keeps same-key successor worktree creation behind exact cl
       await managedWorktrees.remove({
         id: successorWorktreeId,
         reason: "test-cleanup",
-        force: true,
+        allowSnapshotLoss: true,
       });
     }
     closeOpenClawStateDatabaseForTest();
@@ -316,7 +320,11 @@ test("sessions.delete reports the exact preserved worktree when cleanup fails", 
   } finally {
     removeSpy.mockRestore();
     if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
@@ -383,7 +391,7 @@ test("sessions.delete preserves an entry-bound worktree owned by another princip
       await managedWorktrees.remove({
         id: foreignWorktree.id,
         reason: "test-cleanup",
-        force: true,
+        allowSnapshotLoss: true,
       });
     }
     closeOpenClawStateDatabaseForTest();

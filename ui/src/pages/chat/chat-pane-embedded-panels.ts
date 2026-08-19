@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { ProgressCard } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
@@ -20,6 +21,8 @@ type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
   agentId: string | null;
   browserPresented: boolean;
+  desktopPresented: boolean;
+  desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   hasBoard: boolean;
   chat: TemplateResult;
@@ -67,6 +70,7 @@ export function sidebarPanelDefinitions(
   const terminalAvailable = state?.terminalAvailable === true;
   const browserAvailable = state?.browserPanelAvailable === true;
   const desktopAvailable = params?.desktopAvailable === true;
+  const desktopFocusHref = state ? desktopFocusPath(state.basePath) : null;
   const definePanel = (
     slot: SidebarSlotId,
     textKey: SidebarPanelTextKey,
@@ -133,6 +137,8 @@ export function sidebarPanelDefinitions(
           data-chat-autotype-exempt
           .client=${state.connected ? state.client : null}
           .available=${desktopAvailable}
+          .presented=${params?.desktopPresented ?? false}
+          .refreshOnPresentation=${params?.desktopRefreshOnPresentation ?? true}
         ></openclaw-desktop-panel>`
       : null;
   const discussion = params?.discussion
@@ -200,7 +206,22 @@ export function sidebarPanelDefinitions(
         : undefined,
     ),
     definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null),
-    definePanel("desktop", "desktop", icons.monitor, desktop, { available: desktopAvailable }),
+    definePanel("desktop", "desktop", icons.monitor, desktop, {
+      available: desktopAvailable,
+      ...(desktopFocusHref
+        ? {
+            headerAction: html`<a
+              class="rail-header__action"
+              href=${desktopFocusHref}
+              target="_blank"
+              rel="noopener"
+              aria-label=${t("desktop.openWindow")}
+              title=${t("desktop.openWindow")}
+              >${icons.externalLink}</a
+            >`,
+          }
+        : {}),
+    }),
     definePanel("discussion", "discussion", icons.messageSquare, discussion, {
       available: discussion !== null,
       ...(params?.discussionOpenUrl

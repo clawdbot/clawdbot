@@ -296,7 +296,7 @@ export function createExecTool(
         ask: defaults?.ask ?? "off",
       });
       const approvalPolicy =
-        host === "sandbox"
+        host === "sandbox" || defaults?.bypassHostApprovalFloors === true
           ? undefined
           : resolveExecApprovalsFromFile({
               file: loadExecApprovals(),
@@ -306,7 +306,7 @@ export function createExecTool(
                 ask: "off",
               },
             }).agent;
-      let security = minSecurity(
+      const security = minSecurity(
         modePolicy.security,
         approvalPolicy?.security ?? modePolicy.security,
       );
@@ -319,24 +319,17 @@ export function createExecTool(
       const hostPolicyAllowsFullBypass =
         (approvalPolicy?.security ?? "full") === "full" && (approvalPolicy?.ask ?? "off") === "off";
       const modePolicyAllowsFullBypass = modePolicy.security === "full" && modePolicy.ask === "off";
-      if (
-        elevatedRequested &&
-        elevatedMode === "full" &&
-        modePolicyAllowsFullBypass &&
-        hostPolicyAllowsFullBypass
-      ) {
-        security = "full";
-      }
-      // Keep local exec defaults in sync with host approval state when tools.exec.* is unset.
+      // Explicit full-session authority is the sole exception to host approval floors.
       const requestedAsk = normalizeExecAsk(params.ask);
       const hostAsk = maxAsk(modePolicy.ask, approvalPolicy?.ask ?? modePolicy.ask);
       const trustedAsk = defaults?.messageProvider && hostAsk === "off" ? undefined : requestedAsk;
       let ask = maxAsk(hostAsk, trustedAsk ?? hostAsk);
       const bypassApprovals =
-        elevatedRequested &&
-        elevatedMode === "full" &&
-        modePolicyAllowsFullBypass &&
-        hostPolicyAllowsFullBypass;
+        defaults?.bypassHostApprovalFloors === true ||
+        (elevatedRequested &&
+          elevatedMode === "full" &&
+          modePolicyAllowsFullBypass &&
+          hostPolicyAllowsFullBypass);
       if (bypassApprovals) {
         ask = "off";
       }
@@ -435,7 +428,7 @@ export function createExecTool(
           channelContext: defaults?.channelContext,
           defaultPathPrepend,
           pluginEnv: resolvedExecEnvState?.pluginEnv,
-          storeEnv: storeEnv.env,
+          storeEnv: host === "gateway" ? storeEnv.env : undefined,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
           secretEgressEnv,
           ...preparedRunEnvironment,
@@ -464,6 +457,7 @@ export function createExecTool(
             agentId,
             security,
             ask,
+            bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
             autoReview,
             autoReviewer,
             signal,
@@ -475,7 +469,8 @@ export function createExecTool(
             approvalRunningNoticeMs,
             warnings,
             foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
-            processContinuationAvailable: allowBackground,
+            // Remote system.run has no process-session owner.
+            processContinuationAvailable: false,
             notifySessionKey,
             notifyOnExit,
             trustedSafeBinDirs,

@@ -174,6 +174,7 @@ describe("canonical session message recovery", () => {
     ]);
     expect(state.chatRunId).toBe(activeRunId);
     expect(state.chatQueue).toEqual([]);
+    state.chatRunId = steerRunId;
 
     const steerEvent = {
       type: "event",
@@ -198,6 +199,7 @@ describe("canonical session message recovery", () => {
       },
     } satisfies Parameters<typeof handlePageGatewayEvent>[1];
     handlePageGatewayEvent(state, steerEvent);
+    expect(state.chatRunId).toBe(activeRunId);
     const segmentsAfterRequestBoundary = state.chatStreamSegments;
     expect(state.chatStreamSegments).toBe(segmentsAfterRequestBoundary);
     expect(
@@ -329,6 +331,43 @@ describe("canonical session message recovery", () => {
     expect(getChatSessionProjection(state, state.chatMessages).messages).toEqual(
       state.chatMessages,
     );
+  });
+
+  it("does not rebind an unrelated run from a persisted steer", () => {
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [],
+      chatRunId: "run-c",
+      chatStream: "Run C",
+      chatStreamSegments: [],
+      chatToolMessages: [],
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        clientRunId: "run-b",
+        hasActiveRun: true,
+        messageId: "steer-b",
+        messageSeq: 1,
+        message: {
+          role: "user",
+          content: "Steer A",
+          __openclaw: {
+            id: "steer-b",
+            idempotencyKey: "run-b:user",
+            seq: 1,
+            steerTargetRunId: "run-a",
+          },
+        },
+      },
+    });
+
+    expect(state.chatRunId).toBe("run-c");
+    expect(state.chatStream).toBe("Run C");
+    expect(state.chatStreamSegments).toEqual([]);
   });
 
   it("keeps pre-steer output above an earlier ordinary queued user", () => {

@@ -15,7 +15,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
+import { sendMethodNotAllowed } from "./http-common.js";
 import {
   HTTP_IMAGE_MAX_BYTES,
   HTTP_SVG_MAX_BYTES,
@@ -23,12 +23,7 @@ import {
   sendHttpImageResponse,
   type HttpImageRepresentation,
 } from "./http-image-response.js";
-import {
-  authorizeGatewayHttpRequestOrReply,
-  resolveOpenAiCompatibleHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
-} from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { authorizeControlUiSessionOwnerReadRequestOrReply } from "./http-utils.js";
 
 /**
  * Conventional project icon locations in deterministic product precedence.
@@ -229,7 +224,7 @@ export async function handleWorkspaceIconHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+  const requestAuth = await authorizeControlUiSessionOwnerReadRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -238,26 +233,6 @@ export async function handleWorkspaceIconHttpRequest(
     rateLimiter: opts.rateLimiter,
   });
   if (!requestAuth) {
-    return true;
-  }
-  const scopeAuth = authorizeOperatorScopesForMethod(
-    "sessions.list",
-    resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth),
-  );
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
-    return true;
-  }
-  // The read scope alone is not the session's visibility decision: `sessions.list`
-  // additionally hides incognito and non-owner draft sessions per client
-  // (createSessionListEntryFilter). This route has no Gateway client to run that
-  // filter against, so it takes the same owner gate the managed-media route uses
-  // for session-scoped bytes — the identity for which that filter is a no-op.
-  if (!resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
-    sendJson(res, 403, {
-      ok: false,
-      error: { message: "owner access required", type: "forbidden" },
-    });
     return true;
   }
 

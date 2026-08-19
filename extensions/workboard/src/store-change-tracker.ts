@@ -48,6 +48,13 @@ export class WorkboardChangeTracker {
         }
         return updated;
       },
+      deleteIfUpdatedAt: async (key, expectedUpdatedAt) => {
+        const deleted = await store.deleteIfUpdatedAt(key, expectedUpdatedAt);
+        if (deleted) {
+          this.mutationRevision += 1;
+        }
+        return deleted;
+      },
       claimIfOwnerAvailable: async (key, value, expectedUpdatedAt, ownerId, now) => {
         const result = await store.claimIfOwnerAvailable(
           key,

@@ -110,6 +110,7 @@ describe("widget theme bridge", () => {
     }
 
     vi.stubGlobal("MutationObserver", FakeMutationObserver);
+    vi.stubGlobal("window", {});
     stubComputedStyles({ "--accent": "#c41e30" });
     const chatFrame = document.createElement("iframe");
     chatFrame.className = "chat-tool-card__preview-frame";

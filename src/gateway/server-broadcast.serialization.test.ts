@@ -1,7 +1,9 @@
 // Covers broadcast frame-serialization failure: an unserializable payload must
 // not consume per-client seqs (which would fire every client's gap detector and
 // cause a synchronized reconnect storm) and must leave a server-side record.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setVerbose } from "../global-state.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -50,6 +52,12 @@ function makeClient(connId: string): { client: GatewayWsClient; socket: Recordin
   };
 }
 
+afterEach(() => {
+  setVerbose(false);
+  setLoggerOverride(null);
+  resetLogger();
+});
+
 describe("broadcast serialization failures", () => {
   it("drops the event without consuming seqs when the payload cannot serialize", () => {
     warnSpy.mockClear();
@@ -73,5 +81,27 @@ describe("broadcast serialization failures", () => {
     broadcast("skills.changed", { reason: "recovered" });
     expect(first.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
     expect(second.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
+  });
+
+  it("does not inspect agent log summaries for an ineligible outbound broadcast", () => {
+    setVerbose(true);
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const filtered = makeClient("filtered");
+    filtered.client.connect.scopes = [];
+    const { broadcast } = createGatewayBroadcaster({ clients: new Set([filtered.client]) });
+    let dataReads = 0;
+    const payload = {
+      runId: "run-1",
+      stream: "assistant",
+      get data() {
+        dataReads += 1;
+        return { text: "not delivered" };
+      },
+    };
+
+    broadcast("agent", payload);
+
+    expect(filtered.socket.send).not.toHaveBeenCalled();
+    expect(dataReads).toBe(0);
   });
 });

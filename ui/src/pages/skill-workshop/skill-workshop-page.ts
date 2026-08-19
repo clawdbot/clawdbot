@@ -5,7 +5,6 @@ import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
 import "../../components/tooltip.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import {
   filterSkillWorkshopProposals,
   type SkillWorkshopAppliedDiffMode,
@@ -32,7 +31,7 @@ import {
   type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
-import { resolveSkillWorkshopRevisionSessionKey } from "./revision-session.ts";
+import { SkillWorkshopRevisionRecoveryController } from "./revision-recovery.ts";
 import { resolveSelfLearning, setSelfLearningEnabled } from "./self-learning.ts";
 import {
   captureSkillWorkshopSourceScope,
@@ -50,6 +49,7 @@ function renderSkillWorkshopPage(
 ) {
   const {
     context,
+    revisionRecoveryActive,
     workshopAgentName,
     onEvaluate,
     onRevisionSubmit,
@@ -146,6 +146,7 @@ function renderSkillWorkshopPage(
               actionNotice: state.skillWorkshopActionNotice,
               revisionKey: state.skillWorkshopRevisionKey,
               revisionDraft: state.skillWorkshopRevisionDraft,
+              revisionRecoveryActive,
               assistantName: context.config.current.assistantIdentity.name,
               workshopAgentName,
               selfLearning,
@@ -192,13 +193,13 @@ function renderSkillWorkshopPage(
               },
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
-              onApply: (key) => {
+              onApply: (decision) => {
                 if (
                   !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.apply")
                 ) {
                   return;
                 }
-                void runSkillWorkshopLifecycleAction(state, context, "apply", key).finally(
+                void runSkillWorkshopLifecycleAction(state, context, "apply", decision).finally(
                   requestUpdate,
                 );
                 requestUpdate();
@@ -225,13 +226,13 @@ function renderSkillWorkshopPage(
                 state.skillWorkshopRevisionDraft = "";
                 requestUpdate();
               },
-              onReject: (key) => {
+              onReject: (decision) => {
                 if (
                   !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.reject")
                 ) {
                   return;
                 }
-                void runSkillWorkshopLifecycleAction(state, context, "reject", key).finally(
+                void runSkillWorkshopLifecycleAction(state, context, "reject", decision).finally(
                   requestUpdate,
                 );
                 requestUpdate();
@@ -241,6 +242,9 @@ function renderSkillWorkshopPage(
                 requestUpdate();
               },
               onRevisionCancel: () => {
+                if (revisionRecoveryActive) {
+                  return;
+                }
                 state.skillWorkshopRevisionKey = null;
                 state.skillWorkshopRevisionDraft = "";
                 requestUpdate();
@@ -293,6 +297,14 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   private sessionsSource?: SkillWorkshopPageContext["sessions"];
   private selfLearningBusy = false;
   private selfLearningError: string | null = null;
+  private readonly requestPageUpdate = () => {
+    if (this.isConnected) {
+      this.requestUpdate();
+    }
+  };
+  private readonly revisionRecovery = new SkillWorkshopRevisionRecoveryController(
+    this.requestPageUpdate,
+  );
   private readonly proposalsTask = new Task(this, {
     autoRun: false,
     // State and context identities isolate helper mutations after any source reset.
@@ -416,65 +428,34 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.runtimeConfig,
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.skillWorkshopRevisionAdmissions,
+      (admissions, notify) => admissions.subscribe(notify),
     );
 
   private readonly handleRevisionRequest: SkillWorkshopRevisionRequest = async (
     instructions,
     proposal,
     proposalAgentId,
+    expectedRevisionHash,
   ) => {
     const scope = this.captureSourceScope();
     if (!scope) {
-      throw new Error("Skill Workshop is not ready.");
+      return {
+        error: "Skill Workshop is not ready.",
+        id: "unowned",
+        status: "retryable-failed",
+      };
     }
-    let sessionKey: string | null;
-    try {
-      sessionKey = await resolveSkillWorkshopRevisionSessionKey(
-        scope.state,
-        scope.context,
-        proposal,
-        proposalAgentId,
-        () => this.isCurrentSourceScope(scope),
-      );
-    } catch (error) {
-      if (!this.isCurrentSourceScope(scope)) {
-        return;
-      }
-      throw error;
-    }
-    if (!this.isCurrentSourceScope(scope)) {
-      return;
-    }
-    if (!sessionKey) {
-      throw new Error(scope.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
-    }
-    const owner = scope.gateway.snapshot.hello;
-    if (!owner) {
-      return;
-    }
-    const handoff = {
-      sessionKey,
+    return await this.revisionRecovery.request({
+      context: scope.context,
+      expectedRevisionHash,
       instructions,
-      owner,
-      proposalId: proposal.key,
-      proposalAgentId: normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId),
-    };
-    try {
-      scope.revision.prepare(handoff);
-    } catch (error) {
-      if (!this.isCurrentSourceScope(scope)) {
-        return;
-      }
-      throw error;
-    }
-    if (!this.isCurrentSourceScope(scope)) {
-      scope.revision.clear(handoff);
-      return;
-    }
-    scope.navigate(
-      "chat",
-      sessionNavigationTarget({ context: scope.context, face: "chat", sessionKey }).options,
-    );
+      proposal,
+      proposalAgentId,
+      state: scope.state,
+    });
   };
 
   private readonly handleEvaluation = (proposalId: string) => {
@@ -499,7 +480,21 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       proposalId,
       sendRevisionRequest,
       () => this.isCurrentSourceScope(scope),
-    ).finally(this.requestPageUpdate);
+    )
+      .then((outcome) => {
+        if (!outcome || outcome.status !== "admitted" || !this.isCurrentSourceScope(scope)) {
+          return;
+        }
+        scope.navigate(
+          "chat",
+          sessionNavigationTarget({
+            context: scope.context,
+            face: "chat",
+            sessionKey: outcome.sessionKey,
+          }).options,
+        );
+      })
+      .finally(this.requestPageUpdate);
   };
 
   override willUpdate() {
@@ -512,6 +507,9 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   }
 
   override updated() {
+    if (this.state && this.context) {
+      this.revisionRecovery.sync(this.context, this.state);
+    }
     // Only kick a load when none is in flight and the last attempt did not
     // fail: loadProposals early-returns resolve immediately and their finally
     // schedules another update, so re-kicking here would spin forever when a
@@ -537,12 +535,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
   }
 
-  private readonly requestPageUpdate = () => {
-    if (this.isConnected) {
-      this.requestUpdate();
-    }
-  };
-
   private resetSourceState() {
     this.operationEpoch += 1;
     this.selfLearningBusy = false;
@@ -556,6 +548,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       globalThis.clearTimeout(previous.skillWorkshopActionNoticeTimer);
     }
     const next = createSkillWorkshopState();
+    next.skillWorkshopAgentId = previous.skillWorkshopAgentId;
     next.skillWorkshopStatusFilter = previous.skillWorkshopStatusFilter;
     next.skillWorkshopQuery = previous.skillWorkshopQuery;
     next.skillWorkshopQueueWidth = previous.skillWorkshopQueueWidth;
@@ -685,6 +678,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
           this.state,
           {
             context: this.context,
+            revisionRecoveryActive: this.revisionRecovery.active,
             workshopAgentName:
               this.context.agentIdentity.get(this.state.skillWorkshopAgentId)?.name?.trim() ?? "",
             onEvaluate: this.handleEvaluation,

@@ -1092,6 +1092,30 @@
   white-space: nowrap;
 }
 
+.chat-activity-group__review-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.chat-activity-group__review-status svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-activity-group__review-status[data-outcome="approved"] {
+  color: var(--ok);
+}
+
+.chat-activity-group__review-status[data-outcome="denied"] {
+  color: var(--danger);
+}
+
+.chat-activity-group__review-status[data-outcome="reviewing"] {
+  color: var(--warn);
+}
+
 /* Parent and child rows share one icon/text grid; order and whitespace carry
    hierarchy without shrinking the available command width. */
 .chat-activity-group__body {
@@ -2165,6 +2189,85 @@ openclaw-tooltip.chat-tasks-status__preview {
     padding: 8px 10px;
     max-height: 300px;
   }
+}
+
+.chat-tool-reviews {
+  display: grid;
+  gap: 4px;
+  margin: 4px 8px 8px 24px;
+}
+
+.chat-tool-review {
+  padding: 7px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--ok) 48%, var(--border));
+  background: linear-gradient(90deg, var(--ok-subtle), transparent 68%);
+}
+
+.chat-tool-review[data-review-status="denied"],
+.chat-tool-review[data-review-status="timed_out"],
+.chat-tool-review[data-review-status="aborted"] {
+  border-left-color: color-mix(in srgb, var(--danger) 48%, var(--border));
+  background: linear-gradient(90deg, var(--danger-subtle), transparent 68%);
+}
+
+.chat-tool-review[data-review-status="in_progress"] {
+  border-left-color: color-mix(in srgb, var(--warn) 48%, var(--border));
+  background: linear-gradient(90deg, var(--warn-subtle), transparent 68%);
+}
+
+.chat-tool-review__header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-tool-review__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--ok);
+}
+
+.chat-tool-review[data-review-status="denied"] .chat-tool-review__icon,
+.chat-tool-review[data-review-status="timed_out"] .chat-tool-review__icon,
+.chat-tool-review[data-review-status="aborted"] .chat-tool-review__icon {
+  color: var(--danger);
+}
+
+.chat-tool-review[data-review-status="in_progress"] .chat-tool-review__icon {
+  color: var(--warn);
+}
+
+.chat-tool-review__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-tool-review__label {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.chat-tool-review__chip {
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.chat-tool-review__rationale {
+  margin: 4px 0 0 20px;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 560px) {

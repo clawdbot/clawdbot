@@ -9,7 +9,7 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
@@ -59,6 +59,7 @@ type StartChatDispatchParams = {
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
   toolsAllow?: string[];
+  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
@@ -89,6 +90,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     client,
     context,
     toolsAllow,
+    skillWorkshopProposalRevision,
     cronCreatorAuthority,
     externalAuthorityAdmission,
     injection,
@@ -108,7 +110,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     messageInjectionTarget,
     retainGatewayWorkAdmission,
     restartSafeAdmission,
-    setReleaseGatewayRootContinuation,
   } = admission;
   const {
     activeRunScopeKey,
@@ -210,9 +211,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     }
     emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
   };
-  // Reserve the detached dispatch before this request releases its root. Otherwise
-  // its inherited ALS context becomes retired and rejects queued/session work.
-  setReleaseGatewayRootContinuation(retainGatewayRootWorkAdmissionContinuation() ?? undefined);
   const dispatch = replyDispatch
     .runAgentMediaTranscript(gatewayWorkAdmission, () =>
       measureDiagnosticsTimelineSpan(
@@ -252,6 +250,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 changes.forEach((change) => emitSessionsChanged(context, change)),
               replyOptions: {
                 runId: clientRunId,
+                skillWorkshopProposalRevision,
                 ...(cronCreatorAuthority
                   ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
                   : {}),
