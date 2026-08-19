@@ -224,7 +224,7 @@ export function installGitHubPublicationTestHarness(): void {
         const baseRefPrefix = "gh api repos/openclaw/openclaw/git/ref/heads/";
         if (command.startsWith(baseRefPrefix)) {
           const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
-          return commandResult(JSON.stringify({ ref: `refs/heads/${branch}` }));
+          return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
         }
         if (command === "git show -s --format=%B HEAD") {
           return commandResult("existing commit\n");
@@ -261,7 +261,7 @@ export function installGitHubPublicationTestHarness(): void {
           remoteLookup += 1;
           return commandResult(remoteLookup === 1 ? "" : `${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
         }
-        if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=open")) {
+        if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
           return commandResult("[]\n");
         }
         if (command === "gh api --method POST repos/openclaw/openclaw/pulls --input -") {

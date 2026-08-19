@@ -15,7 +15,11 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
-import { parseGitHubPublicationPullRequests } from "./github-publication-pull-requests.js";
+import { parseGitHubPublicationBaseRef } from "./github-publication-base.js";
+import {
+  githubPublicationPullRequestLookupArgs,
+  parseGitHubPublicationPullRequests,
+} from "./github-publication-pull-requests.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
@@ -375,24 +379,23 @@ export async function executeGitHubPublication(params: {
     const remoteBaseResult = await step(
       async () =>
         await runCommand(
-          ["gh", "api", `repos/${repository}/git/ref/heads/${baseBranch}`, "--jq", "{ref: .ref}"],
+          [
+            "gh",
+            "api",
+            `repos/${repository}/git/ref/heads/${baseBranch}`,
+            "--jq",
+            "{ref: .ref, sha: .object.sha}",
+          ],
           { env: identity.env },
         ),
     );
-    let remoteBaseRef: string | undefined;
-    if (remoteBaseResult.code === 0) {
-      try {
-        remoteBaseRef = readNonBlankString(
-          parseJsonObject(remoteBaseResult.stdout.toString("utf8"), "GitHub base branch lookup")
-            .ref,
-        );
-      } catch {
-        remoteBaseRef = undefined;
-      }
-    }
-    if (remoteBaseRef !== `refs/heads/${baseBranch}`) {
+    if (remoteBaseResult.code !== 0) {
       throw new Error("GitHub publication workspace base branch could not be verified.");
     }
+    const remoteBaseSha = parseGitHubPublicationBaseRef(
+      remoteBaseResult.stdout.toString("utf8"),
+      baseBranch,
+    );
     const baseCandidates = [worktree.baseRef, `refs/remotes/origin/${baseBranch}`];
     let baseCommit: string | undefined;
     for (const candidate of baseCandidates) {
@@ -411,33 +414,41 @@ export async function executeGitHubPublication(params: {
     if (!baseCommit) {
       throw new Error("GitHub publication workspace base could not be verified.");
     }
+    const localBaseOwnsRemote = await step(
+      async () =>
+        await runCommand(["git", "merge-base", "--is-ancestor", baseCommit, remoteBaseSha], {
+          cwd: worktree.path,
+        }),
+    );
+    const localBaseOwnsSource = await step(
+      async () =>
+        await runCommand(["git", "merge-base", "--is-ancestor", baseCommit, sourceHeadCommit], {
+          cwd: worktree.path,
+        }),
+    );
+    if (localBaseOwnsRemote.code !== 0 || localBaseOwnsSource.code !== 0) {
+      throw new Error("GitHub publication workspace base lineage could not be verified.");
+    }
     const baseTree = await step(
       async () =>
-        await requireCommand(["git", "rev-parse", `${baseCommit}^{tree}`], {
+        await requireCommand(["git", "rev-parse", `${remoteBaseSha}^{tree}`], {
           cwd: worktree.path,
         }),
     );
     if (baseTree === workspaceTree) {
       throw new Error("GitHub publication has no changes to publish.");
     }
+    const marker = `${PUBLICATION_MARKER}: ${row.request_id}`;
+    const pullRequestMarker = `<!-- openclaw-publication:${row.request_id} -->`;
     const loadOpenPullRequests = async () => {
       const lookupIdentity = await refreshIdentity();
       const raw = await requireCommand(
-        [
-          "gh",
-          "api",
-          "--method",
-          "GET",
-          `repos/${repository}/pulls`,
-          "-f",
-          `head=${repositoryTarget.push.owner}:${branch}`,
-          "-f",
-          `base=${baseBranch}`,
-          "-f",
-          "state=open",
-          "--jq",
-          "map({url: .html_url, userId: .user.id, headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref})",
-        ],
+        githubPublicationPullRequestLookupArgs({
+          repository,
+          owner: repositoryTarget.push.owner,
+          branch,
+          baseBranch,
+        }),
         { env: lookupIdentity.env },
       );
       const candidates = parseGitHubPublicationPullRequests(raw);
@@ -448,7 +459,10 @@ export async function executeGitHubPublication(params: {
     };
     const initialPullRequests = await step(loadOpenPullRequests);
     const occupiedPullRequest = initialPullRequests.candidates.find(
-      (candidate) => candidate.headRef === branch && candidate.baseRef === baseBranch,
+      (candidate) =>
+        candidate.state === "open" &&
+        candidate.headRef === branch &&
+        candidate.baseRef === baseBranch,
     );
     if (occupiedPullRequest && occupiedPullRequest.userId !== initialPullRequests.accountId) {
       throw new Error("GitHub pull request is owned by another account.");
@@ -463,7 +477,6 @@ export async function executeGitHubPublication(params: {
       headCommit,
     });
 
-    const marker = `${PUBLICATION_MARKER}: ${row.request_id}`;
     const currentMessage = await step(
       async () =>
         await requireCommand(["git", "show", "-s", "--format=%B", "HEAD"], {
@@ -625,7 +638,8 @@ export async function executeGitHubPublication(params: {
           candidate.userId === pullRequests.accountId &&
           candidate.headSha === headCommit &&
           candidate.headRef === branch &&
-          candidate.baseRef === baseBranch,
+          candidate.baseRef === baseBranch &&
+          (candidate.state === "open" || candidate.body.includes(pullRequestMarker)),
       );
       return exact?.url;
     };

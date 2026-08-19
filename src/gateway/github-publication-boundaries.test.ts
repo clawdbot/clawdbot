@@ -110,6 +110,32 @@ describe("Gateway GitHub publication boundaries", () => {
     );
   });
 
+  it("fails before mutation when the local base is outside the authenticated remote lineage", async () => {
+    const fallback = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      if (argv[0] === "git" && argv[1] === "merge-base") {
+        return commandResult("", 1);
+      }
+      return await fallback(argv, options);
+    });
+    const coordinator = createTestGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+      }),
+    });
+
+    await expect(
+      coordinator.requestForSession({
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        idempotencyKey: "unrelated-base-lineage",
+      }),
+    ).resolves.toMatchObject({ status: "failed", code: "workspace_changed" });
+    expect(commands.some((argv) => argv.includes("commit-tree") || argv.includes("push"))).toBe(
+      false,
+    );
+  });
+
   it("fails before mutation when the target repository base branch is unavailable", async () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
@@ -146,6 +172,8 @@ describe("Gateway GitHub publication boundaries", () => {
             {
               url: "https://github.com/openclaw/openclaw/pull/foreign",
               userId: 99,
+              state: "open",
+              body: "",
               headSha: "b".repeat(40),
               headRef: BRANCH,
               baseRef: "main",

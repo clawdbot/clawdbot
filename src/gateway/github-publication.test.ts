@@ -148,12 +148,14 @@ describe("Gateway GitHub publication", () => {
       if (command.includes("ls-remote") && command.includes("roboclaw-bot/openclaw.git")) {
         return commandResult(`${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
       }
-      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=open")) {
+      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=all")) {
         return commandResult(
           JSON.stringify([
             {
               url: "https://github.com/openclaw/openclaw/pull/125201",
               userId: 42,
+              state: "open",
+              body: "",
               headSha: NEW_HEAD,
               headRef: BRANCH,
               baseRef: "main",
@@ -208,7 +210,7 @@ describe("Gateway GitHub publication", () => {
         remoteLookups += 1;
         return commandResult(remoteLookups === 1 ? "" : `${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
       }
-      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=open")) {
+      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=all")) {
         return commandResult("[]\n");
       }
       if (command === "gh api --method POST repos/openclaw/openclaw/pulls --input -") {
@@ -261,9 +263,10 @@ describe("Gateway GitHub publication", () => {
   it("recovers a lost pull-request POST response through exact lookup", async () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     let pullLookups = 0;
+    let createdBody = "";
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       const command = argv.join(" ");
-      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=open")) {
+      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=all")) {
         pullLookups += 1;
         return commandResult(
           pullLookups < 3
@@ -272,6 +275,8 @@ describe("Gateway GitHub publication", () => {
                 {
                   url: "https://github.com/openclaw/openclaw/pull/125203",
                   userId: 42,
+                  state: "closed",
+                  body: createdBody,
                   headSha: NEW_HEAD,
                   headRef: BRANCH,
                   baseRef: "main",
@@ -280,6 +285,7 @@ describe("Gateway GitHub publication", () => {
         );
       }
       if (command === "gh api --method POST repos/openclaw/openclaw/pulls --input -") {
+        createdBody = String(JSON.parse(options?.input ?? "{}").body ?? "");
         return commandResult("", 1);
       }
       return await fallback(argv, options);
@@ -308,12 +314,14 @@ describe("Gateway GitHub publication", () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       const command = argv.join(" ");
-      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=open")) {
+      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=all")) {
         return commandResult(
           JSON.stringify([
             {
               url: "https://github.com/openclaw/openclaw/pull/old-base",
               userId: 42,
+              state: "open",
+              body: "",
               headSha: NEW_HEAD,
               headRef: BRANCH,
               baseRef: "release",
@@ -345,8 +353,7 @@ describe("Gateway GitHub publication", () => {
       url: "https://github.com/openclaw/openclaw/pull/right-base",
     });
     const lookup = mocks.runCommand.mock.calls.find(
-      ([argv]) =>
-        argv.includes("state=open") && argv.includes("head=openclaw:openclaw/publication"),
+      ([argv]) => argv.includes("state=all") && argv.includes("head=openclaw:openclaw/publication"),
     );
     expect(lookup?.[0]).toContain("base=main");
     expect(mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("POST"))).toHaveLength(1);
@@ -792,8 +799,8 @@ describe("Gateway GitHub publication", () => {
         if (command.startsWith("gh api repos/openclaw/openclaw --jq {fork, default_branch")) {
           return commandResult('{"fork":false,"default_branch":"main"}\n');
         }
-        if (command === "gh api repos/openclaw/openclaw/git/ref/heads/main --jq {ref: .ref}") {
-          return commandResult('{"ref":"refs/heads/main"}\n');
+        if (command.startsWith("gh api repos/openclaw/openclaw/git/ref/heads/main --jq")) {
+          return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: BASE_HEAD }));
         }
         if (command === "git show -s --format=%B HEAD") {
           return commandResult(`Resume the publication\n\nOpenClaw-Publication: ${requestId}\n`);
@@ -828,13 +835,15 @@ describe("Gateway GitHub publication", () => {
               : "",
           );
         }
-        if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=open")) {
+        if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
           return commandResult(
             pullRequestExists
               ? JSON.stringify([
                   {
                     url: "https://github.com/openclaw/openclaw/pull/125200",
                     userId: 42,
+                    state: "open",
+                    body: "",
                     headSha: NEW_HEAD,
                     headRef: BRANCH,
                     baseRef: "main",
