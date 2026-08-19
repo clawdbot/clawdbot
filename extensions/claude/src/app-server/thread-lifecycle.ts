@@ -33,7 +33,17 @@
  *     (b) Teach the server to refresh sdkOptions.mcpServers on resume
  *         (probably requires SDK support — the SDK's MCP registration
  *         isn't refreshable today).
- *   In practice catalog churn is rare for stable plugin sets.
+ *
+ *   An earlier revision of this note said "in practice catalog churn is
+ *   rare for stable plugin sets." That is true of *genuine* churn but it
+ *   is not the whole story: the live binding store shows the catalog
+ *   occasionally arriving as a tiny remnant of itself and returning intact
+ *   moments later (78 tools -> 2 -> 78, seen 2026-08-12 and 2026-08-17).
+ *   Rotating on those cost two transcript copies and two killed
+ *   subprocesses for no change at all, so `isCollapsedToolCatalog` now
+ *   declines to rotate on a collapse and resumes instead. Why the catalog
+ *   collapses is still open (openclaw-enhz); this only stops it from
+ *   destroying the session.
  */
 
 import {
@@ -138,7 +148,36 @@ async function startOrResumeClaudeThreadLocked(
   } = args;
   const existing = await bindingStore.read(identity);
 
-  const rotationReason = classifyRotationReason(existing, dynamicToolsFingerprint);
+  const classifiedRotationReason = classifyRotationReason(existing, dynamicToolsFingerprint);
+
+  // A rotation is expensive and destructive: thread/fork copies the whole
+  // transcript, the new thread id IS the SDK session id (so the prompt cache
+  // goes cold), and the respawned subprocess kills anything the previous turn
+  // backgrounded. None of that is worth paying for a catalog that has
+  // collapsed to a remnant and will be back next turn. Resume instead — the
+  // tools registered at thread/start are still the real ones, and the binding
+  // keeps describing the real catalog because the resume path preserves the
+  // stored fingerprint rather than overwriting it with this turn's.
+  const collapsed =
+    existing !== null &&
+    classifiedRotationReason !== undefined &&
+    isCollapsedToolCatalog({
+      boundCount: existing.dynamicToolsCount,
+      nextCount: bridge.specs.length,
+    });
+  if (collapsed && existing) {
+    embeddedAgentLog.warn(
+      "claude-bridge: dynamic tool catalog collapsed; resuming instead of rotating (suspected transient)",
+      {
+        sessionKey: identity.sessionKey,
+        sessionId: identity.sessionId,
+        threadId: existing.threadId,
+        boundToolCount: existing.dynamicToolsCount,
+        incomingToolCount: bridge.specs.length,
+      },
+    );
+  }
+  const rotationReason = collapsed ? undefined : classifiedRotationReason;
 
   if (existing && !rotationReason) {
     try {
@@ -146,6 +185,7 @@ async function startOrResumeClaudeThreadLocked(
         client,
         existing,
         bindingStore,
+        boundCatalogSize: collapsed ? undefined : bridge.specs.length,
         identity,
         cfg,
         effectiveWorkspace,
@@ -229,6 +269,46 @@ async function startOrResumeClaudeThreadLocked(
 
 // ── decision: should we rotate? ─────────────────────────────────────────────
 
+/**
+ * Fraction of the bound catalog below which an incoming catalog is treated as
+ * a transient assembly failure rather than a real change.
+ *
+ * Twice observed in the live binding store (2026-08-12 22:07 and 2026-08-17
+ * 20:26): a 78-tool surface arrived as 2 tools (`read`, `write`), rotated, and
+ * came back byte-identical within a minute — two full transcript copies and
+ * two dead subprocesses to end up exactly where we started. Across ~63k
+ * threads in that store, only 14 ever carried 3 tools or fewer while normal
+ * catalogs never sit below 33, so a quarter of the bound size is a wide
+ * margin between "collapsed" and "legitimately smaller".
+ */
+const COLLAPSED_CATALOG_MAX_RATIO = 0.25;
+
+/**
+ * Whether an incoming dynamic tool catalog looks like a collapse (transient
+ * assembly failure) rather than a genuine catalog change.
+ *
+ * Codex has the analogous guard at thread-fingerprints.ts
+ * (`shouldStartTransientNoToolThread`) but only covers the literal-zero case;
+ * the collapses we actually observe leave a small remnant, so zero alone
+ * would not have caught either of them.
+ */
+export function isCollapsedToolCatalog(params: {
+  boundCount: number | undefined;
+  nextCount: number;
+}): boolean {
+  const { boundCount, nextCount } = params;
+  // An empty catalog is always suspect when the bound thread had one.
+  if (nextCount === 0) {
+    return (boundCount ?? 0) > 0;
+  }
+  // Bindings predating `dynamicToolsCount` give us no baseline to compare
+  // against, so the literal-zero case above is all we can judge.
+  if (boundCount === undefined || boundCount <= 0) {
+    return false;
+  }
+  return nextCount < boundCount * COLLAPSED_CATALOG_MAX_RATIO;
+}
+
 function classifyRotationReason(
   existing: ClaudeAppServerBinding | null,
   dynamicToolsFingerprint: string,
@@ -256,11 +336,19 @@ async function tryResumeWithPatch(args: {
   effectiveWorkspace: string;
   developerInstructions: string;
   developerInstructionsFingerprint: string;
+  /**
+   * Size of THIS turn's catalog when it is known to represent the bound
+   * catalog (fingerprints matched). `undefined` when the caller suppressed a
+   * collapse — that turn's size is a remnant, not a baseline, and adopting it
+   * would make the next real collapse look normal.
+   */
+  boundCatalogSize: number | undefined;
 }): Promise<string> {
   const {
     client,
     existing,
     bindingStore,
+    boundCatalogSize,
     identity,
     cfg,
     effectiveWorkspace,
@@ -290,7 +378,20 @@ async function tryResumeWithPatch(args: {
 
   // Persist the patched values so the next turn doesn't re-send the same
   // patches.
-  if (cwdDiverged || approvalPolicyDiverged || developerInstructionsDiverged) {
+  // Bindings written before `dynamicToolsCount` existed carry no baseline, so
+  // the collapse guard cannot judge them. Backfill on a turn whose fingerprint
+  // MATCHES the binding — a match proves this catalog IS the bound catalog, so
+  // its size is the true baseline. Without this the guard would only start
+  // working after a session's first rotation, i.e. after the very event it is
+  // meant to prevent.
+  const needsToolCountBackfill =
+    existing.dynamicToolsCount === undefined && boundCatalogSize !== undefined;
+  if (
+    cwdDiverged ||
+    approvalPolicyDiverged ||
+    developerInstructionsDiverged ||
+    needsToolCountBackfill
+  ) {
     await bindingStore.write(identity, {
       threadId: existing.threadId,
       cwd: effectiveWorkspace,
@@ -301,6 +402,11 @@ async function tryResumeWithPatch(args: {
       sandbox: existing.sandbox,
       developerInstructionsFingerprint,
       dynamicToolsFingerprint: existing.dynamicToolsFingerprint,
+      // Carried through, not recomputed: this turn's catalog may be a
+      // collapsed remnant we deliberately declined to rotate on, and
+      // adopting its size as the new baseline would make the next real
+      // collapse look normal by comparison.
+      dynamicToolsCount: existing.dynamicToolsCount ?? boundCatalogSize,
       createdAt: existing.createdAt,
     });
   }
@@ -384,6 +490,7 @@ async function forkThreadOnCatalogDrift(args: {
     sandbox: cfg.appServer.sandbox,
     developerInstructionsFingerprint,
     dynamicToolsFingerprint,
+    dynamicToolsCount: bridge.specs.length,
   });
   return newThreadId;
 }
@@ -451,6 +558,7 @@ async function startFreshThread(args: {
     sandbox: cfg.appServer.sandbox,
     developerInstructionsFingerprint,
     dynamicToolsFingerprint,
+    dynamicToolsCount: bridge.specs.length,
   });
   return threadId;
 }
