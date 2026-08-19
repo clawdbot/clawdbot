@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -14,9 +12,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
-
-const themeProofDir = process.env.OPENCLAW_TERMINAL_THEME_PROOF_DIR?.trim();
-const themeVideoDir = process.env.OPENCLAW_TERMINAL_THEME_VIDEO_DIR?.trim();
 
 async function openTerminalSidePanel(page: Page): Promise<Locator> {
   await page.goto(`${suite.server.baseUrl}chat`);
@@ -37,18 +32,6 @@ async function settleTerminalPaint(page: Page): Promise<void> {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       }),
   );
-}
-
-async function captureThemeProof(page: Page, name: string): Promise<void> {
-  if (!themeProofDir) {
-    return;
-  }
-  await fs.mkdir(themeProofDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    caret: "hide",
-    path: path.join(themeProofDir, `${name}.png`),
-  });
 }
 
 async function cycleThemeMode(page: Page, currentMode: "Dark" | "Light" | "System") {
@@ -96,9 +79,6 @@ suite.define(() => {
         colorScheme: "light",
         serviceWorkers: "block",
         viewport: { height: 800, width: 1280 },
-        ...(themeVideoDir
-          ? { recordVideo: { dir: themeVideoDir, size: { height: 800, width: 1280 } } }
-          : {}),
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
@@ -113,19 +93,15 @@ suite.define(() => {
         await canvas.evaluate((element) => {
           element.dataset.themeSyncIdentity = "original";
         });
-        await captureThemeProof(page, "light-initial");
-
         await cycleThemeMode(page, "System");
         await cycleThemeMode(page, "Light");
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
-        await captureThemeProof(page, "dark-after-toggle");
         await expect
           .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
           .toBe("dark");
 
         await cycleThemeMode(page, "Dark");
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-        await captureThemeProof(page, "light-after-toggle");
         await expect
           .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
           .toBe("light");
@@ -138,7 +114,6 @@ suite.define(() => {
         await expect
           .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
           .toBe("light");
-        await captureThemeProof(page, "light-after-reopen");
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
       },
     );

@@ -115,6 +115,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
         () => (this.terminalOnly ? this.context?.agentSelection : undefined),
         (selection, notify) => selection.subscribe(notify),
       )
+      .watch(
+        () => (this.terminalOnly ? this.context?.theme : undefined),
+        (theme, notify) => theme.subscribe(notify),
+      )
       .effect(() => this.ownerDocument, installNativeTitleGuard);
   }
 
