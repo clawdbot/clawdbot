@@ -213,6 +213,7 @@ let count = 0;
 try { count = Number(readFileSync(counterPath, "utf8")); } catch {}
 writeFileSync(counterPath, String(count + 1));
 const rows = scenario.snapshots[Math.min(count, scenario.snapshots.length - 1)];
+if (rows === null) process.exit(1);
 for (const row of rows) {
   process.stdout.write([row.pid, row.ppid, row.pgid, row.state, row.startedAt].join(" ") + "\\n");
 }
@@ -247,6 +248,10 @@ const waitForFile = async (filePath) => {
 const commandForPid = (pid) => {
   try { return execFileSync("/bin/ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" }).trim(); }
   catch { return ""; }
+};
+const stoppedForPid = (pid) => {
+  try { return /^[Tt]/.test(execFileSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim()); }
+  catch { return false; }
 };
 const killOwned = (pid) => {
   if (!commandForPid(pid).includes(tempDir)) return;
@@ -329,6 +334,14 @@ try {
                       { ...sentinelIdentity, ppid: root.pid, state: "U" },
                     ],
                   ]
+                : mode === "snapshot-failure"
+                  ? [
+                      [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                      [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                      [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+                      [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+                      null,
+                    ]
               : [
               [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
               [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
@@ -347,6 +360,7 @@ try {
     closed,
     rootExitCode: root.exitCode,
     sentinelSurvived: commandForPid(sentinelPid).includes(tempDir),
+    sentinelStopped: stoppedForPid(sentinelPid),
   };
 } finally {
   process.env.PATH = originalPath;
@@ -359,13 +373,14 @@ process.stdout.write(JSON.stringify(result));
 
     try {
       const transportPath = path.resolve("extensions/codex/src/app-server/transport.ts");
-      for (const [mode, sentinelSurvived] of [
+      for (const [mode, sentinelSurvived, sentinelStopped] of [
         ["reuse", true],
         ["late", false],
         ["reparented", false],
         ["root-resumed", false],
         ["traced", false],
         ["uninterruptible", false],
+        ["snapshot-failure", true, false],
         ["extended", false],
       ] as const) {
         const output = execFileSync(
@@ -390,8 +405,12 @@ process.stdout.write(JSON.stringify(result));
           closed: boolean;
           rootExitCode: number | null;
           sentinelSurvived: boolean;
+          sentinelStopped: boolean;
         };
         expect(result).toMatchObject({ closed: true, rootExitCode: 0, sentinelSurvived });
+        if (sentinelStopped !== undefined) {
+          expect(result.sentinelStopped).toBe(sentinelStopped);
+        }
       }
     } finally {
       await removeTaskOwnedFixtureProcesses(tempDir);

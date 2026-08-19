@@ -4,6 +4,7 @@ type ContainableTransport = {
   pid?: number;
   exitCode?: number | null;
   signalCode?: string | null;
+  kill?: (signal?: NodeJS.Signals) => unknown;
 };
 
 type PosixProcess = {
@@ -59,14 +60,20 @@ export function terminateCodexAppServerDescendants(
         return;
       }
       resumed = true;
-      signalSameRoot(root, "SIGCONT");
+      resumeTransportRoot(child, root, false);
     };
   } finally {
-    for (const descendant of stoppedDescendants.values()) {
-      signalSameProcess(descendant, "SIGCONT");
-    }
     if (resumeRootOnUnwind) {
-      signalSameRoot(root, "SIGCONT");
+      // Inspection failure cannot also own release. These PIDs were signaled
+      // synchronously in this call and have not crossed an asynchronous boundary.
+      for (const descendant of stoppedDescendants.values()) {
+        signalProcess(descendant.pid, "SIGCONT");
+      }
+      resumeTransportRoot(child, root, true);
+    } else {
+      for (const descendant of stoppedDescendants.values()) {
+        signalSameProcess(descendant, "SIGCONT");
+      }
     }
   }
 }
@@ -104,6 +111,10 @@ function quiesceDescendants(
         return undefined;
       }
       provenByPid.set(current.pid, current);
+      const key = identityKey(current);
+      if (stopped.has(key)) {
+        stopped.set(key, current);
+      }
       liveProven.push(current);
     }
     const descendants = collectDescendants(snapshot, [
@@ -252,6 +263,28 @@ function isSameLiveRoot(
 function signalSameRoot(root: PosixProcess, signal: NodeJS.Signals): boolean {
   const current = readProcess(root.pid);
   return Boolean(current && isSameLiveRoot(current, root) && signalProcess(current.pid, signal));
+}
+
+function resumeTransportRoot(
+  child: ContainableTransport,
+  root: PosixProcess,
+  allowSynchronousPidFallback: boolean,
+): void {
+  try {
+    if (child.kill) {
+      child.kill("SIGCONT");
+      return;
+    }
+  } catch {
+    if (!allowSynchronousPidFallback) {
+      return;
+    }
+  }
+  if (allowSynchronousPidFallback) {
+    // Failure unwind has not crossed an asynchronous boundary, so the saved
+    // PID is still bounded to this synchronous stopped-root custody window.
+    signalProcess(root.pid, "SIGCONT");
+  }
 }
 
 function signalSameProcess(expected: PosixProcess, signal: NodeJS.Signals): boolean {
