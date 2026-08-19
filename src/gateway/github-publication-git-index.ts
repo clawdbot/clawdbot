@@ -29,7 +29,8 @@ async function syncDirectory(directory: string): Promise<void> {
     handle = await fs.open(directory, "r");
     await handle.sync();
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
+    const code =
+      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
     if (process.platform !== "win32" || (code !== "EINVAL" && code !== "EPERM")) {
       throw error;
     }
