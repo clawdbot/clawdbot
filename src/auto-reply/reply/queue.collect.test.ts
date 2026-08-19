@@ -860,7 +860,6 @@ describe("followup queue collect routing", () => {
 
     await drainRecordedQueue(key, runFollowup, done);
 
-    expect(calls).toHaveLength(3);
     expect(calls.map((call) => call.originatingTo)).toEqual([
       "channel:B",
       "channel:C",

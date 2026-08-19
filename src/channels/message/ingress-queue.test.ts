@@ -685,7 +685,6 @@ describe("channel ingress queue", () => {
         await queue.enqueue("good-2", { text: "world" });
 
         const pending = await queue.listPending();
-        expect(pending).toHaveLength(2);
         expect(pending.map((r) => r.id).toSorted()).toEqual(["good-1", "good-2"]);
       });
     });
