@@ -295,6 +295,16 @@ export class TwilioProvider implements VoiceCallProvider {
         turnToken: turnTokenFromQuery,
       });
 
+      if (
+        event?.direction === "inbound" &&
+        event.type !== "call.ended" &&
+        event.providerCallId &&
+        this.currentPublicUrl &&
+        !this.callWebhookUrls.has(event.providerCallId)
+      ) {
+        this.callWebhookUrls.set(event.providerCallId, this.currentPublicUrl);
+      }
+
       // For Twilio, we must return TwiML. Most actions are driven by Calls API updates,
       // so the webhook response is typically a pause to keep the call alive.
       const twiml = this.generateTwimlResponse(ctx);
