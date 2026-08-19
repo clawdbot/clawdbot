@@ -1,6 +1,9 @@
 // Delivery-result adapters for channel turn receipts.
 import { formatErrorMessage } from "../../infra/errors.js";
-import { listMessageReceiptPlatformIds } from "../message/receipt.js";
+import {
+  listMessageReceiptPlatformIds,
+  resolveMessageReceiptThreadId,
+} from "../message/receipt.js";
 import type { MessageReceipt } from "../message/types.js";
 import type {
   ChannelDeliveryIntent,
@@ -74,7 +77,7 @@ export function createChannelDeliveryResultFromReceipt(params: {
   deliveryIntent?: ChannelDeliveryIntent;
 }): ChannelDeliveryResult {
   const messageIds = listMessageReceiptPlatformIds(params.receipt);
-  const threadId = params.receipt.threadId?.trim() || params.threadId?.trim();
+  const threadId = resolveMessageReceiptThreadId(params.receipt, params.threadId);
   return {
     ...(messageIds.length > 0 ? { messageIds } : {}),
     receipt: params.receipt,

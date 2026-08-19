@@ -137,3 +137,19 @@ export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string 
     receipt.parts.map((part) => normalizeIdentity(part.platformMessageId)).find(Boolean)
   );
 }
+
+/** Resolves provider-owned thread placement without collapsing conflicting receipt parts. */
+export function resolveMessageReceiptThreadId(
+  receipt: MessageReceipt,
+  requestedThreadId?: string,
+): string | undefined {
+  const partThreadIds = normalizeUniqueStringEntries(
+    receipt.parts.flatMap((part) => normalizeIdentity(part.threadId) ?? []),
+  );
+  if (partThreadIds.length > 1) {
+    return undefined;
+  }
+  return (
+    partThreadIds[0] ?? normalizeIdentity(receipt.threadId) ?? normalizeIdentity(requestedThreadId)
+  );
+}
