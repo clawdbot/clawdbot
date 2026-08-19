@@ -623,6 +623,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       receivedAt: number;
       facts?: ChannelIngressMonitorFacts;
       onDurablyAdmitted: () => void;
+      pruneTask?: Promise<void>;
     },
   ) => {
     try {
@@ -630,6 +631,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       if (!facts) {
         return { kind: "ignored" } as const;
       }
+      admitOptions.pruneTask ??= pruneIfDue("admission");
+      await admitOptions.pruneTask;
       const body = options.payload.serialize(raw, { facts, receivedAt: admitOptions.receivedAt });
       const payload =
         options.payload.storage === "raw-event"
@@ -651,11 +654,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
   const scheduleAdmission = <T>(work: () => Promise<T>): Promise<T> => {
     // Append retries stay serialized so backoff cannot invert one lane's arrival order.
-    const run = async () => {
-      await pruneIfDue("admission");
-      return await work();
-    };
-    const admission = admissionTail.then(() => withAdmissionClaimLock(run));
+    const admission = admissionTail.then(() => withAdmissionClaimLock(work));
     admissionTail = admission.then(
       () => undefined,
       () => undefined,
@@ -692,18 +691,17 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       assertAdmissionOpen();
       const receivedAt = admitOptions?.receivedAt ?? now();
       let durablyAdmitted = false;
+      const sharedOptions = {
+        receivedAt,
+        onDurablyAdmitted: () => {
+          durablyAdmitted = true;
+        },
+      };
       try {
         return await scheduleAdmission(async () => {
           const results = [];
           for (const raw of rawEvents) {
-            results.push(
-              await admitRaw(raw, {
-                receivedAt,
-                onDurablyAdmitted: () => {
-                  durablyAdmitted = true;
-                },
-              }),
-            );
+            results.push(await admitRaw(raw, sharedOptions));
           }
           return results;
         });
