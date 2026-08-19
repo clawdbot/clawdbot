@@ -687,25 +687,6 @@ jobs:
           done
           exit "$result"
 
-      - name: Release Telegram QA user lease
-        if: ${{ always() }}
-        env:
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          lease_file="${{ steps.telegram_credential.outputs.lease_file }}"
-          if [[ -z "$lease_file" ]] || ! sudo test -f "$lease_file"; then
-            exit 0
-          fi
-          sudo env \
-            OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
-            OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
-            /usr/local/lib/mantis-toolchain/node --import tsx \
-            "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" release \
-            --lease-file "$lease_file"
-
       - name: Restore and validate trusted lane evidence
         id: trusted_evidence
         if: ${{ always() }}
@@ -867,14 +848,77 @@ jobs:
           sudo mv -T "$agent_output" "$quarantine"
           sudo mv -T "$trusted_output" "$MANTIS_OUTPUT_DIR"
 
+      - name: Preserve trusted-evidence failure diagnostics
+        id: trusted_evidence_failure
+        if: ${{ always() && steps.trusted_evidence.outcome == 'failure' }}
+        env:
+          SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent_output="$MANTIS_OUTPUT_DIR"
+          quarantine="$RUNNER_TEMP/mantis-agent-output-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          failure_output="$RUNNER_TEMP/mantis-trusted-failure-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo test ! -e "$failure_output"
+          sudo test ! -L "$failure_output"
+          sudo install -d -m 0755 -o root -g root "$failure_output"
+          printf '%s\n' \
+            "Trusted Mantis evidence validation failed." \
+            "The agent-authored output was quarantined and was not published." \
+            "See the Restore and validate trusted lane evidence step log." \
+            | sudo tee "$failure_output/capture-failure.log" >/dev/null
+          for lane in baseline candidate; do
+            verdict="$SESSION_ROOT/$lane.json"
+            if sudo test -f "$verdict"; then
+              sudo jq '{
+                schemaVersion,
+                lane,
+                status,
+                stage,
+                sendCount,
+                hasFocusMessage: (.focusMessageId != null),
+                invocationCount: (.invocations | length),
+                observedEventCount: (.observation.events | length),
+                providerRequestCount: (.providerRequests | length),
+                artifactNames: (.artifacts | keys),
+                cleanupErrorCount: (.cleanupErrors | length)
+              }' "$verdict" | sudo tee "$failure_output/$lane-diagnostic.json" >/dev/null
+            fi
+          done
+          if sudo test -e "$agent_output"; then
+            sudo test ! -e "$quarantine"
+            sudo test ! -L "$quarantine"
+            sudo mv -T "$agent_output" "$quarantine"
+          fi
+          sudo mv -T "$failure_output" "$MANTIS_OUTPUT_DIR"
+
       - name: Return proof artifacts to the runner
-        if: ${{ always() && steps.trusted_evidence.outcome == 'success' }}
+        if: ${{ always() && (steps.trusted_evidence.outcome == 'success' || steps.trusted_evidence_failure.outcome == 'success') }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -d "$MANTIS_OUTPUT_DIR" ]]; then
             sudo chown -R "$(id -u):$(id -g)" "$MANTIS_OUTPUT_DIR"
           fi
+
+      - name: Release Telegram QA user lease
+        if: ${{ always() }}
+        env:
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          lease_file="${{ steps.telegram_credential.outputs.lease_file }}"
+          if [[ -z "$lease_file" ]] || ! sudo test -f "$lease_file"; then
+            exit 0
+          fi
+          sudo env \
+            OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
+            OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
+            /usr/local/lib/mantis-toolchain/node --import tsx \
+            "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" release \
+            --lease-file "$lease_file"
 
       - name: Remove private Mantis runtime state
         if: ${{ always() }}
@@ -908,7 +952,7 @@ jobs:
 
       - name: Upload Mantis Telegram desktop artifacts
         id: upload_artifact
-        if: ${{ always() && steps.trusted_evidence.outcome == 'success' && steps.inspect.outputs.output_dir != '' }}
+        if: ${{ always() && steps.inspect.outputs.output_dir != '' && (steps.trusted_evidence.outcome == 'success' || steps.trusted_evidence_failure.outcome == 'success') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}

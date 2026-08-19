@@ -143,8 +143,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const inspectIndex = steps.findIndex(
       (step) => step.name === "Inspect Mantis evidence manifest",
     );
-    const returnArtifactsIndex = steps.findIndex(
-      (step) => step.name === "Return proof artifacts to the runner",
+    const restoreIndex = steps.findIndex(
+      (step) => step.name === "Restore and validate trusted lane evidence",
+    );
+    const privateCleanupIndex = steps.findIndex(
+      (step) => step.name === "Remove private Mantis runtime state",
     );
 
     expect(codexStep.env?.OPENCLAW_QA_CREDENTIAL_OWNER_ID).toBeUndefined();
@@ -152,8 +155,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowStep("Prepare Codex user").run).not.toContain("OPENCLAW_QA_CREDENTIAL_OWNER_ID");
     expect(cleanupIndex).toBeGreaterThan(steps.findIndex((step) => step.name === codexStep.name));
     expect(cleanupIndex).toBeGreaterThanOrEqual(0);
-    expect(returnArtifactsIndex).toBeGreaterThan(cleanupIndex);
-    expect(inspectIndex).toBeGreaterThan(returnArtifactsIndex);
+    expect(cleanupIndex).toBeGreaterThan(restoreIndex);
+    expect(privateCleanupIndex).toBeGreaterThan(cleanupIndex);
+    expect(inspectIndex).toBeGreaterThan(cleanupIndex);
     const abandoned = workflowStep("Clean up abandoned Mantis sessions");
     expect(abandoned.if).toBe("${{ always() }}");
     expect(abandoned.run).toContain("sudo pkill -TERM -u codex");
@@ -177,11 +181,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     const returnArtifactsStep = workflowStep("Return proof artifacts to the runner");
     expect(returnArtifactsStep.if).toBe(
-      "${{ always() && steps.trusted_evidence.outcome == 'success' }}",
+      "${{ always() && (steps.trusted_evidence.outcome == 'success' || steps.trusted_evidence_failure.outcome == 'success') }}",
     );
     expect(returnArtifactsStep.run).toContain(
       'sudo chown -R "$(id -u):$(id -g)" "$MANTIS_OUTPUT_DIR"',
     );
+
+    const failureDiagnostics = workflowStep("Preserve trusted-evidence failure diagnostics");
+    expect(failureDiagnostics.if).toBe(
+      "${{ always() && steps.trusted_evidence.outcome == 'failure' }}",
+    );
+    expect(failureDiagnostics.run).toContain("The agent-authored output was quarantined");
+    expect(failureDiagnostics.run).toContain('"$failure_output/$lane-diagnostic.json"');
+    expect(failureDiagnostics.run).toContain('sudo mv -T "$agent_output" "$quarantine"');
+    expect(failureDiagnostics.run).toContain('sudo mv -T "$failure_output" "$MANTIS_OUTPUT_DIR"');
 
     const sutWrapper = readFileSync(SUT_CONTAINER_WRAPPER, "utf8");
     expect(sutWrapper).toContain(
@@ -248,6 +261,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).toContain('"$APPROVED_HEAD_SHA" != "$candidate_revision"');
     expect(workflowStep("Upload Mantis Telegram desktop artifacts").if).toContain(
       "steps.trusted_evidence.outcome == 'success'",
+    );
+    expect(workflowStep("Upload Mantis Telegram desktop artifacts").if).toContain(
+      "steps.trusted_evidence_failure.outcome == 'success'",
     );
     expect(workflowStep("Comment PR with inline QA evidence").if).toContain(
       "steps.trusted_evidence.outcome == 'success'",
