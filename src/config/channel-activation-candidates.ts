@@ -78,7 +78,7 @@ export function collectPluginIdsForConfiguredChannel(
   return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
 }
 
-export function isAutoEnableConfiguredChannelSignal(params: {
+function isAutoEnableConfiguredChannelSignal(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   channelId: string;
@@ -102,7 +102,7 @@ export function isAutoEnableConfiguredChannelSignal(params: {
 }
 
 /** The channels auto-enable treats as configured — config, env, and persisted state alike. */
-export function collectConfiguredChannelIds(
+export function collectAutoEnableConfiguredChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   discovery?: PluginDiscoveryResult,

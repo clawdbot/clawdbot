@@ -5,7 +5,7 @@ import { normalizePluginId } from "../plugins/config-state.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  collectConfiguredChannelIds,
+  collectAutoEnableConfiguredChannelIds,
   collectPluginIdsForConfiguredChannel,
 } from "./channel-activation-candidates.js";
 import {
@@ -83,7 +83,9 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   // config meaningful, flip ownership to the real pair, and reject the field just offered.
   let configuredChannelIds: Set<string> | undefined;
   const isChannelConfiguredForActivation = (channelId: string): boolean => {
-    configuredChannelIds ??= new Set(collectConfiguredChannelIds(sourceConfig, params.env));
+    configuredChannelIds ??= new Set(
+      collectAutoEnableConfiguredChannelIds(sourceConfig, params.env),
+    );
     return configuredChannelIds.has(channelId);
   };
   const candidatesByChannel = new Map<string, Set<string>>();
