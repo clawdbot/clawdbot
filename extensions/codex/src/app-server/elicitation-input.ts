@@ -40,7 +40,7 @@ export function compileCodexOrdinaryElicitation(params: {
       },
     };
   }
-  const mode = readString(snapshot, "mode");
+  const mode = readCodexElicitationString(snapshot, "mode");
   if (mode === "url") {
     return {
       kind: "compiled",
@@ -66,7 +66,7 @@ export function compileCodexOrdinaryElicitation(params: {
     kind: "compiled",
     input: structuredInput.compileForm({
       schema: readValue(snapshot, "requestedSchema"),
-      message: readString(snapshot, "message"),
+      message: readCodexElicitationString(snapshot, "message"),
       fallbackMessage: "Codex needs input",
       options: {
         protocolName: mode === "openai/form" ? "OpenAI" : "MCP",
@@ -84,7 +84,10 @@ function readValue(record: Record<string, unknown>, key: string): unknown {
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-function readString(record: Record<string, unknown>, key: string): string | undefined {
+function readCodexElicitationString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
 }

@@ -30,7 +30,7 @@ export function parseAcpElicitationRequest(
   if (typeof correlation === "string") {
     return unsupported(correlation);
   }
-  const mode = readString(snapshot, "mode");
+  const mode = readAcpElicitationString(snapshot, "mode");
   if (mode === "url") {
     return {
       correlation,
@@ -52,7 +52,7 @@ export function parseAcpElicitationRequest(
     correlation,
     input: compileStructuredInputForm({
       schema: readValue(snapshot, "requestedSchema"),
-      message: readString(snapshot, "message"),
+      message: readAcpElicitationString(snapshot, "message"),
       fallbackMessage: "ACP needs input",
       options: {
         protocolName: "ACP",
@@ -125,7 +125,7 @@ function readValue(record: StructuredInputRecord, key: string): StructuredInputV
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-function readString(record: StructuredInputRecord, key: string): string | undefined {
+function readAcpElicitationString(record: StructuredInputRecord, key: string): string | undefined {
   const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
 }
