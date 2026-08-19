@@ -86,7 +86,12 @@ class GatewayProtocolGeneratedTest {
       val encoded =
         json.encodeToJsonElement(SessionGitHubPublicationResult.serializer(), decoded).jsonObject
       assertEquals(
-        json.parseToJsonElement(payload).jsonObject.getValue("status").jsonPrimitive.content,
+        json
+          .parseToJsonElement(payload)
+          .jsonObject
+          .getValue("status")
+          .jsonPrimitive
+          .content,
         encoded.getValue("status").jsonPrimitive.content,
       )
     }
