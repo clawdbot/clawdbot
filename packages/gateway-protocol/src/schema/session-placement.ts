@@ -302,24 +302,32 @@ export const SessionPlacementMoveSchema = closedObject({
   error: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
 });
 
-const SessionsMoveBaseProperties = {
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  expected: SessionMoveExpectedSourceSchema,
-};
+const SessionsMoveTargetCorrelationSchema = Type.Union([
+  Type.Object({ target: SessionMoveGatewayTargetSchema }),
+  Type.Object(
+    {
+      target: Type.Union([SessionMoveProfileTargetSchema, SessionMoveDeviceTargetSchema]),
+    },
+    { not: { required: ["abandonSource"] } },
+  ),
+]);
 
 /** Requests one exact-source placement move without replaying active work. */
-export const SessionsMoveParamsSchema = Type.Union([
-  closedObject({
-    ...SessionsMoveBaseProperties,
+export const SessionsMoveParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    expected: SessionMoveExpectedSourceSchema,
     target: SessionMoveTargetSchema,
-  }),
-  closedObject({
-    ...SessionsMoveBaseProperties,
-    target: SessionMoveGatewayTargetSchema,
-    abandonSource: Type.Literal(true),
-  }),
-]);
+    abandonSource: Type.Optional(Type.Literal(true)),
+  },
+  {
+    additionalProperties: false,
+    // Keep a concrete object for generated clients while JSON Schema `allOf`
+    // restricts explicit source abandonment to the Gateway target.
+    allOf: [SessionsMoveTargetCorrelationSchema],
+  },
+);
 
 /** Successful terminal states returned by sessions.move. */
 export const SessionMovePlacementStateSchema = Type.Union([

@@ -16,6 +16,7 @@ import {
   seedStartingPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { createWorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
@@ -356,18 +357,10 @@ export function createHarness(
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
-    runnerAvailability: {
-      read: (record) =>
-        record.state === "active" &&
-        currentEnvironment?.providerId === "device" &&
-        currentEnvironment.nodeDeviceId
-          ? {
-              kind: "device",
-              status: options.deviceRunnerAvailable ? "available" : "offline",
-            }
-          : undefined,
-      version: () => 0,
-    },
+    runnerAvailability: createWorkerPlacementRunnerAvailabilityReader({
+      environments,
+      hasCurrentDeviceRunner: () => options.deviceRunnerAvailable === true,
+    }),
     workspaceOperations: options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ authorize, startDispatch }) => {
       log.push("barrier");

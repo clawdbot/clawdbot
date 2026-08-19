@@ -8275,6 +8275,36 @@ public struct SessionPlacementMove: Codable, Sendable {
     }
 }
 
+public struct SessionsMoveParams: Codable, Sendable {
+    public let key: String
+    public let agentid: String?
+    public let expected: SessionMoveExpectedSource
+    public let target: SessionMoveTarget
+    public let abandonsource: Bool?
+
+    public init(
+        key: String,
+        agentid: String? = nil,
+        expected: SessionMoveExpectedSource,
+        target: SessionMoveTarget,
+        abandonsource: Bool? = nil)
+    {
+        self.key = key
+        self.agentid = agentid
+        self.expected = expected
+        self.target = target
+        self.abandonsource = abandonsource
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+        case expected
+        case target
+        case abandonsource = "abandonSource"
+    }
+}
+
 public struct SessionMovePlacement: Codable, Sendable {
     public let state: SessionMovePlacementState
     public let generation: Int

@@ -577,6 +577,7 @@ describe("worker placement move destination", () => {
         });
         createGatewayWorkerPlacementRuntime({
           placements: {
+            workspaceResultInstanceId: () => "gateway-test",
             get: () => undefined,
             list: () => [],
             waitForTurnClaimRelease,
