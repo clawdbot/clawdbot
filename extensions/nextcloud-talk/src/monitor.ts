@@ -146,7 +146,9 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       }
 
       const clientIp =
-        resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback) ?? "unknown";
+        resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback) ??
+        req.socket.remoteAddress ??
+        "unknown";
       if (!webhookAuthRateLimiter.check(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE).allowed) {
         res.writeHead(429);
         res.end("Too Many Requests");
