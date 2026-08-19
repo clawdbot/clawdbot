@@ -763,6 +763,14 @@ describe("prepared model catalog worker boundary", () => {
     expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\n");
   });
 
+  it("retires a worker whose reconstructed generation does not match", async () => {
+    const fixture = await createStaticSnapshot(0);
+    writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
+
+    await expect(fixture.snapshot.loadFullModelCatalog?.()).rejects.toThrow("superseded");
+    await expect(fixture.snapshot.loadFullModelCatalog?.()).rejects.toThrow("superseded");
+  });
+
   it("preserves ref-only api-key and token profiles through the real worker", async () => {
     const fixture = await createStaticSnapshot(0);
     const authStore = {

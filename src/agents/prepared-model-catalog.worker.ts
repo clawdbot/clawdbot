@@ -87,9 +87,12 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
     pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
   });
   if (reconstructedFingerprint !== value.generationFingerprint) {
-    throw new Error("prepared model catalog worker reconstructed a different runtime generation");
+    return {
+      status: "generation-invalid" as const,
+      error: "prepared model catalog worker reconstructed a different runtime generation",
+    };
   }
-  return { agentFacts, pluginGeneration: prepared.pluginGeneration };
+  return { status: "ok" as const, agentFacts, pluginGeneration: prepared.pluginGeneration };
 }
 
 export async function runPreparedModelCatalogWorkerRequest(
@@ -99,6 +102,13 @@ export async function runPreparedModelCatalogWorkerRequest(
 ): Promise<PreparedModelWorkerResult> {
   try {
     const prepared = await preparedGeneration;
+    if (prepared.status === "generation-invalid") {
+      return {
+        status: "generation-invalid",
+        requestId: request.requestId,
+        error: prepared.error,
+      };
+    }
     if (request.kind === "auth-refresh") {
       const authStore = refreshAuthStore({
         agentDir: value.input.agentDir,

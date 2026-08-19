@@ -60,6 +60,7 @@ export type PreparedModelWorkerResult =
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
     }>
+  | Readonly<{ status: "generation-invalid"; requestId: number; error: string }>
   | Readonly<{ status: "failed"; requestId: number; error: string }>;
 
 const authByFullCatalog = new WeakMap<
@@ -232,6 +233,10 @@ export function createPreparedModelCatalogWorker(params: {
       pending.delete(message.requestId);
       clearTimeout(request.timeout);
       if (!params.isCurrent()) {
+        const error = superseded();
+        request.reject(error);
+        stop(error);
+      } else if (message.status === "generation-invalid") {
         const error = superseded();
         request.reject(error);
         stop(error);
