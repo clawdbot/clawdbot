@@ -93,11 +93,11 @@ export function renderGoldenImagePreflight(): string {
 contract="Telegram Desktop recorder golden image contract"
 fail() { echo "$contract failed: $1" >&2; exit 1; }
 test -x ${TELEGRAM_BINARY} || fail "${TELEGRAM_BINARY} is not executable"
-test "$(cat /var/lib/crabbox/telegram-desktop-version 2>/dev/null)" = "${TELEGRAM_DESKTOP_VERSION}" || fail "/var/lib/crabbox/telegram-desktop-version is not ${TELEGRAM_DESKTOP_VERSION}"
+test "$(cat /var/lib/crabbox/telegram-desktop-version)" = "${TELEGRAM_DESKTOP_VERSION}" || fail "/var/lib/crabbox/telegram-desktop-version is not ${TELEGRAM_DESKTOP_VERSION}"
 for command in wmctrl xdotool scrot ffmpeg zbarimg xdpyinfo; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is not on PATH"
 done
-DISPLAY=:99 xdpyinfo >/dev/null 2>&1 || fail "DISPLAY=:99 is unreachable"`;
+DISPLAY=:99 xdpyinfo >/dev/null || fail "DISPLAY=:99 is unreachable"`;
 }
 
 export function renderLaunchDesktop(): string {
@@ -225,7 +225,7 @@ async function desktopReachedMainWindow(params: {
   inspect: CrabboxInspect;
   operations: RecorderOperations;
   seconds: number;
-}): Promise<boolean> {
+}): Promise<{ reached: true } | { error: unknown; reached: false }> {
   try {
     await params.operations.sshRun({
       command: renderWaitForMainWindow(params.seconds),
@@ -233,9 +233,9 @@ async function desktopReachedMainWindow(params: {
       inspect: params.inspect,
       run: params.operations.runCommand,
     });
-    return true;
-  } catch {
-    return false;
+    return { reached: true };
+  } catch (error) {
+    return { error, reached: false };
   }
 }
 
@@ -255,6 +255,10 @@ async function authorizeDesktop(params: {
   // confirmation for a rotated one, so a confirmed session id is not proof of
   // login: read a fresh code, confirm it, then verify the client left the QR
   // screen before trusting it.
+  // The loop can end for reasons it never observed - a QR read that threw, a duplicate
+  // link, a window wait that timed out - so carry the last real failure into the throw
+  // instead of asserting the client stayed on the login screen.
+  let lastFailure: unknown;
   let lastLink = "";
   for (let attempt = 1; attempt <= 6; attempt += 1) {
     let link: string;
@@ -267,7 +271,8 @@ async function authorizeDesktop(params: {
         stdio: "pipe",
       });
       link = qr.stdout.trim();
-    } catch {
+    } catch (error) {
+      lastFailure = error;
       link = "";
     }
     if (!link || link === lastLink) {
@@ -281,18 +286,21 @@ async function authorizeDesktop(params: {
       run: params.operations.runCommand,
       userDriver: params.userDriver,
     });
-    if (
-      await desktopReachedMainWindow({
-        cwd: params.cwd,
-        inspect: params.inspect,
-        operations: params.operations,
-        seconds: 20,
-      })
-    ) {
+    const mainWindow = await desktopReachedMainWindow({
+      cwd: params.cwd,
+      inspect: params.inspect,
+      operations: params.operations,
+      seconds: 20,
+    });
+    if (mainWindow.reached) {
       return desktopSessionId;
     }
+    lastFailure = mainWindow.error;
   }
-  throw new Error("Telegram Desktop stayed on the login screen after 6 confirmed QR codes.");
+  const detail = lastFailure === undefined ? "" : `: ${coerceErrorMessage(lastFailure)}`;
+  throw new Error(`Telegram Desktop did not leave the login screen after 6 attempts${detail}`, {
+    cause: lastFailure,
+  });
 }
 
 function resolveOutputDir(cwd: string, outputDir: string): string {

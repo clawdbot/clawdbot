@@ -481,8 +481,8 @@ export function readCodexProxyPort(codexHome: string): number | undefined {
   let config: string;
   try {
     config = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
-  } catch {
-    return undefined;
+  } catch (error) {
+    throw new Error(`Could not read Codex config: ${coerceErrorMessage(error)}`, { cause: error });
   }
   const section = config.match(
     /\[model_providers\.codex-action-responses-proxy\]([\s\S]*?)(?=\n\[|$)/u,
@@ -538,11 +538,13 @@ export function runSutContainerAction(
       cause: result.error,
     });
   }
+  const stderr = result.stderr?.toString().trim().slice(-4_000);
   if (result.signal) {
-    throw new Error(`Container-isolated SUT ${action} was terminated by ${result.signal}.`);
+    throw new Error(
+      `Container-isolated SUT ${action} was terminated by ${result.signal}.${stderr ? `\n${stderr}` : ""}`,
+    );
   }
   if (result.status !== 0) {
-    const stderr = result.stderr?.toString().trim().slice(-4_000);
     throw new Error(
       `Container-isolated SUT ${action} failed with exit code ${result.status ?? "unknown"}.${stderr ? `\n${stderr}` : ""}`,
     );

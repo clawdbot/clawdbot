@@ -201,6 +201,10 @@ jobs:
           test -f scripts/e2e/telegram-user-driver.py
           node_bin="$(command -v node)"
           corepack_bin="$(command -v corepack)"
+          # The recorder spawns the user driver directly, and runs under sudo where PATH is
+          # sudo's secure_path. Resolving uv here pins it the same way node and pnpm are
+          # pinned, and fails at setup instead of inside the agent 25 minutes later.
+          uv_bin="$(command -v uv)"
           "$node_bin" "$corepack_bin" pnpm --version >/dev/null
           cat >"${RUNNER_TEMP}/mantis-node" <<EOF
           #!/usr/bin/env bash
@@ -211,6 +215,11 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           exec "$node_bin" "$corepack_bin" pnpm "\$@"
+          EOF
+          cat >"${RUNNER_TEMP}/mantis-uv" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec "$uv_bin" "\$@"
           EOF
           cat >"${RUNNER_TEMP}/openclaw-telegram-mantis-sut" <<EOF
           #!/usr/bin/env bash
@@ -235,11 +244,12 @@ jobs:
           fi
           exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-desktop-recorder "\$@"
           EOF
-          chmod 0755 "${RUNNER_TEMP}/mantis-node" "${RUNNER_TEMP}/mantis-pnpm"
+          chmod 0755 "${RUNNER_TEMP}/mantis-node" "${RUNNER_TEMP}/mantis-pnpm" "${RUNNER_TEMP}/mantis-uv"
           chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" "${RUNNER_TEMP}/telegram-desktop-recorder-exec"
           sudo install -d -m 0755 /usr/local/lib/mantis-toolchain
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-node" /usr/local/lib/mantis-toolchain/node
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-pnpm" /usr/local/lib/mantis-toolchain/pnpm
+          sudo install -m 0755 "${RUNNER_TEMP}/mantis-uv" /usr/local/lib/mantis-toolchain/uv
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" /usr/local/bin/openclaw-telegram-mantis-sut
           sudo install -m 0755 "${RUNNER_TEMP}/telegram-desktop-recorder-exec" /usr/local/lib/mantis-toolchain/telegram-desktop-recorder
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" /usr/local/bin/openclaw-telegram-desktop-recorder
@@ -468,7 +478,7 @@ jobs:
           OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD: /usr/local/bin/openclaw-telegram-desktop-recorder
           OPENCLAW_TELEGRAM_MANTIS_SUT_CMD: /usr/local/bin/openclaw-telegram-mantis-sut
           OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD: ${{ env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD }}
-          OPENCLAW_TELEGRAM_USER_DRIVER_CMD: uv run ${{ github.workspace }}/scripts/e2e/telegram-user-driver.py
+          OPENCLAW_TELEGRAM_USER_DRIVER_CMD: /usr/local/lib/mantis-toolchain/uv run ${{ github.workspace }}/scripts/e2e/telegram-user-driver.py
           TELEGRAM_USER_DRIVER_STATE_DIR: ${{ env.TELEGRAM_USER_DRIVER_STATE_DIR }}
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}

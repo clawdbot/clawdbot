@@ -265,7 +265,7 @@ cleanup_network_unlocked() {
     [[ -z "$subnet" || "$subnet" == "$inspected_subnet" ]] || return 1
     subnet="$inspected_subnet"
     write_network_state "$network_name" "$subnet" || return 1
-    if ! "$docker_bin" network rm "$network_name" >/dev/null 2>&1; then
+    if ! "$docker_bin" network rm "$network_name" >/dev/null; then
       if network_exists "$network_name"; then
         return 1
       else
@@ -304,7 +304,7 @@ remove_container_or_fail() {
     exists_result=$?
   fi
   if ((exists_result == 0)); then
-    if ! "$docker_bin" rm --force "$container_name" >/dev/null 2>&1; then
+    if ! "$docker_bin" rm --force "$container_name" >/dev/null; then
       if container_exists "$container_name"; then
         return 1
       else
@@ -537,7 +537,7 @@ readonly network_probe_script='
     if (blocked.some(Boolean)) process.exit(41);
     const [telegramIp] = await dns.resolve4("api.telegram.org");
     if (!telegramIp || !(await connects(telegramIp, 443))) process.exit(42);
-  })().catch(() => process.exit(42));
+  })().catch((error) => { console.error(error); process.exit(42); });
 '
 
 # Candidate lifecycle scripts run only inside the isolated build container.

@@ -2,6 +2,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  readCodexProxyPort,
+  runSutContainerAction,
+} from "../../scripts/e2e/telegram-mantis-sut.ts";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/e2e/telegram-mantis-sut.ts";
@@ -18,6 +22,23 @@ function run(args: string[], env: NodeJS.ProcessEnv = process.env) {
 afterEach(() => cleanupTempDirs(tempDirs));
 
 describe("Telegram Mantis SUT CLI", () => {
+  it("keeps the Codex config read failure text", () => {
+    const root = makeTempDir(tempDirs, "telegram-mantis-codex-home-");
+    fs.mkdirSync(path.join(root, "config.toml"));
+
+    expect(() => readCodexProxyPort(root)).toThrow(/EISDIR/u);
+  });
+
+  it("keeps stderr when a container action is terminated", () => {
+    expect(() =>
+      runSutContainerAction("stop", "openclaw-telegram-sut-test", "/tmp/runtime", () => ({
+        signal: "SIGTERM",
+        status: null,
+        stderr: "permission denied while opening the Docker socket",
+      })),
+    ).toThrow("permission denied while opening the Docker socket");
+  });
+
   it("exposes only the focused start and stop contract", () => {
     const help = run(["--help"]);
 

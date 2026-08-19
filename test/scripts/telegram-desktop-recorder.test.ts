@@ -340,6 +340,56 @@ describe("Telegram Desktop recorder remote contract", () => {
     ).rejects.toThrow("permission denied while trying to connect to the Docker daemon socket");
   });
 
+  it("keeps the SSH failure text after exhausting login attempts", async () => {
+    const root = makeTempDir();
+    let qrAttempt = 0;
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn<RunCommand>(async () => ({
+        stderr: "",
+        stdout: JSON.stringify({ ok: true, session: { id: 91234, isPasswordPending: false } }),
+      })),
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async ({ command }: { command: string }) => {
+        if (command.includes("telegram-login-qr.png")) {
+          qrAttempt += 1;
+          return { stderr: "", stdout: `tg://login?token=attempt-${qrAttempt}` };
+        }
+        if (command.includes("Telegram Desktop did not reach the main window")) {
+          throw new Error("permission denied reading the remote Docker socket");
+        }
+        return { stderr: "", stdout: "" };
+      }),
+    } satisfies RecorderOperations;
+
+    await expect(
+      startRecorder(
+        root,
+        {
+          command: "start",
+          chat: "-1001234567890",
+          crabboxClass: "standard",
+          idleTimeout: "1h",
+          json: false,
+          leaseId: "cbx_borrowed",
+          outputDir: "out",
+          provider: "docker",
+          recordFps: 24,
+          ttl: "2h",
+          userDriver: ["python3", "driver.py"],
+        },
+        operations,
+      ),
+    ).rejects.toThrow("permission denied reading the remote Docker socket");
+  });
+
   it("renders only golden-image desktop operations", () => {
     const scripts = [
       renderGoldenImagePreflight(),
@@ -359,9 +409,7 @@ describe("Telegram Desktop recorder remote contract", () => {
 
     expect(scripts).toContain("Telegram Desktop recorder golden image contract");
     expect(scripts).toContain("/opt/Telegram/Telegram");
-    expect(scripts).toContain(
-      'test "$(cat /var/lib/crabbox/telegram-desktop-version 2>/dev/null)" = "7.0.9"',
-    );
+    expect(scripts).toContain('test "$(cat /var/lib/crabbox/telegram-desktop-version)" = "7.0.9"');
     expect(scripts).toContain("DISPLAY=:99 xdpyinfo");
     expect(scripts).toContain("wmctrl xdotool scrot ffmpeg zbarimg xdpyinfo");
     expect(scripts.toLowerCase()).not.toMatch(/apt-get|curl|wget|tdlib|python/u);

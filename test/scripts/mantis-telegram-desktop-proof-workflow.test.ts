@@ -588,6 +588,19 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("untrusted fork code");
   });
 
+  it("pins every executable the agent runs to an absolute toolchain path", () => {
+    // The recorder crosses a sudo boundary, where PATH is sudo's secure_path rather than
+    // the agent's. A PATH-resolved tool works locally and fails in the lane as ENOENT
+    // deep inside the agent step - run 32247220989 lost 25 minutes to `spawn uv ENOENT`.
+    const agentEnv = workflowStep("Run Codex Mantis Telegram agent").env ?? {};
+    const executables = Object.entries(agentEnv).filter(([key]) => /_(?:BIN|CMD)$/u.test(key));
+
+    expect(executables.length).toBeGreaterThan(0);
+    for (const [key, value] of executables) {
+      expect(`${key}=${value.split(/\s+/u)[0]}`).toMatch(/=\//u);
+    }
+  });
+
   it("checks the Telegram user driver before leasing credentials", () => {
     const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
     const startSession = proofScript.slice(
