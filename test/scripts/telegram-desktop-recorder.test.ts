@@ -595,6 +595,39 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     expect(cropped).not.toHaveBeenCalled();
   });
 
+  it("keeps artifacts recorded by an earlier keep-box stop", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    writeRecorderSession(sessionPath, {
+      ...testSession(),
+      artifacts: { previewGif: "/kept/motion.gif", video: "/kept/session.mp4" },
+      keepBox: true,
+    });
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 650 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => {
+        throw new Error("local-container lease not found: cbx_test123");
+      }),
+      runCommand: (async () => ({
+        stderr: "",
+        stdout: JSON.stringify({ ok: true }),
+      })) as RunCommand,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    const stopped = await stopRecorder(
+      root,
+      { command: "stop", keepBox: false, sessionPath },
+      operations,
+    );
+    expect(stopped.artifacts).toEqual({
+      previewGif: "/kept/motion.gif",
+      video: "/kept/session.mp4",
+    });
+  });
+
   it("still stops Crabbox and reports failure when local session termination fails", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");

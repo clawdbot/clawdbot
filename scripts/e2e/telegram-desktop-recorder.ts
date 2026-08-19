@@ -722,7 +722,9 @@ export async function stopRecorder(
   }
   const stopped: RecorderSession = {
     ...session,
-    artifacts,
+    // Keep paths recorded by an earlier stop (--keep-box, then a later stop once
+    // the lease expired); fresh copies overwrite their own entries.
+    artifacts: { ...session.artifacts, ...artifacts },
     cleanupErrors: errors.length ? errors : undefined,
     keepBox: opts.keepBox,
     stoppedAt: new Date().toISOString(),
