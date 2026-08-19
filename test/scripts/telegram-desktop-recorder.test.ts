@@ -441,6 +441,55 @@ describe("Telegram Desktop recorder remote contract", () => {
     );
   });
 
+  it("reports the blocked user when the output dir is not writable", async () => {
+    const root = makeTempDir();
+    // The agent and the recorder run as different users, so this fails in the lane and not
+    // locally. Run 32259789706 surfaced it as a bare EACCES three minutes into the session,
+    // after provisioning, with nothing naming either user.
+    const outputDir = path.join(root, "out");
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.chmodSync(outputDir, 0o500);
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn<RunCommand>(async () => ({ stderr: "", stdout: "" })),
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    try {
+      await expect(
+        startRecorder(
+          root,
+          {
+            command: "start",
+            chat: "-1001234567890",
+            crabboxClass: "standard",
+            idleTimeout: "1h",
+            json: false,
+            leaseId: "cbx_borrowed",
+            outputDir: "out",
+            provider: "docker",
+            recordFps: 24,
+            ttl: "2h",
+            userDriver: ["python3", "driver.py"],
+          },
+          operations,
+        ),
+      ).rejects.toThrow(/Cannot write recorder output to .*mode=0500/u);
+      // Failing before provisioning is the point: the old order paid for a container first.
+      expect(operations.inspectCrabbox).not.toHaveBeenCalled();
+    } finally {
+      fs.chmodSync(outputDir, 0o700);
+    }
+  });
+
   it("renders only golden-image desktop operations", () => {
     const scripts = [
       renderGoldenImagePreflight(),

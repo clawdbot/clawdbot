@@ -323,6 +323,26 @@ async function authorizeDesktop(params: {
   );
 }
 
+// The recorder runs as a different user than the agent that drives it, so an output dir
+// the agent owns can be unwritable here. The first write is the session file, minutes after
+// provisioning, so probe up front and report who is blocked rather than failing at the end.
+function assertOutputDirWritable(outputDir: string): void {
+  const probe = path.join(outputDir, `.recorder-write-probe-${process.pid}`);
+  try {
+    fs.writeFileSync(probe, "");
+    fs.unlinkSync(probe);
+  } catch (error) {
+    const stats = fs.statSync(outputDir);
+    const mode = (stats.mode & 0o7777).toString(8).padStart(4, "0");
+    throw new Error(
+      `Cannot write recorder output to ${outputDir}: ${coerceErrorMessage(error)}. ` +
+        `Directory is uid=${stats.uid} gid=${stats.gid} mode=${mode}; ` +
+        `recorder runs as uid=${process.getuid?.()} gid=${process.getgid?.()}.`,
+      { cause: error },
+    );
+  }
+}
+
 function resolveOutputDir(cwd: string, outputDir: string): string {
   if (path.isAbsolute(outputDir)) {
     throw new Error("--output-dir must be repo-relative.");
@@ -392,6 +412,7 @@ export async function startRecorder(
   const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
   const outputDir = resolveOutputDir(cwd, opts.outputDir);
   fs.mkdirSync(outputDir, { recursive: true });
+  assertOutputDirWritable(outputDir);
   let leaseId = opts.leaseId;
   const leaseOwned = !opts.leaseId;
   let desktopSessionId: string | undefined;
