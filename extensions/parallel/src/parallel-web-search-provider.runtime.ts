@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -16,6 +17,7 @@ import {
   withTrustedWebSearchEndpoint,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildParallelCacheKey,
@@ -158,7 +160,17 @@ async function runParallelSearch(params: {
         const detail = await readResponseTextLimited(res, PARALLEL_ERROR_BODY_LIMIT_BYTES).catch(
           () => "",
         );
-        throw new Error(`Parallel API error (${res.status}): ${detail || res.statusText}`);
+        // Provider/proxy error pages can reflect request headers (including the
+        // x-api-key), and the empty-body statusText fallback is server-controlled
+        // too. Redact in two passes before the detail lands in user-facing error
+        // text: the tools-mode pass masks header-shaped reflections while the
+        // header name is intact (a configured pattern like api[_-]?key would
+        // otherwise rewrite the name first and hide the shape from the
+        // structured matcher), then the canonical tool-payload redactor applies
+        // the operator's logging.redactPatterns on top of the built-in defaults.
+        throw new Error(
+          `Parallel API error (${res.status}): ${redactToolPayloadText(redactSensitiveText(detail || res.statusText, { mode: "tools" }))}`,
+        );
       }
       return await readProviderJsonResponse<ParallelSearchResponse>(res, "Parallel API", {
         maxBytes: PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,

@@ -61,6 +61,8 @@ function formatToolErrorWarningText(params: {
     return `⚠️ ${toolLabel} failed (${reason})${errorSuffix}${recoveryHint}.`;
   }
 
+  const includeError =
+    params.includeDetails || params.lastToolError.errorCode === "approval_timeout";
   if (isExecLikeToolName(params.lastToolError.toolName)) {
     const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
       markdown: params.useMarkdown,
@@ -72,7 +74,7 @@ function formatToolErrorWarningText(params: {
       ? ""
       : formatConciseExecExitSuffix(params.lastToolError.error);
     const errorSuffix =
-      params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      includeError && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
     return subject
       ? `⚠️ ${toolLabel} failed: ${subject}${conciseExitSuffix}${errorSuffix}`
       : `⚠️ ${toolLabel} failed${conciseExitSuffix}${errorSuffix}`;
@@ -84,7 +86,7 @@ function formatToolErrorWarningText(params: {
     { markdown: params.useMarkdown },
   );
   const errorSuffix =
-    params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+    includeError && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
   return `⚠️ ${toolSummary} failed${errorSuffix}`;
 }
 

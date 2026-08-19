@@ -12,6 +12,7 @@ import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
+  CronCompletionStatus,
   CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -41,6 +42,7 @@ export type CronEvent = {
   runAtMs?: number;
   durationMs?: number;
   status?: CronRunStatus;
+  completionStatus?: CronCompletionStatus;
   error?: string;
   summary?: string;
   diagnostics?: CronRunDiagnostics;

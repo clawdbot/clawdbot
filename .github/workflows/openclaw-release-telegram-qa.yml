@@ -1471,7 +1471,7 @@ jobs:
           if [[ "${1:-}" != "--root-run" ]]; then
             present=()
             for key in "${transport_keys[@]}" "${control_keys[@]}"; do
-              if [[ -v "$key" ]]; then
+              if declare -p "$key" >/dev/null 2>&1; then
                 present+=("$key")
               fi
             done
@@ -1492,7 +1492,7 @@ jobs:
             keep_env["$key"]=1
           done
           while IFS= read -r key; do
-            if [[ ! -v "keep_env[$key]" ]]; then
+            if [[ -z "${keep_env[$key]+x}" ]]; then
               unset "$key"
             fi
           done < <(compgen -e)
@@ -1557,7 +1557,7 @@ jobs:
 
           boundary_mode=false
           for key in "${control_keys[@]}"; do
-            if [[ -v "$key" ]]; then
+            if declare -p "$key" >/dev/null 2>&1; then
               boundary_mode=true
             fi
           done
@@ -1565,7 +1565,7 @@ jobs:
           sandbox_payload_b64=""
           if [[ "$boundary_mode" == "true" ]]; then
             for key in "${control_keys[@]}"; do
-              [[ -v "$key" ]]
+              declare -p "$key" >/dev/null 2>&1
             done
             command_file="$(realpath -e "$OPENCLAW_QA_SUT_BOUNDARY_COMMAND_FILE")"
             identity_file="$(realpath -m "$OPENCLAW_QA_SUT_BOUNDARY_IDENTITY_FILE")"
@@ -1635,7 +1635,7 @@ jobs:
               }
               set_launcher_stage mask-host-paths
               trap "exit_status=\$?; trap - ERR; printf \"Telegram SUT launcher failed: stage=%s line=%s status=%s\\n\" \"\$launcher_stage\" \"\$LINENO\" \"\$exit_status\" >&2; exit \"\$exit_status\"" ERR
-              for masked_path in "$RUNNER_HOME" /tmp /var/tmp /dev/shm; do
+              for masked_path in "$RUNNER_HOME" /var/tmp /dev/shm; do
                 set_launcher_stage "mask-host-path:${masked_path}"
                 [[ -d "$masked_path" ]]
                 mount \
@@ -1644,6 +1644,14 @@ jobs:
                   openclaw-telegram-mask \
                   "$masked_path"
               done
+              # Keep the host temporary tree hidden while providing the stable
+              # POSIX runtime path used by cross-process lifecycle coordinators.
+              set_launcher_stage mount-private-tmp
+              mount \
+                -t tmpfs \
+                -o "mode=0700,uid=${SUT_UID},gid=${SUT_GID},nosuid,nodev,noexec" \
+                openclaw-telegram-sut-tmp \
+                /tmp
               set_launcher_stage mount-proc
               mount -t proc proc /proc -o nosuid,nodev,noexec,hidepid=2
               if [[ "$boundary_mode" == "true" ]]; then
@@ -1781,6 +1789,9 @@ jobs:
                       "${TMPDIR:?}"; do
                       [[ -d "$writable_path" && -w "$writable_path" ]]
                     done
+                    runtime_stage=verify-private-tmp
+                    [[ "$(stat -c '%F:%a:%u:%g' /tmp)" == "directory:700:${SUT_UID}:${SUT_GID}" &&
+                          -r /tmp && -w /tmp && -x /tmp ]]
                     runtime_stage=verify-host-paths-hidden
                     for protected_path in \
                       "$RUNNER_HOME" \
@@ -1788,7 +1799,6 @@ jobs:
                       "$RUNNER_SENTINEL" \
                       "$TRUSTED_WORKSPACE" \
                       "$EVIDENCE_ROOT" \
-                      /tmp \
                       /var/tmp \
                       /dev/shm; do
                       [[ ! -r "$protected_path" && ! -w "$protected_path" ]]

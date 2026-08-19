@@ -240,6 +240,7 @@
   "realtime-voice-audio-queue",
   "realtime-voice-activation",
   "realtime-voice",
+  "meeting-page-script-runtime",
   "meeting-runtime",
   "transcripts",
   "media-understanding",

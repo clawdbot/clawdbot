@@ -741,6 +741,7 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params.ephemeral).toBe(true);
+    expect(requests[0]?.params.config).toMatchObject({ project_doc_max_bytes: 131_072 });
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       authProfileId: "openai:default",
@@ -1020,7 +1021,11 @@ describe("codex conversation binding", () => {
     expect(requests[1]?.params).toMatchObject({
       threadId: "thread-native-child",
       sandbox: "read-only",
-      config: { apps: { _default: { enabled: false } }, "features.apps": false },
+      config: {
+        project_doc_max_bytes: 131_072,
+        apps: { _default: { enabled: false } },
+        "features.apps": false,
+      },
     });
     await expect(consumeCodexAppServerLiveThread(client, "thread-native-child")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),

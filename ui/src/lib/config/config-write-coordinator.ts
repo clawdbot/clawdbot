@@ -111,6 +111,14 @@ export function createConfigWriteCoordinator({
   // a post-apply write is meaningless while the gateway restarts, so the
   // teardown flush fail-closes on them).
   let manualFlightInfo: { raw: string; ackHash: string | null } | null = null;
+  const canDispatchConfigMutation = (method: ConfigMethod): boolean => {
+    const allowed = canCallConfigMethod(method);
+    if (!allowed && state.connected) {
+      state.lastError = t("configView.adminRequired");
+      publish();
+    }
+    return allowed;
+  };
   const clearAutoSaveDraftConnection = () => {
     autoSaveDraftConnection = null;
     autoSaveRequiresExplicitSubmit = false;
@@ -559,7 +567,7 @@ export function createConfigWriteCoordinator({
       false,
       {
         flushScheduledDraft: true,
-        canDispatch: () => canCallConfigMethod("config.patch"),
+        canDispatch: () => canDispatchConfigMutation("config.patch"),
       },
     ).finally(() => {
       scheduleAutoSave();
@@ -643,7 +651,7 @@ export function createConfigWriteCoordinator({
     },
     save: (options = {}) => {
       const canDispatch = () =>
-        canCallConfigMethod("config.set") && (options.canDispatch?.() ?? true);
+        canDispatchConfigMutation("config.set") && (options.canDispatch?.() ?? true);
       return !canDispatch()
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
@@ -669,7 +677,7 @@ export function createConfigWriteCoordinator({
           );
     },
     apply: () =>
-      !canCallConfigMethod("config.apply")
+      !canDispatchConfigMutation("config.apply")
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
             async () => {
@@ -686,7 +694,9 @@ export function createConfigWriteCoordinator({
                 return false;
               }
               try {
-                const applied = await applyConfig(state, () => canCallConfigMethod("config.apply"));
+                const applied = await applyConfig(state, () =>
+                  canDispatchConfigMutation("config.apply"),
+                );
                 reconcileAutoSaveDraftConnection();
                 return applied;
               } finally {
@@ -694,10 +704,10 @@ export function createConfigWriteCoordinator({
               }
             },
             false,
-            { canDispatch: () => canCallConfigMethod("config.apply") },
+            { canDispatch: () => canDispatchConfigMutation("config.apply") },
           ),
     stageDefaultAgent: (agentId) => {
-      if (!canCallConfigMethod("config.set")) {
+      if (!canDispatchConfigMutation("config.set")) {
         return false;
       }
       const changed = stageDefaultAgentConfigEntry(state, agentId);
@@ -712,11 +722,11 @@ export function createConfigWriteCoordinator({
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
     patch: (options) =>
-      canCallConfigMethod("config.patch") && (options.canDispatch?.() ?? true)
+      canDispatchConfigMutation("config.patch") && (options.canDispatch?.() ?? true)
         ? queueConfigPatch(() => ({ options }))
         : Promise.resolve(false),
     patchFromSnapshot: (build) =>
-      canCallConfigMethod("config.patch")
+      canDispatchConfigMutation("config.patch")
         ? queueConfigPatch(() => {
             const config = resolveEditableSnapshotConfig(state.configSnapshot);
             return config

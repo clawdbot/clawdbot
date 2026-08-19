@@ -18,8 +18,9 @@ function createReplyDispatchRuntime(
 ): PreparedReplyDispatchRuntime {
   const snapshot = runtimeOwner.snapshot!;
   const owner = resolvePublishedModelCatalogOwner(snapshot);
-  const inboundPluginRegistry = runtimeOwner.pluginGeneration?.inboundPluginRegistry;
-  if (!inboundPluginRegistry) {
+  const pluginGeneration = runtimeOwner.pluginGeneration;
+  const inboundPluginRegistry = pluginGeneration?.inboundPluginRegistry;
+  if (!pluginGeneration || !inboundPluginRegistry) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
       `prepared inbound plugin registry was not published for ${snapshot.agentDir}`,
     );
@@ -31,6 +32,7 @@ function createReplyDispatchRuntime(
     config: owner.config,
     modelCatalog: owner.modelCatalog,
     inboundPluginRegistry,
+    pluginGeneration,
   });
 }
 

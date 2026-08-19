@@ -6,6 +6,7 @@ import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
 
 const EXECUTION_IDENTITY_ADMISSION_MAX_BYTES = 16 * 1024;
 const EXECUTION_IDENTITY_ADMISSION_MAX_ITEMS = 16;
@@ -179,11 +180,11 @@ function uniqueSorted<T>(values: readonly T[], key: (value: T) => string): T[] {
 }
 
 function freezeEnvelope<T>(value: T, seen = new WeakSet<object>()): T {
-  if (!value || typeof value !== "object" || seen.has(value as object)) {
+  if (!value || typeof value !== "object" || seen.has(value)) {
     return value;
   }
-  seen.add(value as object);
-  for (const nested of Object.values(value as Record<string, unknown>)) {
+  seen.add(value);
+  for (const nested of Object.values(value)) {
     freezeEnvelope(nested, seen);
   }
   return Object.freeze(value);
@@ -246,27 +247,39 @@ function copyOwnedData<T>(value: T, ancestors = new WeakSet<object>()): T {
   }
 }
 
-function validateEnvelope(value: unknown): ExecutionIdentityAdmissionEnvelope {
+function validateEnvelope(
+  value: unknown,
+): ExecutionIdentityAdmissionEnvelope & Record<string, unknown> {
   const owned = copyOwnedData(value);
+  const baseEnvelope = executionIdentitySpawnAdmission({
+    operation: "base-envelope",
+    value: owned,
+  });
   if (
-    !Value.Check(ExecutionIdentityAdmissionEnvelopeSchema, owned) ||
-    !Number.isSafeInteger(owned.createdAt)
+    !Value.Check(ExecutionIdentityAdmissionEnvelopeSchema, baseEnvelope) ||
+    typeof baseEnvelope.createdAt !== "number" ||
+    !Number.isSafeInteger(baseEnvelope.createdAt)
   ) {
+    throw new Error("execution identity admission envelope violates its bounded contract");
+  }
+  if (!owned || typeof owned !== "object" || Array.isArray(owned)) {
     throw new Error("execution identity admission envelope violates its bounded contract");
   }
   const encoded = JSON.stringify(owned);
   if (Buffer.byteLength(encoded, "utf8") > EXECUTION_IDENTITY_ADMISSION_MAX_BYTES) {
     throw new Error("execution identity admission envelope exceeds 16 KiB");
   }
-  return owned;
+  return owned as ExecutionIdentityAdmissionEnvelope & Record<string, unknown>;
 }
 
 function validateFacts(value: unknown): ExecutionIdentityAdmissionFacts {
-  const owned = copyOwnedData(value);
+  const baseFacts = executionIdentitySpawnAdmission({ operation: "base-facts", value });
+  const owned = copyOwnedData(baseFacts);
   if (!Value.Check(ExecutionIdentityAdmissionFactsSchema, owned)) {
     throw new Error("execution identity admission facts violate their bounded contract");
   }
-  return owned;
+  const spawnFacts = executionIdentitySpawnAdmission({ operation: "read", value });
+  return executionIdentitySpawnAdmission({ operation: "attach", value: owned, extra: spawnFacts });
 }
 
 function validateToken(value: unknown): ExecutionIdentityAdmissionToken {
@@ -330,7 +343,8 @@ function captureExecutionIdentityAdmissionEnvelope(
       strength: "boundary-verified" as const,
     },
   ];
-  const envelope = {
+  const serializedSpawnFacts = executionIdentitySpawnAdmission({ operation: "read", value: facts });
+  const baseEnvelope = {
     envelopeVersion: 1 as const,
     contextId: ownedToken.contextId,
     executionId: ownedToken.executionId,
@@ -367,29 +381,41 @@ function captureExecutionIdentityAdmissionEnvelope(
       strength: item.strength,
     })),
   };
+  const envelope = executionIdentitySpawnAdmission({
+    operation: "extend-envelope",
+    value: baseEnvelope,
+    extra: serializedSpawnFacts,
+  });
   return freezeEnvelope(validateEnvelope(envelope));
 }
 
-/** Revalidate a structured-cloned worker message before any persistence work. */
+/** Revalidate a structured-cloned queue payload before any persistence work. */
 export function parseExecutionIdentityAdmissionEnvelope(
   value: unknown,
 ): ExecutionIdentityAdmissionEnvelope {
   const envelope = validateEnvelope(value);
-  const parsed = captureExecutionIdentityAdmissionEnvelope(envelope, {
-    token: createExecutionIdentityAdmissionToken(envelope.runId, {
-      contextId: envelope.contextId,
-      executionId: envelope.executionId,
-      now: envelope.createdAt,
-    }),
-    runtimeInstanceId: envelope.runtimeInstanceId,
-  });
+  const spawnFacts = executionIdentitySpawnAdmission({ operation: "read", value: envelope });
+  if (!spawnFacts) {
+    throw new Error("execution identity admission envelope is missing spawn evidence state");
+  }
+  const parsed = captureExecutionIdentityAdmissionEnvelope(
+    executionIdentitySpawnAdmission({ operation: "attach", value: envelope, extra: spawnFacts }),
+    {
+      token: createExecutionIdentityAdmissionToken(envelope.runId, {
+        contextId: envelope.contextId,
+        executionId: envelope.executionId,
+        now: envelope.createdAt,
+      }),
+      runtimeInstanceId: envelope.runtimeInstanceId,
+    },
+  );
   if (JSON.stringify(parsed) !== JSON.stringify(envelope)) {
     throw new Error("execution identity admission envelope is not canonical");
   }
   return parsed;
 }
 
-/** Revalidate either bounded worker message before schema, key, or database work. */
+/** Revalidate either bounded queue payload before schema, key, or database work. */
 export function parseExecutionIdentityAdmissionWork(
   value: unknown,
 ): ExecutionIdentityAdmissionWork {

@@ -17,6 +17,7 @@ describe("worker environment service", () => {
   it("fails node provisioning visibly when Gateway bundle installation fails", async () => {
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         provisionBeforeInstallation: true,
         provision: async () => ({
           leaseId: "device-lease-install-failure",
@@ -185,6 +186,7 @@ describe("worker environment service", () => {
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
       runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
+      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       resolveWorkspacePath: async () => "/gateway/workspace",
       reportWorkspaceResultConflict: async () => {},
       resolveWorkspaceResultConflict: async () => undefined,
@@ -196,7 +198,7 @@ describe("worker environment service", () => {
         sessionKey: "agent:main:session-bootstrap-failure",
         agentId: "main",
         profileId: "development",
-        executionMode: "worker-turn",
+        executionMode: "remote-exec",
       }),
     ).rejects.toThrow("Worker bootstrap failed: remote bootstrap rejected");
 

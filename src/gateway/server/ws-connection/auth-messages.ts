@@ -18,8 +18,9 @@ export function formatGatewayAuthFailureMessage(params: {
   authProvided: AuthProvidedKind;
   reason?: string;
   client?: { id?: string | null; mode?: string | null };
+  isLocalClient?: boolean;
 }): string {
-  const { authMode, authProvided, reason, client } = params;
+  const { authMode, authProvided, reason, client, isLocalClient } = params;
   const isCli = isGatewayCliClient(client);
   const isControlUi = isOperatorUiClient(client);
   const isWebchat = isWebchatClient(client);
@@ -29,13 +30,19 @@ export function formatGatewayAuthFailureMessage(params: {
   const uiHint = "open the dashboard URL and paste the token in Control UI settings";
   const missingUiTokenHint =
     "paste in Control UI settings or openclaw doctor --generate-gateway-token; restart";
+  // Local CLI clients share this gateway's config and have no gateway.remote
+  // block; pointing them at gateway.remote.* would be a dead end.
   const tokenHint = isCli
-    ? "set gateway.remote.token to match gateway.auth.token"
+    ? isLocalClient
+      ? "use this gateway's gateway.auth.token or pair the device"
+      : "set gateway.remote.token to match gateway.auth.token"
     : isControlUi || isWebchat
       ? uiHint
       : "provide gateway auth token";
   const passwordHint = isCli
-    ? "set gateway.remote.password to match gateway.auth.password"
+    ? isLocalClient
+      ? "use this gateway's gateway.auth.password"
+      : "set gateway.remote.password to match gateway.auth.password"
     : isControlUi || isWebchat
       ? "enter the password in Control UI settings"
       : "provide gateway auth password";

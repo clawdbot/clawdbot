@@ -969,6 +969,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       model: params.followupRun.run.model,
       authProfileId: params.followupRun.run.authProfileId,
       authProfileIdSource: params.followupRun.run.authProfileIdSource,
+      sessionEntry: entry,
       agentHarnessId:
         entry.sessionId === params.followupRun.run.sessionId
           ? entry.modelSelectionLocked === true
@@ -1507,7 +1508,7 @@ export async function runMemoryFlushIfNeeded(params: {
             }
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
+              if (phase === "end" && evt.data.completed === true) {
                 memoryCompactionCompleted = true;
               }
             }

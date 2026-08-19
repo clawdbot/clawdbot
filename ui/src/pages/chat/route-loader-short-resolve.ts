@@ -2,8 +2,8 @@ import { ErrorCodes } from "@openclaw/gateway-client/browser";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPathTarget } from "../../app-session-route-paths.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
+import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import {
   resolveShortSessionReferenceWithListFallback,
   type ShortSessionListFallbackResolution,

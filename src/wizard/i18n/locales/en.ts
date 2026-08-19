@@ -1104,14 +1104,9 @@ export const en = {
       controlUiTitle: "Control UI",
       controlUiDocs: "Docs: https://docs.openclaw.ai/web/control-ui",
       dashboardCopyPaste: "Copy/paste this URL in a browser on this machine to control OpenClaw.",
-      dashboardLinkWithToken: "Dashboard link (with token): {url}",
       dashboardOpened: "Opened in your browser. Keep that tab to control OpenClaw.",
       dashboardOpenAnytime: "Open the dashboard anytime: {command}",
       dashboardReady: "Dashboard ready",
-      dashboardTokenMemory:
-        "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
-      dashboardTokenPrompt:
-        "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
       dashboardWhenReady: "When you're ready: {command}",
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
@@ -1214,7 +1209,6 @@ export const en = {
       webSearchUnavailableAction:
         "web_search will not work until the provider is re-enabled or a different provider is selected.",
       webUiUrl: "Web UI: {url}",
-      webUiWithTokenUrl: "Web UI (with token): {url}",
       whatNow: 'What now: https://openclaw.ai/showcase ("What People Are Building").',
       whatNowTitle: "What now",
       workspaceBackupTitle: "Workspace backup",

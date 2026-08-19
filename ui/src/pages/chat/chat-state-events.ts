@@ -1,12 +1,4 @@
-import {
-  readSessionMessageIdentity,
-  readSessionMessageSequence,
-} from "@openclaw/gateway-client/browser";
-import {
-  asNonArrayRecord,
-  asNullableRecord,
-  isRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
@@ -35,113 +27,39 @@ import {
   shouldHideAssistantChatMessage,
 } from "./chat-history.ts";
 import {
+  clearPendingQueueItemsForRun,
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
 } from "./chat-queue.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { preserveQueuedUserTurn } from "./chat-send-support.ts";
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
-import { refreshSessionWorkspace } from "./components/chat-session-workspace.ts";
+import {
+  refreshSessionWorkspace,
+  retireSessionWorkspaceCheckout,
+} from "./components/chat-session-workspace.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
-import {
-  preserveQueuedUserTurn,
-  retirePersistedSteeredChips,
-  retireSteeredChipsForTerminalRun,
-} from "./steer-lifecycle.ts";
-import { isAckedSteeredChip } from "./steered-chip.ts";
-import { persistedSteerTargetRunId, rolloverChatStream } from "./stream-causal-boundary.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
+
+const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
 
 function sessionMessageMatchesChat(
   state: ChatPageHost,
   event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
 ): boolean {
   return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
-}
-
-function applyLiveSessionMessage(
-  state: ChatPageHost,
-  payload: unknown,
-  runActive: boolean | undefined,
-): void {
-  if (!isRecord(payload)) {
-    return;
-  }
-  const event = payload as {
-    clientRunId?: unknown;
-    message?: unknown;
-    messageId?: unknown;
-    messageSeq?: unknown;
-  };
-  const sourceMessage = event.message;
-  const incoming = readSessionMessageIdentity(sourceMessage, event);
-  if (!incoming) {
-    return;
-  }
-  const isPreviousRunAssistant = Boolean(
-    incoming.role === "assistant" &&
-    incoming.sequence !== null &&
-    incoming.runId &&
-    state.chatRunId &&
-    incoming.runId !== state.chatRunId,
-  );
-  if (incoming.role !== "user" && !isPreviousRunAssistant) {
-    return;
-  }
-  // Partial import provenance cannot turn an envelope position into durable
-  // transcript identity; only the persisted row can prove its source order.
-  if (
-    incoming.isImported &&
-    !incoming.externalSource &&
-    readSessionMessageSequence(sourceMessage) === null
-  ) {
-    return;
-  }
-  if (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null) {
-    return;
-  }
-  const sourceRecord = sourceMessage as Record<string, unknown>;
-  const marker = sourceRecord["__openclaw"];
-  const sourceMetadata = asNonArrayRecord(marker);
-  const message = {
-    ...sourceRecord,
-    __openclaw: {
-      ...sourceMetadata,
-      ...(incoming.id ? { id: incoming.id } : {}),
-      ...(incoming.idempotencyKey ? { idempotencyKey: incoming.idempotencyKey } : {}),
-      ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
-    },
-  };
-  const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
-  const previousMessageCount = state.chatMessages.length;
-  const projection = reduceChatSessionProjection(
-    state,
-    { type: "messagePersisted", message, envelope: event },
-    { scope, runActive },
-  );
-  if (
-    incoming.role === "user" &&
-    runActive === true &&
-    state.chatRunId &&
-    incoming.runId &&
-    persistedSteerTargetRunId(message) === state.chatRunId &&
-    projection.messages.length > previousMessageCount
-  ) {
-    rolloverChatStream(state, {
-      runId: state.chatRunId,
-      boundaryRunId: incoming.runId,
-    });
-  }
 }
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
@@ -191,7 +109,7 @@ function finishSessionMessageRunReconcile(
   if (!cleared) {
     return false;
   }
-  retireSteeredChipsForTerminalRun(state, runId ?? undefined);
+  clearPendingQueueItemsForRun(state, runId ?? undefined);
   void loadChatHistory(state)
     .finally(() => {
       if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
@@ -214,8 +132,10 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
     // replaces it in place instead of appending below the newer user turn.
-    applyLiveSessionMessage(state, payload, event.hasActiveRun ?? undefined);
-    retirePersistedSteeredChips(state);
+    applySessionMessagePayload(state, payload, event.hasActiveRun ?? undefined, {
+      kind: "live",
+      activeRunId: state.chatRunId,
+    });
   }
   if (matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
@@ -275,11 +195,6 @@ function replayPendingSessionMessageReload(
   void loadChatHistory(state).finally(() => state.requestUpdate?.());
 }
 
-// Branch topology only changes on structural mutations; the producer records
-// the reason, so reload branches only for those instead of on every
-// sessions.changed (each cache miss rescans the full transcript on the gateway).
-const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
-
 function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
@@ -303,6 +218,10 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     typeof source?.reason === "string" &&
     BRANCH_TOPOLOGY_REASONS.has(source.reason)
   ) {
+    state.chatBranches = [];
+    state.chatBranchesSessionKey = null;
+    state.chatBranchesConnectionEpoch = null;
+    retireSessionWorkspaceCheckout(state);
     void loadChatBranches(state);
   }
   if (event && matchesChat && event.archived !== null) {
@@ -506,6 +425,9 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state, payload);
+    if (terminal) {
+      clearPendingQueueItemsForRun(state, payload?.runId);
+    }
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
     }
@@ -594,9 +516,6 @@ function rememberDeliveredQueuedUserTurn(
     turns = new Map();
     deliveredQueueTurnsByClient.set(owner, turns);
   }
-  const pending = state.chatQueue.find(
-    (item) => isAckedSteeredChip(item) && item.pendingRunId === runId,
-  );
   const stored = readDeliveredQueuedChatSendForRun(state, runId)?.item;
   if (stored) {
     turns.delete(runId);
@@ -609,9 +528,5 @@ function rememberDeliveredQueuedUserTurn(
       turns.delete(oldestRunId);
     }
   }
-  // Original-turn copies first: a run can own both its queued turn (stored, or
-  // its remembered fallback in `turns`) and a steered follow-up chip; the chip
-  // is preserved separately by retireSteeredChipsForTerminalRun and must not
-  // mask the original copy here.
-  return stored ?? turns.get(runId) ?? pending ?? null;
+  return stored ?? turns.get(runId) ?? null;
 }

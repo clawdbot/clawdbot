@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "./runtime/index.js";
 
@@ -12,7 +13,7 @@ function stringifyMcpContent(value: unknown): string {
 }
 
 /** Converts untrusted MCP content into the agent text/image contract. */
-export function mcpContentBlockToAgentContent(block: unknown): McpAgentContentBlock {
+function mcpContentBlockToAgentContent(block: unknown): McpAgentContentBlock {
   if (!isRecord(block)) {
     return { type: "text", text: stringifyMcpContent(block) };
   }
@@ -55,21 +56,55 @@ export function mcpContentBlockToAgentContent(block: unknown): McpAgentContentBl
   return { type: "text", text: stringifyMcpContent(block) };
 }
 
-export function projectMcpCallToolResultContent(result: {
+function projectMcpCallToolResultContent(result: {
   content?: unknown;
   structuredContent?: unknown;
 }): AgentToolResult<unknown>["content"] {
   const sourceContent = Array.isArray(result.content) ? result.content : [];
   if (isRecord(result.structuredContent)) {
+    const mirroredText = JSON.stringify(result.structuredContent, null, 2);
+    const structuredJson = JSON.stringify(
+      JSON.parse(stableStringify(result.structuredContent)),
+      null,
+      2,
+    );
+    const structuredText = `structuredContent:\n${structuredJson}`;
     return [
-      {
-        type: "text",
-        text: `structuredContent:\n${JSON.stringify(result.structuredContent, null, 2)}`,
-      },
+      { type: "text", text: structuredText },
       ...sourceContent
-        .filter((block) => !isRecord(block) || block.type !== "text")
+        // Only the SDK's full pretty-JSON mirror is redundant; overlapping text can carry recovery guidance.
+        .filter((block) => !isRecord(block) || block.type !== "text" || block.text !== mirroredText)
         .map(mcpContentBlockToAgentContent),
     ];
   }
   return sourceContent.map(mcpContentBlockToAgentContent);
+}
+
+/** Projects a raw MCP CallToolResult exactly once at the model boundary. */
+export function projectMcpCallToolResult(
+  result: { content?: unknown; structuredContent?: unknown; isError?: unknown },
+  details: Record<string, unknown> = {},
+): AgentToolResult<unknown> {
+  const isError = result.isError === true;
+  const content = projectMcpCallToolResultContent(result);
+  return {
+    content:
+      content.length > 0
+        ? content
+        : [
+            {
+              type: "text",
+              text: isError
+                ? "MCP tool failed without returning content."
+                : "MCP tool completed without returning content.",
+            },
+          ],
+    details: {
+      ...details,
+      ...(result.structuredContent !== undefined
+        ? { structuredContent: result.structuredContent }
+        : {}),
+      ...(isError ? { status: "error" } : {}),
+    },
+  };
 }

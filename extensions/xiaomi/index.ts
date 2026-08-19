@@ -191,6 +191,7 @@ async function runXiaomiApiKeyAuth(
         : ctx.secretInputMode,
     config: ctx.config,
     env: ctx.env,
+    workspaceDir: ctx.workspaceDir,
     expectedProviders: [params.providerId],
     provider: params.providerId,
     envLabel: params.envVar,

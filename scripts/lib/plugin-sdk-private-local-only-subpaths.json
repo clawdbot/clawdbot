@@ -65,6 +65,7 @@
   "llm",
   "markdown-table-runtime",
   "media-generation-runtime",
+  "meeting-page-script-runtime",
   "memory-core-host-embedding-registry",
   "memory-core-host-engine-curated",
   "memory-core-host-engine-embeddings",

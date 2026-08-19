@@ -474,6 +474,20 @@ type AgentHarnessMcpCatalogCapability = {
   loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
 };
 
+export type AgentHarnessModelCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+};
+
+type AgentHarnessModelCatalogCapability = {
+  /** Lists account-scoped models owned by this native runtime. */
+  loadModelCatalog?(
+    params: AgentHarnessModelCatalogParams,
+  ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
+};
+
 /**
  * @deprecated Implement AgentHarnessV2. This registration contract remains
  * source-compatible for existing plugins through 2026-10-12.
@@ -485,6 +499,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;
@@ -497,6 +512,7 @@ export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParams
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;

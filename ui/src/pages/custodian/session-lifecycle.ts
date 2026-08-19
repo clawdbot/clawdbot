@@ -26,6 +26,14 @@ export function custodianChatParams(
   return { ...variantParams, message, ...(page ? { context: { page } } : {}) };
 }
 
+export function hasCustodianUserInput(params: SystemAgentChatParams): boolean {
+  return (
+    params.message !== undefined ||
+    params.wizardAnswer !== undefined ||
+    params.wizardCancel !== undefined
+  );
+}
+
 export function isCustodianSessionInvalidatedError(error: unknown): boolean {
   const details =
     error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;

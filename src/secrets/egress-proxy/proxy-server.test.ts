@@ -256,6 +256,10 @@ afterEach(async () => {
 });
 
 describe("secret egress proxy", () => {
+  it("activates Node environment proxy support for registered Gateway runs", () => {
+    expect(proxyEnv.NODE_USE_ENV_PROXY).toBe("1");
+  });
+
   it("survives a client that resets a refused tunnel instead of crashing the Gateway", async () => {
     // The proxy runs inside the Gateway process, so an unhandled socket 'error' would take
     // the whole Gateway down. curl resets the connection after a 407, which is exactly this.

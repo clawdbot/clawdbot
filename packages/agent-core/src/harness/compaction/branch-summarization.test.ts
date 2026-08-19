@@ -93,6 +93,39 @@ function createLongBranchEntries(count: number): SessionTreeEntry[] {
 }
 
 describe("branch summarization", () => {
+  it("consumes the decorated stream before reading its result", async () => {
+    const model = createModel(128_000);
+    let consumed = false;
+    const streamFn = vi.fn<StreamFn>(() => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            consumed = true;
+            return { done: true as const, value: undefined };
+          },
+        };
+      },
+      async result() {
+        if (!consumed) {
+          throw new Error("stream result read before iteration");
+        }
+        return createResponse(model);
+      },
+    }));
+
+    await generateBranchSummary(
+      [createMessageEntry({ role: "user", content: "summarize this branch", timestamp: 1 }, 0)],
+      {
+        model,
+        apiKey: "test-key",
+        signal: new AbortController().signal,
+        streamFn,
+      },
+    );
+
+    expect(consumed).toBe(true);
+  });
+
   it.each([
     ["empty", []],
     ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],

@@ -1,4 +1,5 @@
 // ClawHub lifecycle facade: public API plus install/update coordination.
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   downloadClawHubSkillArchive,
@@ -8,7 +9,11 @@ import type {
   ClawHubRiskAcknowledgementRequest,
   ClawHubTrustErrorCode,
 } from "../../infra/clawhub-install-trust.js";
-import { CLAWHUB_SKILLS_SH_REF_PREFIX } from "../../infra/clawhub-skills.js";
+import {
+  CLAWHUB_SKILLS_SH_REF_PREFIX,
+  fetchClawHubSkillVerification,
+  type ClawHubSkillVerificationResponse,
+} from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
@@ -28,6 +33,7 @@ import {
   type InstallClawHubSkillResult,
   type Logger,
 } from "./clawhub-install-core.js";
+import { formatClawHubSkillRequestError } from "./clawhub-request-error.js";
 import { resolveClawHubSkillStatusLinkSync } from "./clawhub-status.js";
 import {
   parseRequestedClawHubSkillRef,
@@ -53,6 +59,18 @@ export {
   untrackClawHubSkill,
   type ClawHubSkillsLockfileStatusRead,
 } from "./clawhub-store.js";
+
+export async function verifySkillWithClawHub(
+  params: Parameters<typeof fetchClawHubSkillVerification>[0],
+): Promise<Result<ClawHubSkillVerificationResponse, string>> {
+  try {
+    return ok(await fetchClawHubSkillVerification(params));
+  } catch (error) {
+    return resultError(
+      formatClawHubSkillRequestError(error, { slug: params.slug, operation: "verify" }),
+    );
+  }
+}
 
 type UpdateClawHubSkillResult =
   | {

@@ -19,9 +19,9 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+  SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY,
   SUGGEST_TASK_TOOL_DISPLAY_SUMMARY,
   DISMISS_TASK_TOOL_DISPLAY_SUMMARY,
-  UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
@@ -422,9 +422,9 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "update_plan",
-    label: "update_plan",
-    description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
+    id: "progress_card",
+    label: "progress_card",
+    description: "Maintain the session progress card",
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -440,8 +440,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "skill_workshop",
     label: "skill_workshop",
-    description:
-      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
+    description: SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

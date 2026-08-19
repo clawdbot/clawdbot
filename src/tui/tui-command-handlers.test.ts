@@ -2517,6 +2517,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/model");
 
+    expect(listModels).toHaveBeenCalledWith({ agentId: "main" });
     const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
     expect(selector?.items?.[0]?.value).toBe("openrouter/auto");
     expect(selector?.items?.[0]?.label).toBe("openrouter/auto");

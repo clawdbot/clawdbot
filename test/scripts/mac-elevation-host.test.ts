@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 // Mac Elevation Host tests protect the unattended launchd and artifact contracts.
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   lstatSync,
@@ -26,6 +27,81 @@ function writeExecutable(filePath: string, contents: string): void {
   chmodSync(filePath, 0o755);
 }
 
+function commandFixturesPath(binDir: string): string {
+  return path.join(binDir, "command-fixtures.bash");
+}
+
+function writeCommandFixture(binDir: string, command: string, contents: string): void {
+  writeExecutable(path.join(binDir, command), contents);
+  appendFileSync(commandFixturesPath(binDir), [`${command}() (`, contents, ")", ""].join("\n"));
+}
+
+function writeDiskutilFixture(binDir: string): void {
+  writeCommandFixture(
+    binDir,
+    "diskutil",
+    [
+      "#!/bin/sh",
+      "set -eu",
+      'if [ "$#" -ne 3 ] || [ "$1" != "info" ] || [ "$2" != "-plist" ]; then',
+      "  printf '%s\\n' 'unexpected diskutil invocation' >&2",
+      "  exit 64",
+      "fi",
+      '[ "$3" = "/dev/openclaw-test-volume" ] || {',
+      "  printf '%s\\n' 'unexpected diskutil device' >&2",
+      "  exit 64",
+      "}",
+      "printf '%s\\n' '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' '<plist version=\"1.0\"><dict><key>VolumeUUID</key><string>00000000-0000-4000-8000-000000000001</string></dict></plist>'",
+      "",
+    ].join("\n"),
+  );
+}
+
+function writeDfFixture(binDir: string): void {
+  writeCommandFixture(
+    binDir,
+    "df",
+    [
+      "#!/bin/sh",
+      "set -eu",
+      '[ "$#" -eq 2 ] && [ "$1" = "-P" ] || {',
+      "  printf '%s\\n' 'unexpected df invocation' >&2",
+      "  exit 64",
+      "}",
+      'if [ "${TEST_FAIL_UNSAFE_ENTRY_IDENTITY:-0}" = "1" ] && [ "$2" = "${TEST_INSTALLED_APP_PATH:-}" ]; then',
+      "  exit 7",
+      "fi",
+      'case "$2" in',
+      '  "$TEST_FIXTURE_ROOT"|"$TEST_FIXTURE_ROOT"/*) ;;',
+      "  *) printf '%s\\n' 'unexpected df target' >&2; exit 64 ;;",
+      "esac",
+      "printf '%s\\n' 'Filesystem 512-blocks Used Available Capacity Mounted on'",
+      "printf '%s %s\\n' '/dev/openclaw-test-volume 1 1 1 1%' \"$TEST_FIXTURE_ROOT\"",
+      "",
+    ].join("\n"),
+  );
+}
+
+function writeShasumFixture(binDir: string): void {
+  writeCommandFixture(
+    binDir,
+    "shasum",
+    [
+      "#!/bin/sh",
+      "set -eu",
+      '[ "$#" -ge 2 ] && [ "$1" = "-a" ] && [ "$2" = "256" ] || {',
+      "  printf '%s\\n' 'unexpected shasum invocation' >&2",
+      "  exit 64",
+      "}",
+      "shift 2",
+      "[ \"$#\" -le 1 ] || { printf '%s\\n' 'unexpected shasum target' >&2; exit 64; }",
+      "[ \"$#\" -eq 0 ] || [ -f \"$1\" ] || { printf '%s\\n' 'missing shasum target' >&2; exit 64; }",
+      'exec /sbin/sha256sum "$@"',
+      "",
+    ].join("\n"),
+  );
+}
+
 function sha256(contents: string | Buffer): string {
   return createHash("sha256").update(contents).digest("hex");
 }
@@ -35,7 +111,7 @@ function fileIdentity(filePath: string): string {
   return `${stats.dev}:${stats.ino}`;
 }
 
-function durableFileIdentity(filePath: string): string {
+function durableFileIdentity(filePath: string, env: NodeJS.ProcessEnv): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("path_identity() {");
   const end = script.indexOf("read_optional_receipt_xattr()", start);
@@ -47,7 +123,7 @@ function durableFileIdentity(filePath: string): string {
       "bash",
       filePath,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env },
   );
   expect(result.status, result.stderr).toBe(0);
   return result.stdout.trim();
@@ -55,6 +131,45 @@ function durableFileIdentity(filePath: string): string {
 
 function receiptDigestArgs(receiptPath: string): string[] {
   return ["--receipt-sha256", sha256(readFileSync(receiptPath))];
+}
+
+function quarantinedElevationAppPath(stateDir: string): string | undefined {
+  const container = readdirSync(stateDir).find((name) =>
+    name.startsWith("elevation-host.quarantined-app."),
+  );
+  return container ? path.join(stateDir, container, "OpenClaw.app") : undefined;
+}
+
+function preservedCuaAppPath(harness: {
+  appPath: string;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+}): string | undefined {
+  const quarantined = quarantinedElevationAppPath(harness.stateDir);
+  if (quarantined) {
+    const driver = path.join(quarantined, "Contents", "Resources", "cua-driver");
+    if (existsSync(driver) || lstatSync(driver, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      return quarantined;
+    }
+  }
+  const home = harness.env.HOME!;
+  for (const entry of readdirSync(home)) {
+    if (
+      !entry.startsWith(`${path.basename(harness.appPath)}.rollback-elevation-host-`) &&
+      !entry.startsWith(`${path.basename(harness.appPath)}.failed-elevation-host-`)
+    ) {
+      continue;
+    }
+    const container = path.join(home, entry);
+    const candidate = entry.includes(".failed-elevation-host-")
+      ? path.join(container, "OpenClaw.app")
+      : container;
+    const driver = path.join(candidate, "Contents", "Resources", "cua-driver");
+    if (existsSync(driver) || lstatSync(driver, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function runInstaller(
@@ -139,8 +254,9 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
     "utf8",
   );
 
-  writeExecutable(
-    path.join(binDir, "codesign"),
+  writeCommandFixture(
+    binDir,
+    "codesign",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -177,8 +293,9 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "plutil"),
+  writeCommandFixture(
+    binDir,
+    "plutil",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -196,16 +313,17 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
       "",
     ].join("\n"),
   );
-  writeExecutable(path.join(binDir, "lipo"), "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
-  writeExecutable(path.join(binDir, "pgrep"), "#!/bin/sh\nexit 1\n");
-  writeExecutable(path.join(binDir, "spctl"), "#!/bin/sh\nexit 0\n");
-  writeExecutable(path.join(binDir, "xcrun"), "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(binDir, "lipo", "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
+  writeCommandFixture(binDir, "pgrep", "#!/bin/sh\nexit 1\n");
+  writeCommandFixture(binDir, "spctl", "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(binDir, "xcrun", "#!/bin/sh\nexit 0\n");
   writeExecutable(
     path.join(binDir, "openclaw"),
     '#!/bin/sh\nprintf \'%s\\n\' \'{"nodes":[{"nodeId":"fixture-node","connected":true,"connectedAtMs":20,"clientId":"openclaw-macos","clientMode":"node","uiVersion":"4.2.0","caps":["computer"],"commands":["screen.snapshot","computer.act"],"computerUse":{"version":2}}]}\'\n',
   );
-  writeExecutable(
-    path.join(binDir, "peekaboo"),
+  writeCommandFixture(
+    binDir,
+    "peekaboo",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -228,6 +346,7 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
     stateDir,
     env: {
       ...process.env,
+      BASH_ENV: commandFixturesPath(binDir),
       HOME: tempRoot,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       TEST_APP_PATH: appPath,
@@ -251,6 +370,8 @@ function createMigrationPlanHarness(launchState: "absent" | "error" | "loaded" =
   mkdirSync(launchAgentsDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(path.join(stateDir, "state"), { recursive: true });
+  writeDiskutilFixture(binDir);
+  writeDfFixture(binDir);
   writeFileSync(configPath, "{}\n", "utf8");
   writeFileSync(path.join(stateDir, "state", "openclaw.sqlite"), "fixture", "utf8");
   writeFileSync(
@@ -272,8 +393,9 @@ function createMigrationPlanHarness(launchState: "absent" | "error" | "loaded" =
     ].join("\n"),
     "utf8",
   );
-  writeExecutable(
-    path.join(binDir, "launchctl"),
+  writeCommandFixture(
+    binDir,
+    "launchctl",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -287,7 +409,7 @@ function createMigrationPlanHarness(launchState: "absent" | "error" | "loaded" =
     ].join("\n"),
   );
   writeExecutable(path.join(binDir, "defaults"), "#!/bin/sh\nprintf '%s\\n' primary\n");
-  writeExecutable(path.join(binDir, "sqlite3"), "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
+  writeCommandFixture(binDir, "sqlite3", "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
   writeExecutable(
     path.join(binDir, "openclaw"),
     [
@@ -313,8 +435,10 @@ function createMigrationPlanHarness(launchState: "absent" | "error" | "loaded" =
     stateDir,
     env: {
       ...process.env,
+      BASH_ENV: commandFixturesPath(binDir),
       HOME: tempRoot,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      TEST_FIXTURE_ROOT: tempRoot,
       TEST_LAUNCH_STATE: launchState,
     },
   };
@@ -488,13 +612,15 @@ function runMigrationReceiptBindingVerifier(
 function addRunningAppFixture(harness: ReturnType<typeof createMigrationPlanHarness>) {
   const binDir = path.join(harness.env.HOME, "bin");
   const appBinary = `${harness.appPath}/Contents/MacOS/OpenClaw`;
-  writeExecutable(path.join(binDir, "pgrep"), "#!/bin/sh\nprintf '%s\\n' 4242\n");
-  writeExecutable(
-    path.join(binDir, "lsof"),
+  writeCommandFixture(binDir, "pgrep", "#!/bin/sh\nprintf '%s\\n' 4242\n");
+  writeCommandFixture(
+    binDir,
+    "lsof",
     `#!/bin/sh\nprintf '%s\\n' p4242 n${JSON.stringify(appBinary)}\n`,
   );
-  writeExecutable(
-    path.join(binDir, "ps"),
+  writeCommandFixture(
+    binDir,
+    "ps",
     `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(`${appBinary} --attach-only --background-only`)}\n`,
   );
 }
@@ -510,10 +636,12 @@ function createArtifactVerificationHarness() {
   const peekabooCommit = "b".repeat(40);
   const entitlements = "<plist><dict/></plist>\n";
   mkdirSync(binDir, { recursive: true });
+  writeShasumFixture(binDir);
   writeFileSync(archivePath, "not-a-real-zip-but-deterministic", "utf8");
   writeExecutable(installerPath, readFileSync(scriptPath, "utf8"));
-  writeExecutable(
-    path.join(binDir, "ditto"),
+  writeCommandFixture(
+    binDir,
+    "ditto",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -536,7 +664,13 @@ function createArtifactVerificationHarness() {
       '  : >"$TEST_PENDING_KILL_MARKER"',
       '  kill -KILL "$PPID"',
       "fi",
+      'if [ "${1:-}" = "--elevation-sync-file" ] && [ "${TEST_CORRUPT_ROLLBACK_PLIST_BACKUP_ON_SYNC:-0}" = "1" ] && echo "${2:-}" | grep -q \'elevation-host[.]previous-plist[.]\'; then',
+      "  printf '%s\\n' corrupt >\"$2\"",
+      "fi",
       'if [ "${1:-}" = "--elevation-rename-exclusive" ]; then',
+      '  if [ "${TEST_FAIL_ELEVATION_QUARANTINE_RENAME:-0}" = "1" ] && echo "$3" | grep -q \'elevation-host[.]quarantined-launch-agent[.]\'; then',
+      "    exit 7",
+      "  fi",
       '  if [ "${TEST_DANGLING_ROLLBACK_DURING_MOVE:-0}" = "1" ] && echo "$3" | grep -q \'[.]rollback-elevation-host-\'; then',
       '    ln -s /missing/openclaw-rollback-target "$3"',
       "  fi",
@@ -570,6 +704,12 @@ function createArtifactVerificationHarness() {
       "  fi",
       '  if [ -e "$3" ] || [ -L "$3" ]; then exit 1; fi',
       '  /bin/mv "$2" "$3" || exit $?',
+      '  if [ "${TEST_REMOVE_CUA_DRIVER_AFTER_UNSAFE_ENTRY_MOVE:-0}" = "1" ] && echo "$3" | grep -q \'elevation-host[.]quarantined-app[.].*[/]OpenClaw[.]app$\' && [ -L "$3" ]; then',
+      '    /bin/rm -f -- "$(readlink "$3")/Contents/Resources/cua-driver"',
+      "  fi",
+      '  if [ "${TEST_RELOAD_ELEVATION_AFTER_QUARANTINE:-0}" = "1" ] && echo "$3" | grep -q \'elevation-host[.]quarantined-launch-agent[.]\'; then',
+      "    printf '%s\\n' elevation-loaded >\"$TEST_LAUNCH_STATE_FILE\"",
+      "  fi",
       '  if [ "${TEST_KILL_AFTER_INITIAL_MIGRATION_CUSTODY:-0}" = "1" ] && echo "$3" | grep -q \'[.]custody[.]\'; then',
       '    kill -KILL "$PPID"',
       "  fi",
@@ -595,11 +735,18 @@ function createArtifactVerificationHarness() {
       "APP_HELPER",
       'printf helper >"$app/Contents/MacOS/openclaw-mlx-tts"',
       'chmod 755 "$app/Contents/MacOS/OpenClaw" "$app/Contents/MacOS/openclaw-mlx-tts"',
+      'case "${TEST_CUA_DRIVER_KIND:-none}" in',
+      '  file) mkdir -p "$app/Contents/Resources"; printf driver >"$app/Contents/Resources/cua-driver"; chmod 755 "$app/Contents/Resources/cua-driver" ;;',
+      '  symlink) mkdir -p "$app/Contents/Resources"; ln -s /missing/cua-driver "$app/Contents/Resources/cua-driver" ;;',
+      "  none) ;;",
+      "  *) exit 64 ;;",
+      "esac",
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "codesign"),
+  writeCommandFixture(
+    binDir,
+    "codesign",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -611,6 +758,9 @@ function createArtifactVerificationHarness() {
       "  exit 1",
       "fi",
       'if [[ "$*" == *"--verify"* && "${TEST_FINAL_SIGNATURE_INVALID:-0}" == "1" && "$target" == "${TEST_INSTALLED_APP_PATH:-}" && -f "${TEST_LAUNCH_STATE_FILE:-}" && "$(tr -d \'\\n\' <"$TEST_LAUNCH_STATE_FILE")" == "elevation-loaded" ]]; then',
+      "  exit 1",
+      "fi",
+      'if [[ "$*" == *"--verify"* && "${TEST_CURRENT_CUA_SIGNATURE_INVALID:-0}" == "1" && "$target" == "${TEST_INSTALLED_APP_PATH:-}" && ( -e "$target/Contents/Resources/cua-driver" || -L "$target/Contents/Resources/cua-driver" ) ]]; then',
       "  exit 1",
       "fi",
       'if [[ "$*" == *"--verify"* && -e "$target/Contents/invalid-signature" ]]; then',
@@ -645,13 +795,24 @@ function createArtifactVerificationHarness() {
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "file"),
-    "#!/bin/sh\nprintf '%s\\n' \"$1: Mach-O universal binary\"\n",
+  writeCommandFixture(
+    binDir,
+    "file",
+    [
+      "#!/bin/sh",
+      "set -eu",
+      '[ "$#" -eq 1 ] || exit 64',
+      'case "$1" in',
+      "  */Contents/MacOS/OpenClaw|*/Contents/MacOS/openclaw-mlx-tts)",
+      "    printf '%s\\n' \"$1: Mach-O universal binary\" ;;",
+      "  *) printf '%s\\n' \"$1: data\" ;;",
+      "esac",
+      "",
+    ].join("\n"),
   );
-  writeExecutable(path.join(binDir, "lipo"), "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
-  writeExecutable(path.join(binDir, "spctl"), "#!/bin/sh\nexit 0\n");
-  writeExecutable(path.join(binDir, "xcrun"), "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(binDir, "lipo", "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
+  writeCommandFixture(binDir, "spctl", "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(binDir, "xcrun", "#!/bin/sh\nexit 0\n");
   const receipt = {
     schemaVersion: 1,
     kind: "openclaw-elevation-artifact",
@@ -683,9 +844,11 @@ function createArtifactVerificationHarness() {
     sourceCommit,
     env: {
       ...process.env,
+      BASH_ENV: commandFixturesPath(binDir),
       HOME: tempRoot,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       TEST_DITTO_MARKER: dittoMarker,
+      TEST_FIXTURE_ROOT: tempRoot,
       TMPDIR: tempRoot,
     },
   };
@@ -693,6 +856,8 @@ function createArtifactVerificationHarness() {
 function createInstallRollbackHarness(
   options: {
     danglingRollbackDuringMove?: boolean;
+    corruptRollbackPlistBackupOnSync?: boolean;
+    currentCuaSignatureInvalid?: boolean;
     failCurrentReceiptRestoreCopy?: boolean;
     failAfterReceiptCommitMove?: boolean;
     failRecoveryXattrRead?: boolean;
@@ -700,8 +865,11 @@ function createInstallRollbackHarness(
     finalSignatureInvalid?: boolean;
     failLsofInspection?: boolean;
     failPgrepInspection?: boolean;
+    failUnsafeEntryIdentity?: boolean;
+    failUnsafeEntryMktemp?: boolean;
     hupDuringCustody?: boolean;
     launchdBootstrapFails?: boolean;
+    failElevationQuarantineRename?: boolean;
     killDuringMigrationRestoreBootstrapOnce?: boolean;
     killAfterMigrationRestoreBootstrapOnce?: boolean;
     killAfterInitialMigrationCustody?: boolean;
@@ -709,7 +877,9 @@ function createInstallRollbackHarness(
     killAfterRollbackAppCustody?: boolean;
     migrationRestoreBootstrapFails?: boolean;
     raceMigrationCustodyDestination?: boolean;
+    reloadElevationAfterQuarantine?: boolean;
     removeInstalledExecutableAfterReadiness?: boolean;
+    existingElevationLoaded?: boolean;
     recreateAppDuringDamagedCustody?: boolean;
     recreateSourceDuringBootout?: boolean;
     recreateSourceOnFailure?: boolean;
@@ -720,6 +890,8 @@ function createInstallRollbackHarness(
     replaceMigrationSourceSameContentBeforeInitialCustody?: boolean;
     restartAppDuringBootout?: boolean;
     rollbackNonNativeSignatureInvalid?: boolean;
+    rollbackCuaDriverKind?: "file" | "symlink";
+    removeCuaDriverAfterUnsafeEntryMove?: boolean;
     signalDuringCustody?: boolean;
     signalDuringRecoveryAppMove?: boolean;
     signalDuringReceiptCommit?: boolean;
@@ -728,11 +900,35 @@ function createInstallRollbackHarness(
     symlinkDamagedAppBeforeCustody?: boolean;
     sameSourceExistingApp?: boolean;
     transientAppRestartReloadsJob?: boolean;
+    unsafeEntryEvidence?:
+      | "job"
+      | "plist"
+      | "plist-program"
+      | "receipt"
+      | "unrelated-plist"
+      | "unrelated-program"
+      | "unrelated-receipt";
   } = {},
 ) {
   const artifact = createArtifactVerificationHarness();
+  // Signal regressions depend on a real child-to-installer process boundary so Bash can
+  // finish the child's wait and EXIT cleanup before replaying the signal.
+  const exercisesProcessSignalBoundary = Boolean(
+    options.hupDuringCustody ||
+    options.killDuringMigrationRestoreBootstrapOnce ||
+    options.killAfterMigrationRestoreBootstrapOnce ||
+    options.killAfterInitialMigrationCustody ||
+    options.killAfterPendingReceipt ||
+    options.killAfterRollbackAppCustody ||
+    options.signalDuringCustody ||
+    options.signalDuringRecoveryAppMove ||
+    options.signalDuringReceiptCommit ||
+    options.signalBeforeRollbackAppMove,
+  );
   const tempRoot = artifact.env.HOME;
   const binDir = path.join(tempRoot, "bin");
+  writeDiskutilFixture(binDir);
+  writeDfFixture(binDir);
   const stateDir = path.join(tempRoot, "node-state");
   const configPath = path.join(stateDir, "openclaw.json");
   const appPath = path.join(tempRoot, "InstalledOpenClaw.app");
@@ -741,6 +937,7 @@ function createInstallRollbackHarness(
   const label = "ai.openclaw.mac.node-fixture";
   const launchAgentsDir = path.join(tempRoot, "Library", "LaunchAgents");
   const sourcePlist = path.join(launchAgentsDir, `${label}.plist`);
+  const elevationPlist = path.join(launchAgentsDir, "ai.openclaw.mac.elevation-host.plist");
   const launchStateFile = path.join(tempRoot, "launch-state");
   const nodeGenerationFile = path.join(tempRoot, "node-generation");
   mkdirSync(path.join(stateDir, "state"), { recursive: true });
@@ -750,6 +947,16 @@ function createInstallRollbackHarness(
   writeAppInfoPlist(appPath, oldSourceCommit, oldPeekabooCommit);
   writeExecutable(path.join(appPath, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\nexit 0\n");
   writeFileSync(path.join(appPath, "Contents", "old-fixture"), "old\n", "utf8");
+  if (options.rollbackCuaDriverKind) {
+    const resources = path.join(appPath, "Contents", "Resources");
+    const cuaDriver = path.join(resources, "cua-driver");
+    mkdirSync(resources, { recursive: true });
+    if (options.rollbackCuaDriverKind === "file") {
+      writeExecutable(cuaDriver, "#!/bin/sh\nexit 0\n");
+    } else {
+      symlinkSync("/missing/cua-driver", cuaDriver);
+    }
+  }
   const sourceContents = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<plist version="1.0"><dict>',
@@ -764,13 +971,42 @@ function createInstallRollbackHarness(
     "</dict></dict></plist>",
     "",
   ].join("\n");
-  writeFileSync(sourcePlist, sourceContents, "utf8");
-  writeFileSync(launchStateFile, "source-loaded\n", "utf8");
+  const elevationPlistContents = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<plist version="1.0"><dict>',
+    "<key>Label</key><string>ai.openclaw.mac.elevation-host</string>",
+    `<key>ProgramArguments</key><array><string>${appPath}/Contents/MacOS/OpenClaw</string><string>--elevation-host</string></array>`,
+    "<key>EnvironmentVariables</key><dict>",
+    `<key>OPENCLAW_STATE_DIR</key><string>${stateDir}</string>`,
+    `<key>OPENCLAW_CONFIG_PATH</key><string>${configPath}</string>`,
+    "</dict></dict></plist>",
+    "",
+  ].join("\n");
+  if (options.existingElevationLoaded) {
+    writeFileSync(elevationPlist, elevationPlistContents, "utf8");
+    writeFileSync(launchStateFile, "elevation-loaded\n", "utf8");
+  } else {
+    writeFileSync(sourcePlist, sourceContents, "utf8");
+    writeFileSync(launchStateFile, "source-loaded\n", "utf8");
+  }
   writeFileSync(nodeGenerationFile, "0\n", "utf8");
   writeExecutable(path.join(binDir, "defaults"), "#!/bin/sh\nprintf '%s\\n' primary\n");
+  writeCommandFixture(
+    binDir,
+    "mktemp",
+    [
+      "#!/usr/bin/env bash",
+      'if [[ "${TEST_FAIL_UNSAFE_ENTRY_MKTEMP:-0}" == "1" && "$*" == *"elevation-host.quarantined-app."* ]]; then',
+      "  exit 7",
+      "fi",
+      'exec /usr/bin/mktemp "$@"',
+      "",
+    ].join("\n"),
+  );
   if (options.replaceAuthenticatedRenameHelperBeforeUse) {
-    writeExecutable(
-      path.join(binDir, "shasum"),
+    writeCommandFixture(
+      binDir,
+      "shasum",
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
@@ -788,9 +1024,10 @@ function createInstallRollbackHarness(
       ].join("\n"),
     );
   }
-  writeExecutable(path.join(binDir, "sqlite3"), "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
-  writeExecutable(
-    path.join(binDir, "pgrep"),
+  writeCommandFixture(binDir, "sqlite3", "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
+  writeCommandFixture(
+    binDir,
+    "pgrep",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -825,9 +1062,10 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(path.join(binDir, "sleep"), "#!/bin/sh\nexit 0\n");
-  writeExecutable(
-    path.join(binDir, "mv"),
+  writeCommandFixture(binDir, "sleep", "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(
+    binDir,
+    "mv",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -859,8 +1097,9 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "cp"),
+  writeCommandFixture(
+    binDir,
+    "cp",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -897,8 +1136,9 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "launchctl"),
+  writeCommandFixture(
+    binDir,
+    "launchctl",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -912,6 +1152,8 @@ function createInstallRollbackHarness(
       "  fi",
       '  if [[ "$target" == */ai.openclaw.mac.elevation-host && "$state" == "elevation-loaded" ]]; then',
       "    printf '%s\\n' '    pid = 555555'",
+      "    printf '    program = %s/Contents/MacOS/OpenClaw\\n' \"$TEST_INSTALLED_APP_PATH\"",
+      "    printf '%s\\n' '    arguments = {' '        --elevation-host' '    }'",
       "    exit 0",
       "  fi",
       "  printf '%s\\n' 'Could not find service in domain' >&2",
@@ -932,6 +1174,27 @@ function createInstallRollbackHarness(
       '  plist="${3:-}"',
       '  if [[ "$plist" == *ai.openclaw.mac.elevation-host.plist ]]; then',
       '    if [[ "$TEST_LAUNCHD_BOOTSTRAP_FAILS" == "1" ]]; then',
+      '      if [[ -n "$TEST_UNSAFE_ENTRY_EVIDENCE" ]]; then',
+      '        rollback_app="$(find "$(dirname "$TEST_INSTALLED_APP_PATH")" -maxdepth 1 -type d -name "$(basename "$TEST_INSTALLED_APP_PATH").rollback-elevation-host-*" -print -quit)"',
+      '        [[ -n "$rollback_app" ]] || exit 71',
+      '        /bin/rm -rf -- "$TEST_INSTALLED_APP_PATH"',
+      '        if [[ "$TEST_UNSAFE_ENTRY_EVIDENCE" == unrelated-* ]]; then',
+      '          /bin/mv "$rollback_app" "$TEST_INSTALLED_APP_PATH"',
+      "        else",
+      '          ln -s "$rollback_app" "$TEST_INSTALLED_APP_PATH"',
+      "        fi",
+      '        pending_receipt="$TEST_STATE_DIR/elevation-host-install.pending.json"',
+      '        case "$TEST_UNSAFE_ENTRY_EVIDENCE" in',
+      '          job) /bin/rm -f -- "$TEST_ELEVATION_PLIST" "$pending_receipt"; printf \'%s\\n\' elevation-loaded >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          plist) /bin/rm -f -- "$pending_receipt"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          plist-program) /bin/rm -f -- "$pending_receipt"; /usr/bin/plutil -insert Program -string "$TEST_INSTALLED_APP_PATH/Contents/MacOS/OpenClaw" "$TEST_ELEVATION_PLIST"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          receipt) /bin/rm -f -- "$TEST_ELEVATION_PLIST"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          unrelated-plist) /bin/rm -f -- "$pending_receipt"; /usr/bin/plutil -replace ProgramArguments.0 -string "$TEST_UNRELATED_APP_PATH/Contents/MacOS/OpenClaw" "$TEST_ELEVATION_PLIST"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          unrelated-program) /bin/rm -f -- "$pending_receipt"; /usr/bin/plutil -insert Program -string "$TEST_UNRELATED_APP_PATH/Contents/MacOS/OpenClaw" "$TEST_ELEVATION_PLIST"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          unrelated-receipt) /bin/rm -f -- "$TEST_ELEVATION_PLIST"; jq --arg appPath "$TEST_UNRELATED_APP_PATH" \'.appPath = $appPath\' "$pending_receipt" >"$pending_receipt.tmp"; /bin/mv "$pending_receipt.tmp" "$TEST_STATE_DIR/elevation-host-install.json"; /bin/rm -f -- "$pending_receipt"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      "          *) exit 72 ;;",
+      "        esac",
+      "      fi",
       '      if [[ "$TEST_RECREATE_SOURCE_ON_FAILURE" == "1" ]]; then',
       "        printf '%s\\n' replacement-owner >\"$TEST_SOURCE_PLIST\"",
       "      fi",
@@ -965,8 +1228,9 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "peekaboo"),
+  writeCommandFixture(
+    binDir,
+    "peekaboo",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -985,8 +1249,9 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "xattr"),
+  writeCommandFixture(
+    binDir,
+    "xattr",
     [
       "#!/bin/sh",
       'if [ "${TEST_FAIL_RECOVERY_XATTR_READ:-0}" = "1" ] && [ "${1:-}" = "-p" ]; then',
@@ -1000,6 +1265,8 @@ function createInstallRollbackHarness(
     ...artifact,
     appPath,
     configPath,
+    elevationPlist,
+    elevationPlistContents,
     label,
     launchStateFile,
     sourceContents,
@@ -1007,16 +1274,29 @@ function createInstallRollbackHarness(
     stateDir,
     env: {
       ...artifact.env,
+      BASH_ENV: exercisesProcessSignalBoundary ? "" : artifact.env.BASH_ENV,
       TEST_DANGLING_ROLLBACK_DURING_MOVE: options.danglingRollbackDuringMove ? "1" : "0",
+      TEST_CORRUPT_ROLLBACK_PLIST_BACKUP_ON_SYNC: options.corruptRollbackPlistBackupOnSync
+        ? "1"
+        : "0",
       TEST_FAIL_CURRENT_RECEIPT_RESTORE_COPY: options.failCurrentReceiptRestoreCopy ? "1" : "0",
       TEST_FAIL_AFTER_RECEIPT_COMMIT_MOVE: options.failAfterReceiptCommitMove ? "1" : "0",
+      TEST_FAIL_ELEVATION_QUARANTINE_RENAME: options.failElevationQuarantineRename ? "1" : "0",
       TEST_FAIL_LSOF_INSPECTION: options.failLsofInspection ? "1" : "0",
       TEST_FAIL_PGREP_INSPECTION: options.failPgrepInspection ? "1" : "0",
       TEST_FAIL_RECOVERY_XATTR_READ: options.failRecoveryXattrRead ? "1" : "0",
+      TEST_FAIL_UNSAFE_ENTRY_IDENTITY: options.failUnsafeEntryIdentity ? "1" : "0",
+      TEST_FAIL_UNSAFE_ENTRY_MKTEMP: options.failUnsafeEntryMktemp ? "1" : "0",
       TEST_FINAL_CDHASH_MISMATCH: options.finalCDHashMismatch ? "1" : "0",
       TEST_FINAL_SIGNATURE_INVALID: options.finalSignatureInvalid ? "1" : "0",
+      TEST_FIXTURE_ROOT: tempRoot,
       TEST_INSTALLED_APP_PATH: appPath,
+      TEST_ELEVATION_PLIST: elevationPlist,
+      TEST_STATE_DIR: stateDir,
+      TEST_UNRELATED_APP_PATH: path.join(tempRoot, "UnrelatedOpenClaw.app"),
+      TEST_UNSAFE_ENTRY_EVIDENCE: options.unsafeEntryEvidence ?? "",
       TEST_CUSTODY_SIGNAL: options.hupDuringCustody ? "HUP" : "TERM",
+      TEST_CURRENT_CUA_SIGNATURE_INVALID: options.currentCuaSignatureInvalid ? "1" : "0",
       TEST_LAUNCHD_BOOTSTRAP_FAILS: options.launchdBootstrapFails === false ? "0" : "1",
       TEST_LIVE_PID: String(process.pid),
       TEST_LAUNCH_STATE_FILE: launchStateFile,
@@ -1037,6 +1317,7 @@ function createInstallRollbackHarness(
       TEST_RECREATE_APP_DURING_DAMAGED_CUSTODY: options.recreateAppDuringDamagedCustody ? "1" : "0",
       TEST_RECREATE_SOURCE_DURING_BOOTOUT: options.recreateSourceDuringBootout ? "1" : "0",
       TEST_RECREATE_SOURCE_ON_FAILURE: options.recreateSourceOnFailure ? "1" : "0",
+      TEST_RELOAD_ELEVATION_AFTER_QUARANTINE: options.reloadElevationAfterQuarantine ? "1" : "0",
       TEST_RENAME_HELPER_HASH_MARKER: path.join(tempRoot, "rename-helper-hash-marker"),
       TEST_REPLACE_DAMAGED_APP_DIRECTORY_BEFORE_CUSTODY:
         options.replaceDamagedAppDirectoryBeforeCustody ? "1" : "0",
@@ -1048,6 +1329,9 @@ function createInstallRollbackHarness(
         options.replaceMigrationSourceSameContentBeforeInitialCustody ? "1" : "0",
       TEST_REMOVE_INSTALLED_EXECUTABLE_AFTER_READINESS:
         options.removeInstalledExecutableAfterReadiness ? "1" : "0",
+      TEST_REMOVE_CUA_DRIVER_AFTER_UNSAFE_ENTRY_MOVE: options.removeCuaDriverAfterUnsafeEntryMove
+        ? "1"
+        : "0",
       TEST_RESTART_APP_DURING_BOOTOUT: options.restartAppDuringBootout ? "1" : "0",
       TEST_ROLLBACK_NON_NATIVE_SIGNATURE_INVALID: options.rollbackNonNativeSignatureInvalid
         ? "1"
@@ -1067,6 +1351,63 @@ function createInstallRollbackHarness(
 }
 
 describe("mac elevation host command contract", () => {
+  it("reads complete codesign metadata without SIGPIPE and preserves codesign failure", () => {
+    const root = tempDirs.make("openclaw-elevation-codesign-metadata-");
+    const binDir = path.join(root, "bin");
+    const fakeApp = path.join(root, "OpenClaw.app");
+    mkdirSync(binDir);
+    mkdirSync(fakeApp);
+    const codesign = path.join(binDir, "codesign");
+    writeExecutable(
+      codesign,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
+        "printf '%s\\n' 'Authority=Developer ID Certification Authority' >&2",
+        "printf '%s\\n' 'TeamIdentifier=FWJYW4S8P8' >&2",
+        'if [[ "$*" == *"--arch arm64"* ]]; then',
+        "  printf '%s\\n' 'CDHash=ARM64HASH' >&2",
+        'elif [[ "$*" == *"--arch x86_64"* ]]; then',
+        "  printf '%s\\n' 'CDHash=X8664HASH' >&2",
+        "else",
+        "  printf '%s\\n' 'CDHash=UNSCOPEDHASH' >&2",
+        "fi",
+        "for _ in $(seq 1 10000); do printf '%s\\n' 'Padding=0123456789abcdef' >&2; done",
+        '[[ "${CODESIGN_FAIL_AFTER_OUTPUT:-0}" != "1" ]] || exit 7',
+        "",
+      ].join("\n"),
+    );
+    const script = readFileSync(scriptPath, "utf8");
+    const start = script.indexOf("codesign_metadata_value() {");
+    const end = script.indexOf("entitlements_for()", start);
+    const helpers = script.slice(start, end);
+    const run = (command: string, failAfterOutput = false) =>
+      spawnSync("/bin/bash", ["-c", `set -euo pipefail\n${helpers}\n${command}`, "bash", fakeApp], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODESIGN_FAIL_AFTER_OUTPUT: failAfterOutput ? "1" : "0",
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      });
+
+    const values = run(
+      'printf "%s\\n" "$(codesign_value "$1" Authority)" "$(codesign_value_for_arch "$1" CDHash arm64)" "$(codesign_value_for_arch "$1" CDHash x86_64)"',
+    );
+    expect(values.status, values.stderr).toBe(0);
+    expect(values.stdout.trim().split("\n")).toEqual([
+      "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+      "ARM64HASH",
+      "X8664HASH",
+    ]);
+
+    const failed = run('codesign_value_for_arch "$1" CDHash arm64', true);
+    expect(failed.status).toBe(7);
+    expect(failed.stdout).toBe("");
+  });
+
   it("documents package and transactional lifecycle commands without probing macOS", () => {
     const result = spawnSync("bash", [scriptPath, "--help"], {
       cwd: process.cwd(),
@@ -1296,6 +1637,47 @@ describe("mac elevation host command contract", () => {
       expect(rejected.stderr).toContain(
         "artifact receipt does not match the authenticated release handoff digest",
       );
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "rejects CUA-bearing elevation artifacts before verify or install",
+    () => {
+      const verification = createArtifactVerificationHarness();
+      const rejectedVerify = runInstaller(
+        verification.installerPath,
+        [
+          "verify",
+          "--archive",
+          verification.archivePath,
+          "--receipt",
+          verification.receiptPath,
+          ...receiptDigestArgs(verification.receiptPath),
+        ],
+        { ...verification.env, TEST_CUA_DRIVER_KIND: "file" },
+      );
+      expect(rejectedVerify.status).toBe(1);
+      expect(rejectedVerify.stderr).toContain("must not contain bundled CUA driver");
+
+      const installation = createInstallRollbackHarness();
+      const rejectedInstall = runInstaller(
+        installation.installerPath,
+        [
+          "install",
+          "--archive",
+          installation.archivePath,
+          "--receipt",
+          installation.receiptPath,
+          ...receiptDigestArgs(installation.receiptPath),
+          "--app",
+          installation.appPath,
+          "--migrate-launch-agent",
+          installation.sourcePlist,
+        ],
+        { ...installation.env, TEST_CUA_DRIVER_KIND: "symlink" },
+      );
+      expect(rejectedInstall.status).toBe(1);
+      expect(rejectedInstall.stderr).toContain("must not contain bundled CUA driver");
     },
   );
 
@@ -1640,6 +2022,428 @@ describe("mac elevation host command contract", () => {
         ),
       ).toBe(false);
       expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+    },
+  );
+
+  for (const rollbackCuaDriverKind of ["file", "symlink"] as const) {
+    it.skipIf(process.platform !== "darwin")(
+      `preserves but never restarts a ${rollbackCuaDriverKind} CUA-bearing elevation rollback`,
+      () => {
+        const harness = createInstallRollbackHarness({
+          existingElevationLoaded: true,
+          reloadElevationAfterQuarantine: true,
+          rollbackCuaDriverKind,
+        });
+        const result = runInstaller(
+          harness.installerPath,
+          [
+            "install",
+            "--archive",
+            harness.archivePath,
+            "--receipt",
+            harness.receiptPath,
+            ...receiptDigestArgs(harness.receiptPath),
+            "--app",
+            harness.appPath,
+            "--state-dir",
+            harness.stateDir,
+            "--config-path",
+            harness.configPath,
+          ],
+          harness.env,
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("could not bootstrap elevation host");
+        expect(result.stderr).toContain("Preserved previous elevation app with bundled CUA driver");
+        expect(result.stderr).toContain(
+          "Quarantined replacement for unsafe previous elevation LaunchAgent",
+        );
+        expect(result.stderr).toContain("automatic elevation-host rollback was incomplete");
+        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-absent");
+        const quarantinedApp = preservedCuaAppPath(harness);
+        expect(quarantinedApp).toBeDefined();
+        const rollbackDriver = lstatSync(
+          path.join(quarantinedApp!, "Contents", "Resources", "cua-driver"),
+        );
+        expect(rollbackDriver.isSymbolicLink()).toBe(rollbackCuaDriverKind === "symlink");
+        expect(existsSync(harness.elevationPlist)).toBe(false);
+        expect(
+          readdirSync(path.dirname(harness.elevationPlist)).filter((name) =>
+            name.startsWith("ai.openclaw.mac.elevation-host"),
+          ),
+        ).toEqual([]);
+        const previousPlist = readdirSync(harness.stateDir).find((name) =>
+          name.startsWith("elevation-host.previous-plist."),
+        );
+        expect(previousPlist).toBeDefined();
+        expect(readFileSync(path.join(harness.stateDir, previousPlist!), "utf8")).toBe(
+          harness.elevationPlistContents,
+        );
+        const quarantinedPlist = readdirSync(harness.stateDir).find((name) =>
+          name.startsWith("elevation-host.quarantined-launch-agent."),
+        );
+        expect(quarantinedPlist).toBeDefined();
+        expect(readFileSync(path.join(harness.stateDir, quarantinedPlist!), "utf8")).toContain(
+          "--elevation-host",
+        );
+      },
+    );
+  }
+
+  it.skipIf(process.platform !== "darwin")(
+    "removes the discoverable elevation plist when unsafe rollback quarantine fails",
+    () => {
+      const harness = createInstallRollbackHarness({
+        existingElevationLoaded: true,
+        failElevationQuarantineRename: true,
+        rollbackCuaDriverKind: "file",
+      });
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--state-dir",
+          harness.stateDir,
+          "--config-path",
+          harness.configPath,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Removed unquarantinable replacement for unsafe previous elevation LaunchAgent",
+      );
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-absent");
+      expect(existsSync(harness.elevationPlist)).toBe(false);
+      const previousPlist = readdirSync(harness.stateDir).find((name) =>
+        name.startsWith("elevation-host.previous-plist."),
+      );
+      expect(previousPlist).toBeDefined();
+      expect(readFileSync(path.join(harness.stateDir, previousPlist!), "utf8")).toBe(
+        harness.elevationPlistContents,
+      );
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "quarantines a CUA-bearing elevation app when the recorded rollback destination is blocked",
+    () => {
+      const harness = createInstallRollbackHarness({
+        danglingRollbackDuringMove: true,
+        existingElevationLoaded: true,
+        rollbackCuaDriverKind: "file",
+      });
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--state-dir",
+          harness.stateDir,
+          "--config-path",
+          harness.configPath,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(existsSync(path.join(harness.appPath, "Contents", "Resources", "cua-driver"))).toBe(
+        false,
+      );
+      expect(existsSync(harness.elevationPlist)).toBe(false);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-absent");
+      const quarantinedApp = quarantinedElevationAppPath(harness.stateDir);
+      expect(quarantinedApp).toBeDefined();
+      expect(existsSync(path.join(quarantinedApp!, "Contents", "Resources", "cua-driver"))).toBe(
+        true,
+      );
+    },
+  );
+
+  for (const evidence of ["job", "plist", "plist-program", "receipt"] as const) {
+    it.skipIf(process.platform !== "darwin")(
+      `quarantines a symlinked CUA app from exact ${evidence} ownership evidence`,
+      () => {
+        const harness = createInstallRollbackHarness({
+          rollbackCuaDriverKind: "file",
+          unsafeEntryEvidence: evidence,
+        });
+        const result = runInstaller(
+          harness.installerPath,
+          [
+            "install",
+            "--archive",
+            harness.archivePath,
+            "--receipt",
+            harness.receiptPath,
+            ...receiptDigestArgs(harness.receiptPath),
+            "--app",
+            harness.appPath,
+            "--migrate-launch-agent",
+            harness.sourcePlist,
+          ],
+          harness.env,
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Quarantined CUA-bearing elevation app");
+        expect(lstatSync(harness.appPath, { throwIfNoEntry: false })).toBeUndefined();
+        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-absent");
+        const quarantinedApp = quarantinedElevationAppPath(harness.stateDir);
+        expect(quarantinedApp).toBeDefined();
+        expect(lstatSync(quarantinedApp!).isSymbolicLink()).toBe(true);
+        expect(existsSync(path.join(quarantinedApp!, "Contents", "Resources", "cua-driver"))).toBe(
+          true,
+        );
+      },
+    );
+  }
+
+  it.skipIf(process.platform !== "darwin")(
+    "keeps a symlink quarantined when its target changes after the move",
+    () => {
+      const harness = createInstallRollbackHarness({
+        removeCuaDriverAfterUnsafeEntryMove: true,
+        rollbackCuaDriverKind: "file",
+        unsafeEntryEvidence: "job",
+      });
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Quarantined CUA-bearing elevation app");
+      const quarantinedApp = quarantinedElevationAppPath(harness.stateDir);
+      expect(quarantinedApp).toBeDefined();
+      expect(lstatSync(quarantinedApp!).isSymbolicLink()).toBe(true);
+    },
+  );
+
+  for (const evidence of ["unrelated-plist", "unrelated-program", "unrelated-receipt"] as const) {
+    it.skipIf(process.platform !== "darwin")(
+      `preserves an app when only an ${evidence} remains`,
+      () => {
+        const harness = createInstallRollbackHarness({
+          rollbackCuaDriverKind: "file",
+          unsafeEntryEvidence: evidence,
+        });
+        const result = runInstaller(
+          harness.installerPath,
+          [
+            "install",
+            "--archive",
+            harness.archivePath,
+            "--receipt",
+            harness.receiptPath,
+            ...receiptDigestArgs(harness.receiptPath),
+            "--app",
+            harness.appPath,
+            "--migrate-launch-agent",
+            harness.sourcePlist,
+          ],
+          harness.env,
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).not.toContain("Quarantined CUA-bearing elevation app");
+        expect(lstatSync(harness.appPath).isDirectory()).toBe(true);
+        expect(quarantinedElevationAppPath(harness.stateDir)).toBeUndefined();
+        const stalePath =
+          evidence !== "unrelated-receipt"
+            ? harness.elevationPlist
+            : path.join(harness.stateDir, "elevation-host-install.json");
+        expect(existsSync(stalePath)).toBe(true);
+      },
+    );
+  }
+
+  for (const setupFailure of ["identity", "mktemp"] as const) {
+    it.skipIf(process.platform !== "darwin")(
+      `neutralizes launchd before unsafe app quarantine ${setupFailure} setup fails`,
+      () => {
+        const harness = createInstallRollbackHarness({
+          danglingRollbackDuringMove: true,
+          existingElevationLoaded: true,
+          failUnsafeEntryIdentity: setupFailure === "identity",
+          failUnsafeEntryMktemp: setupFailure === "mktemp",
+          rollbackCuaDriverKind: "file",
+        });
+        const result = runInstaller(
+          harness.installerPath,
+          [
+            "install",
+            "--archive",
+            harness.archivePath,
+            "--receipt",
+            harness.receiptPath,
+            ...receiptDigestArgs(harness.receiptPath),
+            "--app",
+            harness.appPath,
+            "--state-dir",
+            harness.stateDir,
+            "--config-path",
+            harness.configPath,
+          ],
+          harness.env,
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("automatic elevation-host rollback was incomplete");
+        expect(existsSync(harness.elevationPlist)).toBe(false);
+        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-absent");
+        expect(existsSync(path.join(harness.appPath, "Contents", "Resources", "cua-driver"))).toBe(
+          true,
+        );
+      },
+    );
+  }
+
+  it.skipIf(process.platform !== "darwin")(
+    "neutralizes unsafe rollback even when its plist evidence becomes corrupt",
+    () => {
+      const harness = createInstallRollbackHarness({
+        corruptRollbackPlistBackupOnSync: true,
+        existingElevationLoaded: true,
+        rollbackCuaDriverKind: "file",
+      });
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--state-dir",
+          harness.stateDir,
+          "--config-path",
+          harness.configPath,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("automatic elevation-host rollback was incomplete");
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-absent");
+      expect(existsSync(harness.appPath)).toBe(false);
+      expect(existsSync(harness.elevationPlist)).toBe(false);
+      expect(
+        readdirSync(harness.stateDir).some((name) =>
+          name.startsWith("elevation-host.quarantined-launch-agent."),
+        ),
+      ).toBe(true);
+      expect(
+        existsSync(path.join(preservedCuaAppPath(harness)!, "Contents", "Resources", "cua-driver")),
+      ).toBe(true);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "never restores a CUA-bearing current elevation job after explicit recovery fails",
+    () => {
+      const harness = createInstallRollbackHarness({
+        currentCuaSignatureInvalid: true,
+        launchdBootstrapFails: false,
+        migrationRestoreBootstrapFails: true,
+      });
+      const installed = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+      expect(installed.status, installed.stderr).toBe(0);
+      const currentReceipt = readFileSync(
+        path.join(harness.stateDir, "elevation-host-install.json"),
+        "utf8",
+      );
+      const resources = path.join(harness.appPath, "Contents", "Resources");
+      mkdirSync(resources, { recursive: true });
+      writeExecutable(path.join(resources, "cua-driver"), "#!/bin/sh\nexit 0\n");
+
+      const recovered = runInstaller(
+        harness.installerPath,
+        [
+          "recover",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--state-dir",
+          harness.stateDir,
+        ],
+        harness.env,
+      );
+
+      expect(recovered.status).toBe(1);
+      expect(recovered.stderr).toContain("Preserved current elevation app with bundled CUA driver");
+      expect(recovered.stderr).toContain(
+        "recovery failed and the current OpenClaw installation could not be restored completely",
+      );
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-absent");
+      expect(existsSync(harness.elevationPlist)).toBe(false);
+      expect(existsSync(path.join(harness.appPath, "Contents", "Resources", "cua-driver"))).toBe(
+        false,
+      );
+      const preservedApp = preservedCuaAppPath(harness);
+      expect(preservedApp).toBeDefined();
+      expect(existsSync(path.join(preservedApp!, "Contents", "Resources", "cua-driver"))).toBe(
+        true,
+      );
+      expect(readFileSync(path.join(harness.stateDir, "elevation-host-install.json"), "utf8")).toBe(
+        currentReceipt,
+      );
+      const preservedCurrentPlist = readdirSync(harness.stateDir).find((name) =>
+        name.startsWith("elevation-host.recovery-current-plist."),
+      );
+      expect(preservedCurrentPlist).toBeDefined();
+      expect(readFileSync(path.join(harness.stateDir, preservedCurrentPlist!), "utf8")).toContain(
+        "--elevation-host",
+      );
     },
   );
 
@@ -2933,7 +3737,7 @@ describe("mac elevation host command contract", () => {
         ["-p", "com.openclaw.elevation.recovery-migration-identity", receiptPath],
         { encoding: "utf8" },
       ).stdout.trim();
-      expect(recordedIdentity).toBe(durableFileIdentity(harness.sourcePlist));
+      expect(recordedIdentity).toBe(durableFileIdentity(harness.sourcePlist, harness.env));
 
       const resumed = runInstaller(
         harness.installerPath,

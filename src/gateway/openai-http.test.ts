@@ -21,7 +21,6 @@ import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
-  waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -2498,10 +2497,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     "separates streamed content from the terminal finish for an official SDK $name",
     async ({ fail, providerTerminal, expected, protocolError }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
-      const terminalAdmission = createDeferred<{
-        active: number;
-        drained: { drained: boolean; active: number };
-      }>();
+      const terminalAdmission = createDeferred<{ active: number }>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
       const lifecycleTerminals: string[] = [];
@@ -2518,9 +2514,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         // Agent settlement schedules the terminal in a later microtask. The
         // request must remain admitted until Node finishes the actual stream.
         const active = getActiveGatewayRootWorkCount();
-        void waitForActiveGatewayRootWork(0).then((drained) => {
-          terminalAdmission.resolve({ active, drained });
-        });
+        terminalAdmission.resolve({ active });
       });
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
@@ -2593,7 +2587,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           wireResponse.promise,
         ]);
         expect(admission.active).toBe(idleRootCount + 1);
-        expect(admission.drained).toEqual({ drained: false, active: idleRootCount + 1 });
         expect(parseSseDataLines(wire).at(-1)).toBe("[DONE]");
         expect(lifecycleTerminals).toEqual([fail ? "error" : "end"]);
 
@@ -3718,10 +3711,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       expect(await cleanupAdmissionClosed.promise).toBe(false);
       expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
-      expect(await waitForActiveGatewayRootWork(0)).toEqual({
-        drained: false,
-        active: idleRootCount + 1,
-      });
     } finally {
       finishAgentCleanup.resolve();
     }

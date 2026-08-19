@@ -164,7 +164,6 @@ function attachHarness(
     commitFailure?: WorkerTranscriptCommitErrorReason;
     identity?: WorkerConnectionIdentity;
     liveFailure?: WorkerLiveEventErrorDetails;
-    ingress?: "loopback" | "public";
     omitPublicAdmission?: boolean;
     rateLimiter?: AuthRateLimiter;
     onInferenceLaunch?: (sink: InferenceSink) => void;
@@ -232,11 +231,9 @@ function attachHarness(
     socket: socket as unknown as WebSocket,
     connId: "worker-connection",
     service,
-    ingress: options.ingress ?? "loopback",
-    publicAdmission:
-      options.ingress === "public" && !options.omitPublicAdmission
-        ? { clientIp: "203.0.113.10", rateLimiter: options.rateLimiter }
-        : undefined,
+    publicAdmission: options.omitPublicAdmission
+      ? undefined
+      : { clientIp: "203.0.113.10", rateLimiter: options.rateLimiter },
     send: (frame) => responses.push(frame),
     close,
     isClosed: () => false,
@@ -300,8 +297,13 @@ describe("dedicated worker websocket protocol", () => {
     const harness = attachHarness({ admissionFailure: reason });
     harness.sendConnect();
 
-    await waitForWorkerProtocol(() => expect(harness.close).toHaveBeenCalledWith(1008, reason));
-    expect(harness.responses[0]).toMatchObject({ ok: false, error: { details: { reason } } });
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+    );
+    expect(harness.responses[0]).toMatchObject({
+      ok: false,
+      error: { details: { reason: "invalid-handshake" } },
+    });
     expect(harness.logWsControl.warn).toHaveBeenCalledWith(
       `worker admission rejected reason=${reason}`,
     );
@@ -309,7 +311,7 @@ describe("dedicated worker websocket protocol", () => {
   });
 
   it("fails closed when public ingress context is missing", async () => {
-    const harness = attachHarness({ ingress: "public", omitPublicAdmission: true });
+    const harness = attachHarness({ omitPublicAdmission: true });
     harness.sendConnect();
 
     await waitForWorkerProtocol(() =>
@@ -328,7 +330,6 @@ describe("dedicated worker websocket protocol", () => {
       const rateLimiter = createRateLimiter({ recordFailure });
       const harness = attachHarness({
         admissionFailure: internalReason,
-        ingress: "public",
         rateLimiter,
       });
       harness.sendConnect();
@@ -352,7 +353,7 @@ describe("dedicated worker websocket protocol", () => {
     const rateLimiter = createRateLimiter({
       check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs: 12_000 })),
     });
-    const harness = attachHarness({ ingress: "public", rateLimiter });
+    const harness = attachHarness({ rateLimiter });
     harness.sendConnect();
 
     await waitForWorkerProtocol(() =>
@@ -371,7 +372,7 @@ describe("dedicated worker websocket protocol", () => {
   it("resets public credential failures after successful admission", async () => {
     const reset = vi.fn();
     const rateLimiter = createRateLimiter({ reset });
-    const harness = attachHarness({ ingress: "public", rateLimiter });
+    const harness = attachHarness({ rateLimiter });
     await admit(harness);
 
     expect(reset).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
@@ -382,7 +383,6 @@ describe("dedicated worker websocket protocol", () => {
     const recordFailure = vi.fn();
     const rateLimiter = createRateLimiter({ reset, recordFailure });
     const harness = attachHarness({
-      ingress: "public",
       rateLimiter,
       validationFailure: "credential-replaced",
     });
@@ -683,8 +683,9 @@ describe("dedicated worker websocket protocol", () => {
     harness.sendConnect();
 
     await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"),
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
     );
+    expect(harness.setCloseCause).toHaveBeenCalledWith("credential-replaced");
     expect(harness.setClient).not.toHaveBeenCalled();
   });
 
