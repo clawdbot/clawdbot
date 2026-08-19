@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
 type ContainableTransport = {
   pid?: number;
@@ -19,16 +19,17 @@ const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
 const MAX_CONTAINED_PROCESSES = 512;
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const MAX_PROCESS_QUIESCE_PASSES = 16;
+const PROCESS_INSPECTION_MAX_BYTES = 8 * 1024 * 1024;
 
-export function terminateCodexAppServerDescendants(
+export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
-): (() => void) | undefined {
+): Promise<(() => void) | undefined> {
   const rootPid = child.pid;
   if (process.platform === "win32" || !rootPid || !child.kill || hasExited(child)) {
     return undefined;
   }
   const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
-  const snapshot = readProcessSnapshot(deadline);
+  const snapshot = await readProcessSnapshot(deadline);
   if (!snapshot || Date.now() >= deadline) {
     return undefined;
   }
@@ -42,12 +43,17 @@ export function terminateCodexAppServerDescendants(
     return undefined;
   }
   const stoppedDescendants = new Map<string, PosixProcess>();
-  if (!signalSameRoot(root, "SIGSTOP", deadline)) {
+  if (!(await signalSameRoot(root, "SIGSTOP", deadline))) {
     return undefined;
   }
   let resumeRootOnUnwind = true;
   try {
-    const descendants = quiesceDescendants(root, initialDescendants, stoppedDescendants, deadline);
+    const descendants = await quiesceDescendants(
+      root,
+      initialDescendants,
+      stoppedDescendants,
+      deadline,
+    );
     if (!descendants) {
       return undefined;
     }
@@ -59,7 +65,7 @@ export function terminateCodexAppServerDescendants(
         return undefined;
       }
       if (!descendant.state.startsWith("Z")) {
-        if (!signalSameProcess(descendant, "SIGKILL", deadline) || Date.now() >= deadline) {
+        if (!(await signalSameProcess(descendant, "SIGKILL", deadline)) || Date.now() >= deadline) {
           return undefined;
         }
       }
@@ -85,19 +91,19 @@ export function terminateCodexAppServerDescendants(
   }
 }
 
-function quiesceDescendants(
+async function quiesceDescendants(
   root: PosixProcess,
   initialDescendants: PosixProcess[],
   stopped: Map<string, PosixProcess>,
   deadline: number,
-): PosixProcess[] | undefined {
+): Promise<PosixProcess[] | undefined> {
   const provenByPid = new Map(initialDescendants.map((descendant) => [descendant.pid, descendant]));
   const stopFailures = new Map<string, number>();
   for (let pass = 0; pass < MAX_PROCESS_QUIESCE_PASSES; pass += 1) {
     if (Date.now() >= deadline) {
       return undefined;
     }
-    const snapshot = readProcessSnapshot(deadline);
+    const snapshot = await readProcessSnapshot(deadline);
     if (!snapshot || Date.now() >= deadline) {
       return undefined;
     }
@@ -106,7 +112,7 @@ function quiesceDescendants(
       return undefined;
     }
     if (!isSameLiveRoot(currentRoot, root, true)) {
-      if (!signalSameRoot(root, "SIGSTOP", deadline) || Date.now() >= deadline) {
+      if (!(await signalSameRoot(root, "SIGSTOP", deadline)) || Date.now() >= deadline) {
         return undefined;
       }
       continue;
@@ -116,6 +122,8 @@ function quiesceDescendants(
     for (const proven of provenByPid.values()) {
       const current = snapshotByPid.get(proven.pid);
       if (!current) {
+        provenByPid.delete(proven.pid);
+        stopped.delete(identityKey(proven));
         continue;
       }
       if (!hasSameIdentity(proven, current)) {
@@ -154,7 +162,7 @@ function quiesceDescendants(
       if (isStoppedState(descendant.state)) {
         continue;
       }
-      const stopQueued = signalSameProcess(descendant, "SIGSTOP", deadline);
+      const stopQueued = await signalSameProcess(descendant, "SIGSTOP", deadline);
       if (Date.now() >= deadline) {
         return undefined;
       }
@@ -180,33 +188,54 @@ function quiesceDescendants(
   return undefined;
 }
 
-function readProcessSnapshot(deadline: number): PosixProcess[] | undefined {
-  return readProcesses(["-axo", PROCESS_COLUMNS], deadline);
+async function readProcessSnapshot(deadline: number): Promise<PosixProcess[] | undefined> {
+  return await readProcesses(["-axo", PROCESS_COLUMNS], deadline);
 }
 
-function readProcess(pid: number, deadline: number): PosixProcess | undefined {
-  return readProcesses(["-o", PROCESS_COLUMNS, "-p", String(pid)], deadline)?.find(
+async function readProcess(pid: number, deadline: number): Promise<PosixProcess | undefined> {
+  return (await readProcesses(["-o", PROCESS_COLUMNS, "-p", String(pid)], deadline))?.find(
     (row) => row.pid === pid,
   );
 }
 
-function readProcesses(args: string[], deadline: number): PosixProcess[] | undefined {
+async function readProcesses(
+  args: string[],
+  deadline: number,
+): Promise<PosixProcess[] | undefined> {
   const remainingMs = deadline - Date.now();
   if (remainingMs <= 0) {
     return undefined;
   }
-  try {
-    const result = spawnSync("ps", args, {
-      encoding: "utf8",
-      timeout: Math.max(1, Math.min(500, remainingMs)),
-    });
-    if (result.error || result.status !== 0) {
-      return undefined;
-    }
-    return parseProcesses(result.stdout);
-  } catch {
-    return undefined;
-  }
+  return await new Promise<PosixProcess[] | undefined>((resolve) => {
+    let settled = false;
+    const settle = (processes: PosixProcess[] | undefined) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(processes);
+    };
+    const inspector = execFile(
+      "ps",
+      args,
+      { encoding: "utf8", maxBuffer: PROCESS_INSPECTION_MAX_BYTES },
+      (error, stdout) => {
+        settle(error ? undefined : parseProcesses(stdout));
+      },
+    );
+    const timer = setTimeout(
+      () => {
+        settle(undefined);
+        inspector.stdout?.destroy();
+        inspector.stderr?.destroy();
+        inspector.kill("SIGKILL");
+        inspector.unref();
+      },
+      Math.max(1, remainingMs),
+    );
+    timer.unref?.();
+  });
 }
 
 function parseProcesses(output: string): PosixProcess[] {
@@ -289,8 +318,12 @@ function isSameLiveRoot(
   );
 }
 
-function signalSameRoot(root: PosixProcess, signal: NodeJS.Signals, deadline: number): boolean {
-  const current = readProcess(root.pid, deadline);
+async function signalSameRoot(
+  root: PosixProcess,
+  signal: NodeJS.Signals,
+  deadline: number,
+): Promise<boolean> {
+  const current = await readProcess(root.pid, deadline);
   return Boolean(current && isSameLiveRoot(current, root) && signalProcess(current.pid, signal));
 }
 
@@ -316,14 +349,14 @@ function resumeTransportRoot(
   }
 }
 
-function signalSameProcess(
+async function signalSameProcess(
   expected: PosixProcess,
   signal: NodeJS.Signals,
   deadline: number,
-): boolean {
+): Promise<boolean> {
   // Portable Node POSIX signals are PID-based, so never retain numeric authority:
   // take this final identity snapshot synchronously immediately before every signal.
-  const current = readProcess(expected.pid, deadline);
+  const current = await readProcess(expected.pid, deadline);
   return Boolean(
     current && isSameLiveProcess(current, expected) && signalProcess(current.pid, signal),
   );

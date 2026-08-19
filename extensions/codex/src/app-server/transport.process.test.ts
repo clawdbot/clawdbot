@@ -211,8 +211,10 @@ printf '%s' "$((count + 1))" > ${JSON.stringify(fakePsCounterPath)}
 last=$(command cat ${JSON.stringify(scenarioPath)})
 if [ "$count" -gt "$last" ]; then count=$last; fi
 rows=${JSON.stringify(scenarioPath)}.$count
-if [ "$(command cat "$rows")" = FAIL ]; then exit 1; fi
-command cat "$rows"
+payload=$(command cat "$rows")
+if [ "$payload" = FAIL ]; then exit 1; fi
+if [ "$payload" = HANG ]; then while :; do sleep 1; done; fi
+printf '%s\\n' "$payload"
 `,
       { mode: 0o755 },
     );
@@ -338,6 +340,12 @@ try {
                       [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
                       null,
                     ]
+                  : mode === "inspection-timeout"
+                    ? [
+                        [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                        [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                        "HANG",
+                      ]
               : [
               [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
               [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
@@ -352,7 +360,9 @@ try {
   await Promise.all(snapshots.map(async (rows, index) => {
     const contents = rows === null
       ? "FAIL\\n"
-      : rows.map((row) => [row.pid, row.ppid, row.pgid, row.state, row.startedAt].join(" ")).join("\\n") + "\\n";
+      : rows === "HANG"
+        ? "HANG\\n"
+        : rows.map((row) => [row.pid, row.ppid, row.pgid, row.state, row.startedAt].join(" ")).join("\\n") + "\\n";
     await fs.writeFile(scenarioPath + "." + index, contents);
   }));
   process.env.PATH = fakeBin + path.delimiter + (originalPath ?? "");
@@ -383,6 +393,7 @@ process.stdout.write(JSON.stringify(result));
         ["traced", false],
         ["uninterruptible", false],
         ["snapshot-failure", true, false],
+        ["inspection-timeout", true, false],
         ["extended", false],
       ] as const) {
         const output = execFileSync(
