@@ -8,6 +8,7 @@ import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { classifyRfbSecurity, probeRfbServer } from "../gateway/desktop/rfb-probe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
+import { parseNodeWorkerDesktopStreamInput } from "../worker/node-desktop-protocol.js";
 
 const DEFAULT_DESKTOP_PORT = 5900;
 const PROBE_TIMEOUT_MS = 1_500;
@@ -357,5 +358,28 @@ export async function invokeNodeDesktopStream(params: {
     ...(params.config.passwordFile ? { passwordFile: params.config.passwordFile } : {}),
     signal: params.signal,
     ...(params.emitStatus ? { emitStatus: params.emitStatus } : {}),
+  });
+}
+
+/** Runs the private worker command against provider-attested loopback RFB facts. */
+export async function invokeNodeWorkerDesktopStream(params: {
+  paramsJSON?: string | null;
+  gatewayUrl?: string;
+  gatewayTlsFingerprint?: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (!params.gatewayUrl || !params.signal) {
+    throw new Error("node worker desktop gateway connection is unavailable");
+  }
+  const command = parseNodeWorkerDesktopStreamInput(params.paramsJSON);
+  await runNodeDesktopStreamCommand({
+    command,
+    gatewayUrl: params.gatewayUrl,
+    ...(params.gatewayTlsFingerprint
+      ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
+      : {}),
+    target: { host: "127.0.0.1", port: command.port },
+    ...(command.passwordFilePath ? { passwordFile: command.passwordFilePath } : {}),
+    signal: params.signal,
   });
 }

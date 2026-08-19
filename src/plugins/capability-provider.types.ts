@@ -102,7 +102,7 @@ export type WorkerDesktopEndpoint = {
   protocol: "rfb";
   /** Loopback port on the worker (e.g. 5900). */
   port: number;
-  /** Absolute on-box path to the per-lease password file; read over SSH, never persisted as plaintext. */
+  /** Absolute on-box path to the per-lease password file; read by the owning transport, never persisted as plaintext. */
   passwordFilePath?: string;
   /** Closed application metadata advertised by the provider for this desktop. */
   apps?: WorkerDesktopApp[];

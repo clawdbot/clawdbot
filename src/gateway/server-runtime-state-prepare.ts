@@ -123,18 +123,22 @@ export async function prepareGatewayKernelState(params: {
     !(nodeCommandConfig?.deny ?? []).some(
       (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
     );
+  const workerDesktopObserveAvailable =
+    shouldStartWorkerEnvironmentService &&
+    gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
   const desktopSessionRegistry =
     shouldStartWorkerEnvironmentService || hostDesktopEnabled || nodeDesktopObserveAvailable
       ? createDesktopSessionRegistry()
       : undefined;
-  const nodeDesktopStreamBroker = nodeDesktopObserveAvailable
-    ? (
-        await startupTrace.measure(
-          "node-desktop.runtime-import",
-          () => import("./desktop/node-stream-broker.js"),
-        )
-      ).createNodeDesktopStreamBroker()
-    : undefined;
+  const nodeDesktopStreamBroker =
+    nodeDesktopObserveAvailable || workerDesktopObserveAvailable
+      ? (
+          await startupTrace.measure(
+            "node-desktop.runtime-import",
+            () => import("./desktop/node-stream-broker.js"),
+          )
+        ).createNodeDesktopStreamBroker()
+      : undefined;
   const hostDesktopService =
     hostDesktopConfig && hostDesktopEnabled && desktopSessionRegistry
       ? (
@@ -154,6 +158,7 @@ export async function prepareGatewayKernelState(params: {
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
             desktopSessionRegistry,
+            ...(nodeDesktopStreamBroker ? { nodeDesktopStreamBroker } : {}),
             startup: workerEnvironmentStartup,
             log,
           });
@@ -164,6 +169,7 @@ export async function prepareGatewayKernelState(params: {
     workerLiveEvents,
     nodeWorkerGatewayNamespace,
     bindDeviceNodeControl,
+    bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
     handleNodeWorkerBundleTransferRequest,
     handleNodeWorkspaceTransferRequest,
@@ -201,8 +207,6 @@ export async function prepareGatewayKernelState(params: {
     : undefined;
   const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = workerPlacementControlAvailable;
-  const workerDesktopObserveAvailable =
-    Boolean(workerEnvironmentService) && gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
   const desktopObserveAvailable =
     workerDesktopObserveAvailable || nodeDesktopObserveAvailable || Boolean(hostDesktopService);
   const channelLogs = Object.fromEntries(
@@ -493,6 +497,7 @@ export async function prepareGatewayKernelState(params: {
     workerEnvironmentService,
     workerLiveEvents,
     bindDeviceNodeControl: bindDeviceNodeRuntime,
+    bindWorkerNodeDesktopControl,
     workerDispatchAuthority,
     workerPlacementRuntime,
     workerPlacementControlAvailable,

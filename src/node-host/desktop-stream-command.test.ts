@@ -2,10 +2,41 @@ import http from "node:http";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
+import {
+  invokeNodeDesktopStream,
+  invokeNodeWorkerDesktopStream,
+} from "./desktop-stream-command.js";
 
 const TICKET = "a".repeat(48);
 const cleanups: Array<() => Promise<void>> = [];
+
+async function listenRfbSecurity(securityType: number): Promise<number> {
+  const peers = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    peers.add(socket);
+    socket.once("close", () => peers.delete(socket));
+    socket.on("error", handleExpectedPeerTeardownError);
+    socket.write(Buffer.from("RFB 003.008\n", "ascii"));
+    socket.once("data", () => socket.write(Buffer.from([1, securityType])));
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected RFB test address");
+  }
+  cleanups.push(
+    async () =>
+      await new Promise<void>((resolve) => {
+        for (const peer of peers) {
+          peer.destroy();
+        }
+        server.close(() => resolve());
+      }),
+  );
+  return address.port;
+}
 
 function handleExpectedPeerTeardownError(error: NodeJS.ErrnoException): void {
   if (error.code !== "ECONNRESET" && error.code !== "EPIPE") {
@@ -18,6 +49,41 @@ afterEach(async () => {
 });
 
 describe("node desktop stream command", () => {
+  it.each([
+    ["caller-selected host", { host: "192.0.2.10" }],
+    ["relative password path", { passwordFilePath: "vnc.password" }],
+    ["invalid RFB port", { port: 65_536 }],
+  ])("rejects worker stream payload with %s", async (_name, override) => {
+    await expect(
+      invokeNodeWorkerDesktopStream({
+        paramsJSON: JSON.stringify({
+          ticket: TICKET,
+          attachPath: `/node-desktop/attach?ticket=${TICKET}`,
+          port: 5900,
+          ...override,
+        }),
+        gatewayUrl: "ws://127.0.0.1:1",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("INVALID_REQUEST");
+  });
+
+  it("refuses an unauthenticated provider RFB endpoint before Gateway attach", async () => {
+    const port = await listenRfbSecurity(1);
+
+    await expect(
+      invokeNodeWorkerDesktopStream({
+        paramsJSON: JSON.stringify({
+          ticket: TICKET,
+          attachPath: `/node-desktop/attach?ticket=${TICKET}`,
+          port,
+        }),
+        gatewayUrl: "ws://127.0.0.1:1",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("refusing unauthenticated loopback RFB server");
+  });
+
   it("refuses a caller-selected RFB target before dialing", async () => {
     await expect(
       invokeNodeDesktopStream({
