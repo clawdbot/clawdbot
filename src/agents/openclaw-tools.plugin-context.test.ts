@@ -20,6 +20,19 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.requesterSenderId).toBe("trusted-sender");
   });
 
+  it("forwards trusted current inbound message identity and text", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        currentMessageId: "provider-message-123",
+        currentMessageText: "Please create an order",
+      },
+    });
+
+    expect(result.context.currentMessageId).toBe("provider-message-123");
+    expect(result.context.currentMessageText).toBe("Please create an order");
+  });
+
   it("forwards the trusted owner bit", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

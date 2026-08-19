@@ -56,6 +56,10 @@ export type OpenClawPluginToolContext = {
   nativeChannelId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
+  /** Trusted provider-native id of the current inbound message. */
+  currentMessageId?: string | number;
+  /** Trusted text of the current inbound message. */
+  currentMessageText?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
   /**
