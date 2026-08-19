@@ -15,6 +15,7 @@ import {
   jsonResult,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import {
   addTimerTimeoutGraceMs,
@@ -122,13 +123,6 @@ function wrapCanvasEvalResult(result: unknown): string {
   return wrappedText;
 }
 
-function isPathInsideRoot(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 async function readJsonlFromPath(jsonlPath: string, workspaceDir?: string): Promise<string> {
   const trimmed = jsonlPath.trim();
   if (!trimmed) {
@@ -140,7 +134,7 @@ async function readJsonlFromPath(jsonlPath: string, workspaceDir?: string): Prom
     fs.realpath(workspaceRoot),
     fs.realpath(resolved),
   ]);
-  if (!isPathInsideRoot(workspaceReal, resolvedReal)) {
+  if (!isPathInside(workspaceReal, resolvedReal)) {
     throw new Error("jsonlPath outside workspace");
   }
   return (
