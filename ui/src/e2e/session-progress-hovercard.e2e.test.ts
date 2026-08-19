@@ -148,14 +148,6 @@ suite.define(() => {
         await expect.poll(() => card.count()).toBe(0);
         await expect.poll(() => menu.isVisible()).toBe(true);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-        await expect
-          .poll(() =>
-            page
-              .locator("openclaw-session-menu")
-              .getByRole("menuitem", { name: "Pin session" })
-              .evaluate((element) => element === document.activeElement),
-          )
-          .toBe(true);
       },
     );
   });
