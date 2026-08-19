@@ -1204,15 +1204,7 @@ async function runTurn(
       { modelId: params.modelId },
     );
   }
-  // One-shot: heartbeat/cron runs and subagent dispatches never send a
-  // follow-up turn on this thread, so there's nothing to reuse the attempt
-  // for — tell the bridge to close its subprocess right after this turn
-  // instead of holding it idle until the query-thread-timeout sweep.
-  // Everything else (a real user-triggered chat exchange, or a
-  // compaction/memory continuation of one) may get a follow-up turn, so it
-  // defaults to retained.
-  const oneShot =
-    params.trigger === "heartbeat" || params.trigger === "cron" || Boolean(params.spawnedBy);
+  const oneShot = isOneShotTurn(params);
   const turnParamsCandidate: TurnStartParams = {
     threadId,
     input: buildInput(params, promptPrefix),
@@ -1607,6 +1599,45 @@ function resolveReasoningEffort(
     return thinkLevel;
   }
   return null;
+}
+
+// One-shot: this turn is the LAST one this thread will ever see, so tell the
+// bridge to close its subprocess immediately instead of holding it idle
+// until the query-thread-timeout sweep.
+//
+// Only `heartbeat` and `cron` qualify. Each wake is its own turn and never
+// sends a follow-up on the same thread, so closing early is free.
+//
+// `spawnedBy` USED TO BE in this predicate and should not be: it records
+// provenance ("this session has its own transcript rather than continuing a
+// parent's"), not finality. It is a persisted column on the session row
+// (src/config/sessions/session-accessor.sqlite-session-row.ts), so it is set
+// on EVERY turn of a spawned session for that session's whole life — not
+// just its first. And spawned sessions are explicitly conversational:
+// sessions_send exists to deliver follow-up turns to them. Treating them as
+// final therefore (a) respawned the subprocess on every turn of a multi-turn
+// child, paying a cold prompt cache each time, and (b) made it impossible
+// for a subagent to background work and still have it alive at its own next
+// turn — which is exactly the shape "spawn a child to do the long thing and
+// reap its report later" needs.
+//
+// TRADEOFF, deliberate: a genuine fire-and-forget child (sessions_spawn
+// mode:"run") now holds its subprocess until the idle sweep instead of
+// closing at once. That is memory for no benefit in that one case — the
+// original comment's rationale — but it is the SAFE direction of error.
+// Wrongly retaining costs bounded memory that cli.ts's sweepIdle already
+// exists to reclaim (30 min default, swept every 5 min, tunable via
+// appServer.queryThreadTimeoutMs); wrongly closing silently destroys live
+// work. Operators who care can shorten that timeout.
+//
+// The precise fix is to gate on the spawn's own mode ("run" vs "session",
+// which SpawnMode in src/agents/spawn-plan.ts already models and the
+// subagent registry already persists as spawn_mode). That signal does not
+// currently reach EmbeddedRunAttemptParams — it would need adding to the
+// child session patch and the session row — so it is left as a follow-up
+// rather than guessed at here (openclaw-81h9).
+export function isOneShotTurn(params: Pick<EmbeddedRunAttemptParams, "trigger">): boolean {
+  return params.trigger === "heartbeat" || params.trigger === "cron";
 }
 
 /**
