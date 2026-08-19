@@ -289,7 +289,11 @@ describe("remote workspace quiescence scripts", () => {
 
   it("bounds identity lookups so a stalled host ps cannot strand frozen processes", async () => {
     const input = await fixture();
+    const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
     const nonce = await quiesce(input);
+    const lease = JSON.parse(
+      await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
+    ) as { watchdog: { pid: number } };
 
     // Every SIGCONT is gated on processIdentity, so an unbounded lookup leaves the whole
     // lease frozen with no remaining resumer. The stub ignores SIGTERM because that is the
@@ -297,13 +301,22 @@ describe("remote workspace quiescence scripts", () => {
     await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
     await fs.chmod(path.join(input.bin, "ps"), 0o755);
 
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
-      { timeoutMs: 15_000, baseEnv: input.env },
-    );
+    try {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        { timeoutMs: 15_000, baseEnv: input.env },
+      );
 
-    expect(result.termination).toBe("exit");
-    expect(result.code).not.toBe(0);
+      expect(result.termination).toBe("exit");
+      expect(result.code).not.toBe(0);
+    } finally {
+      await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
+      await fs.chmod(path.join(input.bin, "ps"), 0o755);
+      await resume(input, nonce);
+      await vi.waitFor(() => {
+        expect(() => process.kill(lease.watchdog.pid, 0)).toThrow();
+      });
+    }
   });
 
   it("thaws a real stopped worker and clears the lease", async () => {
