@@ -35,7 +35,6 @@ export type InstalledPluginIndexScopeLookup = {
   addChannelContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectChannelOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectProviderOwners: (target: Set<string>, ids: readonly string[]) => void;
-  addMemoryPluginIds: (target: Set<string>) => void;
   addProviderContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
   addShorthandModelOwners: (target: Set<string>, modelIds: readonly string[]) => void;
   canResolveDirectProviderIds: (
@@ -221,13 +220,6 @@ export function createInstalledPluginIndexScopeLookup(
       addOwners(target, maps.channelContributionOwners, ids),
     addDirectChannelOwners: (target, ids) => addOwners(target, maps.directChannelOwners, ids),
     addDirectProviderOwners: (target, ids) => addOwners(target, maps.directProviderOwners, ids),
-    addMemoryPluginIds: (target) => {
-      for (const plugin of index.plugins) {
-        if (plugin.startup.memory) {
-          target.add(plugin.pluginId);
-        }
-      }
-    },
     addProviderContributionOwners: (target, ids) =>
       addOwners(target, maps.providerContributionOwners, ids),
     addShorthandModelOwners: (target, modelIds) => {

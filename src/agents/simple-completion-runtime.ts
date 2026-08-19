@@ -21,7 +21,6 @@ import type {
   ModelThinkingLevel,
   ThinkingLevel as SimpleCompletionThinkingLevel,
 } from "../llm/types.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
@@ -556,20 +555,13 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       ? { shorthandModelIds: [tentativeRequest.shorthandModelId] }
       : {}),
   });
-  const currentMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+  let metadataSnapshot = resolvePluginMetadataSnapshot({
     config: params.cfg,
+    env: process.env,
     workspaceDir,
     pluginIdScope,
-    allowWorkspaceScopedSnapshot: true,
+    allowWorkspaceScopedCurrent: true,
   });
-  let metadataSnapshot =
-    currentMetadataSnapshot ??
-    resolvePluginMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-      workspaceDir,
-      pluginIdScope,
-    });
   const resolveSelection = () =>
     resolveSimpleCompletionSelectionForAgent({
       ...selectionParams,
@@ -596,19 +588,13 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       : {}),
   });
   if (canonicalPluginIdScope.key !== pluginIdScope.key) {
-    metadataSnapshot =
-      getCurrentPluginMetadataSnapshot({
-        config: params.cfg,
-        workspaceDir,
-        pluginIdScope: canonicalPluginIdScope,
-        allowWorkspaceScopedSnapshot: true,
-      }) ??
-      resolvePluginMetadataSnapshot({
-        config: params.cfg,
-        env: process.env,
-        workspaceDir,
-        pluginIdScope: canonicalPluginIdScope,
-      });
+    metadataSnapshot = resolvePluginMetadataSnapshot({
+      config: params.cfg,
+      env: process.env,
+      workspaceDir,
+      pluginIdScope: canonicalPluginIdScope,
+      allowWorkspaceScopedCurrent: true,
+    });
     selection = resolveSelection();
     if (!selection) {
       return { error: `No model configured for agent ${params.agentId}.` };

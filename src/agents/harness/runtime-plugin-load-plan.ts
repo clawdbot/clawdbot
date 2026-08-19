@@ -4,11 +4,14 @@ import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
 import {
   isTestDefaultMemorySlotDisabled,
-  normalizePluginsConfig,
   resolveEffectivePluginActivationState,
   resolveSelectedContextEnginePluginId,
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
+import {
+  addConfiguredSlotPluginIds,
+  normalizePluginsConfigForInstalledIndex,
+} from "../../plugins/gateway-startup-plugin-config.js";
 import { hashJson } from "../../plugins/installed-plugin-index-hash.js";
 import { createInstalledPluginIndexScopeLookup } from "../../plugins/installed-plugin-index-scope-lookup.js";
 import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
@@ -114,10 +117,11 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
   shorthandModelIds?: readonly string[];
   index: InstalledPluginIndex;
 }): string[] | undefined {
-  if (!normalizePluginsConfig(params.config?.plugins).enabled) {
+  const lookup = createInstalledPluginIndexScopeLookup(params.index);
+  const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config?.plugins, lookup);
+  if (!pluginsConfig.enabled) {
     return [];
   }
-  const lookup = createInstalledPluginIndexScopeLookup(params.index);
   const pluginIds = new Set<string>();
   lookup.addShorthandModelOwners(pluginIds, params.shorthandModelIds ?? []);
   const selections = resolveAgentRuntimePluginSelections(params.config, params.selections);
@@ -146,13 +150,11 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
     return undefined;
   }
   lookup.addAgentHarnessOwners(pluginIds, runtimeIds);
-  // Metadata retains every memory candidate so the canonical runtime plan can
-  // select the active memory owner and any manifest-declared companion sidecar.
-  lookup.addMemoryPluginIds(pluginIds);
-  const contextEnginePluginId = resolveSelectedContextEnginePluginId(params.config);
-  if (contextEnginePluginId) {
-    pluginIds.add(contextEnginePluginId);
-  }
+  addConfiguredSlotPluginIds(pluginIds, {
+    activationSourceConfig: params.config ?? {},
+    activationSourcePlugins: pluginsConfig,
+    lookup,
+  });
   if (!lookup.hasInstalledPluginIds(pluginIds)) {
     return undefined;
   }

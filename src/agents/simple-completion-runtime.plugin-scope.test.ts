@@ -9,7 +9,7 @@ import {
   createColdPluginHermeticEnv,
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "../plugins/test-helpers/fs-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
@@ -20,17 +20,13 @@ import {
   prepareSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 
-const tempDirs: string[] = [];
-
-function makeTempDir() {
-  return makeTrackedTempDir("openclaw-simple-completion-plugin-scope", tempDirs);
-}
+const tempRoots = createSyncSuiteTempRootTracker("openclaw-simple-completion-plugin-scope");
 
 afterEach(() => {
   resetPreparedModelRuntimeSnapshotsForTest();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
-  cleanupTrackedTempDirs(tempDirs);
+  tempRoots.cleanup();
 });
 
 describe("simple completion prepared plugin scope", () => {
@@ -71,7 +67,7 @@ describe("simple completion prepared plugin scope", () => {
   ])(
     "loads only the selected plugin generation for $name",
     async ({ expectedModelId, prepare }) => {
-      const tempRoot = makeTempDir();
+      const tempRoot = tempRoots.makeTempDir();
       const selectedRoot = path.join(tempRoot, "selected");
       const unrelatedRoot = path.join(tempRoot, "unrelated");
       fs.mkdirSync(selectedRoot, { recursive: true });
@@ -116,6 +112,7 @@ module.exports = {
         },
         plugins: {
           load: { paths: [selected.rootDir, unrelated.rootDir] },
+          slots: { memory: "none" },
           entries: {
             [selected.pluginId]: { enabled: true },
             [unrelated.pluginId]: { enabled: true },
@@ -135,7 +132,7 @@ module.exports = {
         },
       );
       const env = {
-        ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
+        ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: tempRoots.makeTempDir() }),
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
       };
@@ -149,9 +146,8 @@ module.exports = {
         }),
       );
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         error: `stop after selected resolver ${selected.providerId}/${expectedModelId}`,
-        ...("selection" in result ? { selection: result.selection } : {}),
       });
       expect(modelResolver).toHaveBeenCalledOnce();
       expect(isColdPluginRuntimeLoaded(selected)).toBe(true);

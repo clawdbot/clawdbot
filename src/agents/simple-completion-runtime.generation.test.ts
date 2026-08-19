@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   acquireRuntimeLease: vi.fn(),
   getApiKeyForModel: vi.fn(),
   prepareProviderRuntimeAuth: vi.fn(),
-  getCurrentPluginMetadataSnapshot: vi.fn(),
   resolvePluginMetadataSnapshot: vi.fn(),
   publishedGeneration: "A",
   readGeneration: (() => "unscoped") as () => string,
@@ -15,10 +14,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: mocks.acquireRuntimeLease,
-}));
-
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: mocks.getCurrentPluginMetadataSnapshot,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -82,7 +77,6 @@ beforeEach(() => {
   mocks.acquireRuntimeLease.mockReset();
   mocks.getApiKeyForModel.mockReset();
   mocks.prepareProviderRuntimeAuth.mockReset();
-  mocks.getCurrentPluginMetadataSnapshot.mockReset().mockReturnValue(undefined);
   mocks.resolvePluginMetadataSnapshot.mockReset().mockReturnValue({
     plugins: [],
     index: { plugins: [] },
@@ -246,16 +240,6 @@ it("acquires the canonical manifest-derived utility model selection", async () =
     ],
     index: { plugins: [] },
   };
-  let scopedMetadataReads = 0;
-  mocks.getCurrentPluginMetadataSnapshot.mockImplementation(
-    (params?: { pluginIdScope?: unknown }) => {
-      if (!params?.pluginIdScope) {
-        return undefined;
-      }
-      scopedMetadataReads += 1;
-      return scopedMetadataReads === 1 ? metadataSnapshot : undefined;
-    },
-  );
   mocks.resolvePluginMetadataSnapshot.mockReturnValue(metadataSnapshot);
 
   const result = await prepareSimpleCompletionModelForAgent({
@@ -272,7 +256,11 @@ it("acquires the canonical manifest-derived utility model selection", async () =
     })),
   });
 
-  expect(scopedMetadataReads).toBe(2);
+  expect(
+    mocks.resolvePluginMetadataSnapshot.mock.calls.filter(
+      ([params]) => (params as { pluginIdScope?: unknown } | undefined)?.pluginIdScope,
+    ),
+  ).toHaveLength(2);
   expect(mocks.acquireRuntimeLease).toHaveBeenCalledWith(
     expect.objectContaining({
       runtimePluginSelections: [
