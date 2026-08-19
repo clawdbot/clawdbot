@@ -90,10 +90,15 @@ describe("worker placement projection", () => {
     expect(projectWorkerSessionPlacement(active, undefined, reader.read(active))).toMatchObject({
       runner: { kind: "device", status: "offline" },
     });
+    expect(reader.version()).toBe(0);
     connected = true;
+    reader.markChanged();
+    reader.markChanged();
+    reader.markChanged();
     expect(projectWorkerSessionPlacement(active, undefined, reader.read(active))).toMatchObject({
       runner: { kind: "device", status: "available" },
     });
+    expect(reader.version()).toBe(3);
   });
 
   it("omits runner availability for non-device and inexact environment owners", () => {

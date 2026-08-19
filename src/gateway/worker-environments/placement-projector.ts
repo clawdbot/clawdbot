@@ -21,33 +21,40 @@ export type WorkerPlacementDiskSpaceReader = {
 
 export type WorkerPlacementRunnerAvailabilityReader = {
   read(record: WorkerSessionPlacementRecord): SessionPlacementRunner | undefined;
+  version(): number;
 };
 
 export function createWorkerPlacementRunnerAvailabilityReader(params: {
   environments: Pick<WorkerEnvironmentServiceContract, "get">;
   hasCurrentDeviceRunner: (deviceId: string) => boolean;
-}): WorkerPlacementRunnerAvailabilityReader {
+}): WorkerPlacementRunnerAvailabilityReader & { markChanged(): void } {
+  let version = 0;
+  const read: WorkerPlacementRunnerAvailabilityReader["read"] = (record) => {
+    if (record.state !== "active") {
+      return undefined;
+    }
+    const environment = params.environments.get(record.environmentId);
+    if (
+      environment?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
+      environment.state !== "attached" ||
+      environment.ownerEpoch !== record.activeOwnerEpoch ||
+      environment.attachedSessionIds.length !== 1 ||
+      environment.attachedSessionIds[0] !== record.sessionId ||
+      !environment.nodeDeviceId
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "device",
+      status: params.hasCurrentDeviceRunner(environment.nodeDeviceId) ? "available" : "offline",
+    };
+  };
   return {
-    read: (record) => {
-      if (record.state !== "active") {
-        return undefined;
-      }
-      const environment = params.environments.get(record.environmentId);
-      if (
-        environment?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
-        environment.state !== "attached" ||
-        environment.ownerEpoch !== record.activeOwnerEpoch ||
-        environment.attachedSessionIds.length !== 1 ||
-        environment.attachedSessionIds[0] !== record.sessionId ||
-        !environment.nodeDeviceId
-      ) {
-        return undefined;
-      }
-      return {
-        kind: "device",
-        status: params.hasCurrentDeviceRunner(environment.nodeDeviceId) ? "available" : "offline",
-      };
+    read,
+    markChanged: () => {
+      version += 1;
     },
+    version: () => version,
   };
 }
 

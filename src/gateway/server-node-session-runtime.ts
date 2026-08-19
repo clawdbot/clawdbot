@@ -60,9 +60,9 @@ export function createGatewayNodeSessionRuntime(params: {
       }),
   );
   setNodeRunnerInventoryChangedListener(nodeRegistry, (nodeId) => {
+    params.onRunnerInventoryChanged?.(nodeId);
     params.broadcast(GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED, { nodeId }, { dropIfSlow: true });
     params.broadcast("sessions.changed", { reason: "runner-availability" }, { dropIfSlow: true });
-    params.onRunnerInventoryChanged?.(nodeId);
   });
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const sessionEventSubscribers = params.sessionEventSubscribers;

@@ -98,8 +98,13 @@ describe("gateway node session runtime", () => {
   });
 
   test("broadcasts and routes runner inventory changes from publication and replacement", () => {
-    const broadcast = vi.fn();
-    const onRunnerInventoryChanged = vi.fn();
+    const order: string[] = [];
+    const broadcast = vi.fn((event: string) => {
+      order.push(`broadcast:${event}`);
+    });
+    const onRunnerInventoryChanged = vi.fn(() => {
+      order.push("lifecycle");
+    });
     const runtime = createRuntime(
       async () => "generation-a",
       broadcast,
@@ -133,6 +138,11 @@ describe("gateway node session runtime", () => {
     );
     expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(true);
     expect(onRunnerInventoryChanged).toHaveBeenLastCalledWith("node-a");
+    expect(order).toEqual([
+      "lifecycle",
+      `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
+      "broadcast:sessions.changed",
+    ]);
 
     registerNode(runtime, "conn-replacement", "generation-a", []);
 
@@ -151,6 +161,11 @@ describe("gateway node session runtime", () => {
       { dropIfSlow: true },
     );
     expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(false);
+    expect(order.slice(3)).toEqual([
+      "lifecycle",
+      `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
+      "broadcast:sessions.changed",
+    ]);
   });
 
   test("forwards subscribed payload json without parsing it again", async () => {

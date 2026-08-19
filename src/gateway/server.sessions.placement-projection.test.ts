@@ -78,6 +78,7 @@ test("sessions.list batch-projects durable worker placement", async () => {
         workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
         workerPlacementRunnerAvailabilityReader: {
           read: () => ({ kind: "device", status: "offline" }),
+          version: () => 1,
         },
       },
     },
@@ -170,6 +171,7 @@ test("sessions.describe projects durable worker placement", async () => {
         workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
         workerPlacementRunnerAvailabilityReader: {
           read: () => ({ kind: "device", status: "offline" }),
+          version: () => 1,
         },
       },
     },

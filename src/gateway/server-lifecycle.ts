@@ -126,6 +126,7 @@ export async function prepareGatewayLifecycle(params: {
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
     onRunnerInventoryChanged: (nodeId) => {
+      workerPlacementRuntime?.runnerAvailability.markChanged();
       void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
     },
     onPairingInvalidated: ({ nodeId, connId }) => {
