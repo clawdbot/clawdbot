@@ -67,6 +67,8 @@ function resolveWorkerCapabilityProfile(params: {
     runtimePluginToolGrant: turn.runtimePluginToolGrant,
     inputProvenance: turn.inputProvenance,
     trustedInternalHandoff: turn.trustedInternalHandoff,
+    trustedSessionHandoff: turn.trustedSessionHandoff,
+    sessionHandoffRequester: turn.sessionHandoffRequester,
     scheduledToolPolicy: turn.scheduledToolPolicy,
   });
 }

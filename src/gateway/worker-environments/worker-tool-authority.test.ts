@@ -135,6 +135,38 @@ describe("resolveWorkerToolAuthority", () => {
     ).toEqual(["read"]);
   });
 
+  it("intersects session handoffs with the target sender policy", () => {
+    expect(
+      authority({
+        sessionKey: "agent:main:whatsapp:group:team",
+        config: {
+          channels: {
+            whatsapp: {
+              groups: {
+                team: {
+                  tools: { allow: ["read", "write"] },
+                  toolsBySender: { "id:guest": { deny: ["write", "apply_patch"] } },
+                },
+              },
+            },
+          },
+        },
+        messageProvider: "whatsapp",
+        toolsAllow: ["read", "write"],
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:whatsapp:direct:guest",
+          sourceTool: "sessions_send",
+        },
+        trustedSessionHandoff: true,
+        sessionHandoffRequester: {
+          messageProvider: "whatsapp",
+          senderId: "guest",
+        },
+      }),
+    ).toEqual(["read"]);
+  });
+
   it("re-resolves current owner-group restrictions for every scheduled turn", () => {
     expect(
       authority({
