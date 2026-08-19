@@ -722,5 +722,7 @@ fi
 wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz,fullscreen
 wmctrl -ir "$win" -e 0,${TELEGRAM_DESKTOP_WINDOW.x},${TELEGRAM_DESKTOP_WINDOW.y},${TELEGRAM_DESKTOP_WINDOW.width},${TELEGRAM_DESKTOP_WINDOW.height}
 ${openLink}
+xdotool windowmap "$win"
+xdotool windowactivate --sync "$win"
 wmctrl -lxG | awk 'tolower($0) ~ /telegramdesktop/'`;
 }

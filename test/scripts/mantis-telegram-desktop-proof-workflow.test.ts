@@ -460,6 +460,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish --focus-message-id ID`");
     expect(prompt).toContain("`block --missing-primitive NAME --reason TEXT`");
+    expect(prompt).toContain("Recording starts with Telegram hidden");
+    expect(prompt).toContain("session-owned outbound message");
     expect(prompt).toContain("This proof has no skipped lane");
     expect(prompt).not.toContain("--sut-container");
     expect(prompt).not.toContain("OPENCLAW_TELEGRAM_USER_PROOF_CMD");

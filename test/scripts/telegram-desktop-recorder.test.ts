@@ -16,6 +16,7 @@ import {
   type RecorderOperations,
   type RecorderSession,
   renderGoldenImagePreflight,
+  renderHideTelegramWindow,
   renderLaunchDesktop,
   renderPrepareQr,
   renderReadQrLink,
@@ -400,7 +401,7 @@ describe("Telegram Desktop recorder remote contract", () => {
     ).rejects.toThrow("permission denied reading the remote Docker socket");
   });
 
-  it("opens the target chat before recording starts", async () => {
+  it("hides prior chat history before recording starts", async () => {
     const root = makeTempDir();
     const sshRun = vi.fn(async ({ command }: { command: string }) => {
       if (command.includes("telegram-login-qr.png")) {
@@ -446,14 +447,19 @@ describe("Telegram Desktop recorder remote contract", () => {
       operations,
     );
 
-    // Capturing before the chat is open records the account's own chat list, so the order
-    // of these two calls is the privacy contract, not an implementation detail.
+    // The target opens before capture to remove the chat list, then the whole window stays
+    // hidden until the lane focuses its first session-owned outbound message.
     const openIndex = sshRun.mock.calls.findIndex(([call]) =>
       call.command.includes("tg://privatepost?channel=1234567890"),
     );
+    const hideIndex = sshRun.mock.calls.findIndex(([call]) =>
+      call.command.includes("xdotool windowminimize"),
+    );
     const captureIndex = sshRun.mock.calls.findIndex(([call]) => call.command.includes("x11grab"));
     expect(openIndex).toBeGreaterThanOrEqual(0);
-    expect(captureIndex).toBeGreaterThan(openIndex);
+    expect(hideIndex).toBeGreaterThan(openIndex);
+    expect(captureIndex).toBeGreaterThan(hideIndex);
+    expect(renderHideTelegramWindow()).toContain('xdotool windowminimize "$win"');
   });
 
   it("fetches the undecodable login screen when login attempts run out", async () => {
@@ -850,19 +856,22 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       sshPort: "22",
       sshUser: "user",
     }));
+    const sshRun = vi.fn(async () => ({ stderr: "", stdout: "" }));
     const operations = {
       createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
       createMotionPreview: vi.fn(async () => ({})),
       inspectCrabbox,
       runCommand: mockedRun,
       scpFromRemote: vi.fn(async () => undefined),
-      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+      sshRun,
     } satisfies RecorderOperations;
 
     await viewRecorder(root, { command: "view", messageId: "42", sessionPath }, operations);
     await stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations);
 
     expect(inspectCrabbox).toHaveBeenCalledTimes(2);
+    expect(sshRun.mock.calls[0]?.[0].command).toContain('xdotool windowmap "$win"');
+    expect(sshRun.mock.calls[0]?.[0].command).toContain('xdotool windowactivate --sync "$win"');
     expect(inspectCrabbox).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ provider: "docker" }),

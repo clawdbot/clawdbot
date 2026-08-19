@@ -819,6 +819,33 @@ async function send(
   return redact(response, secret) as ObserverResponse;
 }
 
+async function revealSentMessage(
+  state: ActiveSession,
+  response: ObserverResponse,
+): Promise<string> {
+  const sent = response.sent;
+  if (
+    sent === null ||
+    typeof sent !== "object" ||
+    !("actor" in sent) ||
+    sent.actor !== "user" ||
+    !("messageId" in sent) ||
+    typeof sent.messageId !== "string" ||
+    !/^\d+$/u.test(sent.messageId)
+  ) {
+    throw new Error("Telegram send did not return a session-owned server message id.");
+  }
+  await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
+    "view",
+    "--session",
+    state.recorderSession,
+    "--message-id",
+    sent.messageId,
+  ]);
+  appendInvocation(state, "reveal", { messageId: sent.messageId }, response.cursor);
+  return sent.messageId;
+}
+
 async function observe(
   state: ActiveSession,
   values: Map<string, string>,
@@ -1318,12 +1345,20 @@ async function main(): Promise<void> {
     if (cli.command === "mock") {
       outputJson(updateMockResponse(state, cli.values, roots.outputRoot));
     } else if (cli.command === "send") {
-      outputJson(await send(state, cli.values, roots.outputRoot, credential.sutToken));
+      const sent = await send(state, cli.values, roots.outputRoot, credential.sutToken);
+      saveActive(roots.sessionRoot, state);
+      const revealedMessageId = await revealSentMessage(state, sent);
+      outputJson({ ...sent, revealedMessageId });
     } else if (cli.command === "turn") {
       const sent = await send(state, cli.values, roots.outputRoot, credential.sutToken);
       saveActive(roots.sessionRoot, state);
+      const revealedMessageId = await revealSentMessage(state, sent);
+      saveActive(roots.sessionRoot, state);
       cli.values.set("--seconds", cli.values.get("--observe-seconds") ?? "15");
-      outputJson({ sent, observed: await observe(state, cli.values, credential.sutToken) });
+      outputJson({
+        sent: { ...sent, revealedMessageId },
+        observed: await observe(state, cli.values, credential.sutToken),
+      });
     } else if (cli.command === "observe") {
       outputJson(await observe(state, cli.values, credential.sutToken));
     } else if (cli.command === "requests") {

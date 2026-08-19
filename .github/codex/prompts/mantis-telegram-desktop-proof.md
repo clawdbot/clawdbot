@@ -55,6 +55,8 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 `start` returns the exact capability/budget list. No generic exec/eval or raw
 Telegram API exists. If a required action is absent, use `block`; do not route
 around the credential boundary.
+Recording starts with Telegram hidden. `send` and `turn` reveal their exact
+session-owned outbound message before the bot response is evaluated.
 
 The observer remains live between commands. This allows sequences such as:
 send → inspect draft edits → wait → send `/stop` → inspect deletion/wipe → focus

@@ -158,6 +158,15 @@ eval "$(xdotool getwindowgeometry --shell "$win")"
 printf '%s %s %s %s\n' "$X" "$Y" "$WIDTH" "$HEIGHT"`;
 }
 
+export function renderHideTelegramWindow(): string {
+  return `set -euo pipefail
+export DISPLAY=:99
+win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
+test -n "$win"
+xdotool windowminimize "$win"
+sleep 0.2`;
+}
+
 export function renderPrepareQr(): string {
   return `set -euo pipefail
 export DISPLAY=:99
@@ -536,6 +545,14 @@ export async function startRecorder(
       stdio: "pipe",
     });
     const windowGeometry = parseWindowGeometry(geometry.stdout);
+    // Recording begins on a hidden Telegram window. The first session-owned send maps and
+    // focuses it, so a reused QA chat can never contribute old history to public frames.
+    await operations.sshRun({
+      command: renderHideTelegramWindow(),
+      cwd,
+      inspect,
+      run: operations.runCommand,
+    });
     await operations.sshRun({
       command: renderStartRemoteRecording({ paths: remotePaths, recordFps: opts.recordFps }),
       cwd,

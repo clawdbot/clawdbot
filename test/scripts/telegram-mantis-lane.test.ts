@@ -15,12 +15,16 @@ function writeJson(file: string, value: unknown): void {
   fs.writeFileSync(file, `${JSON.stringify(value)}\n`);
 }
 
-async function setupHarness(options: { failEvents?: boolean; userOnlyEvents?: boolean } = {}) {
+async function setupHarness(
+  options: { failEvents?: boolean; failRecorder?: boolean; userOnlyEvents?: boolean } = {},
+) {
   const root = tempDirs.make("telegram-mantis-lane-");
   const outputRoot = path.join(root, "public");
   const sessionRoot = path.join(root, "private");
   const credentialFile = path.join(root, "credential.json");
   const observerSocket = path.join(root, "observer.sock");
+  const recorderLog = path.join(root, "recorder.log");
+  const recorderCommand = path.join(root, "recorder");
   fs.mkdirSync(outputRoot);
   fs.mkdirSync(sessionRoot);
   writeJson(credentialFile, {
@@ -29,6 +33,11 @@ async function setupHarness(options: { failEvents?: boolean; userOnlyEvents?: bo
     testerUserId: "77",
   });
   writeJson(path.join(root, "mock-response.json"), { chunkDelayMs: 0, text: "initial" });
+  fs.writeFileSync(
+    recorderCommand,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}\n${options.failRecorder ? "exit 1\n" : ""}`,
+    { mode: 0o755 },
+  );
   writeJson(path.join(sessionRoot, "candidate.active.json"), {
     attempt: 1,
     config: { mockResponse: "visible result" },
@@ -116,8 +125,10 @@ async function setupHarness(options: { failEvents?: boolean; userOnlyEvents?: bo
       OPENCLAW_MANTIS_CREDENTIAL_FILE: credentialFile,
       OPENCLAW_MANTIS_OUTPUT_ROOT: outputRoot,
       OPENCLAW_MANTIS_SESSION_ROOT: sessionRoot,
+      OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD: recorderCommand,
     },
     outputRoot,
+    recorderLog,
     requests,
     sessionRoot,
   };
@@ -150,7 +161,7 @@ describe("Telegram Mantis free-form lane", () => {
             { actor: "bot", kind: "edit", text: "final" },
           ],
         },
-        sent: { sent: { actor: "user", messageId: "101" } },
+        sent: { revealedMessageId: "101", sent: { actor: "user", messageId: "101" } },
       });
       expect(harness.requests).toEqual([
         { command: "send", text: "show progress" },
@@ -163,8 +174,12 @@ describe("Telegram Mantis free-form lane", () => {
       expect(state.invocations.map((entry: { command: string }) => entry.command)).toEqual([
         "start",
         "send",
+        "reveal",
         "observe",
       ]);
+      expect(fs.readFileSync(harness.recorderLog, "utf8")).toContain(
+        `view --session ${path.join(path.dirname(harness.outputRoot), "attempt", "recorder.json")} --message-id 101`,
+      );
       expect(result.stdout).not.toContain("secret-sut-token");
     } finally {
       await harness.close();
@@ -180,6 +195,22 @@ describe("Telegram Mantis free-form lane", () => {
         runLane(harness.env, ["send", "--lane", "candidate", "--text-file", outside]),
       ).rejects.toThrow("--text-file must be inside the Mantis output directory");
       expect(harness.requests).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("retains the sent message when revealing it fails", async () => {
+    const harness = await setupHarness({ failRecorder: true });
+    try {
+      await expect(
+        runLane(harness.env, ["send", "--lane", "candidate", "--text", "keep this send"]),
+      ).rejects.toThrow();
+      const state = JSON.parse(
+        fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
+      );
+      expect(state.sendCount).toBe(1);
+      expect(state.invocations.at(-1)).toMatchObject({ command: "send" });
     } finally {
       await harness.close();
     }
@@ -317,7 +348,7 @@ describe("Telegram Mantis free-form lane", () => {
         fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
       );
       expect(state.sendCount).toBe(1);
-      expect(state.invocations.at(-1)).toMatchObject({ command: "send" });
+      expect(state.invocations.at(-1)).toMatchObject({ command: "reveal" });
     } finally {
       await harness.close();
     }
