@@ -233,6 +233,23 @@ jobs:
           exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-sut.ts" "\$@"
           EOF
           recorder_user="$(id -un)"
+          cat >"${RUNNER_TEMP}/telegram-user-driver" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec /usr/local/lib/mantis-toolchain/uv run --script "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-driver.py" "\$@"
+          EOF
+          cat >"${RUNNER_TEMP}/openclaw-telegram-user-driver" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          # The driver chmods its own state dir to 0700, and chmod needs ownership rather
+          # than ACL write, so the state has exactly one owner: ${recorder_user}. Both the
+          # agent and the recorder reach the driver through here so neither can create
+          # state the other owns.
+          if [ "\$(id -un)" = "${recorder_user}" ]; then
+            exec /usr/local/lib/mantis-toolchain/telegram-user-driver "\$@"
+          fi
+          exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-user-driver "\$@"
+          EOF
           cat >"${RUNNER_TEMP}/telegram-desktop-recorder-exec" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
@@ -251,7 +268,7 @@ jobs:
           exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-desktop-recorder "\$@"
           EOF
           chmod 0755 "${RUNNER_TEMP}/mantis-node" "${RUNNER_TEMP}/mantis-pnpm" "${RUNNER_TEMP}/mantis-uv"
-          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" "${RUNNER_TEMP}/telegram-desktop-recorder-exec"
+          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" "${RUNNER_TEMP}/openclaw-telegram-user-driver" "${RUNNER_TEMP}/telegram-desktop-recorder-exec" "${RUNNER_TEMP}/telegram-user-driver"
           sudo install -d -m 0755 /usr/local/lib/mantis-toolchain
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-node" /usr/local/lib/mantis-toolchain/node
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-pnpm" /usr/local/lib/mantis-toolchain/pnpm
@@ -259,6 +276,8 @@ jobs:
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" /usr/local/bin/openclaw-telegram-mantis-sut
           sudo install -m 0755 "${RUNNER_TEMP}/telegram-desktop-recorder-exec" /usr/local/lib/mantis-toolchain/telegram-desktop-recorder
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" /usr/local/bin/openclaw-telegram-desktop-recorder
+          sudo install -m 0755 "${RUNNER_TEMP}/telegram-user-driver" /usr/local/lib/mantis-toolchain/telegram-user-driver
+          sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-user-driver" /usr/local/bin/openclaw-telegram-user-driver
           sudo install -m 0755 scripts/mantis/mantis-sut-container.sh /usr/local/sbin/openclaw-mantis-sut-container
           printf '/tmp/openclaw-mantis-proof-worktrees-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
             | sudo tee /etc/openclaw-mantis-sut-worktrees >/dev/null
@@ -436,6 +455,7 @@ jobs:
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD OPENCLAW_TELEGRAM_MANTIS_SUT_CMD OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD OPENCLAW_TELEGRAM_USER_DRIVER_CMD TELEGRAM_USER_DRIVER_STATE_DIR"'
             printf '%s\n' 'codex ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container'
             printf '%s\n' "codex ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-desktop-recorder"
+            printf '%s\n' "codex ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-user-driver"
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
           codex_home="/tmp/mantis-codex-home-${GITHUB_RUN_ID}"
@@ -449,15 +469,16 @@ jobs:
             workspace_parent="$(dirname "$workspace_parent")"
           done
           sudo chown -R codex:codex "$GITHUB_WORKSPACE"
-          sudo chown -R codex:codex "$(dirname "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE")"
-          # The recorder runs as ${recorder_user} for docker while the agent runs as codex,
-          # so proof output and Telegram driver state need both users on the ACL. Without the
-          # default entries, files one user creates are unreadable to the other.
+          # Both users write proof output, so it is shared. The credential dir is split
+          # instead: the agent gets traverse plus read on the payload the SUT loads, while
+          # the driver state dir stays single-owner because the driver chmods it to 0700
+          # and chmod needs ownership, not ACL write.
+          credential_dir="$(dirname "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE")"
+          sudo setfacl -m "u:codex:--x" "$credential_dir"
+          sudo setfacl -m "u:codex:r--" "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD"
           sudo install -d -m 2770 -o codex -g codex "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
-          for shared_dir in "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR" "$(dirname "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE")"; do
-            sudo setfacl -R -m "u:${recorder_user}:rwx,u:codex:rwx" "$shared_dir"
-            sudo setfacl -R -d -m "u:${recorder_user}:rwx,u:codex:rwx" "$shared_dir"
-          done
+          sudo setfacl -R -m "u:${recorder_user}:rwx,u:codex:rwx" "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
+          sudo setfacl -R -d -m "u:${recorder_user}:rwx,u:codex:rwx" "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
           proof_worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo chown -R root:root "$proof_worktree_root"
           sudo chmod -R a-w "$proof_worktree_root"
@@ -485,7 +506,7 @@ jobs:
           OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD: /usr/local/bin/openclaw-telegram-desktop-recorder
           OPENCLAW_TELEGRAM_MANTIS_SUT_CMD: /usr/local/bin/openclaw-telegram-mantis-sut
           OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD: ${{ env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD }}
-          OPENCLAW_TELEGRAM_USER_DRIVER_CMD: /usr/local/lib/mantis-toolchain/uv run ${{ github.workspace }}/scripts/e2e/telegram-user-driver.py
+          OPENCLAW_TELEGRAM_USER_DRIVER_CMD: /usr/local/bin/openclaw-telegram-user-driver
           TELEGRAM_USER_DRIVER_STATE_DIR: ${{ env.TELEGRAM_USER_DRIVER_STATE_DIR }}
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}

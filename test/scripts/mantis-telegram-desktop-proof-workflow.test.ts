@@ -453,8 +453,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(credential.run).toContain("--lease-file");
 
     const agent = workflowStep("Run Codex Mantis Telegram agent");
-    expect(agent.env?.OPENCLAW_TELEGRAM_USER_DRIVER_CMD).toContain(
-      "uv run ${{ github.workspace }}/scripts/e2e/telegram-user-driver.py",
+    expect(agent.env?.OPENCLAW_TELEGRAM_USER_DRIVER_CMD).toBe(
+      "/usr/local/bin/openclaw-telegram-user-driver",
     );
     expect(agent.env?.OPENCLAW_TELEGRAM_MANTIS_SUT_CMD).toBe(
       "/usr/local/bin/openclaw-telegram-mantis-sut",
@@ -698,8 +698,31 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow).toContain(
       "exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-desktop-recorder",
     );
-    // Proof output and driver state are written by one user and read by the other.
-    expect(workflow).toContain('sudo setfacl -R -d -m "u:${recorder_user}:rwx,u:codex:rwx"');
+  });
+
+  it("splits credential state by who owns each artifact", () => {
+    const install = workflowStep("Install local proof tools").run ?? "";
+    const prepare = workflowStep("Prepare Codex user").run ?? "";
+    // The driver chmods its state dir to 0700, and chmod needs ownership rather than ACL
+    // write, so sharing that dir between users fails as EPERM - run 32253541261 died there.
+    // The agent reaches the driver through sudo instead, leaving one owner.
+    expect(prepare).toContain(
+      "codex ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-user-driver",
+    );
+    expect(install).toContain(
+      'exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-user-driver "\\$@"',
+    );
+    expect(prepare).not.toContain(
+      'chown -R codex:codex "$(dirname "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE")"',
+    );
+    expect(prepare).not.toMatch(/setfacl[^\n]*TELEGRAM_USER_DRIVER_STATE_DIR/u);
+    expect(prepare).not.toMatch(/setfacl[^\n]*"\$credential_dir\/user-driver"/u);
+    // The SUT runs as the agent and reads the payload directly, so that one file stays
+    // reachable; granting it via the containing dir would expose the driver state too.
+    expect(prepare).toContain('sudo setfacl -m "u:codex:--x" "$credential_dir"');
+    expect(prepare).toContain(
+      'sudo setfacl -m "u:codex:r--" "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD"',
+    );
   });
 
   it("does not pass the full workflow environment into the local Telegram SUT", () => {
