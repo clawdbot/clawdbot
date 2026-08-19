@@ -15,6 +15,7 @@ import {
   jsonResult,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import {
   addTimerTimeoutGraceMs,
@@ -28,7 +29,7 @@ import {
   wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
-import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
+import { validateNativeA2UIJsonl } from "./a2ui-jsonl.js";
 import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
 
@@ -122,13 +123,6 @@ function wrapCanvasEvalResult(result: unknown): string {
   return wrappedText;
 }
 
-function isPathInsideRoot(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 async function readJsonlFromPath(jsonlPath: string, workspaceDir?: string): Promise<string> {
   const trimmed = jsonlPath.trim();
   if (!trimmed) {
@@ -140,7 +134,7 @@ async function readJsonlFromPath(jsonlPath: string, workspaceDir?: string): Prom
     fs.realpath(workspaceRoot),
     fs.realpath(resolved),
   ]);
-  if (!isPathInsideRoot(workspaceReal, resolvedReal)) {
+  if (!isPathInside(workspaceReal, resolvedReal)) {
     throw new Error("jsonlPath outside workspace");
   }
   return (
@@ -302,7 +296,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");
           }
-          validateSupportedA2UIJsonl(jsonl);
+          validateNativeA2UIJsonl(jsonl);
           const { node } = await invoke("canvas.a2ui.pushJSONL", { jsonl });
           return jsonResult({ ok: true, node });
         }

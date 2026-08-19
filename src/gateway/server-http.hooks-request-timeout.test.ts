@@ -1,6 +1,8 @@
 /**
  * Tests timeout behavior for gateway HTTP hook request handling.
  */
+import { EventEmitter } from "node:events";
+import type { ServerResponse } from "node:http";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   createHookRequest,
@@ -40,14 +42,33 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     const dispatchWakeHook = vi.fn();
     const dispatchAgentHook = vi.fn(() => ({ ok: true as const, runId: "run-1" }));
     const handler = createHooksHandler({ dispatchWakeHook, dispatchAgentHook });
-    const req = createHookRequest();
-    const { res, end } = createResponse();
+    const req = createHookRequest() as ReturnType<typeof createHookRequest> & {
+      destroyed: boolean;
+      destroy: ReturnType<typeof vi.fn>;
+    };
+    req.destroyed = false;
+    req.destroy = vi.fn(() => {
+      req.destroyed = true;
+      return req;
+    });
+    const res = new EventEmitter() as ServerResponse;
+    res.statusCode = 200;
+    const setHeader = vi.fn();
+    res.setHeader = setHeader;
+    const end = vi.fn();
+    res.end = end;
 
     const handled = await handler(req, res);
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(408);
     expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error: "request body timeout" }));
+    expect(setHeader).toHaveBeenCalledWith("Connection", "close");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("close");
+    expect(req.destroy).toHaveBeenCalledOnce();
     expect(dispatchWakeHook).not.toHaveBeenCalled();
     expect(dispatchAgentHook).not.toHaveBeenCalled();
   });

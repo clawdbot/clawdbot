@@ -33,7 +33,13 @@ ensure_home_env
 # Register paths in the caller: command substitutions run in a subshell, so
 # array mutations inside a helper would not reach this shell.
 TMPFILES=()
+WRAPPER_BACKUP_TARGET=""
+WRAPPER_BACKUP_PATH=""
 cleanup_tmpfiles() {
+  if [[ -n "$WRAPPER_BACKUP_PATH" && ( -e "$WRAPPER_BACKUP_PATH" || -L "$WRAPPER_BACKUP_PATH" ) ]]; then
+    rm -f "$WRAPPER_BACKUP_TARGET" 2>/dev/null || true
+    mv "$WRAPPER_BACKUP_PATH" "$WRAPPER_BACKUP_TARGET" 2>/dev/null || true
+  fi
   local f
   for f in "${TMPFILES[@]:-}"; do
     rm -rf "$f" 2>/dev/null || true
@@ -1273,6 +1279,62 @@ npm_config_has_raw_key() {
   return 1
 }
 
+npm_lifecycle_allow_arg() {
+  local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" version=""
+  version="$("$npm_cmd" --version 2>/dev/null | awk 'NF { value = $0 } END { print value }')" || true
+  if [[ ! "$version" =~ ^[vV]?([0-9]+)\.([0-9]+)\.([0-9]+)([-+][0-9A-Za-z.-]+)?$ ]]; then
+    log "ERROR: unable to determine npm version; no package changes were made"
+    return 1
+  fi
+  local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}"
+  if (( major < 12 && (major != 11 || minor < 16) )); then return 0; fi
+  local identity="$spec" normalized=""
+  normalized="$(to_lowercase_ascii "$identity")"
+  if [[ "$normalized" == openclaw@* ]]; then identity="${identity#*@}"; normalized="$(to_lowercase_ascii "$identity")"; fi
+  if [[ "$normalized" == npm:* ]]; then
+    local alias_target="${identity#*:}"
+    if [[ "$alias_target" == @*/*@* ]]; then identity="${alias_target%@*}"
+    elif [[ "$alias_target" == *@* ]]; then identity="${alias_target%%@*}"
+    else identity="$alias_target"; fi
+  elif [[ "$identity" != *"://"* && "$identity" != /* && "$identity" != ./* && "$identity" != ../* && ! "$identity" =~ ^(file|github|git\+|npm): && ! "$identity" =~ \.(tgz|tar\.gz)$ ]]; then
+    identity="openclaw"
+  fi
+  if [[ "$identity" == /* ]]; then
+    # shellcheck disable=SC2016 # JavaScript source must not expand in the installer shell.
+    identity="$("$(node_bin)" -e '
+const path = require("node:path");
+const relative = path.relative(process.argv[1], process.argv[2]) || ".";
+process.stdout.write(path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`);
+' "$npm_cwd" "$identity")" || return 1
+  fi
+  [[ -n "$identity" && "$identity" != *,* ]] || { log "ERROR: npm cannot allow lifecycle scripts for ${spec}"; return 1; }
+  printf '%s\n' "--allow-scripts=${identity}"
+}
+
+publish_executable_wrapper() {
+  local target="$1" target_dir="" temp="" backup=""
+  target_dir="${target%/*}"
+  mkdir -p "$target_dir"
+  temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
+  TMPFILES+=("$temp")
+  cat > "$temp"
+  chmod +x "$temp"
+  if [[ -z "$WRAPPER_BACKUP_PATH" && ( -e "$target" || -L "$target" ) ]]; then
+    backup="$(mktemp "${target}.backup.XXXXXX")" || return 1
+    rm -f "$backup" || return 1
+    mv "$target" "$backup" || return 1
+    WRAPPER_BACKUP_TARGET="$target"
+    WRAPPER_BACKUP_PATH="$backup"
+  fi
+  mv -f "$temp" "$target"
+}
+
+commit_wrapper_backup() {
+  [[ -z "$WRAPPER_BACKUP_PATH" ]] || rm -f "$WRAPPER_BACKUP_PATH" || return 1
+  WRAPPER_BACKUP_TARGET=""
+  WRAPPER_BACKUP_PATH=""
+}
+
 install_openclaw() {
   local requested="${OPENCLAW_VERSION:-latest}"
   if is_openclaw_source_package_install_spec "$requested"; then
@@ -1304,17 +1366,29 @@ install_openclaw() {
     fi
     require_openclaw_version_compatible "$resolved_requested"
   fi
+  local install_spec="openclaw@${resolved_requested}"
+  if [[ "$resolved_requested" == *"://"* || "$resolved_requested" == /* || "$resolved_requested" == ./* || "$resolved_requested" == ../* || "$resolved_requested" =~ ^(file|github|git\+|npm): || "$resolved_requested" =~ \.(tgz|tar\.gz)$ ]]; then
+    install_spec="$resolved_requested"
+  fi
+  local npm_cmd="" lifecycle_arg=""
+  npm_cmd="$(npm_bin)"
+  local npm_cwd="$PWD"
+  lifecycle_arg="$(npm_lifecycle_allow_arg "$npm_cmd" "$install_spec" "$npm_cwd")" || return 1
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"version\":\"${requested}\"}"
   log "Installing OpenClaw (${requested})..."
   if [[ "$SET_NPM_PREFIX" -eq 1 ]]; then
     fix_npm_prefix_if_needed
   fi
 
-  local installed_entry
+  local installed_entry install_guard
   installed_entry="$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
-  if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}" || [[ ! -f "$installed_entry" ]]; then
+  install_guard="$(node_dir)/lib/node_modules/openclaw/dist/openclaw-install-guard"
+  local npm_install_args=(install -g --prefix "$(node_dir)" "${npm_args[@]}")
+  [[ -z "$lifecycle_arg" ]] || npm_install_args+=("$lifecycle_arg")
+  npm_install_args+=("$install_spec")
+  if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$install_guard" ]]; then
     log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
-    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}" || [[ ! -f "$installed_entry" ]]; then
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$install_guard" ]]; then
       emit_json '{"event":"error","message":"npm install did not produce a usable OpenClaw package"}'
       log "ERROR: npm install did not produce a usable OpenClaw package"
       return 1
@@ -1322,13 +1396,11 @@ install_openclaw() {
   fi
 
   mkdir -p "${PREFIX}/bin"
-  rm -f "${PREFIX}/bin/openclaw"
-  cat > "${PREFIX}/bin/openclaw" <<EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 exec "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js" "\$@"
 EOF
-  chmod +x "${PREFIX}/bin/openclaw"
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"ok\",\"version\":\"${requested}\"}"
 }
 
@@ -1541,12 +1613,11 @@ install_openclaw_from_git() {
   emit_json '{"event":"step","name":"cli-build","status":"ok"}'
 
   mkdir -p "${PREFIX}/bin"
-  cat > "${PREFIX}/bin/openclaw" <<EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js" "\$@"
 EOF
-  chmod +x "${PREFIX}/bin/openclaw"
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"ok\",\"method\":\"git\"}"
 }
 
@@ -1636,6 +1707,7 @@ main() {
     [[ -z "$installed_version" ]]; then
     fail "Installed OpenClaw CLI did not return a version successfully from ${PREFIX}/bin/openclaw."
   fi
+  commit_wrapper_backup
 
   refresh_gateway_service_if_loaded
   emit_json "{\"event\":\"done\",\"ok\":true,\"version\":\"${installed_version//\"/\\\"}\"}"

@@ -61,7 +61,7 @@ import {
 import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
 import {
   listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
-  loadTaskRegistryStateFromSqliteReadOnly,
+  loadTaskRegistryStateFromSqliteReadOnlyResult,
 } from "./task-registry.store.sqlite.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
@@ -819,9 +819,18 @@ export function reconcileInspectableTasks(): TaskRecord[] {
 
 /** Reads and reconciles persisted tasks without initializing the process task runtime. */
 export function listInspectableTasksReadOnly(): TaskRecord[] {
-  return reconcileTaskRecordsForOperatorInspection([
-    ...loadTaskRegistryStateFromSqliteReadOnly().tasks.values(),
-  ]);
+  return inspectTasksReadOnly().tasks;
+}
+
+export function inspectTasksReadOnly(): {
+  tasks: TaskRecord[];
+  state: "ready" | "migration-required";
+} {
+  const loaded = loadTaskRegistryStateFromSqliteReadOnlyResult();
+  return {
+    state: loaded.state,
+    tasks: reconcileTaskRecordsForOperatorInspection([...loaded.snapshot.tasks.values()]),
+  };
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);

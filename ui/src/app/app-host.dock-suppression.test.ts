@@ -99,6 +99,7 @@ describe("OpenClaw shell dock suppression", () => {
           updateAvailable: null,
           updateRunning: false,
           updateStatusBanner: null,
+          recordedUpdateAttempt: null,
           controlUiRefreshRequired: false,
           approvalQueue: [],
           approvalBusy: false,
@@ -165,10 +166,10 @@ describe("OpenClaw shell dock suppression", () => {
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          sessionBottomOnly: boolean;
+          sessionKey: string | null;
         }
-      ).sessionBottomOnly,
-    ).toBe(true);
+      ).sessionKey,
+    ).toBe("agent:main:main");
     expect(container.querySelector("openclaw-browser-panel")).toBeNull();
     expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
 

@@ -1,8 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
+  captureUiProofEnabled,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
@@ -116,4 +117,69 @@ suite.define(() => {
       }
     });
   }
+
+  it("repaints a mounted project icon after the Gateway advertises a retry", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 520, width: 760 },
+    });
+    const page = await context.newPage();
+    const favicon = await readFile(path.resolve(process.cwd(), "ui/public/favicon.svg"));
+    let requests = 0;
+    await page.route("**/__openclaw__/workspace-icon/**", async (route) => {
+      requests += 1;
+      if (requests === 1) {
+        await route.fulfill({
+          body: "workspace icon snapshot is not ready",
+          headers: { "retry-after": "1" },
+          status: 503,
+        });
+        return;
+      }
+      await route.fulfill({ body: favicon, contentType: "image/svg+xml", status: 200 });
+    });
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([
+          {
+            key: "agent:main:session-a",
+            kind: "direct",
+            label: "Workspace icon recovery",
+            spawnedCwd: "/repo/openclaw",
+            updatedAt: 1,
+          },
+        ]),
+      },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const icon = page.locator(".chat-pane__header openclaw-workspace-icon").first();
+      await icon.waitFor();
+      await icon.locator("svg").waitFor();
+      await icon.evaluate((element) => element.setAttribute("data-recovery-host", "mounted"));
+      const proofDir = path.join(
+        process.cwd(),
+        ".artifacts",
+        "control-ui-e2e",
+        "workspace-icon-recovery",
+      );
+      if (captureUiProofEnabled) {
+        await mkdir(proofDir, { recursive: true });
+        await page.screenshot({ path: path.join(proofDir, "fallback.png") });
+      }
+
+      await icon.locator(".workspace-icon").waitFor({ timeout: 10_000 });
+
+      expect(requests).toBe(2);
+      expect(await icon.getAttribute("data-recovery-host")).toBe("mounted");
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(proofDir, "recovered.png") });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 });

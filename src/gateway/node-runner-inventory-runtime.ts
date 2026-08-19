@@ -1,6 +1,7 @@
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -36,6 +37,7 @@ export type NodeRunnerInventoryRecord = Omit<
   NodeWorkerSupervisorNodeProof,
   "commands" | "pairingGeneration" | "protocolFeature" | "workerHost"
 > & {
+  pairingGeneration?: string;
   protocolFeatures: readonly string[];
   workerHost?: NodeWorkerHostDeclaration;
 };
@@ -48,7 +50,8 @@ export function sameNodeWorkerHostDeclaration(
     left?.enabled === right?.enabled &&
     (left?.enabled !== true ||
       (right?.enabled === true &&
-        left.capacity === right.capacity &&
+        left.capacity.total === right.capacity.total &&
+        left.capacity.available === right.capacity.available &&
         left.bundlePrewarm === right.bundlePrewarm &&
         left.bundleRetention === right.bundleRetention &&
         left.bundleStatus === right.bundleStatus))
@@ -68,6 +71,7 @@ export function resolveNodeWorkerSupervisorProof(
     node.clientMode !== "node" ||
     declaration.nodeId !== node.nodeId ||
     declaration.pairingIdentity !== node.pairingIdentity ||
+    declaration.pairingGeneration !== node.pairingGeneration ||
     declaration.clientId !== node.clientId ||
     declaration.clientMode !== node.clientMode ||
     !declaration.protocolFeatures.includes(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE) ||
@@ -83,7 +87,10 @@ export function resolveNodeWorkerSupervisorProof(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { ...declaration.workerHost },
+    workerHost: {
+      ...declaration.workerHost,
+      capacity: { ...declaration.workerHost.capacity },
+    },
     commands: [...node.commands],
   };
 }
@@ -97,13 +104,16 @@ export function resolveNodeRunnerInventoryIssue(
     node.client.invalidated !== true &&
     declaration.nodeId === node.nodeId &&
     declaration.pairingIdentity === node.pairingIdentity &&
+    declaration.pairingGeneration !== undefined &&
+    declaration.pairingGeneration === node.pairingGeneration &&
     declaration.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
     declaration.clientMode === "node" &&
     declaration.protocolFeatures.length === 1 &&
     (declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
       declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE ||
       declaration.protocolFeatures[0] ===
-        NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE)
+        NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE)
     ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
     : undefined;
 }

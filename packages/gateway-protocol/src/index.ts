@@ -360,6 +360,7 @@ export {
   AuditEventSchema,
   AuditListParamsSchema,
   AuditListResultSchema,
+  GIT_COAUTHOR_PREFERENCE_KEY,
   UserProfileSchema,
   UsersLinkEmailParamsSchema,
   UsersLinkEmailResultSchema,

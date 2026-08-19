@@ -213,6 +213,7 @@ describe("worker turn launcher failure recovery", () => {
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
       runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
+      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       workspaceOperations,
       resolveWorkspacePath: async () => root,
       reportWorkspaceResultConflict: async () => {},

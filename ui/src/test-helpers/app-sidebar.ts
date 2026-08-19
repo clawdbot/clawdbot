@@ -271,7 +271,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       })),
     }),
   );
-  const setCreatorFilter = vi.fn(() => Promise.resolve());
+  const setOwnerFilter = vi.fn(() => Promise.resolve());
   const setInvolvingMeFilter = vi.fn(() => Promise.resolve());
   const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
     Promise.resolve({ key, agentId: options?.agentId ?? null }),
@@ -379,7 +379,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return scopedSessions!.refreshList(options);
     },
     reconcile,
-    setCreatorFilter,
+    setOwnerFilter,
     setInvolvingMeFilter,
     refresh,
     refreshReplacement,
@@ -459,7 +459,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteMany,
     list,
     reconcile,
-    setCreatorFilter,
+    setOwnerFilter,
     setInvolvingMeFilter,
     refresh,
     refreshReplacement,
@@ -629,8 +629,8 @@ export function setupSidebarTest() {
       configurable: true,
       value: createStorageMock(),
     });
-    // The Coding zone defaults to collapsed on first run; most cases assert its
-    // contents, so start expanded. Collapse-specific tests override this value.
+    // Coding defaults to compact; most cases assert expanded contents, so start
+    // expanded. Collapse tests override this value.
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 

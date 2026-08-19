@@ -130,6 +130,8 @@ export type DiscordVoiceAutoJoinConfig = {
   guildId: string;
   /** Voice channel ID to join. */
   channelId: string;
+  /** Join and remain connected only while at least one human is in the channel. Default: false. */
+  whenOccupied?: boolean;
 };
 
 export type DiscordVoiceAllowedChannelConfig = {
@@ -196,7 +198,7 @@ export type DiscordVoiceConfig = {
   model?: string;
   /** Realtime provider settings for agent-proxy or bidi modes. */
   realtime?: DiscordVoiceRealtimeConfig;
-  /** Voice channels to auto-join on startup. */
+  /** Voice channels to join automatically, optionally only while occupied. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** If false, configured followUsers are ignored without removing the saved user list. */
   followUsersEnabled?: boolean;

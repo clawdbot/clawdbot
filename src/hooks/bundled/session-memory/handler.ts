@@ -41,6 +41,10 @@ const SESSION_MEMORY_CAPTURE_MAX_BYTES = 8 * 1024 * 1024;
 const SESSION_MEMORY_CAPTURE_PAGE_MESSAGES = 256;
 const SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES = 4_096;
 
+type SessionMemoryTranscript =
+  | { status: "available"; content: string | null }
+  | { status: "unavailable"; reason: string };
+
 function pickDateTimePart(
   parts: Intl.DateTimeFormatPart[],
   type: Intl.DateTimeFormatPartTypes,
@@ -274,31 +278,34 @@ async function saveSessionMemoryNow(
         : 15;
 
     let slug: string | null = null;
-    let sessionContent: string | null = null;
-    let transcriptUnavailableReason: string | null = null;
+    let transcript: SessionMemoryTranscript = { status: "available", content: null };
 
     if (currentSessionId) {
       try {
-        sessionContent = await getRecentSqliteSessionContent(
-          {
-            agentId,
-            sessionId: currentSessionId,
-            sessionKey: event.sessionKey,
-            storePath:
-              contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
-          },
-          messageCount,
-          capturedEvents,
-        );
+        transcript = {
+          status: "available",
+          content: await getRecentSqliteSessionContent(
+            {
+              agentId,
+              sessionId: currentSessionId,
+              sessionKey: event.sessionKey,
+              storePath:
+                contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+            },
+            messageCount,
+            capturedEvents,
+          ),
+        };
       } catch (error) {
-        transcriptUnavailableReason = formatHookErrorForLog(error);
+        const reason = formatHookErrorForLog(error);
+        transcript = { status: "unavailable", reason };
         log.warn("Session transcript unavailable for memory capture", {
           sessionKey: event.sessionKey,
-          error: transcriptUnavailableReason,
+          error: reason,
         });
       }
       log.debug("Session content loaded", {
-        length: sessionContent?.length ?? 0,
+        length: transcript.status === "available" ? (transcript.content?.length ?? 0) : 0,
         messageCount,
       });
 
@@ -306,11 +313,16 @@ async function saveSessionMemoryNow(
       const isTestEnv = isVitestRuntimeEnv();
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
-      if (sessionContent && cfg && allowLlmSlug) {
+      if (transcript.status === "available" && transcript.content && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
         const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
-        slug = await generateSlugViaLLM({ sessionContent, cfg, agentId, model: slugModel });
+        slug = await generateSlugViaLLM({
+          sessionContent: transcript.content,
+          cfg,
+          agentId,
+          model: slugModel,
+        });
         log.debug("Generated slug", { slug });
       }
     }
@@ -349,13 +361,13 @@ async function saveSessionMemoryNow(
     ];
 
     // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
-    } else if (transcriptUnavailableReason) {
+    if (transcript.status === "available" && transcript.content) {
+      entryParts.push("## Conversation Summary", "", transcript.content, "");
+    } else if (transcript.status === "unavailable") {
       entryParts.push(
         "## Conversation Summary",
         "",
-        `> Transcript content was unavailable: ${JSON.stringify(transcriptUnavailableReason)}`,
+        `> Transcript content was unavailable: ${JSON.stringify(transcript.reason)}`,
         "",
       );
     }

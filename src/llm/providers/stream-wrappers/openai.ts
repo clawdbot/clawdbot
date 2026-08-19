@@ -30,7 +30,10 @@ import {
   type OpenAITextVerbosity,
 } from "../../../agents/openai-text-verbosity.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../../agents/openai-transport-stream.js";
-import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
+import {
+  getModelProviderRequestRouteFacts,
+  resolveProviderRequestPolicyConfig,
+} from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { SandboxToolPolicy } from "../../../agents/sandbox.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
@@ -88,6 +91,7 @@ function resolveOpenAIRequestCapabilities(model: {
     compat,
     capability: "llm",
     transport: "stream",
+    routeFacts: getModelProviderRequestRouteFacts(model),
   }).capabilities;
 }
 
@@ -818,6 +822,7 @@ export function createOpenAIAttributionHeadersWrapper(
         baseUrl: readStringValue(model.baseUrl),
         capability: "llm",
         transport: "stream",
+        routeFacts: getModelProviderRequestRouteFacts(model),
         callerHeaders: options?.headers,
         precedence: "defaults-win",
       }).headers,

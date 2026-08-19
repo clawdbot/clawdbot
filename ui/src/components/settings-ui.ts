@@ -1,7 +1,7 @@
 // Settings design-language primitives. Every settings surface builds its
 // layout through these helpers so pages cannot drift back into bespoke
-// card/pill markup. Styles live in ui/src/styles/settings.css; rules in
-// ui/docs/settings-design.md.
+// card/pill markup. Styles live in ui/src/styles/settings.css and the shared
+// ui/src/styles/settings-controls.css; rules in ui/docs/design-system/settings-design.md.
 import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";

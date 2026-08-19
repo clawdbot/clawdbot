@@ -92,6 +92,8 @@ A Gateway can remain healthy for browser users while node hosting is unavailable
 
 - **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
 - **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
+- **Node onboarding plugin:** Join codes and `openclaw connect` require the bundled `device-pair` plugin. If it is disabled or excluded by plugin policy, set `plugins.entries.device-pair.enabled: true`, make sure `device-pair` is allowed, and restart the Gateway.
+- **Device session runtime:** Paired-device runners host only the embedded OpenClaw runtime. Give at least one selected agent/model route `agentRuntime.id: "openclaw"`; Codex and ACPX routes cannot dispatch to a paired device. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [runtime policy](/gateway/config-agents#runtime-policy).
 - **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
 
 For a Cloudflare Access-fronted Gateway:
@@ -466,6 +468,14 @@ contains its complete JavaScript dependency closure; the node does not install
 packages or execute lifecycle scripts. Later turns reuse the immutable artifact
 while its receipt still matches the Gateway's current build.
 
+You can also enroll and enable a service host in one step with
+`openclaw connect --service --session-host`. In Control UI New Session, a
+write-scoped operator selects a Gateway project or folder and then the paired
+device. OpenClaw creates a session-owned managed worktree on the Gateway,
+dispatches it with the exact `deviceId`, and sends the first turn only after the
+device placement becomes active. New Session does not bind `execNode` or browse
+the device filesystem.
+
 The Devices page shows the validated Gateway-owned worker version in the node's
 metadata. If the retained artifact is missing or fails validation, Devices shows
 a **worker missing** warning; start a new session on that device to reinstall the
@@ -484,6 +494,24 @@ Gateway-owned workspace transfer and result reconciliation. Each node runs at
 most two worker processes by default. A third launch waits up to 10 seconds for
 a durable slot; while both slots are occupied, the node remains available for
 status and cancellation but is not selected for a new session turn.
+
+The picker derives every device row from `environments.list`. A device is
+selectable only when current inventory reports status `available`,
+`sessionHost: true`, valid exact worker slots, and at least one available slot.
+Connected non-hosts, saturated hosts, hosts without current capacity,
+update-required or otherwise outdated hosts, and unavailable hosts remain
+visible but disabled with an actionable reason. Enable hosting with
+`openclaw connect --service --session-host` or the `nodeHost.workerRuns`
+setting, then restart the node host. Update-required hosts must be upgraded and
+restarted before selection.
+
+When a known session host disconnects, its paired-device record preserves only
+the last accepted current-v5 hosting consent. The offline row remains visible
+and disabled with status unavailable. A current disabled or empty v5
+publication records false; older v1-v4 and update-required dialects do not
+overwrite the last current fact. Connected inventory always wins over stored
+history, a missing stored value means false, and exact worker slots are never
+persisted or shown as offline capacity.
 
 If the device is offline before a turn is dispatched, the Gateway waits up to
 10 seconds and then returns a visible retry/reconnect error while keeping the

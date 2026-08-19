@@ -37,6 +37,7 @@ export function readChatHistoryMessageSeq(message: unknown): number | undefined 
 
 type ChatHistoryPage = {
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
   messages: unknown[];
   responseOffset?: number;
   completeCliImport?: true;
@@ -479,6 +480,9 @@ export async function readChatHistoryPage(params: {
       ...(isTailPage
         ? {
             activeLeafEntryId: resolveChatHistoryActiveLeafEntryId(readPage),
+            ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+              ? { deltaCursor: readPage.deltaCursor }
+              : {}),
           }
         : {}),
       messages: augmentChatHistoryWithCanvasBlocks(windowed),
@@ -574,6 +578,9 @@ export async function readChatHistoryPage(params: {
   });
   return {
     activeLeafEntryId,
+    ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+      ? { deltaCursor: readPage.deltaCursor }
+      : {}),
     messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
     pagination: {
       offset: 0,

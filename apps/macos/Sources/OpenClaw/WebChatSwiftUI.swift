@@ -144,6 +144,13 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: target.agentID)
     }
 
+    func gatewayAdvertisesProgressCardStore() async -> Bool? {
+        guard let lease = await self.connection.captureServerLease() else { return nil }
+        return await self.connection.supportsServerMethod(
+            "progressCard.get",
+            ifCurrentServerLease: lease)
+    }
+
     func fetchProgressCard(sessionKey: String) async throws -> ProgressCard? {
         let target = self.sessionTarget(for: sessionKey)
         let request = OpenClawChatGatewayRequests.progressCardGet(sessionKey: target.sessionKey)

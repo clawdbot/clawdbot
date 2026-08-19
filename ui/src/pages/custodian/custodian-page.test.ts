@@ -852,6 +852,29 @@ describe("custodian page", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
+  it("reveals a collapsed fenced code block in the caretaker transcript", async () => {
+    const code = Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n");
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: `Here you go:\n\n\`\`\`bash\n${code}\n\`\`\``,
+      action: "none",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    const wrapper = page.querySelector(".code-block-wrapper");
+    const expand = page.querySelector<HTMLButtonElement>(".code-block-expand");
+    expect(wrapper?.classList.contains("is-collapsible")).toBe(true);
+    expect(expand?.textContent).toContain("13 hidden lines");
+
+    expand?.click();
+
+    expect(wrapper?.classList.contains("is-expanded")).toBe(true);
+    expect(expand?.getAttribute("aria-expanded")).toBe("true");
+  });
+
   it("does not render a silent assistant reply", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",

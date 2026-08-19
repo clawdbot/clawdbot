@@ -825,7 +825,10 @@ export function createCodexDynamicToolBridge(params: {
           },
           terminalType,
         );
-        withDynamicToolTranscriptDetails(response, result.details);
+        withDynamicToolTranscriptDetails(
+          response,
+          asOptionalRecord(sanitizeToolResult(result))?.details,
+        );
         withDiagnosticFailureDisposition(response, resultFailureKind);
         const blocksSourceReplyTermination = hasExplicitNonSourceMessageRoute(
           executedArgs,

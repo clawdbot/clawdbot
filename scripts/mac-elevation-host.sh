@@ -313,12 +313,25 @@ plist_file_value() {
   plutil -extract "$2" raw -o - "$1" 2>/dev/null || true
 }
 
+codesign_metadata_value() {
+  local target="$1" key="$2" output
+  shift 2
+  output="$(codesign -dv --verbose=4 "$@" "$target" 2>&1)" || {
+    local rc=$?
+    return "$rc"
+  }
+  awk -F= -v key="$key" '
+    $1 == key && !found { value = $2; found = 1 }
+    END { if (!found) exit 1; print value }
+  ' <<<"$output"
+}
+
 codesign_value() {
-  codesign -dv --verbose=4 "$1" 2>&1 | awk -F= -v key="$2" '$1 == key {print $2; exit}'
+  codesign_metadata_value "$1" "$2"
 }
 
 codesign_value_for_arch() {
-  codesign -dv --verbose=4 --arch "$3" "$1" 2>&1 | awk -F= -v key="$2" '$1 == key {print $2; exit}'
+  codesign_metadata_value "$1" "$2" --arch "$3"
 }
 
 entitlements_for() {

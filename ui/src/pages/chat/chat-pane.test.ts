@@ -93,7 +93,7 @@ function createInitializationContext(): ApplicationContext {
       state: { configNeedsApply: false, configSnapshot: null },
       subscribe: () => () => {},
     },
-    cloudStartup: {
+    placementStartup: {
       get: () => null,
       retry: () => undefined,
       subscribe: () => () => {},

@@ -35,10 +35,7 @@ import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import {
-  bundledStaticCatalogProviderUsesRuntimeAugment,
-  resolveBundledStaticCatalogModel,
-} from "../embedded-agent-runner/model.static-catalog.js";
+import { bundledStaticCatalogProviderUsesRuntimeAugment } from "../embedded-agent-runner/model.static-catalog.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   resolveImageFallbackCandidates,
@@ -137,7 +134,6 @@ const imageToolProviderDeps = {
   describeImagesWithModel,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
-  resolveBundledStaticCatalogModel,
   resolveModelAsync: resolveModelAsyncDefault,
   resolveRegisteredMediaUnderstandingProvider,
   resolveImageCompressionPolicy,
@@ -201,7 +197,6 @@ const testing = {
     describeImagesWithModel?: typeof describeImagesWithModel;
     resolveAutoMediaKeyProviders?: typeof resolveAutoMediaKeyProviders;
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
-    resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
     resolveModelAsync?: ResolveModelAsync;
     resolveRegisteredMediaUnderstandingProvider?: typeof resolveRegisteredMediaUnderstandingProvider;
     resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
@@ -219,8 +214,6 @@ const testing = {
       overrides?.resolveAutoMediaKeyProviders ?? resolveAutoMediaKeyProviders;
     imageToolProviderDeps.resolveDefaultMediaModel =
       overrides?.resolveDefaultMediaModel ?? resolveDefaultMediaModel;
-    imageToolProviderDeps.resolveBundledStaticCatalogModel =
-      overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
     imageToolProviderDeps.resolveModelAsync =
       overrides?.resolveModelAsync ?? resolveModelAsyncDefault;
     imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider =
@@ -468,24 +461,6 @@ function mergeImageCompressionPolicies(params: {
   };
 }
 
-function resolveBundledStaticCompressionModelPolicy(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-}): ImageCompressionModelPolicy {
-  const model = imageToolProviderDeps.resolveBundledStaticCatalogModel({
-    provider: params.provider,
-    modelId: params.model,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    includeRuntimeDiscovery: true,
-    metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
-  });
-  return model?.mediaInput?.image ?? {};
-}
-
 function providerUsesRuntimeModelAugment(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -578,13 +553,9 @@ async function resolveCompressionModelPolicy(params: {
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): Promise<ImageCompressionModelPolicy> {
-  const configuredStaticPolicy = await resolveCompressionModelPolicyWithHooks({
+  const staticPolicy = await resolveCompressionModelPolicyWithHooks({
     ...params,
     skipProviderRuntimeHooks: true,
-  });
-  const staticPolicy = mergeImageCompressionPolicies({
-    runtimePolicy: resolveBundledStaticCompressionModelPolicy(params),
-    staticPolicy: configuredStaticPolicy,
   });
   if (
     imageCompressionPolicyHasDimensionLimit(staticPolicy) ||

@@ -2220,7 +2220,6 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
-    expect(buildNodeOptions).toHaveLength(2);
     expect(buildNodeOptions).toEqual(["--max-old-space-size=8192", "--max-old-space-size=8192"]);
     expect(buildCacheRoots).toEqual([
       path.join(tempDir, ".artifacts", "build-all-cache"),

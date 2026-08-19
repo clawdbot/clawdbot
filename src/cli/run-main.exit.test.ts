@@ -6,7 +6,9 @@ import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
@@ -28,6 +30,8 @@ let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
 type ConfigSnapshotStub = {
   exists: boolean;
   hash?: string;
+  issues?: Array<{ message: string; path: string }>;
+  legacyIssues?: Array<{ message: string; path: string }>;
   path?: string;
   raw?: string | null;
   valid: boolean;
@@ -1100,6 +1104,8 @@ describe("runCli exit behavior", () => {
   it("ignores service mode declared by an invalid selected config", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
+      issues: [{ message: "invalid", path: "gateway" }],
+      legacyIssues: [],
       valid: false,
       sourceConfig: {
         env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
@@ -1695,6 +1701,8 @@ describe("runCli exit behavior", () => {
     await withEnvAsync({ OPENCLAW_INCLUDE_ROOTS: undefined }, async () => {
       readConfigFileSnapshotMock.mockResolvedValue({
         exists: true,
+        issues: [{ message: "invalid", path: "gateway" }],
+        legacyIssues: [],
         valid: false,
         sourceConfig: {
           env: { vars: { OPENCLAW_INCLUDE_ROOTS: "/tmp/openclaw-includes" } },
@@ -3238,18 +3246,20 @@ describe("runCli exit behavior", () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const previousRawConsole = loggingState.rawConsole;
-    const previousOverrideSettings = loggingState.overrideSettings;
+    const previousOverrideSettings = loggingState.overrideSettings as Parameters<
+      typeof setLoggerOverride
+    >[0];
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((
       value: string | Uint8Array,
     ) => {
       stdout.push(String(value));
       return true;
     }) as typeof process.stdout.write);
-    loggingState.overrideSettings = {
+    setLoggerOverride({
       level: "silent",
       consoleLevel: "info",
       consoleStyle: "compact",
-    };
+    });
     loggingState.rawConsole = {
       log: (value) => stdout.push(String(value)),
       info: (value) => stdout.push(String(value)),
@@ -3275,7 +3285,7 @@ describe("runCli exit behavior", () => {
     } finally {
       stdoutWrite.mockRestore();
       loggingState.rawConsole = previousRawConsole;
-      loggingState.overrideSettings = previousOverrideSettings;
+      setLoggerOverride(previousOverrideSettings);
       loggingState.forceConsoleToStderr = false;
       loggingState.earlyConsoleRoutingRestore = null;
     }
@@ -4136,6 +4146,30 @@ describe("runCli exit behavior", () => {
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expectBoundTui({ url, token: "loopback-remote-auth" });
+  });
+
+  it("passes configured remote edge auth into the bare-root onboarding probe", async () => {
+    const url = "wss://gateway.example/ws";
+    const config: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url,
+          token: "test-token",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    primeBareRootConfig(config);
+
+    await runBareCli();
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url,
+      config,
+      token: "test-token",
+    });
+    expectBoundTui({ url, token: "test-token" });
   });
 
   it("keeps configured remote password authoritative from preflight through TUI launch", async () => {

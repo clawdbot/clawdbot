@@ -2,6 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
@@ -360,6 +364,25 @@ describe("openclaw-tools progress_card gating", () => {
     expect(includeProgressCard).toBe(true);
   });
 
+  it.each([
+    {
+      name: "a configured profile",
+      options: { config: { tools: { profile: "messaging" as const } } },
+    },
+    {
+      name: "the runtime allowlist",
+      options: { runtimeToolAllowlist: ["read"] },
+    },
+  ])("omits progress_card when $name excludes it", ({ options }) => {
+    expect(
+      createFastToolNames({
+        ...options,
+        modelProvider: "openai",
+        modelId: "gpt-5.6-sol",
+      }),
+    ).not.toContain("progress_card");
+  });
+
   it("leaves normal deny policy enforcement to the assembled tool set", () => {
     const tools = createFastToolNames({
       config: {} as OpenClawConfig,
@@ -639,6 +662,149 @@ describe("sessions_yield completion ownership", () => {
       markRequesterTurnYielded.mockRestore();
     }
   });
+
+  it("keeps the turn active when it owns no pending child completion", async () => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(0);
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: controllerSessionKey,
+          runSessionKey: "agent:main:main",
+          sessionId: "requester-session",
+          runId: "run-requester",
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      const result = await tool.execute("yield-requester", {});
+
+      expect(result.details).toMatchObject({
+        status: "error",
+        error:
+          "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.",
+      });
+      expect(markRequesterTurnYielded).toHaveBeenCalledOnce();
+      expect(onYield).not.toHaveBeenCalled();
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
+  });
+
+  it("accepts a subagent self-yield without a pending child completion", async () => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(0);
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: "agent:main:subagent:worker",
+          sessionId: "subagent-session",
+          runId: "run-subagent",
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      await expect(tool.execute("yield-subagent", {})).resolves.toMatchObject({
+        details: { status: "yielded" },
+      });
+      expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
+        requesterAgentId: "main",
+        requesterSessionKey: "agent:main:subagent:worker",
+        requesterTurnRunId: "run-subagent",
+      });
+      expect(onYield).toHaveBeenCalledOnce();
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
+  });
+
+  it("accepts a runtime completion owner while recording the registry claim", async () => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(0);
+    const claimYieldCompletion = vi.fn(() => true);
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: controllerSessionKey,
+          sessionId: "requester-session",
+          runId: "run-requester",
+          claimYieldCompletion,
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      await expect(tool.execute("yield-requester", {})).resolves.toMatchObject({
+        details: { status: "yielded" },
+      });
+      expect(markRequesterTurnYielded).toHaveBeenCalledOnce();
+      expect(claimYieldCompletion).toHaveBeenCalledOnce();
+      expect(onYield).toHaveBeenCalledOnce();
+      expect(claimYieldCompletion.mock.invocationCallOrder[0]).toBeLessThan(
+        markRequesterTurnYielded.mock.invocationCallOrder[0]!,
+      );
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
+  });
+
+  it("fails before registry side effects when the runtime completion claimant throws", async () => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(1);
+    const failure = new Error("runtime completion owner failed");
+    const claimYieldCompletion = vi.fn(() => {
+      throw failure;
+    });
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: controllerSessionKey,
+          sessionId: "requester-session",
+          runId: "run-requester",
+          claimYieldCompletion,
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      await expect(tool.execute("yield-requester", {})).rejects.toBe(failure);
+      expect(markRequesterTurnYielded).not.toHaveBeenCalled();
+      expect(claimYieldCompletion).toHaveBeenCalledOnce();
+      expect(onYield).not.toHaveBeenCalled();
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
+  });
 });
 
 function hasTool(tools: readonly { name: string }[], name: string): boolean {
@@ -683,6 +849,44 @@ describe("gateway client capability tool filtering", () => {
         "show_widget",
       ),
     ).toBe(false);
+  });
+
+  it("keeps registered board widgets available without promising inline delivery", () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "diagram",
+      source: "diagram-fixture",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    createPluginBoardWidgetContentKindRegistrar(registry)(record, {
+      kind: "diagram",
+      label: "Diagram",
+      resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
+      validateSource() {},
+      composeDocument: ({ source }) => source,
+    });
+    setActivePluginRegistry(registry);
+
+    try {
+      const tool = expectToolNamed(
+        createOpenClawTools({
+          agentSessionKey: "agent:main:main",
+          clientCaps: ["inline-widgets"],
+          config: {
+            plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
+          },
+        }),
+        "show_widget",
+      );
+
+      expect(tool.description).toContain(
+        "Inline hosting is disabled; set pin=true to place it on this session's dashboard",
+      );
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("keeps the core widget tool out when OPENCLAW_SKIP_CANVAS_HOST is set", () => {

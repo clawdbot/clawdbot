@@ -97,7 +97,15 @@ export function actionResult(
 
 export function proposalResult(
   proposal: SkillProposalReadResult,
-  options: { contentText?: string; includeContent?: boolean } = {},
+  options: {
+    contentText?: string;
+    inspect?: {
+      artifactPath: string;
+      artifactSizeBytes: number;
+      availableArtifacts: Array<{ path: string; sizeBytes: number }>;
+      contentIncluded: boolean;
+    };
+  } = {},
 ) {
   return {
     content: options.contentText ? [{ type: "text" as const, text: options.contentText }] : [],
@@ -115,10 +123,7 @@ export function proposalResult(
       draftHash: proposal.record.draftHash,
       revisionHash: proposal.revisionHash,
       ...(proposal.record.evaluation ? { evaluation: proposal.record.evaluation } : {}),
-      ...(options.includeContent ? { proposalContent: proposal.content } : {}),
-      ...(options.includeContent && proposal.supportFiles
-        ? { supportFiles: proposal.supportFiles }
-        : {}),
+      ...(options.inspect ? { inspect: options.inspect } : {}),
     },
   };
 }

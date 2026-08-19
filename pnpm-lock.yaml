@@ -239,8 +239,11 @@ importers:
         version: 4.4.3
     devDependencies:
       '@a2ui/lit':
-        specifier: 0.10.2
-        version: 0.10.2(signal-polyfill@0.2.2)
+        specifier: 0.10.3
+        version: 0.10.3(signal-polyfill@0.2.2)
+      '@a2ui/web_core':
+        specifier: 0.10.6
+        version: 0.10.6
       '@copilotkit/aimock':
         specifier: 1.37.4
         version: 1.37.4(vitest@4.1.10)
@@ -574,8 +577,11 @@ importers:
   extensions/canvas:
     dependencies:
       '@a2ui/lit':
-        specifier: 0.10.2
-        version: 0.10.2(signal-polyfill@0.2.2)
+        specifier: 0.10.3
+        version: 0.10.3(signal-polyfill@0.2.2)
+      '@a2ui/web_core':
+        specifier: 0.10.6
+        version: 0.10.6
       '@lit/context':
         specifier: 1.1.6
         version: 1.1.6
@@ -826,9 +832,6 @@ importers:
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
       typebox:
         specifier: 1.3.6
         version: 1.3.6
@@ -988,9 +991,6 @@ importers:
       jszip:
         specifier: 3.10.1
         version: 3.10.1
-      pretty-ms:
-        specifier: 9.3.0
-        version: 9.3.0
       typebox:
         specifier: 1.3.6
         version: 1.3.6
@@ -1280,9 +1280,6 @@ importers:
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
       typebox:
         specifier: 1.3.6
         version: 1.3.6
@@ -1490,9 +1487,6 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.5.5
         version: 0.5.5
-      execa:
-        specifier: 10.0.0
-        version: 10.0.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1615,18 +1609,9 @@ importers:
       '@openclaw/crabline':
         specifier: 0.1.11
         version: 0.1.11
-      p-limit:
-        specifier: 7.3.1
-        version: 7.3.1
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
-      pretty-ms:
-        specifier: 9.3.0
-        version: 9.3.0
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -1763,9 +1748,6 @@ importers:
       get-east-asian-width:
         specifier: 1.6.0
         version: 1.6.0
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
       typebox:
         specifier: 1.3.6
         version: 1.3.6
@@ -2480,16 +2462,16 @@ importers:
 
 packages:
 
-  '@a2ui/lit@0.10.2':
-    resolution: {integrity: sha512-Jn/nlytHi0nXF6BRSEYPTJ27o4k8ozd+dTxeHZlNGG/ppVSw/EVWZ0N5uaxDoiCDhMNdQXQ3qZREMp9GsYXmMw==}
+  '@a2ui/lit@0.10.3':
+    resolution: {integrity: sha512-/kkL0BqJJfC6sn3XNKbo7QDWKE9K06blUVIoLHLU2PZQJalE1KBv/HLTpupBJ94SMhG+NaOUUu8yBUT+ACsm2Q==}
     peerDependencies:
       '@a2ui/markdown-it': '*'
     peerDependenciesMeta:
       '@a2ui/markdown-it':
         optional: true
 
-  '@a2ui/web_core@0.10.5':
-    resolution: {integrity: sha512-q+HyK1V/jM8l+/VmuXRbBNCS9yDguqdjsJ7/8aqY9O/WUdRE14FbhkFyQyGWQNqPJa9QbVfQyAjGQIK0B1aQtg==}
+  '@a2ui/web_core@0.10.6':
+    resolution: {integrity: sha512-kTwir93Fk5eupl4FZ6CkhJDrisR2fnQgEIlDCTp06uzx2PvUhItbq1E+h7hFyeHGTu/NMci9Tqn7Is1IVRpufw==}
 
   '@agentclientprotocol/claude-agent-acp@0.62.0':
     resolution: {integrity: sha512-8QRNmyk5Cfy4XVREeg5KCPoCDtmYS0xALY9WqI640PfopLMpeUzMByXbzLkBLbD819zB67DBhLG5ta98uOEPKg==}
@@ -9106,9 +9088,9 @@ packages:
 
 snapshots:
 
-  '@a2ui/lit@0.10.2(signal-polyfill@0.2.2)':
+  '@a2ui/lit@0.10.3(signal-polyfill@0.2.2)':
     dependencies:
-      '@a2ui/web_core': 0.10.5
+      '@a2ui/web_core': 0.10.6
       '@lit-labs/signals': 0.3.0
       '@lit/context': 1.1.6
       lit: 3.3.3
@@ -9117,7 +9099,7 @@ snapshots:
     transitivePeerDependencies:
       - signal-polyfill
 
-  '@a2ui/web_core@0.10.5':
+  '@a2ui/web_core@0.10.6':
     dependencies:
       '@preact/signals-core': 1.14.4
       date-fns: 4.4.0

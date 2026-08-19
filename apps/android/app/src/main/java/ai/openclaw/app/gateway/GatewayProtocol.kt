@@ -591,6 +591,7 @@ enum class GatewayMethod(
   ProgressCardPut("progressCard.put"),
   ToolsGithubStatus("tools.github.status"),
   ToolsGithubConfigure("tools.github.configure"),
+  DiagnosticsLanes("diagnostics.lanes"),
 }
 
 enum class GatewayEvent(

@@ -1,15 +1,6 @@
 // Voice Call tests cover timers plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { persistCallRecordMock } = vi.hoisted(() => ({
-  persistCallRecordMock: vi.fn(),
-}));
-
-vi.mock("./store.js", () => ({
-  persistCallRecord: persistCallRecordMock,
-}));
-
 import {
   clearMaxDurationTimer,
   clearTranscriptWaiter,
@@ -29,15 +20,15 @@ describe("voice-call manager timers", () => {
     vi.useRealTimers();
   });
 
-  it("starts and clears max duration timers, persisting timeout metadata before delegation", async () => {
+  it("delegates max-duration termination and logs typed failure", async () => {
     const call = { id: "call-1", state: "active" };
     const ctx = {
       activeCalls: new Map([["call-1", call]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call",
     };
-    const onTimeout = vi.fn(async () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onTimeout = vi.fn(async () => ({ success: false, error: "carrier unavailable" }));
 
     startMaxDurationTimer({
       ctx: ctx as never,
@@ -49,9 +40,11 @@ describe("voice-call manager timers", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(call).toEqual({ id: "call-1", state: "active", endReason: "timeout" });
-    expect(persistCallRecordMock).toHaveBeenCalledWith("/tmp/voice-call", call);
+    expect(call).toEqual({ id: "call-1", state: "active" });
     expect(onTimeout).toHaveBeenCalledWith("call-1");
+    expect(warn).toHaveBeenCalledWith(
+      "[voice-call] Failed to end max-duration call call-1: carrier unavailable",
+    );
     expect(ctx.maxDurationTimers.has("call-1")).toBe(false);
 
     startMaxDurationTimer({
@@ -68,9 +61,8 @@ describe("voice-call manager timers", () => {
       activeCalls: new Map([["call-1", { id: "call-1", state: "completed" }]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call",
     };
-    const onTimeout = vi.fn(async () => {});
+    const onTimeout = vi.fn(async () => ({ success: true }));
 
     startMaxDurationTimer({
       ctx: ctx as never,
@@ -80,7 +72,6 @@ describe("voice-call manager timers", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(persistCallRecordMock).not.toHaveBeenCalled();
     expect(onTimeout).not.toHaveBeenCalled();
   });
 
@@ -94,14 +85,13 @@ describe("voice-call manager timers", () => {
         maxDurationSeconds: Number.MAX_SAFE_INTEGER,
         transcriptTimeoutMs: Number.MAX_SAFE_INTEGER,
       },
-      storePath: "/tmp/voice-call",
     };
 
     try {
       startMaxDurationTimer({
         ctx: ctx as never,
         callId: "call-1",
-        onTimeout: vi.fn(async () => {}),
+        onTimeout: vi.fn(async () => ({ success: true })),
       });
       const transcript = waitForFinalTranscript(ctx as never, "call-2");
 

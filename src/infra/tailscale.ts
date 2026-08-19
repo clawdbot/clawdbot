@@ -21,6 +21,7 @@ import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
 } from "./tailscale-route-owner-protocol.js";
+import { TailscaleRouteOwnershipConflictError } from "./tailscale-route-ownership-error.js";
 
 const TAILSCALE_STATUS_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
@@ -237,7 +238,14 @@ type TailscaleRouteOwnerFailure = Pick<
   "code" | "stdout" | "stderr"
 >;
 
+function isPort443RouteConflict(message: TailscaleRouteOwnerFailure): boolean {
+  return /listener already exists for port 443/i.test(`${message.stderr}\n${message.stdout}`);
+}
+
 function routeClaimError(message: TailscaleRouteOwnerFailure): Error {
+  if (isPort443RouteConflict(message)) {
+    return new TailscaleRouteOwnershipConflictError();
+  }
   const detail = [message.stderr.trim(), message.stdout.trim()].find(Boolean);
   return Object.assign(new Error(detail || "Tailscale route owner exited before claiming route"), {
     code: message.code,

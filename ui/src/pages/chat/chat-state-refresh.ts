@@ -197,8 +197,8 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     }
   } catch (error) {
     if (ownsRequest()) {
-      // Keep the startup/prepared snapshot usable while making the failed
-      // discovery and its retry path visible in the open picker.
+      // Keep the startup/prepared snapshot usable while recording the failed
+      // discovery. Reopening the picker starts another uncached load.
       host.chatModelCatalogError = formatUiError(error);
     }
   } finally {

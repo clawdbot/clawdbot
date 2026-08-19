@@ -1,5 +1,6 @@
 // Memory Core tests cover short term promotion plugin behavior.
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,10 +18,15 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 import {
   configureMemoryCoreDreamingState,
   DREAMING_DAILY_PROVENANCE_NAMESPACE,
+  memoryCoreWorkspaceStateKey,
+  openMemoryCoreStateStore,
+  SHORT_TERM_LOCK_MAX_ENTRIES,
+  SHORT_TERM_LOCK_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
+import { deleteShortTermLockEntryIfCurrent } from "./short-term-promotion-store.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -3736,6 +3742,59 @@ describe("short-term promotion", () => {
         message: "Short-term promotion lock appears stale.",
         fixable: true,
       });
+    });
+  });
+
+  it("reclaims a stale sqlite lock owned by a Linux zombie", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const ownerPid = 4242;
+      await testing.writeShortTermLock(workspaceDir, {
+        owner: `${ownerPid}:0`,
+        acquiredAt: Date.now() - 120_000,
+      });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath) => {
+        if (String(filePath) === `/proc/${ownerPid}/status`) {
+          return `Name:\tmemory worker\nState:\tZ (zombie)\nPid:\t${ownerPid}\n`;
+        }
+        throw new Error(`unexpected read: ${String(filePath)}`);
+      });
+
+      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(audit.issues.map((issue) => issue.code)).toContain("recall-lock-stale");
+
+      await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
+        changed: true,
+        removedStaleLock: true,
+      });
+    });
+  });
+
+  it("preserves a replacement lock when the expected stale entry is no longer current", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const expected = {
+        owner: "4243:stale",
+        acquiredAt: Date.now() - 120_000,
+      };
+      const replacement = {
+        owner: `${process.pid}:replacement`,
+        acquiredAt: Date.now(),
+      };
+      const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+      const lockStore = openMemoryCoreStateStore<typeof expected>({
+        namespace: SHORT_TERM_LOCK_NAMESPACE,
+        maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+      });
+      try {
+        await lockStore.register(lockKey, replacement);
+        await expect(deleteShortTermLockEntryIfCurrent(lockStore, lockKey, expected)).resolves.toBe(
+          false,
+        );
+        await expect(lockStore.lookup(lockKey)).resolves.toEqual(replacement);
+      } finally {
+        await lockStore.delete(lockKey);
+      }
     });
   });
 

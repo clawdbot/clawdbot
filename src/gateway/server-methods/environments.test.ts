@@ -10,6 +10,7 @@ import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js
 import {
   collectNodeRunnerIssuesByNodeId,
   collectNodeWorkerBundleStatusByNodeId,
+  collectNodeWorkerCapacityByNodeId,
   isNodeRunnerSessionHost,
 } from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
@@ -28,6 +29,7 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 vi.mock("../node-registry-private.js", () => ({
   collectNodeRunnerIssuesByNodeId: vi.fn(() => new Map()),
   collectNodeWorkerBundleStatusByNodeId: vi.fn(() => new Map()),
+  collectNodeWorkerCapacityByNodeId: vi.fn(() => new Map()),
   isNodeRunnerSessionHost: vi.fn(() => false),
 }));
 
@@ -210,6 +212,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   vi.mocked(isNodeRunnerSessionHost).mockReturnValue(false);
   vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(new Map());
+  vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(new Map());
   vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(new Map());
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({
@@ -317,7 +320,42 @@ describe("environment gateway methods", () => {
     });
   });
 
-  it("projects the same redacted worker bundle status through list and status", async () => {
+  it("projects durable offline session-host identity through list and status without slots", async () => {
+    vi.mocked(listNodePairing).mockResolvedValue({
+      paired: [
+        {
+          nodeId: "node-offline-host",
+          displayName: "Offline Host",
+          commands: ["system.run"],
+          sessionHost: true,
+        },
+      ],
+    } as never);
+
+    const [, listPayload] = await callEnvironmentMethod(
+      "environments.list",
+      {},
+      { connectedNodes: [] },
+    );
+    const [, statusPayload] = await callEnvironmentMethod(
+      "environments.status",
+      { environmentId: "node:node-offline-host" },
+      { connectedNodes: [] },
+    );
+    const listed = (
+      listPayload as { environments: Array<Record<string, unknown>> }
+    ).environments.find((environment) => environment.id === "node:node-offline-host");
+
+    expect(listed).toMatchObject({ status: "unavailable", sessionHost: true });
+    expect(listed).not.toHaveProperty("workerSlots");
+    expect(statusPayload).toMatchObject({ status: "unavailable", sessionHost: true });
+    expect(statusPayload).not.toHaveProperty("workerSlots");
+  });
+
+  it("projects the same exact slots and redacted bundle status through list and status", async () => {
+    vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(
+      new Map([["node-live", { total: 2, available: 1 }]]),
+    );
     vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(
       new Map([["node-live", { status: "installed", version: "2026.8.9" }]]),
     );
@@ -330,8 +368,12 @@ describe("environment gateway methods", () => {
       listPayload as { environments: Array<{ id: string; workerBundle?: unknown }> }
     ).environments.find((environment) => environment.id === "node:node-live");
 
-    expect(listed?.workerBundle).toEqual({ status: "installed", version: "2026.8.9" });
+    expect(listed).toMatchObject({
+      workerSlots: { total: 2, available: 1 },
+      workerBundle: { status: "installed", version: "2026.8.9" },
+    });
     expect(statusPayload).toMatchObject({
+      workerSlots: { total: 2, available: 1 },
       workerBundle: { status: "installed", version: "2026.8.9" },
     });
     expect(JSON.stringify({ listed, statusPayload })).not.toContain("bundleHash");
@@ -459,7 +501,8 @@ describe("environment gateway methods", () => {
             {
               id: "standard",
               label: "Standard",
-              description: "Cheap smoke checks and small repos",
+              cpu: 32,
+              memoryGb: 64,
               default: true,
             },
           ]
@@ -481,7 +524,8 @@ describe("environment gateway methods", () => {
             {
               id: "standard",
               label: "Standard",
-              description: "Cheap smoke checks and small repos",
+              cpu: 32,
+              memoryGb: 64,
               default: true,
             },
           ],

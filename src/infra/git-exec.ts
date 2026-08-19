@@ -1,6 +1,6 @@
 import { runCommandBuffered, runCommandWithTimeout } from "../process/exec.js";
 
-const GIT_TIMEOUT_MS = 120_000;
+export const GIT_TIMEOUT_MS = 120_000;
 
 type GitCommandResult = {
   stdout: string;

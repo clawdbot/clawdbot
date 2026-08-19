@@ -41,12 +41,12 @@ describe("DraftPlaceState cloud machine selection", () => {
         context: undefined,
         data: undefined,
         submitting: false,
-        pendingCloudSessionKey: "",
+        pendingPlacementSessionKey: "",
       }),
       { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
     );
 
-    state.applyPendingCloud({ agentId: "main", profileId: "aws" });
+    state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
     expect(state.machineClass).toBe("");
 
     state.cloudMachines.select("aws", "fast", gateway.cloudProfiles);
@@ -85,18 +85,18 @@ describe("DraftPlaceState cloud machine selection", () => {
         context: undefined,
         data: undefined,
         submitting: false,
-        pendingCloudSessionKey: "",
+        pendingPlacementSessionKey: "",
       }),
       { requestUpdate: vi.fn(), onError: vi.fn(), onClearError: vi.fn() },
     );
 
-    state.applyPendingCloud({ agentId: "main", profileId: "aws", machineClass: "fast" });
+    state.applyPendingPlacement({ agentId: "main", profileId: "aws", machineClass: "fast" });
     expect(state.machineClass).toBe("fast");
 
     cloudProfiles.splice(0, cloudProfiles.length, { id: "aws", providerId: "crabbox" });
     expect(state.machineClass).toBe("fast");
 
-    state.applyPendingCloud({ agentId: "main", profileId: "aws" });
+    state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
     expect(state.machineClass).toBe("");
   });
 });

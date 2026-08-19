@@ -41,6 +41,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "dashboard document"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "desktop panel"
     },
     {
@@ -378,6 +385,13 @@
       "name": "text",
       "path": "ui/src/pages/config/mcp.ts",
       "text": "openclaw mcp status --verbose"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/updates.ts",
+      "text": "openclaw update status --json openclaw update"
     },
     {
       "count": 1,

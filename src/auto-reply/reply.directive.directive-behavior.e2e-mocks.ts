@@ -6,7 +6,7 @@ export const compactEmbeddedAgentSessionMock: Mock = vi.fn();
 export const loadModelCatalogMock: Mock = vi.fn();
 export const resolveCommandSecretRefsViaGatewayMock: Mock = vi.fn();
 export const clearSessionAuthProfileOverrideMock: Mock = vi.fn();
-export const resolveSessionAuthProfileOverrideMock: Mock = vi.fn();
+export const resolveSessionAuthSelectionMock: Mock = vi.fn();
 
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
@@ -127,8 +127,7 @@ vi.mock("../cli/command-secret-gateway.js", () => ({
 vi.mock("../agents/auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: (...args: unknown[]) =>
     clearSessionAuthProfileOverrideMock(...args),
-  resolveSessionAuthProfileOverride: (...args: unknown[]) =>
-    resolveSessionAuthProfileOverrideMock(...args),
+  resolveSessionAuthSelection: (...args: unknown[]) => resolveSessionAuthSelectionMock(...args),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {

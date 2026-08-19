@@ -1,9 +1,14 @@
 // Doctor node-hosting preconditions expose config combinations that leave browser auth healthy
 // while machine authentication or onboarding remains unavailable.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../agents/agent-runtime-id.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { hasConfiguredGatewayAuthSecretInput } from "../gateway/auth-config-utils.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 
 const CHECK_ID = "core/doctor/node-hosting-preconditions";
 const LOOPBACK_JOIN_CODE_MESSAGE =
@@ -42,11 +47,59 @@ function lacksNodeOnboardingUrl(cfg: OpenClawConfig): boolean {
   );
 }
 
+function lacksNodeOnboardingPlugin(cfg: OpenClawConfig): boolean {
+  return !resolveEffectiveEnableState({
+    id: "device-pair",
+    origin: "bundled",
+    config: normalizePluginsConfig(cfg.plugins),
+    rootConfig: cfg,
+    enabledByDefault: true,
+  }).enabled;
+}
+
+function lacksEmbeddedRuntimeRoute(cfg: OpenClawConfig): boolean {
+  return listAgentIds(cfg).every((agentId) => {
+    const model = resolveDefaultModelForAgent({ cfg, agentId });
+    return (
+      resolveEffectiveAgentRuntime({
+        cfg,
+        provider: model.provider,
+        modelId: model.model,
+        agentId,
+      }) !== OPENCLAW_AGENT_RUNTIME_ID
+    );
+  });
+}
+
 /** Collects config-only warnings for node authentication, onboarding, and worker ingress. */
 export function collectNodeHostingPreconditionFindings(
   cfg: OpenClawConfig,
 ): readonly HealthFinding[] {
   const findings: HealthFinding[] = [];
+  if (lacksNodeOnboardingPlugin(cfg)) {
+    findings.push({
+      checkId: CHECK_ID,
+      severity: "warning",
+      message:
+        "The device-pair plugin is not enabled; node onboarding join codes and openclaw connect are unavailable.",
+      path: "plugins.entries.device-pair.enabled",
+      requirement: "node-onboarding-plugin",
+      fixHint:
+        "Set plugins.entries.device-pair.enabled: true, ensure device-pair is not denied or excluded by plugins.allow, then restart the Gateway.",
+    });
+  }
+  if (lacksEmbeddedRuntimeRoute(cfg)) {
+    findings.push({
+      checkId: CHECK_ID,
+      severity: "warning",
+      message:
+        "No configured agent/model route resolves to the embedded runtime; paired-device dispatch will fail at launch because device runners cannot run Codex, ACPX, or another external harness.",
+      path: "agents",
+      requirement: "device-session-runtime",
+      fixHint:
+        'Set agentRuntime.id: "openclaw" on at least one provider/model route (models.providers.<provider>.agentRuntime, agents.defaults.models["provider/model"].agentRuntime, or agents.entries.<id>.models["provider/model"].agentRuntime), then select that agent/model for paired-device sessions. Runtime policy is model/provider-scoped; whole-agent runtime keys are ignored. For a multi-agent roster, set agents.ownership: "explicit".',
+    });
+  }
   if (usesIdentityHeadersWithoutMachineCredentials(cfg)) {
     findings.push({
       checkId: CHECK_ID,
