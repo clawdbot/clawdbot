@@ -244,6 +244,7 @@ describe("config help copy quality", () => {
       name: "documents session maintenance duration/size examples and deprecations",
       fields: [
         ["session.maintenance.pruneAfter", ["30d", "12h"]],
+        ["session.maintenance.threadRetention", ["30d", /false/i, /inactiv/i, /independent/i]],
         ["session.maintenance.archiveDashboardAfter", ["7d", /false/i, "0"]],
         ["session.maintenance.preserveRecent", ["7d", /false/i]],
         ["session.maintenance.resetArchiveRetention", [".reset.", /false/i]],

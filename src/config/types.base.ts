@@ -252,6 +252,8 @@ export type SessionMaintenanceConfig = {
   mode?: SessionMaintenanceMode;
   /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
+  /** Remove inactive thread-scoped sessions after this duration. Default: "30d"; false disables. */
+  threadRetention?: string | number | false;
   /** Archive inactive dashboard sessions after this duration. Default: "7d"; false or 0 disables. */
   archiveDashboardAfter?: string | number | false;
   /** Maximum total session entries to keep when protection permits. Default: 500. */

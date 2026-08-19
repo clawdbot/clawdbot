@@ -86,6 +86,7 @@ export const SessionSchema = z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),
         pruneAfter: PositiveDurationSchema.optional(),
+        threadRetention: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
         archiveDashboardAfter: z
           .union([PositiveDurationSchema, z.literal(false), z.literal(0)])
           .optional(),

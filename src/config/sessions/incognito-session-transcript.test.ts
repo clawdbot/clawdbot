@@ -151,6 +151,7 @@ describe("incognito transcript access", () => {
           modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
           pruneAfterMs: 365 * 24 * 60 * 60 * 1000,
           resetArchiveRetentionMs: null,
+          threadRetentionMs: null,
         },
       });
 

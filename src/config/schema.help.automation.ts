@@ -78,6 +78,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     'Determines whether maintenance policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds.',
   "session.maintenance.pruneAfter":
     "Removes entries older than this duration (for example `30d` or `12h`) during maintenance passes. Use this as the primary age-retention control and align it with data retention policy.",
+  "session.maintenance.threadRetention":
+    "Removes thread-scoped sessions after this period without activity (for example `30d`), independently of general session pruning. Active work, pinned sessions, and archived sessions remain protected. Defaults to `30d`; set `false` to keep inactive threads indefinitely.",
   "session.maintenance.archiveDashboardAfter":
     "Archives inactive dashboard sessions after this duration (for example `7d`) so they remain available without crowding the active session list. Set `false` or `0` to disable automatic dashboard archiving.",
   "session.maintenance.maxEntries":

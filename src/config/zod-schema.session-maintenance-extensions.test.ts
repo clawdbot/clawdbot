@@ -19,6 +19,22 @@ describe("SessionSchema maintenance extensions", () => {
     expect(SessionSchema.safeParse({ maintenance: { preserveRecent: false } }).success).toBe(true);
   });
 
+  it.each(["30d", 86_400_000, false] as const)(
+    "accepts thread retention value %s",
+    (threadRetention) => {
+      expect(SessionSchema.safeParse({ maintenance: { threadRetention } }).success).toBe(true);
+    },
+  );
+
+  it.each([0, "0d", -1, "forever"] as const)(
+    "rejects invalid thread retention value %s",
+    (threadRetention) => {
+      const result = SessionSchema.safeParse({ maintenance: { threadRetention } });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toContain("threadRetention");
+    },
+  );
+
   it.each([false, 0] as const)("accepts disabling dashboard archiving with %s", (value) => {
     expect(SessionSchema.safeParse({ maintenance: { archiveDashboardAfter: value } }).success).toBe(
       true,

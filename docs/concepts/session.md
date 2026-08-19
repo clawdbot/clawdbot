@@ -217,6 +217,7 @@ shown:
     maintenance: {
       mode: "enforce", // "enforce" applies cleanup; "warn" only reports
       pruneAfter: "30d",
+      threadRetention: "30d", // false keeps inactive threads indefinitely
       archiveDashboardAfter: "7d", // false or 0 disables
       maxEntries: 500,
       preserveRecent: "7d", // optional; false or omitted disables
@@ -232,8 +233,8 @@ startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
 `maxEntries` counts every live session row. Archived or pinned sessions, active
-or admitted work, model-locked sessions, and durable external conversation
-pointers are protected from automatic eviction, but still consume the cap.
+or admitted work, model-locked sessions, group/channel pointers, and retained
+thread pointers are protected from count eviction, but still consume the cap.
 Cleanup removes the oldest unprotected rows until it reaches `maxEntries` or
 runs out of eligible victims. The total can therefore remain above the cap when
 protected rows alone exceed it or active work temporarily blocks eviction.
@@ -247,9 +248,13 @@ maintenance/cap pressure is reached, and runs before the broader stale-entry
 age cutoff and entry cap. Normal direct, group, thread, cron, hook, heartbeat,
 ACP, and sub-agent sessions do not inherit this 24h retention.
 
-Maintenance preserves durable external conversation pointers, including group
-sessions and thread-scoped chat sessions, while still allowing synthetic cron,
-hook, heartbeat, ACP, and sub-agent entries to age out.
+Maintenance preserves group/channel conversation pointers. Thread-scoped chat
+sessions remain count-protected while retained, then age out after 30 days of
+inactivity by default through the independent `threadRetention` setting. Set it
+to `false` to retain inactive threads indefinitely. Pinned, archived,
+model-locked, admitted, and unresolved-work threads remain protected. Synthetic
+cron, hook, heartbeat, ACP, and sub-agent entries continue to follow their
+normal cleanup policies.
 
 Shared or high-volume installations can set `preserveRecent` to protect
 recently active interactive sessions and every SQLite history generation owned

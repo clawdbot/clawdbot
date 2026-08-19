@@ -44,6 +44,7 @@ import {
   archiveStaleDashboardEntries,
   capEntryCount,
   pruneStaleModelRunEntries,
+  pruneStaleThreadEntries,
   pruneStaleEntries,
   normalizeResolvedMaintenanceConfigInput,
   shouldPreserveMaintenanceEntry,
@@ -163,6 +164,18 @@ export function applySessionEntryMaintenance(
         preserveRecentMs: maintenance.preserveRecentMs ?? null,
       }),
   );
+  const hasStaleThreadCandidate =
+    maintenance.threadRetentionMs != null &&
+    hasStaleSqliteSessionEntryCandidate(
+      database,
+      maintenance.threadRetentionMs,
+      (key, entry) =>
+        pruneStaleThreadEntries({ [key]: entry }, maintenance.threadRetentionMs, {
+          log: false,
+          preserveKeys: preserveCandidateKeys,
+          preserveRecentMs: maintenance.preserveRecentMs,
+        }) > 0,
+    );
   const hasStaleDashboardCandidate =
     maintenance.archiveDashboardAfterMs != null &&
     hasStaleSqliteSessionEntryCandidate(
@@ -178,6 +191,7 @@ export function applySessionEntryMaintenance(
     params.forceMaintenance === true ||
     entryCount > maintenance.maxEntries ||
     hasStaleDashboardCandidate ||
+    hasStaleThreadCandidate ||
     hasStaleCandidate ||
     shouldRunModelRunPrune({
       maintenance,
@@ -242,18 +256,29 @@ export function applySessionEntryMaintenance(
     preserveKeys,
   });
   let pruned = 0;
-  if (
-    params.forceMaintenance === true ||
-    hasStaleCandidate ||
-    remainingEntryCount > maintenance.maxEntries
-  ) {
-    pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
+  if (hasStaleThreadCandidate || params.forceMaintenance === true) {
+    const threadPruned = pruneStaleThreadEntries(store, maintenance.threadRetentionMs, {
       log: false,
       onPruned: rememberRemovedEntry,
       preserveKeys,
       preserveRecentMs: maintenance.preserveRecentMs,
     });
-    remainingEntryCount -= pruned;
+    pruned += threadPruned;
+    remainingEntryCount -= threadPruned;
+  }
+  if (
+    params.forceMaintenance === true ||
+    hasStaleCandidate ||
+    remainingEntryCount > maintenance.maxEntries
+  ) {
+    const stalePruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
+      log: false,
+      onPruned: rememberRemovedEntry,
+      preserveKeys,
+      preserveRecentMs: maintenance.preserveRecentMs,
+    });
+    pruned += stalePruned;
+    remainingEntryCount -= stalePruned;
   }
   let capped = 0;
   if (
