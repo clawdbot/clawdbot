@@ -1,3 +1,7 @@
+import {
+  parseControlUiFocusLocation,
+  type ControlUiFocusLocation,
+} from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
@@ -39,8 +43,6 @@ import type {
   ApplicationThemeServerSelection,
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
-import { isDashboardOnlyView } from "./dashboard-document-mode.ts";
-import { isDesktopDocumentPath, isDesktopOnlyView } from "./desktop-document-mode.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
@@ -59,7 +61,6 @@ import {
 import { createSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
-import { isTerminalDocumentPath, isTerminalOnlyView } from "./terminal-document-mode.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
@@ -222,6 +223,7 @@ export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
   readonly documentMode: ApprovalDocumentMode | null;
+  readonly focusLocation: ControlUiFocusLocation | null;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
     readonly token: string;
@@ -274,24 +276,16 @@ export function bootstrapApplication(
   const basePath = resolveControlUiBasePath(
     startup.location.pathname || globalThis.location?.pathname || "/",
   );
-  const dashboardDocument = isDashboardOnlyView(startup.location);
-  const standaloneDocument =
-    isTerminalDocumentPath(startup.location.pathname, basePath) ||
-    isDesktopDocumentPath(startup.location.pathname, basePath) ||
-    dashboardDocument;
+  const focusLocation = parseControlUiFocusLocation(startup.location, basePath);
   const firstRunDefaultLanding =
-    documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
-  // A `?view=` document mode still lands on the chat path, so it counts as the default landing
-  // for routing, but it is an explicit destination that renders its own surface. Redirecting it
-  // into model setup strands native app webviews on a blank page, so only gate the redirect.
-  const firstRunRedirectEnabled =
-    firstRunDefaultLanding &&
-    !isTerminalOnlyView(startup.location, basePath) &&
-    !isDesktopOnlyView(startup.location, basePath) &&
-    !dashboardDocument;
+    documentMode === null &&
+    focusLocation === null &&
+    isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
+  const firstRunRedirectEnabled = firstRunDefaultLanding;
   const sessionPathBuilderReady =
     dependencies.sessionPathBuilderReady ??
-    (documentMode || dashboardDocument
+    (documentMode ||
+    (focusLocation?.status === "valid" && focusLocation.target.kind !== "dashboard")
       ? Promise.resolve()
       : import("@openclaw/session-url-contract").then((contract) => {
           setSessionPathBuilder(contract.buildControlUiSessionPath);
@@ -324,7 +318,7 @@ export function bootstrapApplication(
     firstRunDefaultLanding &&
     !parseAgentSessionKey(settings.sessionKey);
   const initialLocationReady = (
-    documentMode || dashboardDocument
+    documentMode || focusLocation
       ? Promise.resolve(startup.location)
       : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
           ([, location]) =>
@@ -391,9 +385,9 @@ export function bootstrapApplication(
   const chatAttachmentHandoff = createChatAttachmentHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
-  // Standalone terminal, desktop, and dashboard documents render before the
-  // shell; starting the page router would rewrite them to an application route.
-  const startsApplicationRouter = documentMode === null && !standaloneDocument;
+  // Focus documents render before the shell; starting the application router
+  // would rewrite their reserved presentation route into an ordinary page.
+  const startsApplicationRouter = documentMode === null && focusLocation === null;
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
@@ -532,6 +526,7 @@ export function bootstrapApplication(
     context,
     router,
     documentMode,
+    focusLocation,
     get pendingGatewayConnection() {
       return pendingGatewayConnection;
     },

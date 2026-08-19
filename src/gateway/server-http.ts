@@ -31,6 +31,7 @@ import {
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import {
   isControlUiApprovalDocumentPath,
+  isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -460,24 +461,27 @@ export function createGatewayHttpServer(opts: {
             config: openAiChatCompletionsConfig,
           }),
       );
-      addRequestStage(
+      const standaloneControlUiDocument =
         isControlUiApprovalDocumentPath({
           basePath: controlUiBasePath,
           pathname: scopedRequestPath,
-        }),
-        async () => {
-          if (!controlUiEnabled) {
-            respondNotFound(res);
-            return true;
-          }
-          const handled = await handleControlUiRequest();
-          if (handled) {
-            return true;
-          }
+        }) ||
+        isControlUiFocusDocumentPath({
+          basePath: controlUiBasePath,
+          pathname: scopedRequestPath,
+        });
+      addRequestStage(standaloneControlUiDocument, async () => {
+        if (!controlUiEnabled) {
           respondNotFound(res);
           return true;
-        },
-      );
+        }
+        const handled = await handleControlUiRequest();
+        if (handled) {
+          return true;
+        }
+        respondNotFound(res);
+        return true;
+      });
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({

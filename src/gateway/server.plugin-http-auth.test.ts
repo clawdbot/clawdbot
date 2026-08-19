@@ -754,6 +754,98 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test.each([
+    {
+      label: "root-mounted",
+      basePath: "",
+      rootPath: "/focus",
+      descendantPath: "/focus/desktop/control",
+      lookalikePath: "/focused",
+    },
+    {
+      label: "base-path-mounted",
+      basePath: "/openclaw",
+      rootPath: "/openclaw/focus",
+      descendantPath: "/openclaw/focus/dashboard/roboclaw/session-ref",
+      lookalikePath: "/openclaw/focused",
+    },
+  ])(
+    "reserves the $label focus namespace ahead of plugin routes",
+    async ({ basePath, rootPath, descendantPath, lookalikePath }) => {
+      const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+        res.statusCode = 200;
+        res.end("plugin-handled");
+        return true;
+      });
+
+      await withGatewayServer({
+        prefix: "openclaw-plugin-http-focus-reservation-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const get = await sendRequest(server, { path: rootPath });
+          expect(get.res.statusCode).toBe(503);
+          expect(get.getBody()).toContain("Control UI assets not found");
+
+          const head = await sendRequest(server, { path: descendantPath, method: "HEAD" });
+          expect(head.res.statusCode).toBe(503);
+
+          for (const method of ["POST", "PUT"] as const) {
+            const write = await sendRequest(server, { path: descendantPath, method });
+            expect(write.res.statusCode, method).toBe(404);
+            expect(write.getBody(), method).toBe("Not Found");
+          }
+          expect(handlePluginRequest).not.toHaveBeenCalled();
+
+          const lookalike = await sendRequest(server, { path: lookalikePath });
+          expect(lookalike.res.statusCode).toBe(200);
+          expect(lookalike.getBody()).toBe("plugin-handled");
+          expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        },
+      });
+    },
+  );
+
+  test.each([
+    { label: "root-mounted", basePath: "", path: "/focus/terminal" },
+    {
+      label: "base-path-mounted",
+      basePath: "/openclaw",
+      path: "/openclaw/focus/desktop",
+    },
+  ])(
+    "keeps the $label focus namespace reserved when control ui serving is disabled",
+    async ({ basePath, path }) => {
+      const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+        res.statusCode = 200;
+        res.end("plugin-shadowed-disabled-focus");
+        return true;
+      });
+
+      await withPluginGatewayServer({
+        prefix: "openclaw-plugin-http-disabled-focus-reservation-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: false,
+          controlUiBasePath: basePath,
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const response = await sendRequest(server, { path });
+
+          expect(response.res.statusCode).toBe(404);
+          expect(response.getBody()).toBe("Not Found");
+          expect(handlePluginRequest).not.toHaveBeenCalled();
+        },
+      });
+    },
+  );
+
   test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;

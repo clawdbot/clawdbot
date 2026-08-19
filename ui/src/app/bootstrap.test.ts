@@ -521,17 +521,22 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
-  it("keeps the terminal document route outside the application router", async () => {
+  it("keeps the focused terminal route outside the application router", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
-    window.history.replaceState({}, "", "/terminal");
+    window.history.replaceState({}, "", "/focus/terminal");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const routerStart = vi.spyOn(runtime.router, "start");
 
     try {
       await runtime.start();
 
-      expect(window.location.pathname).toBe("/terminal");
+      expect(window.location.pathname).toBe("/focus/terminal");
+      expect(runtime.focusLocation).toEqual({
+        status: "valid",
+        basePath: "",
+        target: { kind: "terminal" },
+      });
       expect(routerStart).not.toHaveBeenCalled();
     } finally {
       runtime.stop();
