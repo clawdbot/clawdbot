@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -159,7 +160,7 @@ describe("session mutation reconnect truth", () => {
   it.each(["delete", "deleteMany"] as const)(
     "retains a confirmed %s across a same-client reconnect without stale deletion publication",
     async (operationName) => {
-      const deleteResponse = createDeferred<{ deleted: boolean }>();
+      const deleteResponse = createDeferred<SessionsDeleteResult>();
       const { publish, request, sessions } = createMutationHarness({
         "sessions.delete": () => deleteResponse.promise,
       });
@@ -168,12 +169,24 @@ describe("session mutation reconnect truth", () => {
       const operation =
         operationName === "delete" ? sessions.delete(key) : sessions.deleteMany([{ key }]);
       reconnectSameClient(publish);
-      deleteResponse.resolve({ deleted: true });
+      const worktreePreserved = {
+        id: "wt-busy",
+        branch: "openclaw/busy",
+        path: "/worktrees/busy",
+        reason: "busy" as const,
+      };
+      deleteResponse.resolve({
+        ok: true,
+        key,
+        deleted: true,
+        archived: [],
+        worktreePreserved,
+      });
 
       await expect(operation).resolves.toEqual(
         operationName === "delete"
-          ? { deleted: true }
-          : { deleted: [key], errors: [], preservedWorktrees: [] },
+          ? { deleted: true, worktreePreserved }
+          : { deleted: [key], errors: [], preservedWorktrees: [worktreePreserved] },
       );
       expect(sessions.state.deletedSessions).toEqual([]);
       expect(sessions.state.error).toContain("completed on the previous connection");
