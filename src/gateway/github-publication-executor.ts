@@ -15,7 +15,17 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
-import { parseGitHubPublicationBaseRef } from "./github-publication-base.js";
+import {
+  githubPublicationBaseFetchArgs,
+  githubPublicationBaseLineageArgs,
+  githubPublicationBaseLookupArgs,
+  parseGitHubPublicationBaseRef,
+} from "./github-publication-base.js";
+import {
+  githubPublicationPushArgs,
+  githubPublicationRemoteHeadArgs,
+  githubPublicationResetIndexArgs,
+} from "./github-publication-git-transport.js";
 import {
   githubPublicationPullRequestLookupArgs,
   parseGitHubPublicationPullRequests,
@@ -378,16 +388,9 @@ export async function executeGitHubPublication(params: {
     }
     const remoteBaseResult = await step(
       async () =>
-        await runCommand(
-          [
-            "gh",
-            "api",
-            `repos/${repository}/git/ref/heads/${baseBranch}`,
-            "--jq",
-            "{ref: .ref, sha: .object.sha}",
-          ],
-          { env: identity.env },
-        ),
+        await runCommand(githubPublicationBaseLookupArgs(repository, baseBranch), {
+          env: identity.env,
+        }),
     );
     if (remoteBaseResult.code !== 0) {
       throw new Error("GitHub publication workspace base branch could not be verified.");
@@ -396,6 +399,23 @@ export async function executeGitHubPublication(params: {
       remoteBaseResult.stdout.toString("utf8"),
       baseBranch,
     );
+    await step(async () => await assertSafeGitPublicationConfig(worktree.path));
+    identity = await refreshIdentity();
+    const baseTransportEnv = {
+      ...identity.env,
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_SYSTEM: os.devNull,
+    };
+    const baseFetched = await step(
+      async () =>
+        await runCommand(githubPublicationBaseFetchArgs(repository, remoteBaseSha), {
+          cwd: worktree.path,
+          env: baseTransportEnv,
+        }),
+    );
+    if (baseFetched.code !== 0) {
+      throw new Error("GitHub publication workspace base could not be materialized.");
+    }
     const baseCandidates = [worktree.baseRef, `refs/remotes/origin/${baseBranch}`];
     let baseCommit: string | undefined;
     for (const candidate of baseCandidates) {
@@ -416,13 +436,13 @@ export async function executeGitHubPublication(params: {
     }
     const localBaseOwnsRemote = await step(
       async () =>
-        await runCommand(["git", "merge-base", "--is-ancestor", baseCommit, remoteBaseSha], {
+        await runCommand(githubPublicationBaseLineageArgs(baseCommit, remoteBaseSha), {
           cwd: worktree.path,
         }),
     );
     const localBaseOwnsSource = await step(
       async () =>
-        await runCommand(["git", "merge-base", "--is-ancestor", baseCommit, sourceHeadCommit], {
+        await runCommand(githubPublicationBaseLineageArgs(baseCommit, sourceHeadCommit), {
           cwd: worktree.path,
         }),
     );
@@ -561,6 +581,9 @@ export async function executeGitHubPublication(params: {
       });
       headCommit = commit;
     }
+    await step(async () => {
+      await requireCommand(githubPublicationResetIndexArgs(headCommit), { cwd: worktree.path });
+    });
     row = params.updatePublishingFacts({
       row,
       repository,
@@ -583,33 +606,13 @@ export async function executeGitHubPublication(params: {
       "git",
       "-c",
       `core.hooksPath=${os.devNull}`,
-      "-c",
-      "credential.helper=",
-      "-c",
-      "credential.helper=!gh auth git-credential",
-      "push",
-      "--porcelain",
-      "--no-follow-tags",
-      "--recurse-submodules=no",
-      "--",
-      httpsRemote,
-      `${headCommit}:refs/heads/${branch}`,
+      ...githubPublicationPushArgs(httpsRemote, headCommit, branch).slice(1),
     ];
     const observeRemoteHead = async () => {
-      const observed = await requireCommand(
-        [
-          "git",
-          "-c",
-          "credential.helper=",
-          "-c",
-          "credential.helper=!gh auth git-credential",
-          "ls-remote",
-          "--refs",
-          httpsRemote,
-          `refs/heads/${branch}`,
-        ],
-        { cwd: worktree.path, env: transportEnv },
-      );
+      const observed = await requireCommand(githubPublicationRemoteHeadArgs(httpsRemote, branch), {
+        cwd: worktree.path,
+        env: transportEnv,
+      });
       return observed.split(/\s+/u)[0] ?? "";
     };
     let remoteHead = await step(observeRemoteHead);

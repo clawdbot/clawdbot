@@ -530,6 +530,13 @@ describe("Gateway GitHub publication", () => {
       expect.objectContaining({ status: "published" }),
     ]);
     expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
+    const fetchIndex = commands.findIndex((argv) => argv.includes("fetch"));
+    const commitIndex = commands.findIndex((argv) => argv.includes("commit-tree"));
+    const updateRefIndex = commands.findIndex((argv) => argv.includes("update-ref"));
+    const resetIndex = commands.findIndex((argv) => argv.includes("reset"));
+    expect(fetchIndex).toBeGreaterThanOrEqual(0);
+    expect(commitIndex).toBeGreaterThan(fetchIndex);
+    expect(resetIndex).toBeGreaterThan(updateRefIndex);
     expect(commands.filter((argv) => argv.includes("push"))).toHaveLength(1);
     expect(commands.filter((argv) => argv[0] === "gh" && argv.includes("POST"))).toHaveLength(1);
   });
