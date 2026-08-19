@@ -47,6 +47,10 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
   }
 }
 
+function linkNodeExecutable(bin: string) {
+  symlinkSync(process.execPath, join(bin, "node"));
+}
+
 describe("install.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -981,6 +985,7 @@ NODE
           },
         );
       expect(run("invalid", "0").status).not.toBe(0);
+      expect(run("npm 12.0.0 warning", "0").status).not.toBe(0);
       expect(existsSync(args)).toBe(false);
       expect(run("12.0.0", "1").status).not.toBe(0);
     } finally {
@@ -1877,6 +1882,7 @@ EOF
       const calls = join(tmp, "calls");
       const npmRoot = join(tmp, "lib", "node_modules");
       mkdirSync(bin, { recursive: true });
+      linkNodeExecutable(bin);
       writeNpmInstallRetryFixture(join(bin, "npm"));
 
       try {
@@ -1926,6 +1932,7 @@ EOF
     const calls = join(tmp, "calls");
     const npmRoot = join(tmp, "lib", "node_modules");
     mkdirSync(bin, { recursive: true });
+    linkNodeExecutable(bin);
     writeNpmInstallRetryFixture(join(bin, "npm"));
 
     try {
@@ -1969,6 +1976,7 @@ EOF
     const home = join(tmp, "home");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(bin, { recursive: true });
+    linkNodeExecutable(bin);
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, ".npmrc"), "min-release-age=7\n");
     writeNpmFreshnessConflictFixture(join(bin, "npm"), argsLog);
@@ -2004,6 +2012,7 @@ EOF
     const project = join(tmp, "project");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(bin, { recursive: true });
+    linkNodeExecutable(bin);
     mkdirSync(home, { recursive: true });
     mkdirSync(project, { recursive: true });
     writeFileSync(join(home, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n");
