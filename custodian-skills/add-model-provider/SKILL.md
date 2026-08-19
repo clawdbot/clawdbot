@@ -16,7 +16,10 @@ openclaw config get models --json          # "Config path not found" is normal b
 openclaw models list --agent <agentId>     # --agent is required in multi-agent rosters
 openclaw models auth list --agent <agentId>
 openclaw config schema --json | jq '.properties.models'   # confirm exact provider paths before writing
+openclaw plugins list   # OpenAI routes need the codex harness plugin; enable/install NOW, not mid-proof
 ```
+
+If the harness plugin for the target provider is missing or disabled, remediate here (`openclaw plugins enable codex` or `openclaw plugins install @openclaw/codex`) so the Prove step does not stall on it later; plugin enable is picked up by gateway hot-reload.
 
 Decide the auth contract: API-key providers take a SecretRef on `models.providers.<id>.apiKey`; subscription/OAuth providers (ChatGPT/Codex, Claude subscriptions) use `openclaw models auth login --provider <id>` instead and must not be given an API key path.
 
