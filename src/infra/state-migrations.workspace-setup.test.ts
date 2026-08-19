@@ -886,6 +886,52 @@ describe("legacy workspace Doctor migration", () => {
     });
   });
 
+  it("resumes a recreated generation from its interrupted claim", async () => {
+    const context = setup();
+    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
+    const setupPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
+    await fsp.writeFile(
+      setupPath,
+      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-15T10:00:00.000Z" }),
+      "utf8",
+    );
+    expect((await migrate(context)).warnings).toEqual([]);
+
+    const recreated = JSON.stringify({
+      version: 1,
+      setupCompletedAt: "2026-07-16T10:00:00.000Z",
+    });
+    await fsp.writeFile(setupPath, recreated, "utf8");
+    const claimPath = `${setupPath}.doctor-importing`;
+    await fsp.rename(setupPath, claimPath);
+
+    const result = await migrate(context);
+
+    expect(result.warnings).toEqual([]);
+    expect(fs.existsSync(claimPath)).toBe(false);
+    const db = openOpenClawStateDatabase({ env: context.env }).db;
+    expect(
+      db
+        .prepare(
+          "SELECT bootstrap_seeded_at, setup_completed_at FROM workspace_setup_state WHERE workspace_key = ?",
+        )
+        .get(identity.workspaceKey),
+    ).toEqual({
+      bootstrap_seeded_at: "2026-07-15T10:00:00.000Z",
+      setup_completed_at: "2026-07-16T10:00:00.000Z",
+    });
+    expect(
+      db
+        .prepare(
+          "SELECT source_sha256, removed_source FROM migration_sources WHERE source_path = ?",
+        )
+        .get(setupPath),
+    ).toEqual({
+      source_sha256: createHash("sha256").update(recreated).digest("hex"),
+      removed_source: 1,
+    });
+  });
+
   it("cleans receipt-covered superseded setup markers after an interrupted delete", async () => {
     const context = setup();
     const rootPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
