@@ -257,9 +257,20 @@ function isValidLineLocation(location: LineLocation): boolean {
   return location.title.trim().length > 0 && location.address.trim().length > 0;
 }
 
-export function createLocationMessage(location: LineLocation): LocationMessage | null {
+// A pin LINE will not render still carries the values the sender wrote, and the
+// coordinates are always present, so the location degrades to the text it was
+// made of instead of vanishing from the reply.
+function locationTextFallback(location: LineLocation): TextMessage {
+  const authored = [location.title.trim(), location.address.trim()].filter(Boolean);
+  return {
+    type: "text",
+    text: [...authored, `${location.latitude}, ${location.longitude}`].join("\n"),
+  };
+}
+
+export function createLocationMessage(location: LineLocation): LocationMessage | TextMessage {
   if (!isValidLineLocation(location)) {
-    return null;
+    return locationTextFallback(location);
   }
   return {
     type: "location",
@@ -528,11 +539,7 @@ export async function pushLocationMessage(
   location: LineLocation,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  const message = createLocationMessage(location);
-  if (!message) {
-    throw new Error("LINE location title and address must be non-empty");
-  }
-  return pushLineMessages(to, [message], opts, {
+  return pushLineMessages(to, [createLocationMessage(location)], opts, {
     verboseMessage: (chatId) => `line: pushed location to ${chatId}`,
   });
 }

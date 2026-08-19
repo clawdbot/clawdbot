@@ -220,7 +220,7 @@ describe("line outbound sendPayload", () => {
   it.each([
     { name: "title", title: " ", address: "1 Main Street" },
     { name: "address", title: "Meet here", address: " " },
-  ])("skips a direct location with a blank $name while delivering text", async (location) => {
+  ])("delivers a blank-$name location instead of dropping it", async (location) => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
 
@@ -239,7 +239,13 @@ describe("line outbound sendPayload", () => {
       cfg: { channels: { line: {} } } as OpenClawConfig,
     });
 
-    expect(mocks.pushLocationMessage).not.toHaveBeenCalled();
+    // The pin LINE will not render still reaches the chat as the text it was
+    // made of; the builder owns that degradation, so delivery must not skip it.
+    expect(mocks.pushLocationMessage).toHaveBeenCalledWith(
+      "line:user:U123",
+      { ...location, latitude: 35.6895, longitude: 139.6917 },
+      expect.any(Object),
+    );
     expect(mocks.pushMessageLine).toHaveBeenCalledWith(
       "line:user:U123",
       "Meet me there.",
@@ -247,7 +253,7 @@ describe("line outbound sendPayload", () => {
     );
   });
 
-  it("omits an invalid direct location from the quick-reply inline batch", async () => {
+  it("keeps a degraded location in the quick-reply inline batch", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
 
@@ -272,9 +278,18 @@ describe("line outbound sendPayload", () => {
       cfg: { channels: { line: {} } } as OpenClawConfig,
     });
 
-    expect(mocks.pushLocationMessage).not.toHaveBeenCalled();
-    expect(mocks.pushMessagesLine).not.toHaveBeenCalled();
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:U123",
+      [
+        expect.objectContaining({
+          type: "text",
+          text: "Meet here" + String.fromCharCode(10) + "35.6895, 139.6917",
+          quickReply: expect.any(Object),
+        }),
+      ],
+      expect.any(Object),
+    );
+    expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalledWith(
       "line:user:U123",
       expect.stringContaining("Continue"),
       ["Continue"],
