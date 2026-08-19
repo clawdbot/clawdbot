@@ -1822,12 +1822,37 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(toolNameList(allowed)).toContain("apply_patch");
 
+    const sessionHandoffPolicy = {
+      version: 1 as const,
+      allow: [] as string[],
+      deny: [] as string[],
+    };
     const denied = createOpenClawCodingTools({
       config: allowModelsConfig,
       modelProvider: "openai",
       modelId: "gpt-5.4-mini",
+      sessionsSendToolPolicyRef: sessionHandoffPolicy,
     });
     expect(toolNameList(denied)).not.toContain("apply_patch");
+    expect(sessionHandoffPolicy.allow).toContain("write");
+    expect(sessionHandoffPolicy.allow).not.toContain("apply_patch");
+
+    const handoffTarget = createOpenClawCodingTools({
+      config: allowModelsConfig,
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      runtimeToolAllowlist: sessionHandoffPolicy.allow,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:source",
+        sourceTool: "sessions_send",
+      },
+      trustedSessionHandoff: {
+        inheritedToolPolicy: sessionHandoffPolicy,
+        requester: {},
+      },
+    });
+    expect(toolNameList(handoffTarget)).not.toContain("apply_patch");
 
     const oauthTools = createOpenClawCodingTools({
       config: testConfig,

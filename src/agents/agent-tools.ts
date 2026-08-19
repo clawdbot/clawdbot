@@ -948,10 +948,20 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
+  const sessionHandoffToolAllowlist = options?.trustedSessionHandoff
+    ? new Set(options.trustedSessionHandoff.inheritedToolPolicy.allow.map(normalizeToolPolicyName))
+    : undefined;
+  // Handoff allow entries are the sender's exact executable names. Filter before
+  // ordinary policy aliases can widen them (for example, write -> apply_patch).
+  const toolsForSessionHandoff = sessionHandoffToolAllowlist
+    ? toolsForModelProvider.filter((tool) =>
+        sessionHandoffToolAllowlist.has(normalizeToolPolicyName(tool.name)),
+      )
+    : toolsForModelProvider;
   // Sender identity is primarily command/action auth, with one Gateway parity exception:
   // explicit non-owner callers never receive owner-only control-plane core tools.
   const subagentFiltered = applyToolPolicyPipeline({
-    tools: toolsForModelProvider,
+    tools: toolsForSessionHandoff,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: logWarn,
     steps: buildConversationToolPolicyPipelineSteps({
