@@ -362,7 +362,10 @@ When the tester says `finish validation`:
    the source of observed results; do not report the other table rows as evidence.
 4. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
    notes, setup details, and cleanup details from the comment.
-5. Post the comment once with `gh` and show the tester its URL.
+5. Read and apply the [structured report contract](references/structured-report.md).
+   Append its hidden v1 payload to the visible Markdown, validate it, then create
+   or update this GitHub user's one report comment for the release. Show the
+   tester the resulting comment URL.
 6. Give the tester this concise copy-ready Discord summary, populated only from
    the same release-facing worksheet evidence and final comment:
 
