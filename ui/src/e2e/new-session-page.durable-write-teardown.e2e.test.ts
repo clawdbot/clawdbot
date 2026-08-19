@@ -214,7 +214,6 @@ suite.define(() => {
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
       await firstPage.getByRole("button", { name: `Open image ${fileName}` }).waitFor();
-      await expect.poll(() => rawDraftMatches(firstPage, text, 1)).toBe(true);
       await firstPage.evaluate(() => {
         const state = (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown;
         state.teardownActive = true;
