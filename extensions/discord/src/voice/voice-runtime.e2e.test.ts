@@ -854,15 +854,13 @@ defineDiscordVoiceTests(
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
       canonicalizeRealtimeVoiceProviderIdMock.mockReturnValueOnce("xai");
-      assertSecretOwnerAvailableMock.mockImplementation(
-        (_ownerKind: string, ownerId: string) => {
-          if (ownerId === "discord:voice:realtime:work:xai") {
-            throw new Error(
-              "Secret owner capability:discord:voice:realtime:work:xai is configured but unavailable (secret reference was not found).",
-            );
-          }
-        },
-      );
+      assertSecretOwnerAvailableMock.mockImplementation((_ownerKind: string, ownerId: string) => {
+        if (ownerId === "discord:voice:realtime:work:xai") {
+          throw new Error(
+            "Secret owner capability:discord:voice:realtime:work:xai is configured but unavailable (secret reference was not found).",
+          );
+        }
+      });
       const manager = createManager(
         {
           voice: {

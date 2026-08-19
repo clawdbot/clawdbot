@@ -193,8 +193,8 @@ const {
     updateVoiceStateMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
     assertSecretOwnerAvailableMock: vi.fn(),
-    canonicalizeRealtimeVoiceProviderIdMock: vi.fn(
-      (providerId: string | undefined) => providerId?.trim().toLowerCase(),
+    canonicalizeRealtimeVoiceProviderIdMock: vi.fn((providerId: string | undefined) =>
+      providerId?.trim().toLowerCase(),
     ),
   };
 });
