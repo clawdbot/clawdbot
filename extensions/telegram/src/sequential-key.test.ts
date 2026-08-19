@@ -1,7 +1,8 @@
 // Telegram tests cover sequential key plugin behavior.
 import type { Chat, Message } from "grammy/types";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
+import { resetTelegramForumFlagCacheForTest, resolveTelegramForumFlag } from "./bot/helpers.js";
 import { buildTelegramQuestionCallbackData } from "./question-callback-data.js";
 import { getTelegramSequentialConstraints, getTelegramSequentialKey } from "./sequential-key.js";
 
@@ -412,6 +413,42 @@ describe("getTelegramSequentialKey", () => {
 
   it("keeps malformed message updates on the unknown lane", () => {
     expect(getTelegramSequentialKey({ message: {} as Message })).toBe("telegram:unknown");
+  });
+
+  describe("forum flag cache fallback", () => {
+    afterEach(() => {
+      resetTelegramForumFlagCacheForTest();
+    });
+
+    it("uses cached forum flag to assign topic:1 lane when payload lacks is_forum and is_topic_message", async () => {
+      // Prime the cache the way bot-message-context does: resolveTelegramForumFlag
+      // calls cacheTelegramForumFlag internally when the hint is available.
+      await resolveTelegramForumFlag({
+        chatId: -9001,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: true,
+      });
+
+      // General topic message: no is_forum, no is_topic_message, no message_thread_id.
+      // Without the cache, getTelegramSequentialKey returns the base lane.
+      // With the cache primed, it must return topic:1.
+      const generalTopicCtx = {
+        message: mockMessage({
+          chat: mockChat({ id: -9001, type: "supergroup" }),
+        }),
+      };
+      expect(getTelegramSequentialKey(generalTopicCtx)).toBe("telegram:-9001:topic:1");
+    });
+
+    it("falls back to base lane when cache is empty and payload lacks is_forum hint", () => {
+      const ctx = {
+        message: mockMessage({
+          chat: mockChat({ id: -9002, type: "supergroup" }),
+        }),
+      };
+      expect(getTelegramSequentialKey(ctx)).toBe("telegram:-9002");
+    });
   });
 });
 
