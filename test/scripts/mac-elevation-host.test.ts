@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 // Mac Elevation Host tests protect the unattended launchd and artifact contracts.
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   lstatSync,
@@ -26,6 +27,81 @@ function writeExecutable(filePath: string, contents: string): void {
   chmodSync(filePath, 0o755);
 }
 
+function commandFixturesPath(binDir: string): string {
+  return path.join(binDir, "command-fixtures.bash");
+}
+
+function writeCommandFixture(binDir: string, command: string, contents: string): void {
+  writeExecutable(path.join(binDir, command), contents);
+  appendFileSync(commandFixturesPath(binDir), [`${command}() (`, contents, ")", ""].join("\n"));
+}
+
+function writeDiskutilFixture(binDir: string): void {
+  writeCommandFixture(
+    binDir,
+    "diskutil",
+    [
+      "#!/bin/sh",
+      "set -eu",
+      'if [ "$#" -ne 3 ] || [ "$1" != "info" ] || [ "$2" != "-plist" ]; then',
+      "  printf '%s\\n' 'unexpected diskutil invocation' >&2",
+      "  exit 64",
+      "fi",
+      '[ "$3" = "/dev/openclaw-test-volume" ] || {',
+      "  printf '%s\\n' 'unexpected diskutil device' >&2",
+      "  exit 64",
+      "}",
+      "printf '%s\\n' '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' '<plist version=\"1.0\"><dict><key>VolumeUUID</key><string>00000000-0000-4000-8000-000000000001</string></dict></plist>'",
+      "",
+    ].join("\n"),
+  );
+}
+
+function writeDfFixture(binDir: string): void {
+  writeCommandFixture(
+    binDir,
+    "df",
+    [
+      "#!/bin/sh",
+      "set -eu",
+      '[ "$#" -eq 2 ] && [ "$1" = "-P" ] || {',
+      "  printf '%s\\n' 'unexpected df invocation' >&2",
+      "  exit 64",
+      "}",
+      'if [ "${TEST_FAIL_UNSAFE_ENTRY_IDENTITY:-0}" = "1" ] && [ "$2" = "${TEST_INSTALLED_APP_PATH:-}" ]; then',
+      "  exit 7",
+      "fi",
+      'case "$2" in',
+      '  "$TEST_FIXTURE_ROOT"|"$TEST_FIXTURE_ROOT"/*) ;;',
+      "  *) printf '%s\\n' 'unexpected df target' >&2; exit 64 ;;",
+      "esac",
+      "printf '%s\\n' 'Filesystem 512-blocks Used Available Capacity Mounted on'",
+      "printf '%s %s\\n' '/dev/openclaw-test-volume 1 1 1 1%' \"$TEST_FIXTURE_ROOT\"",
+      "",
+    ].join("\n"),
+  );
+}
+
+function writeShasumFixture(binDir: string): void {
+  writeCommandFixture(
+    binDir,
+    "shasum",
+    [
+      "#!/bin/sh",
+      "set -eu",
+      '[ "$#" -ge 2 ] && [ "$1" = "-a" ] && [ "$2" = "256" ] || {',
+      "  printf '%s\\n' 'unexpected shasum invocation' >&2",
+      "  exit 64",
+      "}",
+      "shift 2",
+      "[ \"$#\" -le 1 ] || { printf '%s\\n' 'unexpected shasum target' >&2; exit 64; }",
+      "[ \"$#\" -eq 0 ] || [ -f \"$1\" ] || { printf '%s\\n' 'missing shasum target' >&2; exit 64; }",
+      'exec /sbin/sha256sum "$@"',
+      "",
+    ].join("\n"),
+  );
+}
+
 function sha256(contents: string | Buffer): string {
   return createHash("sha256").update(contents).digest("hex");
 }
@@ -35,7 +111,7 @@ function fileIdentity(filePath: string): string {
   return `${stats.dev}:${stats.ino}`;
 }
 
-function durableFileIdentity(filePath: string): string {
+function durableFileIdentity(filePath: string, env: NodeJS.ProcessEnv): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("path_identity() {");
   const end = script.indexOf("read_optional_receipt_xattr()", start);
@@ -47,7 +123,7 @@ function durableFileIdentity(filePath: string): string {
       "bash",
       filePath,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env },
   );
   expect(result.status, result.stderr).toBe(0);
   return result.stdout.trim();
@@ -178,8 +254,9 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
     "utf8",
   );
 
-  writeExecutable(
-    path.join(binDir, "codesign"),
+  writeCommandFixture(
+    binDir,
+    "codesign",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -216,8 +293,9 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "plutil"),
+  writeCommandFixture(
+    binDir,
+    "plutil",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -235,16 +313,17 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
       "",
     ].join("\n"),
   );
-  writeExecutable(path.join(binDir, "lipo"), "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
-  writeExecutable(path.join(binDir, "pgrep"), "#!/bin/sh\nexit 1\n");
-  writeExecutable(path.join(binDir, "spctl"), "#!/bin/sh\nexit 0\n");
-  writeExecutable(path.join(binDir, "xcrun"), "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(binDir, "lipo", "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
+  writeCommandFixture(binDir, "pgrep", "#!/bin/sh\nexit 1\n");
+  writeCommandFixture(binDir, "spctl", "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(binDir, "xcrun", "#!/bin/sh\nexit 0\n");
   writeExecutable(
     path.join(binDir, "openclaw"),
     '#!/bin/sh\nprintf \'%s\\n\' \'{"nodes":[{"nodeId":"fixture-node","connected":true,"connectedAtMs":20,"clientId":"openclaw-macos","clientMode":"node","uiVersion":"4.2.0","caps":["computer"],"commands":["screen.snapshot","computer.act"],"computerUse":{"version":2}}]}\'\n',
   );
-  writeExecutable(
-    path.join(binDir, "peekaboo"),
+  writeCommandFixture(
+    binDir,
+    "peekaboo",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -267,6 +346,7 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
     stateDir,
     env: {
       ...process.env,
+      BASH_ENV: commandFixturesPath(binDir),
       HOME: tempRoot,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       TEST_APP_PATH: appPath,
@@ -290,6 +370,8 @@ function createMigrationPlanHarness(launchState: "absent" | "error" | "loaded" =
   mkdirSync(launchAgentsDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(path.join(stateDir, "state"), { recursive: true });
+  writeDiskutilFixture(binDir);
+  writeDfFixture(binDir);
   writeFileSync(configPath, "{}\n", "utf8");
   writeFileSync(path.join(stateDir, "state", "openclaw.sqlite"), "fixture", "utf8");
   writeFileSync(
@@ -311,8 +393,9 @@ function createMigrationPlanHarness(launchState: "absent" | "error" | "loaded" =
     ].join("\n"),
     "utf8",
   );
-  writeExecutable(
-    path.join(binDir, "launchctl"),
+  writeCommandFixture(
+    binDir,
+    "launchctl",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -326,7 +409,7 @@ function createMigrationPlanHarness(launchState: "absent" | "error" | "loaded" =
     ].join("\n"),
   );
   writeExecutable(path.join(binDir, "defaults"), "#!/bin/sh\nprintf '%s\\n' primary\n");
-  writeExecutable(path.join(binDir, "sqlite3"), "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
+  writeCommandFixture(binDir, "sqlite3", "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
   writeExecutable(
     path.join(binDir, "openclaw"),
     [
@@ -352,8 +435,10 @@ function createMigrationPlanHarness(launchState: "absent" | "error" | "loaded" =
     stateDir,
     env: {
       ...process.env,
+      BASH_ENV: commandFixturesPath(binDir),
       HOME: tempRoot,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      TEST_FIXTURE_ROOT: tempRoot,
       TEST_LAUNCH_STATE: launchState,
     },
   };
@@ -527,13 +612,15 @@ function runMigrationReceiptBindingVerifier(
 function addRunningAppFixture(harness: ReturnType<typeof createMigrationPlanHarness>) {
   const binDir = path.join(harness.env.HOME, "bin");
   const appBinary = `${harness.appPath}/Contents/MacOS/OpenClaw`;
-  writeExecutable(path.join(binDir, "pgrep"), "#!/bin/sh\nprintf '%s\\n' 4242\n");
-  writeExecutable(
-    path.join(binDir, "lsof"),
+  writeCommandFixture(binDir, "pgrep", "#!/bin/sh\nprintf '%s\\n' 4242\n");
+  writeCommandFixture(
+    binDir,
+    "lsof",
     `#!/bin/sh\nprintf '%s\\n' p4242 n${JSON.stringify(appBinary)}\n`,
   );
-  writeExecutable(
-    path.join(binDir, "ps"),
+  writeCommandFixture(
+    binDir,
+    "ps",
     `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(`${appBinary} --attach-only --background-only`)}\n`,
   );
 }
@@ -549,10 +636,12 @@ function createArtifactVerificationHarness() {
   const peekabooCommit = "b".repeat(40);
   const entitlements = "<plist><dict/></plist>\n";
   mkdirSync(binDir, { recursive: true });
+  writeShasumFixture(binDir);
   writeFileSync(archivePath, "not-a-real-zip-but-deterministic", "utf8");
   writeExecutable(installerPath, readFileSync(scriptPath, "utf8"));
-  writeExecutable(
-    path.join(binDir, "ditto"),
+  writeCommandFixture(
+    binDir,
+    "ditto",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -655,8 +744,9 @@ function createArtifactVerificationHarness() {
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "codesign"),
+  writeCommandFixture(
+    binDir,
+    "codesign",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -705,13 +795,24 @@ function createArtifactVerificationHarness() {
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "file"),
-    "#!/bin/sh\nprintf '%s\\n' \"$1: Mach-O universal binary\"\n",
+  writeCommandFixture(
+    binDir,
+    "file",
+    [
+      "#!/bin/sh",
+      "set -eu",
+      '[ "$#" -eq 1 ] || exit 64',
+      'case "$1" in',
+      "  */Contents/MacOS/OpenClaw|*/Contents/MacOS/openclaw-mlx-tts)",
+      "    printf '%s\\n' \"$1: Mach-O universal binary\" ;;",
+      "  *) printf '%s\\n' \"$1: data\" ;;",
+      "esac",
+      "",
+    ].join("\n"),
   );
-  writeExecutable(path.join(binDir, "lipo"), "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
-  writeExecutable(path.join(binDir, "spctl"), "#!/bin/sh\nexit 0\n");
-  writeExecutable(path.join(binDir, "xcrun"), "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(binDir, "lipo", "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
+  writeCommandFixture(binDir, "spctl", "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(binDir, "xcrun", "#!/bin/sh\nexit 0\n");
   const receipt = {
     schemaVersion: 1,
     kind: "openclaw-elevation-artifact",
@@ -743,9 +844,11 @@ function createArtifactVerificationHarness() {
     sourceCommit,
     env: {
       ...process.env,
+      BASH_ENV: commandFixturesPath(binDir),
       HOME: tempRoot,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       TEST_DITTO_MARKER: dittoMarker,
+      TEST_FIXTURE_ROOT: tempRoot,
       TMPDIR: tempRoot,
     },
   };
@@ -808,8 +911,24 @@ function createInstallRollbackHarness(
   } = {},
 ) {
   const artifact = createArtifactVerificationHarness();
+  // Signal regressions depend on a real child-to-installer process boundary so Bash can
+  // finish the child's wait and EXIT cleanup before replaying the signal.
+  const exercisesProcessSignalBoundary = Boolean(
+    options.hupDuringCustody ||
+    options.killDuringMigrationRestoreBootstrapOnce ||
+    options.killAfterMigrationRestoreBootstrapOnce ||
+    options.killAfterInitialMigrationCustody ||
+    options.killAfterPendingReceipt ||
+    options.killAfterRollbackAppCustody ||
+    options.signalDuringCustody ||
+    options.signalDuringRecoveryAppMove ||
+    options.signalDuringReceiptCommit ||
+    options.signalBeforeRollbackAppMove,
+  );
   const tempRoot = artifact.env.HOME;
   const binDir = path.join(tempRoot, "bin");
+  writeDiskutilFixture(binDir);
+  writeDfFixture(binDir);
   const stateDir = path.join(tempRoot, "node-state");
   const configPath = path.join(stateDir, "openclaw.json");
   const appPath = path.join(tempRoot, "InstalledOpenClaw.app");
@@ -872,19 +991,9 @@ function createInstallRollbackHarness(
   }
   writeFileSync(nodeGenerationFile, "0\n", "utf8");
   writeExecutable(path.join(binDir, "defaults"), "#!/bin/sh\nprintf '%s\\n' primary\n");
-  writeExecutable(
-    path.join(binDir, "df"),
-    [
-      "#!/usr/bin/env bash",
-      'if [[ "${TEST_FAIL_UNSAFE_ENTRY_IDENTITY:-0}" == "1" && "${!#}" == "${TEST_INSTALLED_APP_PATH:-}" ]]; then',
-      "  exit 7",
-      "fi",
-      'exec /bin/df "$@"',
-      "",
-    ].join("\n"),
-  );
-  writeExecutable(
-    path.join(binDir, "mktemp"),
+  writeCommandFixture(
+    binDir,
+    "mktemp",
     [
       "#!/usr/bin/env bash",
       'if [[ "${TEST_FAIL_UNSAFE_ENTRY_MKTEMP:-0}" == "1" && "$*" == *"elevation-host.quarantined-app."* ]]; then',
@@ -895,8 +1004,9 @@ function createInstallRollbackHarness(
     ].join("\n"),
   );
   if (options.replaceAuthenticatedRenameHelperBeforeUse) {
-    writeExecutable(
-      path.join(binDir, "shasum"),
+    writeCommandFixture(
+      binDir,
+      "shasum",
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
@@ -914,9 +1024,10 @@ function createInstallRollbackHarness(
       ].join("\n"),
     );
   }
-  writeExecutable(path.join(binDir, "sqlite3"), "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
-  writeExecutable(
-    path.join(binDir, "pgrep"),
+  writeCommandFixture(binDir, "sqlite3", "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
+  writeCommandFixture(
+    binDir,
+    "pgrep",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -951,9 +1062,10 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(path.join(binDir, "sleep"), "#!/bin/sh\nexit 0\n");
-  writeExecutable(
-    path.join(binDir, "mv"),
+  writeCommandFixture(binDir, "sleep", "#!/bin/sh\nexit 0\n");
+  writeCommandFixture(
+    binDir,
+    "mv",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -985,8 +1097,9 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "cp"),
+  writeCommandFixture(
+    binDir,
+    "cp",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -1023,8 +1136,9 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "launchctl"),
+  writeCommandFixture(
+    binDir,
+    "launchctl",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -1114,8 +1228,9 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "peekaboo"),
+  writeCommandFixture(
+    binDir,
+    "peekaboo",
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -1134,8 +1249,9 @@ function createInstallRollbackHarness(
       "",
     ].join("\n"),
   );
-  writeExecutable(
-    path.join(binDir, "xattr"),
+  writeCommandFixture(
+    binDir,
+    "xattr",
     [
       "#!/bin/sh",
       'if [ "${TEST_FAIL_RECOVERY_XATTR_READ:-0}" = "1" ] && [ "${1:-}" = "-p" ]; then',
@@ -1158,6 +1274,7 @@ function createInstallRollbackHarness(
     stateDir,
     env: {
       ...artifact.env,
+      BASH_ENV: exercisesProcessSignalBoundary ? "" : artifact.env.BASH_ENV,
       TEST_DANGLING_ROLLBACK_DURING_MOVE: options.danglingRollbackDuringMove ? "1" : "0",
       TEST_CORRUPT_ROLLBACK_PLIST_BACKUP_ON_SYNC: options.corruptRollbackPlistBackupOnSync
         ? "1"
@@ -1172,6 +1289,7 @@ function createInstallRollbackHarness(
       TEST_FAIL_UNSAFE_ENTRY_MKTEMP: options.failUnsafeEntryMktemp ? "1" : "0",
       TEST_FINAL_CDHASH_MISMATCH: options.finalCDHashMismatch ? "1" : "0",
       TEST_FINAL_SIGNATURE_INVALID: options.finalSignatureInvalid ? "1" : "0",
+      TEST_FIXTURE_ROOT: tempRoot,
       TEST_INSTALLED_APP_PATH: appPath,
       TEST_ELEVATION_PLIST: elevationPlist,
       TEST_STATE_DIR: stateDir,
@@ -3619,7 +3737,7 @@ describe("mac elevation host command contract", () => {
         ["-p", "com.openclaw.elevation.recovery-migration-identity", receiptPath],
         { encoding: "utf8" },
       ).stdout.trim();
-      expect(recordedIdentity).toBe(durableFileIdentity(harness.sourcePlist));
+      expect(recordedIdentity).toBe(durableFileIdentity(harness.sourcePlist, harness.env));
 
       const resumed = runInstaller(
         harness.installerPath,
