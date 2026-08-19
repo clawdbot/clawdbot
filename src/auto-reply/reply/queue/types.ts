@@ -23,6 +23,7 @@ import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { ExplicitSkillSelection, SkillSnapshot } from "../../../skills/types.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../../skills/workshop/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
   SourceReplyDeliveryMode,
@@ -231,6 +232,8 @@ export type FollowupRun = {
     allowEmptyAssistantReplyAsSilent?: boolean;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
+    /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
+    skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   };
 };
 

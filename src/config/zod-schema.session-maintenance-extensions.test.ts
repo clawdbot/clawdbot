@@ -19,6 +19,27 @@ describe("SessionSchema maintenance extensions", () => {
     expect(SessionSchema.safeParse({ maintenance: { preserveRecent: false } }).success).toBe(true);
   });
 
+  it.each([false, 0] as const)("accepts disabling dashboard archiving with %s", (value) => {
+    expect(SessionSchema.safeParse({ maintenance: { archiveDashboardAfter: value } }).success).toBe(
+      true,
+    );
+  });
+
+  it("accepts a positive dashboard archive duration", () => {
+    expect(SessionSchema.safeParse({ maintenance: { archiveDashboardAfter: "7d" } }).success).toBe(
+      true,
+    );
+  });
+
+  it.each(["0", "0d", -1, "never"])(
+    "rejects invalid dashboard archive duration: %s",
+    (archiveDashboardAfter) => {
+      const result = SessionSchema.safeParse({ maintenance: { archiveDashboardAfter } });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toContain("archiveDashboardAfter");
+    },
+  );
+
   it("rejects an invalid recent-session preservation duration", () => {
     const result = SessionSchema.safeParse({ maintenance: { preserveRecent: "forever" } });
     expect(result.success).toBe(false);

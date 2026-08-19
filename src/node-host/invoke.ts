@@ -5,7 +5,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { mcpContentBlockToAgentContent } from "../agents/mcp-content.js";
 import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
@@ -14,6 +13,7 @@ import {
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
   resolveAllowAlwaysPatternCoverage,
+  resolveExecApprovalsFromFile,
   updateExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -43,7 +43,6 @@ import {
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
 import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 import {
@@ -52,6 +51,7 @@ import {
 } from "./invoke-agent-cli-claude-handler.js";
 import { invokeDeviceApps } from "./invoke-device-apps.js";
 import { invokeNodeFileCommand } from "./invoke-file-commands.js";
+import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -75,12 +75,6 @@ import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-h
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const OUTPUT_CAP = 200_000;
-
-const MCP_TEXT_CONTENT_MAX_BYTES = 1024 * 1024;
-const MCP_TEXT_TRUNCATION_MARKER = "\n[truncated: MCP text content exceeded 1 MB]";
-
-const MCP_INVOKE_PAYLOAD_MAX_BYTES = 20 * 1024 * 1024;
-const MCP_PAYLOAD_TRUNCATION_MARKER = "[truncated: MCP result exceeded 20 MB]";
 
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
@@ -674,13 +668,33 @@ async function dispatchInvoke(
     return;
   }
   if (command === "system.execApprovals.get") {
+    let includeResolvedDefaults = false;
+    try {
+      if (frame.paramsJSON != null) {
+        const params = decodeParams<unknown>(frame.paramsJSON);
+        if (
+          !isRecord(params) ||
+          (params.includeResolvedDefaults !== undefined &&
+            typeof params.includeResolvedDefaults !== "boolean")
+        ) {
+          throw new Error("INVALID_REQUEST: includeResolvedDefaults must be boolean");
+        }
+        includeResolvedDefaults = params.includeResolvedDefaults === true;
+      }
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+      return;
+    }
     try {
       const snapshot = await ensureExecApprovalsSnapshot();
-      const payload: ExecApprovalsSnapshot = {
+      const payload = {
         path: snapshot.path,
         exists: snapshot.exists,
         hash: snapshot.hash,
         file: redactExecApprovals(snapshot.file),
+        ...(includeResolvedDefaults
+          ? { resolvedDefaults: resolveExecApprovalsFromFile({ file: snapshot.file }).defaults }
+          : {}),
       };
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
@@ -953,106 +967,6 @@ function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
   };
 }
 
-type McpInvokeContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
-
-function normalizeMcpContentBlock(block: unknown): McpInvokeContentBlock | null {
-  return isRecord(block) ? mcpContentBlockToAgentContent(block) : null;
-}
-
-function serializedJsonBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value));
-}
-
-/** Keeps MCP text/image content while bounding text sent through node.invoke. */
-function boundMcpToolResultPayload(result: {
-  content: readonly unknown[];
-  structuredContent?: Record<string, unknown>;
-  isError?: boolean;
-}): {
-  content: McpInvokeContentBlock[];
-  structuredContent?: Record<string, unknown>;
-  isError?: true;
-} {
-  const normalizedBlocks = result.content
-    .map(normalizeMcpContentBlock)
-    .filter((block): block is McpInvokeContentBlock => block !== null);
-  const totalTextBytes = normalizedBlocks.reduce<number>(
-    (total, block) => total + (block.type === "text" ? Buffer.byteLength(block.text) : 0),
-    0,
-  );
-  let remainingTextBytes =
-    totalTextBytes > MCP_TEXT_CONTENT_MAX_BYTES
-      ? MCP_TEXT_CONTENT_MAX_BYTES - Buffer.byteLength(MCP_TEXT_TRUNCATION_MARKER)
-      : MCP_TEXT_CONTENT_MAX_BYTES;
-  let markedTruncated = false;
-  const textBoundedContent: McpInvokeContentBlock[] = [];
-  for (const block of normalizedBlocks) {
-    if (block.type === "image") {
-      textBoundedContent.push(block);
-      continue;
-    }
-    if (totalTextBytes <= MCP_TEXT_CONTENT_MAX_BYTES) {
-      textBoundedContent.push(block);
-      continue;
-    }
-    if (markedTruncated) {
-      continue;
-    }
-    const text = truncateUtf8Prefix(block.text, remainingTextBytes);
-    remainingTextBytes -= Buffer.byteLength(text);
-    const blockWasTruncated = text.length < block.text.length;
-    if (text || blockWasTruncated) {
-      textBoundedContent.push({
-        ...block,
-        text: blockWasTruncated ? `${text}${MCP_TEXT_TRUNCATION_MARKER}` : text,
-      });
-    }
-    if (blockWasTruncated || remainingTextBytes === 0) {
-      if (!blockWasTruncated) {
-        textBoundedContent.push({ type: "text", text: MCP_TEXT_TRUNCATION_MARKER.trimStart() });
-      }
-      markedTruncated = true;
-    }
-  }
-  const payloadMarker = { type: "text" as const, text: MCP_PAYLOAD_TRUNCATION_MARKER };
-  const reservedMarkerBytes = serializedJsonBytes(payloadMarker) + 1;
-  const isError = result.isError === true;
-  let usedBytes = Buffer.byteLength(
-    JSON.stringify({ content: [], ...(isError ? { isError } : {}) }),
-  );
-  let payloadTruncated = false;
-  const content: McpInvokeContentBlock[] = [];
-  for (const block of textBoundedContent) {
-    const blockBytes = serializedJsonBytes(block) + (content.length > 0 ? 1 : 0);
-    if (usedBytes + blockBytes + reservedMarkerBytes > MCP_INVOKE_PAYLOAD_MAX_BYTES) {
-      payloadTruncated = true;
-      continue;
-    }
-    content.push(block);
-    usedBytes += blockBytes;
-  }
-  let structuredContent: Record<string, unknown> | undefined;
-  if (result.structuredContent) {
-    const structuredBytes =
-      Buffer.byteLength(',"structuredContent":') + serializedJsonBytes(result.structuredContent);
-    if (usedBytes + structuredBytes + reservedMarkerBytes <= MCP_INVOKE_PAYLOAD_MAX_BYTES) {
-      structuredContent = result.structuredContent;
-    } else {
-      payloadTruncated = true;
-    }
-  }
-  if (payloadTruncated) {
-    content.push(payloadMarker);
-  }
-  return {
-    content,
-    ...(structuredContent ? { structuredContent } : {}),
-    ...(isError ? { isError } : {}),
-  };
-}
-
 async function handleMcpToolsCall(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,
@@ -1169,8 +1083,6 @@ async function sendNodeEvent(client: NodeHostClient, event: string, payload: unk
 }
 
 const testing = {
-  MCP_TEXT_CONTENT_MAX_BYTES,
-  MCP_INVOKE_PAYLOAD_MAX_BYTES,
   clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;

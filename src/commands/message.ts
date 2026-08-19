@@ -24,6 +24,7 @@ import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "../infra/outbound/message-account-selection.js";
+import { isMessageBroadcastSuccessful } from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -49,6 +50,7 @@ function extractMessageId(payload: unknown): string | undefined {
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
   const messageId = extractMessageId(result.payload);
   return {
+    ...(result.kind === "broadcast" ? { ok: isMessageBroadcastSuccessful(result) } : {}),
     action: result.action,
     channel: result.channel,
     dryRun: result.dryRun,
@@ -158,7 +160,7 @@ export async function messageCommand(
 
   if (json) {
     writeRuntimeJson(runtime, buildMessageCliJson(result));
-    return;
+    return result;
   }
 
   const { formatMessageCliText } = await import("./message-format.js");
@@ -166,4 +168,5 @@ export async function messageCommand(
   for (const line of formatMessageCliText(result, { displayLimit })) {
     runtime.log(line);
   }
+  return result;
 }

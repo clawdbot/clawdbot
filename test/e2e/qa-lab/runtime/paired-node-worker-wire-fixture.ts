@@ -4,7 +4,6 @@ import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { expect, vi } from "vitest";
 import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -33,6 +32,20 @@ import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture
 
 const execFileAsync = promisify(execFile);
 const NODE_DISPLAY_NAME = "QA Gateway-bundle worker node";
+
+async function waitUntil<T>(read: () => Promise<T | undefined>): Promise<T> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const value = await read();
+    if (value !== undefined) {
+      return value;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+  }
+  throw new Error("timed out waiting for paired worker node state");
+}
 
 export type WireGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
 type WireGatewayEvent = { event: string; payload?: unknown };
@@ -186,48 +199,32 @@ function isPairingRequired(error: unknown): boolean {
 }
 
 async function approveNodePairing(operator: GatewayClient, nodeId: string): Promise<void> {
-  let nodeRequestId: string | undefined;
-  await vi.waitFor(
-    async () => {
-      const result = await operator.request<{
-        pending?: Array<{ requestId?: string; nodeId?: string }>;
-      }>("node.pair.list", {});
-      nodeRequestId = result.pending?.find((entry) => entry.nodeId === nodeId)?.requestId;
-      expect(nodeRequestId).toBeTruthy();
-    },
-    { timeout: 30_000, interval: 100 },
-  );
+  const nodeRequestId = await waitUntil(async () => {
+    const result = await operator.request<{
+      pending?: Array<{ requestId?: string; nodeId?: string }>;
+    }>("node.pair.list", {});
+    return result.pending?.find((entry) => entry.nodeId === nodeId)?.requestId;
+  });
   await operator.request("node.pair.approve", { requestId: nodeRequestId });
 }
 
 async function approvePairing(operator: GatewayClient, nodeId: string): Promise<void> {
-  let deviceRequestId: string | undefined;
-  await vi.waitFor(
-    async () => {
-      const result = await operator.request<{
-        pending?: Array<{ requestId?: string; deviceId?: string; role?: string }>;
-      }>("device.pair.list", {});
-      deviceRequestId = result.pending?.find(
-        (entry) => entry.deviceId === nodeId || entry.role === "node",
-      )?.requestId;
-      expect(deviceRequestId).toBeTruthy();
-    },
-    { timeout: 30_000, interval: 100 },
-  );
+  const deviceRequestId = await waitUntil(async () => {
+    const result = await operator.request<{
+      pending?: Array<{ requestId?: string; deviceId?: string; role?: string }>;
+    }>("device.pair.list", {});
+    return result.pending?.find((entry) => entry.deviceId === nodeId || entry.role === "node")
+      ?.requestId;
+  });
   await operator.request("device.pair.approve", { requestId: deviceRequestId });
   await approveNodePairing(operator, nodeId);
 }
 
 async function ensureNodeApproved(operator: GatewayClient, nodeId: string): Promise<boolean> {
-  let approvalState: string | undefined;
-  await vi.waitFor(
-    async () => {
-      const result = await operator.request<{ nodes?: WireNodeRead[] }>("node.list", {});
-      approvalState = result.nodes?.find((node) => node.nodeId === nodeId)?.approvalState;
-      expect(approvalState).toBeTruthy();
-    },
-    { timeout: 30_000, interval: 100 },
-  );
+  const approvalState = await waitUntil(async () => {
+    const result = await operator.request<{ nodes?: WireNodeRead[] }>("node.list", {});
+    return result.nodes?.find((node) => node.nodeId === nodeId)?.approvalState;
+  });
   if (approvalState !== "approved") {
     await approveNodePairing(operator, nodeId);
     return true;
@@ -239,25 +236,16 @@ async function waitForApprovedWireNode(
   operator: GatewayClient,
   nodeId: string,
 ): Promise<WireNodeRead> {
-  let approved: WireNodeRead | undefined;
-  await vi.waitFor(
-    async () => {
-      const result = await operator.request<{ nodes?: WireNodeRead[] }>("node.list", {});
-      approved = result.nodes?.find((node) => node.nodeId === nodeId);
-      expect(approved).toMatchObject({
-        nodeId,
-        approvalState: "approved",
-        connected: true,
-        paired: true,
-        sessionHost: true,
-      });
-    },
-    { timeout: 30_000, interval: 100 },
-  );
-  if (!approved) {
-    throw new Error("paired worker node did not become available");
-  }
-  return approved;
+  return await waitUntil(async () => {
+    const result = await operator.request<{ nodes?: WireNodeRead[] }>("node.list", {});
+    const approved = result.nodes?.find((node) => node.nodeId === nodeId);
+    return approved?.approvalState === "approved" &&
+      approved.connected === true &&
+      approved.paired === true &&
+      approved.sessionHost === true
+      ? approved
+      : undefined;
+  });
 }
 
 type WireWorkerHostOptions = {
@@ -307,7 +295,7 @@ export async function createPairedNodeWorkerHost(
   await fs.mkdir(nodeEnv.HOME, { recursive: true });
   const workspace = new NodeWorkerWorkspaceRuntime({ root: nodeHostRoot, env: nodeEnv });
   const bundleInstaller = new NodeWorkerBundleInstaller({ root: nodeHostRoot, env: nodeEnv });
-  let capacityAvailable = true;
+  let capacity = { total: options.capacity ?? 2, available: 0 };
   let client: GatewayClient | undefined;
   let closing = false;
   const invokeTasks = new Set<Promise<void>>();
@@ -323,7 +311,7 @@ export async function createPairedNodeWorkerHost(
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
     workerHost: {
       enabled: true as const,
-      capacity: capacityAvailable ? ("available" as const) : ("full" as const),
+      capacity,
       ...(options.bundlePrewarm ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION } : {}),
       ...(options.bundleRetention ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION } : {}),
       ...(options.bundleStatus ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION } : {}),
@@ -335,8 +323,8 @@ export async function createPairedNodeWorkerHost(
     workspace,
     capacity: options.capacity,
     capacityWaitMs: options.capacityWaitMs,
-    onAvailabilityChanged: (available) => {
-      capacityAvailable = available;
+    onCapacityChanged: (nextCapacity) => {
+      capacity = nextCapacity;
     },
   });
 
@@ -427,19 +415,16 @@ export async function createPairedNodeWorkerHost(
       await drainInvokeTasks();
     },
     async waitForWorkersIdle() {
-      await vi.waitFor(
-        async () => {
-          const receipts = await Promise.all(
-            [...launchIds].map(async (launchId) => await supervisor.status(launchId)),
-          );
-          expect(
-            receipts.every(
-              (receipt) => receipt !== undefined && !["pending", "running"].includes(receipt.state),
-            ),
-          ).toBe(true);
-        },
-        { timeout: 30_000, interval: 100 },
-      );
+      await waitUntil(async () => {
+        const receipts = await Promise.all(
+          [...launchIds].map(async (launchId) => await supervisor.status(launchId)),
+        );
+        return receipts.every(
+          (receipt) => receipt !== undefined && !["pending", "running"].includes(receipt.state),
+        )
+          ? true
+          : undefined;
+      });
     },
     async installedBundleDirectory(bundleHash) {
       const namespaces = await fs.readdir(nodeHostRoot, { withFileTypes: true });
@@ -491,10 +476,14 @@ export async function createPairedNodeWorkerHost(
 
 export async function startPairedNodeWorkerGateway(params: {
   providerBaseUrl: string;
+  executionIdentity?: boolean;
+  repoRoot?: string;
+  useRepoCli?: boolean;
+  workspaceDir?: string;
 }): Promise<WireGateway> {
   return await startQaGatewayChild({
-    repoRoot: process.cwd(),
-    useRepoCli: true,
+    repoRoot: params.repoRoot ?? process.cwd(),
+    useRepoCli: params.useRepoCli ?? true,
     providerBaseUrl: `${params.providerBaseUrl}/v1`,
     providerMode: "mock-openai",
     primaryModel: MODEL_REF,
@@ -503,6 +492,23 @@ export async function startPairedNodeWorkerGateway(params: {
     controlUiEnabled: false,
     mutateConfig: (config) => ({
       ...config,
+      agents: {
+        ...config.agents,
+        defaults: {
+          ...config.agents?.defaults,
+          ...(params.workspaceDir ? { workspace: params.workspaceDir } : {}),
+          subagents: {
+            ...config.agents?.defaults?.subagents,
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+      logging: params.executionIdentity
+        ? {
+            ...config.logging,
+            audit: { ...config.logging?.audit, executionIdentity: true },
+          }
+        : config.logging,
       nodeHost: {
         ...config.nodeHost,
         workerRuns: { enabled: true },

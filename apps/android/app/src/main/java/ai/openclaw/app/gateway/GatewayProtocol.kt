@@ -587,6 +587,11 @@ enum class GatewayMethod(
   PortalClose("portal.close"),
   SessionsMove("sessions.move"),
   SessionsAssignOwner("sessions.assignOwner"),
+  ProgressCardGet("progressCard.get"),
+  ProgressCardPut("progressCard.put"),
+  ToolsGithubStatus("tools.github.status"),
+  ToolsGithubConfigure("tools.github.configure"),
+  DiagnosticsLanes("diagnostics.lanes"),
 }
 
 enum class GatewayEvent(
@@ -642,4 +647,5 @@ enum class GatewayEvent(
   TerminalExit("terminal.exit"),
   UpdateAvailable("update.available"),
   PortalChanged("portal.changed"),
+  ProgressCardChanged("progressCard.changed"),
 }

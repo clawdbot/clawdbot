@@ -10,7 +10,7 @@ import {
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
-  resolveSessionAuthProfileOverrideMock,
+  resolveSessionAuthSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
@@ -193,7 +193,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
   });
 
   it("propagates a legacy source-less user auth profile into the run", async () => {
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-a");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "profile-a",
+      source: "user",
+      routeRequirement: undefined,
+    });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         sessionEntry: makeCronSessionEntry({
@@ -222,7 +226,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
   });
 
   it("keeps a resolved fallback profile automatic when it differs from the stored pin", async () => {
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-b");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "profile-b",
+      source: "auto",
+      routeRequirement: undefined,
+    });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         sessionEntry: makeCronSessionEntry({
@@ -251,7 +259,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
   });
 
   it("retries with switched auth profile state from LiveSessionModelSwitchError", async () => {
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-a");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "profile-a",
+      source: "auto",
+      routeRequirement: undefined,
+    });
     const cronSession = makeCronSession({
       sessionEntry: makeCronSessionEntry({
         model: undefined,
@@ -329,6 +341,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         model: "gpt-5.6-luna",
         modelProvider: "openai",
         agentRuntimeOverride: "openclaw",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        contextBudgetStatus: {} as NonNullable<
+          ReturnType<typeof makeCronSessionEntry>["contextBudgetStatus"]
+        >,
       }),
       isNewSession: false,
     });
@@ -374,6 +391,9 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(requireEmbeddedAgentCall(0).agentHarnessRuntimeOverride).toBe("openclaw");
     expect(requireEmbeddedAgentCall(1).agentHarnessRuntimeOverride).toBe("codex");
     expect(cronSession.sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(cronSession.sessionEntry.contextTokens).toBe(128_000);
+    expect(cronSession.sessionEntry.contextTokensSource).toBe("resolved");
+    expect(cronSession.sessionEntry.contextBudgetStatus).toBeUndefined();
   });
 
   it("returns error (not infinite loop) when LiveSessionModelSwitchError is thrown repeatedly", async () => {

@@ -32,7 +32,6 @@ export async function startGatewayServerCore(
   let startupSettled: Promise<void>;
   const {
     beginClosePrelude,
-    clearFallbackGatewayContextForServer,
     closeOnStartupFailure,
     createCloseHandler,
     sealAndJoinRegisteredSidecarStops,
@@ -116,10 +115,6 @@ export async function startGatewayServerCore(
           { name: "gateway close prelude", run: runClosePrelude },
           { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
           { name: "gateway close", run: () => close(optsLocal) },
-          {
-            name: "fallback gateway context",
-            run: () => clearFallbackGatewayContextForServer.get()(),
-          },
         ],
         onError: (message) => log.error(message),
       });

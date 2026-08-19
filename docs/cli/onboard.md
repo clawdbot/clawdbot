@@ -360,7 +360,7 @@ Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 
 UI and hook setup: `--skip-ui` (skip Control UI/TUI prompts), `--skip-hooks` (skip webhook/hook setup), `--skip-channels`, `--skip-search`.
 
-Output: `--suppress-gateway-token-output` suppresses token-bearing Gateway/UI output (token hints, auto-login URL with embedded token, and automatic Control UI launch) - useful in shared terminals and CI.
+Output: `--suppress-gateway-token-output` disables the automatic Control UI handoff in guided onboarding. Classic onboarding never prints reusable Gateway token values or tokenized URLs; it still prints safe recovery commands.
 
 <Note>
 `--json` does not imply non-interactive mode in guided or classic onboarding.

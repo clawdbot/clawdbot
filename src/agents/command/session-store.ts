@@ -117,6 +117,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
           fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS);
+  const contextTokensSource = result.meta.agentMeta?.contextTokensSource ?? "resolved";
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
@@ -137,6 +138,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       ? {}
       : {
           contextTokens,
+          contextTokensSource,
         }),
   };
   if (entry.sessionId !== sessionId) {
@@ -175,11 +177,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   if (!preserveUserFacingRunState) {
     if (!preserveRuntimeModel) {
-      if (agentHarnessId) {
-        next.agentHarnessId = agentHarnessId;
-      } else if (result.meta.executionTrace?.runner === "cli") {
-        next.agentHarnessId = undefined;
-      }
+      next.agentHarnessId = agentHarnessId;
     }
     if (!preserveRuntimeModel && isCliProvider(providerUsed, cfg)) {
       const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;

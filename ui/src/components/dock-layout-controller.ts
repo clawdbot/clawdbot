@@ -397,6 +397,9 @@ export const dockPanelStyles = css`
   .rail-header__action[aria-disabled="true"] {
     opacity: var(--rail-header-action-disabled-opacity, 0.4);
   }
+  [data-new-tab-action]:not(:disabled):not([disabled]):not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
   .rail-header__action svg {
     width: var(--rail-header-action-glyph-size, 16px);
     height: var(--rail-header-action-glyph-size, 16px);

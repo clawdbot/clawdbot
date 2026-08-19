@@ -32,7 +32,7 @@ export function escapeSkillXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
-const COMPACT_DESCRIPTION_MAX_CHARS = 220;
+export const COMPACT_DESCRIPTION_MAX_CHARS = 220;
 const SKILL_FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u;
 const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/mu;
 

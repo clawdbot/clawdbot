@@ -9,7 +9,11 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../../config/sessions/legacy-sqlite-marker.js";
-import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  readSessionTranscriptBoundedMessageTailPage,
+  replaceTranscriptEvents,
+} from "../../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -32,6 +36,18 @@ const loggerMocks = vi.hoisted(() => ({
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
 }));
+
+vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    loadTranscriptEvents: vi.fn(actual.loadTranscriptEvents),
+    readSessionTranscriptBoundedMessageTailPage: vi.fn(
+      actual.readSessionTranscriptBoundedMessageTailPage,
+    ),
+  };
+});
 
 async function readFileTranscript(filePath: string, messageCount = 15): Promise<string | null> {
   try {
@@ -417,6 +433,36 @@ describe("session-memory hook", () => {
     );
     expect(memoryContent).not.toContain("\nuser: forged request");
     expect(memoryContent).not.toContain("Inactive branch content");
+  });
+
+  it("records and warns when transcript loading fails after reset capture", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionId = "unavailable-transcript";
+    const sessionKey = "agent:main:main";
+    const failure = new Error("transcript projection unavailable\nretry later");
+    vi.mocked(readSessionTranscriptBoundedMessageTailPage).mockImplementationOnce(() => {
+      throw new Error("bounded capture unavailable");
+    });
+    vi.mocked(loadTranscriptEvents).mockRejectedValueOnce(failure);
+    loggerMocks.warn.mockClear();
+
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      sessionKey,
+      previousSessionEntry: { sessionId },
+    });
+
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "Session transcript unavailable for memory capture",
+      {
+        sessionKey,
+        error: "transcript projection unavailable retry later",
+      },
+    );
+    expect(memoryContent).toContain("## Conversation Summary");
+    expect(memoryContent).toContain(
+      '> Transcript content was unavailable: "transcript projection unavailable retry later"',
+    );
   });
 
   it("fills the configured memory window past ineligible tail messages", async () => {

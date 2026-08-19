@@ -341,7 +341,7 @@ function buildGroups(params: {
 }): TreemapGroup[] {
   const { report } = params;
   const injectedTotal = report.injectedWorkspaceFiles.reduce(
-    (sum, file) => sum + file.injectedChars,
+    (sum, file) => (file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars),
     0,
   );
   const projectFrameChars = Math.max(0, report.systemPrompt.projectContextChars - injectedTotal);
@@ -360,10 +360,12 @@ function buildGroups(params: {
       name: "Workspace files",
       color: rgba(58, 145, 91),
       leaves: [
-        ...report.injectedWorkspaceFiles.map((file) => ({
-          name: file.name,
-          value: file.injectedChars,
-        })),
+        ...report.injectedWorkspaceFiles
+          .filter((file) => file.injectionStatus !== "native_unverified")
+          .map((file) => ({
+            name: file.name,
+            value: file.injectedChars,
+          })),
         { name: "Project context frame", value: projectFrameChars },
       ],
     }),

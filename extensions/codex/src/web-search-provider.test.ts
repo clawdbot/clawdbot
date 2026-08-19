@@ -353,7 +353,7 @@ describe("codex web search provider", () => {
 
     const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
 
-    expect(result?.model).toBe("available-default-wire");
+    expect(result?.model).toBe("available-default");
     expect(requests[1]?.params).toEqual(
       expect.objectContaining({ model: "available-default-wire" }),
     );

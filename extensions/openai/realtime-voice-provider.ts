@@ -170,6 +170,7 @@ function buildOpenAIRealtimeBrowserSessionConfig(
 async function createOpenAIRealtimeBrowserSession(
   req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
   quicksilverBroker: OpenAIQuicksilverBrowserSessionBroker | undefined,
+  logger: Pick<PluginLogger, "warn">,
 ): Promise<RealtimeVoiceBrowserSession> {
   const rawConfig = resolveOpenAIProviderConfigRecord(req.providerConfig);
   const config = normalizeProviderConfig(req.providerConfig);
@@ -219,6 +220,7 @@ async function createOpenAIRealtimeBrowserSession(
               providerConfig: req.providerConfig,
               apiKey,
               callId,
+              audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
               gaSessionPolicy: sessionConfig,
               model,
               voice,
@@ -241,6 +243,7 @@ async function createOpenAIRealtimeBrowserSession(
                 gatewayControl.onClose?.(reason);
                 onTerminal();
               },
+              logger,
             });
             gatewayControl.bindBridge(bridge);
             return bridge;
@@ -384,6 +387,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
           model,
           voice: config.voice,
           instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+          logger: options?.logger ?? { warn: () => undefined },
           resolveAuth: async () => ({
             type: "api-key",
             token: (
@@ -412,12 +416,14 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
         azureEndpoint: config.azureEndpoint,
         azureDeployment: config.azureDeployment,
         azureApiVersion: config.azureApiVersion,
+        logger: options?.logger ?? { warn: () => undefined },
       });
     },
     createBrowserSession: (req) =>
       createOpenAIRealtimeBrowserSession(
         req as OpenAIInternalRealtimeBrowserSessionCreateRequest,
         options?.quicksilverBrowserSessionBroker,
+        options?.logger ?? { warn: () => undefined },
       ),
   };
   const internalApi: OpenAIInternalRealtimeVoiceProviderApi = {

@@ -18,6 +18,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
+import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
 import {
   CodexAppServerStartupError,
   isCodexAppServerStartupError,
@@ -144,7 +145,10 @@ export async function startCodexAttemptThread(params: {
   startupEnvApiKeyCacheKey: string | undefined;
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
+  shellEnvironment?: Readonly<Record<string, string>>;
+  disableLoginShell?: boolean;
   buildAttemptParams: () => EmbeddedRunAttemptParams;
+  runtimeModelId?: string;
   sessionAgentId: string;
   effectiveWorkspace: string;
   effectiveCwd: string;
@@ -152,6 +156,7 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  agentWorkspaceDeveloperInstructions?: string;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
@@ -280,39 +285,11 @@ export async function startCodexAttemptThread(params: {
             if (startupAbandonController.signal.aborted) {
               throw new CodexAppServerStartupError("aborted");
             }
-            let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
-            if (params.runtimeArtifactRequest) {
-              const {
-                readCodexAppServerClientRuntimeArtifact,
-                validateCodexAppServerRuntimeArtifact,
-              } = await import("./runtime-artifact.js");
-              runtimeArtifact = readCodexAppServerClientRuntimeArtifact(activeStartupClient);
-              const expected = params.runtimeArtifactRequest.expected;
-              const matchesExpected =
-                !expected ||
-                Boolean(
-                  runtimeArtifact &&
-                  runtimeArtifact.id === expected.id &&
-                  runtimeArtifact.fingerprint === expected.fingerprint,
-                );
-              if (
-                !runtimeArtifact ||
-                !matchesExpected ||
-                !(await validateCodexAppServerRuntimeArtifact(
-                  runtimeArtifact,
-                  startupAbandonController.signal,
-                ))
-              ) {
-                // Never let an unattested physical generation reach Computer Use,
-                // plugin discovery, or a native thread request.
-                retireSharedCodexAppServerClientIfCurrent(activeStartupClient);
-                throw new Error(
-                  expected
-                    ? "Codex app-server runtime artifact does not match verified inference"
-                    : "Codex app-server runtime artifact is unavailable or stale",
-                );
-              }
-            }
+            const runtimeArtifact = await verifyStartupArtifact({
+              client: activeStartupClient,
+              request: params.runtimeArtifactRequest,
+              signal: startupAbandonController.signal,
+            });
             ensureCodexAppServerClientRuntime(activeStartupClient, {
               agentDir: params.agentDir,
               authProfileId: startupRuntimeAuthProfileId,
@@ -465,6 +442,7 @@ export async function startCodexAttemptThread(params: {
                 reserveResumeThread,
                 bindingStore: params.bindingStore,
                 params: params.buildAttemptParams(),
+                runtimeModelId: params.runtimeModelId,
                 agentId: params.sessionAgentId,
                 cwd: startupExecutionCwd,
                 dynamicTools: params.dynamicTools,
@@ -472,7 +450,10 @@ export async function startCodexAttemptThread(params: {
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,
+                shellEnvironment: params.shellEnvironment,
+                disableLoginShell: params.disableLoginShell,
                 finalConfigPatch: params.finalConfigPatch,
                 buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,

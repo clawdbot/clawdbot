@@ -564,6 +564,10 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/auto-reply/reply/commands-status.test.ts", 12],
   ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
   ["src/gateway/dashboard-session-title.test.ts", 23],
+  // Successful run 32172905415: 26.9s and 15.9s. Without direct hints the
+  // hosted agent-chat splitter prices both at 3s and puts them in one stripe.
+  ["src/gateway/server.sessions.create.test.ts", 27],
+  ["src/gateway/server.chat.gateway-server-chat.test.ts", 16],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).

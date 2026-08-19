@@ -52,6 +52,7 @@ describe("users gateway methods", () => {
     createdAt: 1,
     updatedAt: 1,
     emails: ["ada@example.com"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const adminClient = { connect: { scopes: ["operator.admin"] } };
@@ -122,6 +123,78 @@ describe("users gateway methods", () => {
     expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });
 
+  it("waits for the authenticated GitHub sync before returning users.self", async () => {
+    let finishSync: (() => void) | undefined;
+    const providerClient: Record<string, unknown> = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      connect: { scopes: ["operator.write"] },
+    };
+    const authenticatedGitHubIdentitySync = vi.fn(
+      async () =>
+        await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
+          finishSync = () => {
+            providerClient.authenticatedUserProfile = {
+              profileId: profile.id,
+              displayName: "Ada",
+              hasAvatar: false,
+              updatedAt: 1,
+            };
+            resolve({ profileId: profile.id, updatedAt: profile.updatedAt });
+          };
+        }),
+    );
+    providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
+    resolveUserProfileId.mockReturnValue(profile.id);
+    getUserProfileListItem.mockReturnValue(profile);
+
+    const pending = runUsersHandler("users.self", {}, providerClient);
+    await Promise.resolve();
+
+    expect(authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
+    expect(getUserProfileListItem).not.toHaveBeenCalled();
+    finishSync?.();
+    const respond = await pending;
+    expect(respond).toHaveBeenCalledWith(true, { profile });
+  });
+
+  it("keeps unresolved users.self unavailable and retryable when GitHub lookup fails", async () => {
+    const providerClient: Record<string, unknown> = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      connect: { scopes: ["operator.write"] },
+    };
+    const authenticatedGitHubIdentitySync = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockImplementationOnce(async () => {
+        providerClient.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: "Ada",
+          hasAvatar: false,
+          updatedAt: 1,
+        };
+        return { profileId: profile.id, updatedAt: profile.updatedAt };
+      });
+    providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
+    resolveUserProfileId.mockReturnValue(profile.id);
+    getUserProfileListItem.mockReturnValue(profile);
+
+    expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+      }),
+    );
+    expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(true, {
+      profile,
+    });
+    expect(authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps generic proxy identities on the legacy profile fallback", async () => {
     const proxyClient = {
       authenticatedUserId: "ada@github",
@@ -148,7 +221,7 @@ describe("users gateway methods", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: "authenticated user profile is unavailable" }),
+      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
     );
     expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });

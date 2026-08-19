@@ -662,9 +662,9 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
         call.text !== expected[index] ||
         call.args.action !== "send" ||
         // Extended-stable candidates can predate this optional Codex control.
-        // A successful ordered completion send is valid evidence; `false` is not.
+        // Current progress sends use `false`; completion may omit it or use `true`.
         (index === 0
-          ? call.args.final !== undefined
+          ? call.args.final !== undefined && call.args.final !== false
           : call.args.final !== undefined && call.args.final !== true),
     )
   ) {
