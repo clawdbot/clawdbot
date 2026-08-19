@@ -265,6 +265,32 @@ describe("sendTextMediaPayload", () => {
     expect(result).toEqual({ channel: "test", messageId: "caption" });
   });
 
+  it("passes config, account, and formatting facts to adapter chunkers", async () => {
+    const cfg = { channels: { discord: { maxLinesPerMessage: 50 } } };
+    const formatting = { maxLinesPerMessage: 25 };
+    const chunker = vi.fn(() => ["hello"]);
+    const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
+
+    await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg,
+        to: "target",
+        text: "",
+        payload: { text: "hello" },
+        accountId: "work",
+        formatting,
+      },
+      adapter: { textChunkLimit: 2000, chunker, sendText },
+    });
+
+    expect(chunker).toHaveBeenCalledWith("hello", 2000, {
+      cfg,
+      accountId: "work",
+      formatting,
+    });
+  });
+
   it("reports each completed text chunk before a later chunk fails", async () => {
     const sendText = vi
       .fn()

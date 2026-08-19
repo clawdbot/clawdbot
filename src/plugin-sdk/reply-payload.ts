@@ -401,7 +401,11 @@ export async function sendTextMediaPayload(params: {
   const limit = params.adapter.textChunkLimit;
   const chunks =
     limit && params.adapter.chunker
-      ? params.adapter.chunker(text, limit, { formatting: params.ctx.formatting })
+      ? params.adapter.chunker(text, limit, {
+          cfg: params.ctx.cfg,
+          accountId: params.ctx.accountId,
+          formatting: params.ctx.formatting,
+        })
       : [text];
   let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
   for (const chunk of chunks) {

@@ -17,6 +17,7 @@ import {
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveDiscordMaxLinesPerMessage } from "./accounts.js";
 import { formatDiscordApprovalDisplayValue } from "./approval-message-safety.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
@@ -149,7 +150,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit, ctx) =>
     chunkDiscordTextWithMode(text, {
       maxChars: limit,
-      maxLines: ctx?.formatting?.maxLinesPerMessage,
+      maxLines:
+        ctx?.formatting?.maxLinesPerMessage ??
+        (ctx?.cfg
+          ? resolveDiscordMaxLinesPerMessage({ cfg: ctx.cfg, accountId: ctx.accountId })
+          : undefined),
     }),
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,

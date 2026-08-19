@@ -1231,12 +1231,45 @@ describe("discordOutbound", () => {
     );
   });
 
-  it("uses explicit maxLinesPerMessage in its adapter chunker", () => {
+  it("prefers explicit maxLinesPerMessage in its adapter chunker", () => {
     expect(
       discordOutbound.chunker?.("line one\nline two\nline three", 2000, {
+        cfg: { channels: { discord: { maxLinesPerMessage: 50 } } },
         formatting: { maxLinesPerMessage: 1 },
       }),
     ).toEqual(["line one", "line two", "line three"]);
+  });
+
+  it("keeps the default 17-line chunk limit without config context", () => {
+    const lines = Array.from({ length: 20 }, (_, index) => `line-${index + 1}`);
+
+    expect(discordOutbound.chunker?.(lines.join("\n"), 2000)).toEqual([
+      lines.slice(0, 17).join("\n"),
+      lines.slice(17).join("\n"),
+    ]);
+  });
+
+  it("keeps the Discord character limit with a configured line limit", () => {
+    const chunks = discordOutbound.chunker?.("x".repeat(2001), 2000, {
+      cfg: { channels: { discord: { maxLinesPerMessage: 50 } } },
+    });
+
+    expect(chunks?.map((chunk) => chunk.length)).toEqual([2000, 1]);
+  });
+
+  it("honors configured maxLinesPerMessage on payload sends", async () => {
+    const text = Array.from({ length: 20 }, (_, index) => `line-${index + 1}`).join("\n");
+
+    await discordOutbound.sendPayload?.({
+      cfg: { channels: { discord: { token: "test-token", maxLinesPerMessage: 50 } } },
+      to: "channel:123456",
+      text: "",
+      payload: { text },
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.sendMessageDiscordMock.mock.calls[0]?.[1]).toBe(text);
   });
 
   it("renders channelData Discord components on payload sends", async () => {

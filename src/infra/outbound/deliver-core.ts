@@ -161,6 +161,8 @@ export async function deliverOutboundPayloadsCore(
       chunkedTextFormatting: sendHandler.chunkedTextFormatting,
       textLimit,
       chunkMode,
+      cfg,
+      accountId,
       formatting: params.formatting,
       consumeReplyTo: (value) =>
         applyReplyToConsumption(value, {

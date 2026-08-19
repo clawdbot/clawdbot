@@ -154,6 +154,8 @@ type ChannelOutboundFormattedContext = ChannelOutboundContext & {
 };
 
 type ChannelOutboundChunkContext = {
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
   formatting?: OutboundDeliveryFormattingOptions;
 };
 

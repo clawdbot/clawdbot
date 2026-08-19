@@ -4259,7 +4259,11 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(chunker).toHaveBeenCalledTimes(1);
-    expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
+    expect(chunker).toHaveBeenNthCalledWith(1, text, 4000, {
+      cfg,
+      accountId: undefined,
+      formatting: undefined,
+    });
   });
 
   it("passes formatting overrides for pre-rendered chunker output", async () => {
@@ -4284,7 +4288,11 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "**bold**" }],
     });
 
-    expect(chunker).toHaveBeenCalledWith("**bold**", 4000);
+    expect(chunker).toHaveBeenCalledWith("**bold**", 4000, {
+      cfg: matrixChunkConfig,
+      accountId: undefined,
+      formatting: undefined,
+    });
     const sendTextParams = requireMockCallArg(sendText, "sendText");
     expect(sendTextParams.text).toBe("<b>bold</b>");
     expect(sendTextParams.formatting).toEqual({ parseMode: "HTML" });
