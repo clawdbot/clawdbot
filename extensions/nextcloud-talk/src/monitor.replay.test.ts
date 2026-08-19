@@ -330,6 +330,41 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
     expect(await lastResponse?.text()).toBe("Too Many Requests");
   });
 
+  it("isolates failed-auth limits by forwarded client behind a trusted proxy", async () => {
+    const harness = await startWebhookServer({
+      path: "/nextcloud-auth-rate-limit-trusted-proxy",
+      authRateLimit: { maxRequests: 1 },
+      trustedProxies: ["127.0.0.1"],
+      onMessage: vi.fn(),
+    });
+    const { body, headers } = createSignedCreateMessageRequest();
+    const attackerHeaders = {
+      ...headers,
+      "x-forwarded-for": "198.51.100.10",
+      "x-nextcloud-talk-signature": "invalid-signature",
+    };
+
+    const firstAttack = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: attackerHeaders,
+      body,
+    });
+    const blockedAttack = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: attackerHeaders,
+      body,
+    });
+    const legitimateDelivery = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: { ...headers, "x-forwarded-for": "198.51.100.11" },
+      body,
+    });
+
+    expect(firstAttack.status).toBe(401);
+    expect(blockedAttack.status).toBe(429);
+    expect(legitimateDelivery.status).toBe(200);
+  });
+
   it("does not rate limit valid signed webhook bursts from the same source", async () => {
     const maxRequests = 1;
     const harness = await startWebhookServer({
