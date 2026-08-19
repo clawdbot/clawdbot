@@ -449,7 +449,7 @@ async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
 type ExecApprovalRequestRoute<TTimeoutContext> =
   | (Omit<RegisteredExecApprovalRequestContext, "preResolvedDecision"> & {
       kind: "inline";
-      preResolvedDecision: null;
+      preResolvedDecision: null | "deny";
       state: ExecApprovalDecisionState<TTimeoutContext>;
     })
   | (RegisteredExecApprovalRequestContext & { kind: "wait" });
