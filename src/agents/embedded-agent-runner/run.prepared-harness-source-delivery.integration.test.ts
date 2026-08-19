@@ -33,11 +33,13 @@ import { registerAgentHarness } from "../harness/registry.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedAcquireAgentRunPreparedModelRuntime,
   mockedBuildEmbeddedRunPayloads,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
+import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 const runnerState = setupAgentRunnerExecutionTestState();
@@ -427,5 +429,110 @@ describe("prepared harness source delivery", () => {
         "Your replies are automatically sent to this conversation",
       );
     }
+  });
+
+  it("prepares a Codex primary without pinning a plugin-owned fallback", async () => {
+    const { runEmbeddedAgent, registerPreparedAgentHarness } =
+      await loadRunOverflowCompactionHarness();
+    registerPreparedAgentHarness({
+      id: "fallback-owner",
+      label: "Fallback owner",
+      supports: ({ provider }) =>
+        provider === "custom" ? { supported: true } : { supported: false },
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["primary"] }),
+    );
+    useOpenAIPlatformAuthFixture();
+
+    const runParams: RunEmbeddedAgentInternalParams = {
+      agentId: "worker",
+      sessionId: "runtime-preparation-hint",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      runId: "runtime-preparation-hint",
+      timeoutMs: 30_000,
+      provider: "openai",
+      model: "gpt-5.4",
+      agentHarnessRuntimePreparationHint: "codex",
+      modelFallbacksOverride: ["fast"],
+      config: {
+        agents: {
+          list: [
+            { id: "main", default: true },
+            {
+              id: "worker",
+              models: {
+                "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+                "custom/plugin-fallback": {
+                  alias: "fast",
+                  agentRuntime: { id: "fallback-owner" },
+                },
+              },
+            },
+          ],
+          defaults: {
+            models: {
+              "custom/global-fallback": { alias: "fast" },
+            },
+          },
+        },
+      },
+    };
+    await runEmbeddedAgent(runParams);
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: [
+          { provider: "openai", modelId: "gpt-5.4", runtime: "codex", agentId: "worker" },
+          { provider: "custom", modelId: "plugin-fallback", agentId: "worker" },
+        ],
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    ["agentHarnessId", { agentHarnessId: "codex" }],
+    ["agentHarnessRuntimeOverride", { agentHarnessRuntimeOverride: "codex" }],
+  ] as const)("keeps %s authoritative across fallback preparation", async (_label, override) => {
+    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["primary"] }),
+    );
+    useOpenAIPlatformAuthFixture();
+
+    await runEmbeddedAgent({
+      agentId: "worker",
+      sessionId: `authoritative-${_label}`,
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      runId: `authoritative-${_label}`,
+      timeoutMs: 30_000,
+      provider: "openai",
+      model: "gpt-5.4",
+      modelFallbacksOverride: ["custom/plugin-fallback"],
+      ...override,
+    });
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: [
+          { provider: "openai", modelId: "gpt-5.4", runtime: "codex", agentId: "worker" },
+          {
+            provider: "custom",
+            modelId: "plugin-fallback",
+            runtime: "codex",
+            agentId: "worker",
+          },
+        ],
+      }),
+      expect.any(Object),
+    );
   });
 });
