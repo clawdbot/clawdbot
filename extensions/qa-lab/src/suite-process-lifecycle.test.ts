@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
+import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const fixturePath = fileURLToPath(
@@ -58,7 +59,9 @@ function forceStopProcessTree(child: ChildProcess) {
     return;
   }
   if (process.platform === "win32") {
-    child.kill("SIGKILL");
+    if (!runQaWindowsTaskkill({ pid: child.pid, signal: "SIGKILL" })) {
+      child.kill("SIGKILL");
+    }
     return;
   }
   const rows = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" })
