@@ -1639,8 +1639,7 @@ describe("handleControlUiHttpRequest", () => {
 
           const emittedAssetUrls = Array.from(
             body.matchAll(/(?:src|href)="([^" ]*\/assets\/[^" ]+)"/g),
-            (match) => match[1],
-          );
+          ).flatMap((match) => (match[1] ? [match[1]] : []));
           expect(new Set(emittedAssetUrls)).toEqual(
             new Set(emittedAssets.map(([asset]) => `${expectedPrefix}/assets/${asset}`)),
           );
