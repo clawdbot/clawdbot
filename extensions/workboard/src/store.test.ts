@@ -1093,6 +1093,95 @@ describe("WorkboardStore", () => {
     expect(untrusted.metadata?.automation?.workspaceAccess).toBeUndefined();
   });
 
+  it("only accepts launch state from store-owned transitions", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Trusted launch",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+      metadata: {
+        automation: {
+          launch: {
+            phase: "prepared",
+            requestedSessionKey: "injected-session",
+            provisionalRunId: "injected-run",
+            preparedAt: 1,
+          },
+        },
+      },
+    });
+    expect(card.metadata?.automation?.launch).toBeUndefined();
+
+    const claimed = await store.claim(card.id, { ownerId: "worker", token: "claim-token" });
+    const prepared = await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "subagent:workboard-default-trusted",
+      now: 100,
+      scope: { ownerId: "worker", token: claimed.token },
+    });
+    const updated = await store.update(card.id, {
+      metadata: {
+        automation: {
+          launch: {
+            ...prepared.launch,
+            phase: "accepted",
+            acceptedAt: 101,
+            acceptedSessionKey: "agent:injected:subagent:workboard-default-trusted",
+            acceptedRunId: "injected-accepted-run",
+          },
+        },
+      },
+    });
+
+    expect(updated.metadata?.automation?.launch).toEqual(prepared.launch);
+  });
+
+  it("does not let a delayed launch failure overwrite a newer retry", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Retried launch", status: "ready" });
+    const firstClaim = await store.claim(card.id, { ownerId: "worker" });
+    const first = await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "subagent:workboard-default-retried",
+      now: 100,
+      scope: { ownerId: "worker", token: firstClaim.token },
+    });
+    await store.failPreparedLaunch(card.id, {
+      expectedLaunch: first.launch,
+      reason: "first launch failed",
+      failedAt: 101,
+    });
+    await store.unblock(card.id);
+    const retryClaim = await store.claim(card.id, { ownerId: "worker" });
+    const retry = await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "subagent:workboard-default-retried",
+      now: 200,
+      scope: { ownerId: "worker", token: retryClaim.token },
+    });
+
+    await expect(
+      store.failPreparedLaunch(card.id, {
+        expectedLaunch: first.launch,
+        reason: "delayed first failure",
+        failedAt: 201,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.syncLifecycle(card.id, {
+        targetStatus: "review",
+        executionStatus: "review",
+        sourceUpdatedAt: undefined,
+        stale: undefined,
+        now: 202,
+        association: {
+          expectedSessionKey: retry.launch.requestedSessionKey,
+          expectedRunId: retry.launch.provisionalRunId,
+          sessionKey: `agent:worker:${retry.launch.requestedSessionKey}`,
+          acceptedAt: 150,
+        },
+      }),
+    ).resolves.toBe(false);
+    expect((await store.get(card.id))?.metadata?.automation?.launch).toEqual(retry.launch);
+  });
+
   it("moves cards and records lifecycle timestamps", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Ship workboard" });

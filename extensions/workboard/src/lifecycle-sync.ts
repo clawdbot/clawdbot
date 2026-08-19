@@ -27,7 +27,7 @@ const workboardLifecycleGatewayState = resolveGlobalSingleton(
   },
 );
 
-type WorkboardLifecycleState = "running" | "succeeded" | "failed" | "idle" | "missing" | "stale";
+type WorkboardLifecycleState = "running" | "succeeded" | "failed" | "idle" | "stale";
 
 type WorkboardLifecycleObservation = {
   state: WorkboardLifecycleState;
@@ -51,6 +51,16 @@ type WorkboardLifecycleSessionSnapshot = {
   sessions: WorkboardLifecycleSession[];
   complete: boolean;
 };
+
+function sessionProvesPreparedAcceptance(session: WorkboardLifecycleSession): boolean {
+  return (
+    session.hasActiveRun === true ||
+    session.status === "done" ||
+    session.status === "failed" ||
+    session.status === "killed" ||
+    session.status === "timeout"
+  );
+}
 
 type WorkboardLifecycleSessionReadOptions = {
   includeUnknown: boolean;
@@ -87,7 +97,6 @@ const LIFECYCLE_TARGETS = {
   succeeded: { card: "review", execution: "review" },
   failed: { card: "blocked", execution: "blocked" },
   idle: { execution: "idle" },
-  missing: {},
   stale: { card: "running", execution: "running" },
 } as const satisfies Record<
   WorkboardLifecycleState,
@@ -104,6 +113,7 @@ async function syncWorkboardCardLifecycle(params: {
     expectedRunId?: string;
     sessionKey: string;
     runId?: string;
+    acceptedAt?: number;
   };
 }): Promise<boolean> {
   const target = LIFECYCLE_TARGETS[params.observation.state];
@@ -140,6 +150,7 @@ async function syncWorkboardLifecycleEvent(params: {
                   ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
                   sessionKey: params.source.sessionKey,
                   ...(params.source.runId ? { runId: params.source.runId } : {}),
+                  acceptedAt: params.observation.sourceUpdatedAt ?? params.now,
                 },
               }
             : {}),
@@ -286,28 +297,46 @@ async function syncWorkboardLifecycleSessions(params: {
       (canUseAgentlessFallback && suffixIndex >= 0
         ? sessionsByWorkboardSuffix.get(lookupKey.slice(suffixIndex))
         : undefined);
-    const observation = session
-      ? lifecycleFromSession(session, now)
-      : params.complete
-        ? ({ state: "missing" } as const)
+    const launch = card.metadata?.automation?.launch;
+    const preparedAcceptanceAt =
+      launch?.phase === "prepared" && session && sessionProvesPreparedAcceptance(session)
+        ? session.hasActiveRun === true
+          ? Math.max(now, launch.preparedAt)
+          : (session.updatedAt ?? now)
         : undefined;
     if (
-      observation &&
-      (await syncWorkboardCardLifecycle({
+      launch?.phase === "prepared" &&
+      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
+    ) {
+      if (
+        params.complete &&
+        (await params.store.failPreparedLaunch(card.id, {
+          expectedLaunch: launch,
+          reason: "Gateway did not accept the prepared Workboard session before restart.",
+          failedAt: now,
+        }))
+      ) {
+        count += 1;
+      }
+      continue;
+    }
+    if (!session) {
+      continue;
+    }
+    const observation = lifecycleFromSession(session, now);
+    if (
+      await syncWorkboardCardLifecycle({
         store: params.store,
         cardId: card.id,
         observation,
         now,
-        ...(session
-          ? {
-              association: {
-                ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
-                ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
-                sessionKey: session.key,
-              },
-            }
-          : {}),
-      }))
+        association: {
+          ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
+          ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
+          sessionKey: session.key,
+          ...(preparedAcceptanceAt === undefined ? {} : { acceptedAt: preparedAcceptanceAt }),
+        },
+      })
     ) {
       count += 1;
     }

@@ -3,6 +3,7 @@ import path from "node:path";
 import type {
   WorkboardCard,
   WorkboardExecution,
+  WorkboardLaunchState,
   WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -70,6 +71,8 @@ type WorkboardDispatchAndStartResult = WorkboardDispatchResult & {
   started: WorkboardStartedRun[];
   startFailures: WorkboardStartFailure[];
 };
+
+type WorkboardPreparedLaunch = Extract<WorkboardLaunchState, { phase: "prepared" }>;
 
 type WorkboardDispatchStartParams = {
   store: WorkboardStore;
@@ -364,8 +367,8 @@ async function runWorkboardDispatch(
     let materializedWorkspace: WorkboardWorkspace | undefined;
     let implicitWorkspaceCwd: string | undefined;
     let runStarted = false;
-    let launchIntentPersisted = false;
     let workspaceMutation: { before: WorkboardCard; after: WorkboardCard } | undefined;
+    let preparedLaunch: WorkboardPreparedLaunch | undefined;
     const requestedWorkspace = card.metadata?.automation?.workspace;
     let workspaceAccess: WorkboardWorkspaceAccess;
     let targetWorkspace: string | undefined;
@@ -502,28 +505,14 @@ async function runWorkboardDispatch(
         );
         workspaceMutation = { before: workspaceBase, after: materializedCard };
       }
-      const launchBase = await params.store.get(card.id);
-      if (!launchBase) {
-        throw new Error(`card not found: ${card.id}`);
-      }
-      const runId = `workboard:${card.id}:${launchBase.updatedAt}`;
-      const launched = await params.store.update(
-        card.id,
-        {
-          sessionKey,
-          runId,
-          execution: buildExecution({
-            card: launchBase,
-            sessionKey,
-            runId,
-            runtime: undefined,
-            now,
-          }),
-          ...(materializedWorkspace ? { workspace: materializedWorkspace } : {}),
-        },
-        { expectedUpdatedAt: launchBase.updatedAt },
-      );
-      launchIntentPersisted = true;
+      const prepared = await params.store.prepareExecutionLaunch(card.id, {
+        requestedSessionKey: sessionKey,
+        now,
+        scope: { ownerId, token: claimValue },
+      });
+      const launched = prepared.card;
+      preparedLaunch = prepared.launch;
+      const runId = prepared.launch.provisionalRunId;
       const run = await params.subagent.run({
         sessionKey,
         message: buildWorkerPrompt({
@@ -556,15 +545,18 @@ async function runWorkboardDispatch(
         runId: run.runId,
         execution: acceptedExecution,
       };
-      const updated = await params.store
-        .enrichExecutionAssociation(card.id, {
-          expectedSessionKey: sessionKey,
-          expectedRunId: runId,
-          sessionKey: acceptedSessionKey,
-          runId: run.runId,
-          execution: acceptedExecution,
-        })
-        .catch(() => acceptedCard);
+      const updated =
+        (await params.store
+          .acceptExecutionLaunch(card.id, {
+            expectedLaunch: prepared.launch,
+            acceptedAt: Math.max(Date.now(), prepared.launch.preparedAt),
+            expectedSessionKey: sessionKey,
+            expectedRunId: runId,
+            sessionKey: acceptedSessionKey,
+            runId: run.runId,
+            execution: acceptedExecution,
+          })
+          .catch(() => undefined)) ?? acceptedCard;
       acceptedStarts += 1;
       startedOwners.add(ownerId);
       started.push({
@@ -614,16 +606,20 @@ async function runWorkboardDispatch(
         continue;
       }
       try {
-        await params.store.block(
-          card.id,
-          {
-            ownerId,
-            token: claimValue,
-            reason: `Dispatcher could not start worker: ${message}`,
-          },
-          { ownerId, token: claimValue },
-          { clearExecutionAssociation: launchIntentPersisted },
-        );
+        const reason = `Dispatcher could not start worker: ${message}`;
+        if (preparedLaunch) {
+          await params.store.failPreparedLaunch(card.id, {
+            expectedLaunch: preparedLaunch,
+            reason,
+            failedAt: Date.now(),
+          });
+        } else {
+          await params.store.block(
+            card.id,
+            { ownerId, token: claimValue, reason },
+            { ownerId, token: claimValue },
+          );
+        }
       } catch {
         // Leave the original start failure visible; dispatch will diagnose stale claims later.
       }

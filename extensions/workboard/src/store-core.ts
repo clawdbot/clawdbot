@@ -78,6 +78,7 @@ import {
 } from "./store-normalizers.js";
 
 type WorkboardUpdateCardOptions = {
+  allowAutomationLaunch?: boolean;
   allowMetadataDependencyLinks?: boolean;
   enforceStatusHolds?: boolean;
   event?: Omit<WorkboardEvent, "id" | "at">;
@@ -786,6 +787,7 @@ export class WorkboardCoreStore {
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
+      allowAutomationLaunch: options.allowAutomationLaunch,
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
       preserveProofId: options.preserveProofId,
     });
