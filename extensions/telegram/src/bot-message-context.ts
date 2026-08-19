@@ -171,7 +171,7 @@ export const buildTelegramMessageContext = async ({
         isTopicMessage: msg.is_topic_message,
         getChat: getChatApi,
       });
-  const threadSpec = resolveTelegramMessageThreadSpec(msg, isForum);
+  const threadSpec = options?.threadSpec ?? resolveTelegramMessageThreadSpec(msg, isForum);
   const resolvedThreadId =
     threadSpec.scope === "forum" || threadSpec.scope === "direct-messages"
       ? threadSpec.id
@@ -250,8 +250,7 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
     chatId,
     isGroup,
-    resolvedThreadId,
-    replyThreadId,
+    threadSpec,
     senderId,
     topicAgentId: topicConfig?.agentId,
   });
@@ -475,6 +474,7 @@ export const buildTelegramMessageContext = async ({
     senderUsername,
     resolvedThreadId,
     replyThreadId,
+    threadSpec,
     originatingTo,
     routeAgentId: route.agentId,
     sessionKey,

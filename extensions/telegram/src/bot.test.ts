@@ -539,6 +539,7 @@ async function writeDirectTelegramTranscriptMessages(params: {
     accountId: "default",
     chatId: params.chatId,
     isGroup: false,
+    threadSpec: { scope: "none" },
     senderId: params.senderId,
   }).route;
   const sessionKey = resolveTelegramConversationBaseSessionKey({
@@ -2608,6 +2609,7 @@ describe("createTelegramBot", () => {
       accountId: "default",
       chatId: 1234,
       isGroup: false,
+      threadSpec: { scope: "none" },
       senderId: 9,
     }).route;
     const sessionKey = resolveTelegramConversationBaseSessionKey({
@@ -2715,6 +2717,7 @@ describe("createTelegramBot", () => {
           accountId: "default",
           chatId: 1234,
           isGroup: false,
+          threadSpec: { scope: "none" },
           senderId: 9,
         }).route;
         const sessionKey = resolveTelegramConversationBaseSessionKey({
