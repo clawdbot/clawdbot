@@ -12,6 +12,22 @@ type SessionMessageApplySource =
   | { kind: "history-delta" }
   | { kind: "live"; activeRunId: string | null };
 
+/**
+ * The run this pane is finishing. A terminal chat event clears the local run
+ * before its persisted reply row arrives, so the armed terminal tombstone is
+ * the same pane's proof of ownership for that trailing row.
+ */
+function finishingChatRunId(state: ChatState, source: SessionMessageApplySource): string | null {
+  if (source.kind !== "live") {
+    return null;
+  }
+  if (source.activeRunId) {
+    return source.activeRunId;
+  }
+  const recent = state.lastLocalTerminalReconcile;
+  return recent?.sessionKey === state.sessionKey ? (recent.runId ?? null) : null;
+}
+
 /** Apply one durable session.message payload through the pane-owned transcript reducer. */
 export function applySessionMessagePayload(
   state: ChatState,
@@ -36,7 +52,24 @@ export function applySessionMessagePayload(
     source.activeRunId &&
     incoming.runId !== source.activeRunId,
   );
-  if (source.kind === "live" && incoming.role !== "user" && !isPreviousRunAssistant) {
+  // The transcript never records which run wrote an assistant row, so the run
+  // this pane is finishing is the only proof of ownership for the reply that
+  // ends it. Admitting it here lets the reducer recognize the same run's
+  // terminal projection instead of rendering the reply twice.
+  const assistantOwnerRunId =
+    incoming.role === "assistant" &&
+    incoming.id &&
+    !incoming.isImported &&
+    !incoming.runId &&
+    runActive !== true
+      ? finishingChatRunId(state, source)
+      : null;
+  if (
+    source.kind === "live" &&
+    incoming.role !== "user" &&
+    !isPreviousRunAssistant &&
+    !assistantOwnerRunId
+  ) {
     return;
   }
   // Partial import provenance cannot turn an envelope position into durable
@@ -69,7 +102,11 @@ export function applySessionMessagePayload(
   const previousMessageCount = state.chatMessages.length;
   const projection = reduceChatSessionProjection(
     state,
-    { type: "messagePersisted", message, envelope: event },
+    {
+      type: "messagePersisted",
+      message,
+      envelope: assistantOwnerRunId ? { ...event, runId: assistantOwnerRunId } : event,
+    },
     { scope, runActive },
   );
   const steerTargetRunId = persistedSteerTargetRunId(message);
