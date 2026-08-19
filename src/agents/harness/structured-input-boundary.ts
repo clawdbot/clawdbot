@@ -48,11 +48,6 @@ const MAX_SNAPSHOT_ARRAY_ITEMS = 16;
 const MAX_SNAPSHOT_TEXT = 65_536;
 const MAX_FIELD_NAME = 256;
 
-/* oxlint-disable eslint/no-control-regex -- Boundary validation rejects literal controls. */
-const UNSAFE_VISIBLE_CHARACTERS =
-  /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/u;
-/* oxlint-enable eslint/no-control-regex */
-
 /** Copies only bounded, enumerable own data properties without invoking accessors. */
 export function snapshotStructuredInput(value: unknown): StructuredInputValue | undefined {
   let nodes = 0;
@@ -213,7 +208,21 @@ export function readStructuredInputText(value: unknown, maximum: number): string
 }
 
 export function hasUnsafeVisibleCharacters(value: string): boolean {
-  return UNSAFE_VISIBLE_CHARACTERS.test(value);
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      (codePoint >= 0x200b && codePoint <= 0x200f) ||
+      (codePoint >= 0x2028 && codePoint <= 0x202e) ||
+      codePoint === 0x2060 ||
+      (codePoint >= 0x2066 && codePoint <= 0x2069) ||
+      codePoint === 0xfeff
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function boundStructuredInputText(value: string, maximum: number): string {
