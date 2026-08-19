@@ -233,12 +233,21 @@ describe("agents set-identity command", () => {
 
     const jsonRuntime = createCapturingTestRuntime();
     await agentsSetIdentityCommand({ agent: "main", name, json: true }, jsonRuntime.runtime);
-    expect(JSON.parse(jsonRuntime.logs.at(-1) ?? "{}")).toStrictEqual({
+    const payload = JSON.parse(jsonRuntime.logs.at(-1) ?? "{}") as {
+      agentId: string;
+      identity: { name: string };
+      workspace: string | null;
+      identityFile: string | null;
+      identitySource: string | null;
+    };
+    expect(payload).toMatchObject({
       agentId: "main",
       identity: { name },
-      workspace: null,
       identityFile: null,
+      identitySource: null,
     });
+    expect(payload.workspace).toEqual(expect.any(String));
+    expect(payload.workspace).not.toBe("");
   });
 
   it("reads identity from an explicit IDENTITY.md path", async () => {
@@ -442,5 +451,46 @@ describe("agents set-identity command", () => {
     ).rejects.toBe(writeFailure);
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not persist --workspace and reports stored workspace separately from the identity source", async () => {
+    const { root, workspace: storedWorkspace } = await createIdentityWorkspace("stored");
+    const identitySource = path.join(root, "relocated");
+    await fs.mkdir(identitySource, { recursive: true });
+
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { worker: { workspace: storedWorkspace } } } },
+    });
+
+    const jsonRuntime = createCapturingTestRuntime();
+    await agentsSetIdentityCommand(
+      {
+        agent: "worker",
+        workspace: identitySource,
+        name: "Worker",
+        json: true,
+      },
+      jsonRuntime.runtime,
+    );
+
+    const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
+    expect(written).toMatchObject({
+      agents: {
+        entries: {
+          worker: {
+            workspace: storedWorkspace,
+            identity: { name: "Worker" },
+          },
+        },
+      },
+    });
+    expect(JSON.parse(jsonRuntime.logs.at(-1) ?? "{}")).toEqual({
+      agentId: "worker",
+      identity: { name: "Worker" },
+      workspace: storedWorkspace,
+      identitySource,
+      identityFile: null,
+    });
   });
 });

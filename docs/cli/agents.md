@@ -156,6 +156,8 @@ Avatar paths resolve relative to the workspace root and cannot escape it, even t
 `set-identity` writes fields into `agents.entries.*.identity`: `name`, `theme`, `emoji`, `avatar` (workspace-relative path, http(s) URL, or data URI).
 
 - `--agent` or `--workspace` selects the target agent. If `--workspace` matches more than one agent, the command fails and asks you to pass `--agent`.
+- `--workspace` and `--identity-file` only select the agent or identity file. They do not change `agents.entries.*.workspace`.
+- Relocate an existing agent with `openclaw config set agents.entries.<id>.workspace <dir>`, then follow the CLI restart hint and confirm with `openclaw agents list`.
 - Local workspace-relative avatar image files are limited to 2 MB. HTTP(S) URLs and `data:` URIs are not checked against the local file-size limit.
 - When no explicit identity fields are provided, the command reads identity data from `IDENTITY.md`.
 
@@ -169,6 +171,13 @@ Override fields explicitly:
 
 ```bash
 openclaw agents set-identity --agent main --name "OpenClaw" --emoji "🦞" --avatar avatars/openclaw.png
+```
+
+Relocate the stored workspace:
+
+```bash
+openclaw config set agents.entries.work.workspace ~/.openclaw/workspace-work
+openclaw agents list
 ```
 
 Config sample:
