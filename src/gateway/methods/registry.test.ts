@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
+import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
 import { listCoreGatewayMethodNames } from "./core-descriptors.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -131,11 +132,18 @@ describe("gateway method registry", () => {
     }
     expect(registry.requiresAuthenticatedProfile("users.self")).toBe(false);
     expect(registry.requiresAuthenticatedProfile("status")).toBe(false);
+    for (const method of listCoreGatewayMethodNames().filter(isSessionProfileDependentMethod)) {
+      expect(registry.requiresAuthenticatedProfile(method), method).toBe(true);
+    }
     expect(registry.requiresAuthenticatedProfile("agent")).toBe(true);
     expect(registry.requiresAuthenticatedProfile("chat.history")).toBe(true);
     expect(registry.requiresAuthenticatedProfile("sessions.list")).toBe(true);
     expect(registry.requiresAuthenticatedProfile("openclaw.chat")).toBe(true);
     expect(registry.requiresAuthenticatedProfile("projects.list")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("approval.get")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("approval.history")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("board.data.read")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("board.prompt.authorize")).toBe(false);
     expect(registry.requiresAuthenticatedProfile("aux.identity.read")).toBe(true);
   });
 });

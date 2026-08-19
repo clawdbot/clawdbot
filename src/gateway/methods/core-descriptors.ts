@@ -1,5 +1,6 @@
 // Core gateway method descriptors keep handler names, auth scopes, startup availability, and write policy in one table.
 import type { OperatorScope } from "../operator-scopes.js";
+import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   NODE_GATEWAY_METHOD_SCOPE,
@@ -34,10 +35,7 @@ type CoreGatewayMethodSpecRow = readonly [
 ];
 
 const PROFILE_DEPENDENT_CORE_METHODS = new Set([
-  "agent",
   "agent.wait",
-  "plugins.sessionAction",
-  "tools.invoke",
   "ui.command",
   "users.linkEmail",
   "users.setAvatar",
@@ -65,6 +63,7 @@ const PROFILE_DEPENDENT_CORE_PREFIXES = [
 /** Classifies core methods whose behavior reads or mutates durable user/session ownership. */
 function isCoreGatewayMethodProfileDependent(method: string): boolean {
   return (
+    isSessionProfileDependentMethod(method) ||
     PROFILE_DEPENDENT_CORE_METHODS.has(method) ||
     PROFILE_DEPENDENT_CORE_PREFIXES.some((prefix) => method.startsWith(prefix))
   );

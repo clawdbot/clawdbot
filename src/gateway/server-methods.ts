@@ -55,6 +55,7 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
+import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -293,14 +294,14 @@ function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
 async function authorizeAuthenticatedProfileForMethod(params: {
   client: GatewayRequestOptions["client"];
   method: string;
+  requestParams: unknown;
   methodRegistry: GatewayMethodRegistry;
 }): Promise<ErrorShape | null> {
   const sync = params.client?.authenticatedGitHubIdentitySync;
-  if (
-    !sync ||
-    !params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
-    params.client?.authenticatedUserProfile?.profileId.trim()
-  ) {
+  const requiresProfile =
+    params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
+    resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0;
+  if (!sync || !requiresProfile || params.client?.authenticatedUserProfile?.profileId.trim()) {
     return null;
   }
   try {

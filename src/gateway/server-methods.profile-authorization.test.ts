@@ -22,11 +22,17 @@ async function dispatchPendingProfileMethod(params: {
   client: NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
   handler: GatewayRequestHandler;
   method: string;
+  requestParams?: unknown;
   methodRegistry?: ReturnType<typeof createGatewayMethodRegistry>;
 }) {
   const respond = vi.fn();
   await handleGatewayRequest({
-    req: { type: "req", id: `req-${params.method}`, method: params.method, params: {} },
+    req: {
+      type: "req",
+      id: `req-${params.method}`,
+      method: params.method,
+      params: params.requestParams ?? {},
+    },
     respond,
     client: params.client,
     isWebchatConnect: () => false,
@@ -101,16 +107,22 @@ describe("Gateway pending-profile authorization", () => {
   it("classifies profile-owned core families and plugin or auxiliary methods fail-closed", async () => {
     const methods = [
       "agent",
-      "chat.history",
-      "sessions.list",
-      "openclaw.chat",
-      "projects.list",
+      "approval.resolve",
       "artifacts.list",
-      "tasks.list",
-      "taskSuggestions.list",
-      "mcp.app.view",
+      "board.event",
+      "chat.history",
       "controlUi.sessionPreview",
+      "exec.approval.resolve",
+      "mcp.app.view",
+      "message.action",
+      "openclaw.chat",
+      "plugin.approval.resolve",
+      "projects.list",
       "secrets.store.set",
+      "send",
+      "sessions.list",
+      "taskSuggestions.list",
+      "tasks.list",
     ];
     for (const method of methods) {
       const client = createPendingProfileClient();
@@ -139,6 +151,35 @@ describe("Gateway pending-profile authorization", () => {
       await dispatchPendingProfileMethod({ client, handler, method, methodRegistry });
       expect(handler, owner.kind).not.toHaveBeenCalled();
     }
+  });
+
+  it("gates parameter-dependent incognito access without blocking ordinary independent requests", async () => {
+    const client = createPendingProfileClient();
+    client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
+
+    const blocked = await dispatchPendingProfileMethod({
+      client,
+      handler,
+      method: "question.request",
+      requestParams: { sessionKey: "agent:main:dashboard:incognito-profile-gate" },
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+    );
+
+    const allowed = await dispatchPendingProfileMethod({
+      client,
+      handler,
+      method: "question.request",
+      requestParams: { sessionKey: "agent:main:main" },
+    });
+    expect(handler).toHaveBeenCalledOnce();
+    expect(allowed).toHaveBeenCalledWith(true, { ok: true });
+    expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
   });
 
   it("keeps profile bootstrap and identity-independent status available while sync is pending", async () => {

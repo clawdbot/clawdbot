@@ -108,6 +108,40 @@ describe("session sharing policy", () => {
     expect(resolveSessionSharingRole({ client: pending, target: draft })).toBe("viewer");
   });
 
+  it("returns retryable unavailability from direct session guards while profile sync is pending", () => {
+    const pending = client({ githubSyncPending: true });
+    const ownedTarget = target({ type: "human", id: "profile-owner" });
+    const incognitoTarget = {
+      ...ownedTarget,
+      canonicalKey: "agent:main:dashboard:incognito-direct-guard",
+      entry: { ...ownedTarget.entry, incognito: true as const },
+    };
+
+    expect(
+      authorizeIncognitoSessionTarget({
+        client: pending,
+        sessionKey: incognitoTarget.canonicalKey,
+        target: incognitoTarget,
+      }),
+    ).toMatchObject({
+      code: "UNAVAILABLE",
+      retryable: true,
+      details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+    });
+    expect(
+      resolveSessionMutationAuthorization({
+        client: pending,
+        method: "send",
+        requestParams: { sessionKey: "agent:main:main" },
+        context: {} as GatewayRequestContext,
+      }).error,
+    ).toMatchObject({
+      code: "UNAVAILABLE",
+      retryable: true,
+      details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+    });
+  });
+
   it("requires participation before sessions.create can adopt a categorized key", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:categorized-adoption";
