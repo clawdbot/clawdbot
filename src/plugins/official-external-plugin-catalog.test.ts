@@ -44,6 +44,7 @@ type ExtensionPackageMetadata = {
 
 type BundledCatalogIdentity = {
   id?: string;
+  name?: string;
   openclaw?: {
     channel?: { id?: string };
     plugin?: { id?: string };
