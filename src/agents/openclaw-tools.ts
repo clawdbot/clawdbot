@@ -284,17 +284,13 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     resolvedConfig?.tools?.alsoAllow,
     options?.pluginToolAllowlist,
   );
-  const explicitFactoryDenylist = mergeFactoryPolicyList(
-    resolvedConfig?.tools?.deny,
-    options?.pluginToolDenylist,
-  );
   const includeMessageTool =
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
     isToolExplicitlyAllowedByFactoryPolicy({
       toolName: "message",
       allowlist: explicitFactoryAllowlist,
-      denylist: explicitFactoryDenylist,
+      denylist: mergeFactoryPolicyList(resolvedConfig?.tools?.deny, options?.pluginToolDenylist),
     });
   const sessionLookupToolOptions = {
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
