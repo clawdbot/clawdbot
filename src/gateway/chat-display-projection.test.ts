@@ -366,6 +366,58 @@ describe("transcript metadata projection", () => {
       );
     }
   });
+
+  it("records a display-cap marker on every history transport when text is truncated", () => {
+    const message = { role: "assistant", content: "x".repeat(9_000), timestamp: 1 };
+    for (const messages of projectHistoryTransports(message)) {
+      const projected = messages[0] as Record<string, unknown>;
+      expect(JSON.stringify(projected.content)).toContain("...(truncated)...");
+      // Structured fact, so consumers fetch the full row via chat.message.get
+      // instead of sniffing the in-band sentinel.
+      expect(projected["__openclaw"]).toEqual({ truncated: true, reason: "display-cap" });
+    }
+  });
+
+  it("marks display-cap truncation inside content blocks and keeps existing metadata", () => {
+    const [projected] = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "block text ".repeat(20) }],
+          __openclaw: { id: "message-9", senderId: "assistant-1" },
+        },
+      ],
+      16,
+    ) as Record<string, unknown>[];
+    expect(projected?.["__openclaw"]).toEqual({
+      id: "message-9",
+      senderId: "assistant-1",
+      truncated: true,
+      reason: "display-cap",
+    });
+  });
+
+  it("leaves untruncated messages without a truncation marker", () => {
+    const [projected] = sanitizeChatHistoryMessages(
+      [{ role: "assistant", content: "short", timestamp: 1 }],
+      16,
+    ) as Record<string, unknown>[];
+    expect(projected?.["__openclaw"]).toBeUndefined();
+  });
+
+  it("does not overwrite an upstream oversized reason with display-cap", () => {
+    const [projected] = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: "still long enough to cap ".repeat(4),
+          __openclaw: { truncated: true, reason: "oversized" },
+        },
+      ],
+      16,
+    ) as Record<string, unknown>[];
+    expect(projected?.["__openclaw"]).toEqual({ truncated: true, reason: "oversized" });
+  });
 });
 
 describe("managed inbound media fact projection", () => {
