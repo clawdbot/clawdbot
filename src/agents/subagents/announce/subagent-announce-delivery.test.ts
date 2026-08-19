@@ -2672,37 +2672,69 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "image",
       sourceTool: "image_generate",
-      internalEvents: imageCompletionEvents(),
-      expectedMediaUrls: ["/tmp/generated-daily.png"],
+      attachment: {
+        type: "image" as const,
+        path: "/tmp/generated-daily.png",
+        name: "generated-daily.png",
+        mimeType: "image/png",
+        sizeBytes: 1234,
+        width: 1024,
+        height: 768,
+      },
+      buildEvents: (attachment: NonNullable<AgentInternalEvent["attachments"]>[number]) =>
+        imageCompletionEvents({ attachments: [attachment] }),
     },
     {
       name: "music",
       sourceTool: "music_generate",
-      internalEvents: musicCompletionEvents(),
-      expectedMediaUrls: ["/tmp/generated-night-drive.mp3"],
+      attachment: {
+        type: "audio" as const,
+        path: "/tmp/generated-night-drive.mp3",
+        name: "generated-night-drive.mp3",
+        mimeType: "audio/mpeg",
+        sizeBytes: 5678,
+        durationMs: 42_000,
+      },
+      buildEvents: (attachment: NonNullable<AgentInternalEvent["attachments"]>[number]) =>
+        musicCompletionEvents({ attachments: [attachment] }),
     },
     {
       name: "video",
       sourceTool: "video_generate",
-      internalEvents: taskCompletionEvents({
-        source: "video_generation",
-        childSessionKey: "video_generate:task-123",
-        childSessionId: "task-123",
-        announceType: "video generation task",
-        mediaUrls: ["/tmp/generated-corgi.mp4"],
-      }),
-      expectedMediaUrls: ["/tmp/generated-corgi.mp4"],
+      attachment: {
+        type: "video" as const,
+        path: "/tmp/generated-corgi.mp4",
+        name: "generated-corgi.mp4",
+        mimeType: "video/mp4",
+        sizeBytes: 9012,
+        durationMs: 8_000,
+        width: 1280,
+        height: 720,
+      },
+      buildEvents: (attachment: NonNullable<AgentInternalEvent["attachments"]>[number]) =>
+        taskCompletionEvents({
+          source: "video_generation",
+          childSessionKey: "video_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "video generation task",
+          mediaUrls: [attachment.path ?? ""],
+          attachments: [attachment],
+        }),
     },
   ])(
     "queues generated $name completions without opt-in or direct delivery",
-    async ({ sourceTool, internalEvents, expectedMediaUrls }) => {
+    async ({ sourceTool, attachment, buildEvents }) => {
+      const mediaUrl = attachment.path;
+      if (!mediaUrl) {
+        throw new Error("generated media fixture requires a path");
+      }
       const callGateway = createPayloadGatewayMock();
       const sendMessage = createSendMessageMock();
       const result = await deliverDiscordDirectMessageCompletion({
         callGateway,
         sendMessage,
         sourceTool,
-        internalEvents,
+        internalEvents: buildEvents(attachment),
       });
 
       expectDeliveryPath(result, "queued");
@@ -2714,7 +2746,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           sessionKey: "agent:main:discord:dm:U123",
           inputProvenance: expect.objectContaining({ kind: "inter_session", sourceTool }),
           sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls,
+          expectedMediaUrls: [mediaUrl],
+          expectedMediaAttachments: { [mediaUrl]: attachment },
           idempotencyKey: "announce-dm-fallback-empty:agent-loop",
         }),
         expect.any(Number),
@@ -2744,10 +2777,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectDeliveryPath(result, "queued");
-    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedMediaUrls: [] }),
-      expect.any(Number),
-    );
+    const queuedPayload =
+      sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mock.calls.at(-1)?.[0];
+    expect(queuedPayload).toMatchObject({ expectedMediaUrls: [] });
+    expect(queuedPayload).not.toHaveProperty("expectedMediaAttachments");
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
