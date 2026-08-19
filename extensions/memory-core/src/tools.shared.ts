@@ -2,6 +2,7 @@
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -10,6 +11,7 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
@@ -171,6 +173,11 @@ export function buildMemorySearchUnavailableResult(
 const SUPPLEMENT_FAILURE_DETAIL_MAX_CHARS = 200;
 const SUPPLEMENT_FAILURES_REPORTED_MAX = 3;
 
+/** Every registered supplement rejected; the caller owns the degradation shape. */
+export type MemoryCorpusSupplementSearchOutcome =
+  | { status: "ok"; results: MemoryCorpusSearchResult[] }
+  | { status: "all-failed"; failure: string };
+
 export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
@@ -178,13 +185,13 @@ export async function searchMemoryCorpusSupplements(params: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
-}): Promise<MemoryCorpusSearchResult[]> {
+}): Promise<MemoryCorpusSupplementSearchOutcome> {
   if (params.corpus === "memory" || params.corpus === "sessions") {
-    return [];
+    return { status: "ok", results: [] };
   }
   const supplements = listMemoryCorpusSupplements();
   if (supplements.length === 0) {
-    return [];
+    return { status: "ok", results: [] };
   }
   // allSettled so a single rejecting supplement does not discard sibling
   // results. The caller's memory-search deadline owns time bounding; no local
@@ -217,23 +224,30 @@ export async function searchMemoryCorpusSupplements(params: {
   }
   if (failures.length === supplements.length) {
     // Every supplement failed: that is backend unavailability, not an empty
-    // corpus. Throw so the memory tool surfaces its unavailable result
-    // (cooldown stays memory-phase-only) instead of a silent empty or
-    // memory-only success. The message reaches the agent-visible unavailable
-    // response, so report a bounded sample plus count, never every failure.
+    // corpus. Return the structured outcome so the caller can keep healthy
+    // builtin-memory hits and record the unavailable supplement corpus
+    // (cooldown stays memory-phase-only). The message reaches the
+    // agent-visible response, so report a bounded sample plus count, never
+    // every failure.
     const shown = failures.slice(0, SUPPLEMENT_FAILURES_REPORTED_MAX);
     const omitted = failures.length - shown.length;
     const detail = omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
-    throw new Error(`all ${supplements.length} corpus supplement searches failed: ${detail}`);
+    return {
+      status: "all-failed",
+      failure: `all ${supplements.length} corpus supplement searches failed: ${detail}`,
+    };
   }
-  return results
-    .toSorted((left, right) => {
-      if (left.score !== right.score) {
-        return right.score - left.score;
-      }
-      return left.path.localeCompare(right.path);
-    })
-    .slice(0, Math.max(1, params.maxResults ?? 10));
+  return {
+    status: "ok",
+    results: results
+      .toSorted((left, right) => {
+        if (left.score !== right.score) {
+          return right.score - left.score;
+        }
+        return left.path.localeCompare(right.path);
+      })
+      .slice(0, Math.max(1, params.maxResults ?? 10)),
+  };
 }
 
 export async function getMemoryCorpusSupplementResult(params: {
@@ -255,4 +269,73 @@ export async function getMemoryCorpusSupplementResult(params: {
     }
   }
   return null;
+}
+
+export type MemorySearchToolResult =
+  | (MemorySearchResult & { corpus: MemorySource })
+  | MemoryCorpusSearchResult;
+
+function mergeRankedMemorySearchToolStreams(
+  memoryResults: MemorySearchToolResult[],
+  supplementResults: MemorySearchToolResult[],
+): MemorySearchToolResult[] {
+  const merged: MemorySearchToolResult[] = [];
+  let memoryIndex = 0;
+  let supplementIndex = 0;
+  // Each backend owns its ranking. Memory scores intentionally omit some
+  // precedence facts, so compare only stream heads and never reorder a stream.
+  while (memoryIndex < memoryResults.length && supplementIndex < supplementResults.length) {
+    const memory = memoryResults[memoryIndex];
+    const supplement = supplementResults[supplementIndex];
+    if ((memory?.score ?? 0) >= (supplement?.score ?? 0)) {
+      if (memory) {
+        merged.push(memory);
+      }
+      memoryIndex += 1;
+    } else {
+      if (supplement) {
+        merged.push(supplement);
+      }
+      supplementIndex += 1;
+    }
+  }
+  merged.push(...memoryResults.slice(memoryIndex), ...supplementResults.slice(supplementIndex));
+  return merged;
+}
+
+export function mergeMemorySearchCorpusResults(params: {
+  memoryResults: MemorySearchToolResult[];
+  supplementResults: MemorySearchToolResult[];
+  maxResults: number;
+  balanceCorpora: boolean;
+}): MemorySearchToolResult[] {
+  const memoryResults = params.memoryResults;
+  const supplementResults = params.supplementResults;
+  if (!params.balanceCorpora || memoryResults.length === 0 || supplementResults.length === 0) {
+    return mergeRankedMemorySearchToolStreams(memoryResults, supplementResults).slice(
+      0,
+      params.maxResults,
+    );
+  }
+
+  const perCorpusCap = Math.ceil(params.maxResults / 2);
+  let memoryTake = Math.min(perCorpusCap, memoryResults.length);
+  let supplementTake = Math.min(perCorpusCap, supplementResults.length);
+  while (memoryTake + supplementTake < params.maxResults) {
+    const memory = memoryResults[memoryTake];
+    const supplement = supplementResults[supplementTake];
+    if (!memory && !supplement) {
+      break;
+    }
+    if (!supplement || (memory && memory.score >= supplement.score)) {
+      memoryTake += 1;
+    } else {
+      supplementTake += 1;
+    }
+  }
+
+  return mergeRankedMemorySearchToolStreams(
+    memoryResults.slice(0, memoryTake),
+    supplementResults.slice(0, supplementTake),
+  ).slice(0, params.maxResults);
 }

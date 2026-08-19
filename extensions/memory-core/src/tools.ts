@@ -14,7 +14,6 @@ import {
   readStringParam,
   resolveMemoryDreamingPluginConfig,
   resolveMemorySearchConfig,
-  type MemoryCorpusSearchResult,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -47,12 +46,10 @@ import {
   loadMemoryToolRuntime,
   MemoryGetSchema,
   MemorySearchSchema,
+  mergeMemorySearchCorpusResults,
   searchMemoryCorpusSupplements,
 } from "./tools.shared.js";
 
-type MemorySearchToolResult =
-  | (MemorySearchResult & { corpus: MemorySource })
-  | MemoryCorpusSearchResult;
 type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWithPurpose>>;
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
 type MemorySearchToolQueryDebug = NonNullable<
@@ -140,71 +137,6 @@ async function closeMemoryManagers(
   } catch {
     // Search results should not be hidden by best-effort transient cleanup.
   }
-}
-
-function mergeRankedMemorySearchToolStreams(
-  memoryResults: MemorySearchToolResult[],
-  supplementResults: MemorySearchToolResult[],
-): MemorySearchToolResult[] {
-  const merged: MemorySearchToolResult[] = [];
-  let memoryIndex = 0;
-  let supplementIndex = 0;
-  // Each backend owns its ranking. Memory scores intentionally omit some
-  // precedence facts, so compare only stream heads and never reorder a stream.
-  while (memoryIndex < memoryResults.length && supplementIndex < supplementResults.length) {
-    const memory = memoryResults[memoryIndex];
-    const supplement = supplementResults[supplementIndex];
-    if ((memory?.score ?? 0) >= (supplement?.score ?? 0)) {
-      if (memory) {
-        merged.push(memory);
-      }
-      memoryIndex += 1;
-    } else {
-      if (supplement) {
-        merged.push(supplement);
-      }
-      supplementIndex += 1;
-    }
-  }
-  merged.push(...memoryResults.slice(memoryIndex), ...supplementResults.slice(supplementIndex));
-  return merged;
-}
-
-function mergeMemorySearchCorpusResults(params: {
-  memoryResults: MemorySearchToolResult[];
-  supplementResults: MemorySearchToolResult[];
-  maxResults: number;
-  balanceCorpora: boolean;
-}): MemorySearchToolResult[] {
-  const memoryResults = params.memoryResults;
-  const supplementResults = params.supplementResults;
-  if (!params.balanceCorpora || memoryResults.length === 0 || supplementResults.length === 0) {
-    return mergeRankedMemorySearchToolStreams(memoryResults, supplementResults).slice(
-      0,
-      params.maxResults,
-    );
-  }
-
-  const perCorpusCap = Math.ceil(params.maxResults / 2);
-  let memoryTake = Math.min(perCorpusCap, memoryResults.length);
-  let supplementTake = Math.min(perCorpusCap, supplementResults.length);
-  while (memoryTake + supplementTake < params.maxResults) {
-    const memory = memoryResults[memoryTake];
-    const supplement = supplementResults[supplementTake];
-    if (!memory && !supplement) {
-      break;
-    }
-    if (!supplement || (memory && memory.score >= supplement.score)) {
-      memoryTake += 1;
-    } else {
-      supplementTake += 1;
-    }
-  }
-
-  return mergeRankedMemorySearchToolStreams(
-    memoryResults.slice(0, memoryTake),
-    supplementResults.slice(0, supplementTake),
-  ).slice(0, params.maxResults);
 }
 
 function buildRecallKey(
@@ -597,7 +529,7 @@ export function createMemorySearchTool(options: {
                 );
               }
             }
-            const supplementResults = shouldQuerySupplements
+            const supplementOutcome = shouldQuerySupplements
               ? await runUnavailablePhase(
                   "supplement",
                   async () =>
@@ -613,7 +545,25 @@ export function createMemorySearchTool(options: {
                         }),
                     ),
                 )
-              : [];
+              : { status: "ok" as const, results: [] };
+            const supplementCorpusUnavailable =
+              supplementOutcome.status === "all-failed" ? supplementOutcome.failure : undefined;
+            if (supplementCorpusUnavailable !== undefined) {
+              // Mirror the memory-corpus degradation: only when no healthy
+              // corpus remains does the whole search surface unavailability.
+              if (requestedCorpus === "wiki") {
+                return jsonResult(buildMemorySearchUnavailableResult(supplementCorpusUnavailable));
+              }
+              if (memoryCorpusUnavailable) {
+                return jsonResult(
+                  buildMemorySearchUnavailableResult(
+                    `${supplementCorpusUnavailable}; memory: ${memoryCorpusUnavailable}`,
+                  ),
+                );
+              }
+            }
+            const supplementResults =
+              supplementOutcome.status === "ok" ? supplementOutcome.results : [];
             // Wiki and memory scores use incomparable scales, so corpus=all first
             // balances candidate selection and then backfills any unused slots.
             const effectiveMax = Math.max(1, maxResults ?? 10);
@@ -642,7 +592,13 @@ export function createMemorySearchTool(options: {
                 ? {
                     warning: `Memory corpus unavailable; results cover wiki supplements only: ${memoryCorpusUnavailable}`,
                   }
-                : {}),
+                : supplementCorpusUnavailable
+                  ? {
+                      // Both-corpora-down returned unavailable above, so healthy
+                      // memory hits are always present here.
+                      warning: `Wiki corpus unavailable; results cover memory only: ${supplementCorpusUnavailable}`,
+                    }
+                  : {}),
               ...staleness,
               debug: searchDebug,
             });

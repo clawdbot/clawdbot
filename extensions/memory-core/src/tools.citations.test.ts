@@ -607,7 +607,6 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(1);
   });
 
-
   it("surfaces a memory-corpus warning when corpus=all hits a returned manager error", async () => {
     setMemorySearchManagerImpl(async () => ({ error: "sqlite support missing" }));
     registerMemoryCorpusSupplement("memory-wiki", {
@@ -731,6 +730,68 @@ describe("memory tools", () => {
       const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
       expect(message).toContain('corpus supplement "broken-wiki" search failed');
       expect(message).toContain("corpus backend unavailable");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("keeps builtin memory hits and records the wiki corpus when every supplement rejects", async () => {
+    // Mirror of the memory-corpus degradation (#125500): supplement-phase
+    // unavailability must not discard a healthy primary search.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      registerMemoryCorpusSupplement("broken-wiki", {
+        search: async () => {
+          throw new Error("corpus backend unavailable");
+        },
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const result = await tool.execute("call_all_supplements_failed", {
+        query: "alpha",
+        corpus: "all",
+      });
+      const details = result.details as {
+        results: Array<{ corpus?: string; path: string }>;
+        warning?: string;
+        unavailable?: boolean;
+      };
+
+      expect(details.unavailable).toBeUndefined();
+      expect(details.results.map((entry) => entry.path)).toContain("MEMORY.md");
+      expect(details.warning).toContain("Wiki corpus unavailable; results cover memory only");
+      expect(details.warning).toContain("all 1 corpus supplement searches failed");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("stays unavailable for corpus=wiki when every supplement rejects", async () => {
+    // With no healthy corpus in scope, degradation has nothing to serve.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      registerMemoryCorpusSupplement("broken-wiki", {
+        search: async () => {
+          throw new Error("corpus backend unavailable");
+        },
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const result = await tool.execute("call_wiki_all_failed", {
+        query: "alpha",
+        corpus: "wiki",
+      });
+      const details = result.details as {
+        results: unknown[];
+        unavailable?: boolean;
+        error?: string;
+      };
+
+      expect(details.unavailable).toBe(true);
+      expect(details.results).toEqual([]);
+      expect(details.error).toContain("all 1 corpus supplement searches failed");
     } finally {
       warnSpy.mockRestore();
     }

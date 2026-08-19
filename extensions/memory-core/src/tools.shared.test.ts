@@ -38,9 +38,9 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
     warnSpy.mockRestore();
   });
 
-  it("returns empty array when no supplements registered", async () => {
+  it("returns empty ok outcome when no supplements registered", async () => {
     const out = await searchMemoryCorpusSupplements({ query: "anything", corpus: "all" });
-    expect(out).toEqual([]);
+    expect(out).toEqual({ status: "ok", results: [] });
   });
 
   it("returns surviving results when one supplement rejects", async () => {
@@ -59,17 +59,20 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
 
     const out = await searchMemoryCorpusSupplements({ query: "alpha", corpus: "all" });
 
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ path: "wiki/a.md", snippet: "alpha" });
+    expect(out.status).toBe("ok");
+    const results = out.status === "ok" ? out.results : [];
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ path: "wiki/a.md", snippet: "alpha" });
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
     expect(message).toContain('memory-core: corpus supplement "bad" search failed');
     expect(message).toContain("supplement exploded");
   });
 
-  it("throws (backend unavailable) when every supplement rejects", async () => {
+  it("returns the all-failed outcome when every supplement rejects", async () => {
     // Silent recall loss guard: when every registered supplement fails, the
-    // call must surface unavailability instead of a normal empty success.
+    // caller must be able to surface supplement unavailability instead of a
+    // normal empty success — without discarding healthy builtin results.
     registerMemoryCorpusSupplement(
       "bad-1",
       buildSupplement(async () => {
@@ -83,9 +86,10 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
       }),
     );
 
-    await expect(
-      searchMemoryCorpusSupplements({ query: "anything", corpus: "all" }),
-    ).rejects.toThrow(/all 2 corpus supplement searches failed: .*"bad-1": e1.*"bad-2": e2/);
+    const out = await searchMemoryCorpusSupplements({ query: "anything", corpus: "all" });
+    expect(out.status).toBe("all-failed");
+    const failure = out.status === "all-failed" ? out.failure : "";
+    expect(failure).toMatch(/all 2 corpus supplement searches failed: .*"bad-1": e1.*"bad-2": e2/);
     expect(warnSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -106,7 +110,11 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
 
     const out = await searchMemoryCorpusSupplements({ query: "x", corpus: "all" });
 
-    expect(out.map((r) => r.path)).toEqual(["notes/x.md", "wiki/a.md", "wiki/b.md"]);
+    expect(out.status === "ok" ? out.results.map((r) => r.path) : []).toEqual([
+      "notes/x.md",
+      "wiki/a.md",
+      "wiki/b.md",
+    ]);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
@@ -129,26 +137,27 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
       corpus: "all",
       maxResults: 5,
     });
-    expect(five).toHaveLength(5);
+    expect(five.status === "ok" ? five.results : []).toHaveLength(5);
 
     const zeroClampedToOne = await searchMemoryCorpusSupplements({
       query: "x",
       corpus: "all",
       maxResults: 0,
     });
-    expect(zeroClampedToOne).toHaveLength(1);
+    expect(zeroClampedToOne.status === "ok" ? zeroClampedToOne.results : []).toHaveLength(1);
   });
 
   it("never queries supplements when corpus is 'memory' or 'sessions'", async () => {
     const search = vi.fn(async () => [buildResult()]);
     registerMemoryCorpusSupplement("wiki", buildSupplement(search));
 
-    await expect(searchMemoryCorpusSupplements({ query: "x", corpus: "memory" })).resolves.toEqual(
-      [],
-    );
+    await expect(searchMemoryCorpusSupplements({ query: "x", corpus: "memory" })).resolves.toEqual({
+      status: "ok",
+      results: [],
+    });
     await expect(
       searchMemoryCorpusSupplements({ query: "x", corpus: "sessions" }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ status: "ok", results: [] });
 
     expect(search).not.toHaveBeenCalled();
   });
@@ -174,8 +183,9 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
     );
 
     const out = await searchMemoryCorpusSupplements({ query: "x", corpus: "all" });
-    expect(out).toHaveLength(1);
-    expect(out[0]?.path).toBe("wiki/a.md");
+    const results = out.status === "ok" ? out.results : [];
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toBe("wiki/a.md");
 
     const messages: string[] = warnSpy.mock.calls.map(([message]: unknown[]): string =>
       typeof message === "string" ? message : (JSON.stringify(message) ?? ""),
@@ -206,8 +216,9 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
 
     const out = await searchMemoryCorpusSupplements({ query: "x", corpus: "all" });
 
-    expect(out).toHaveLength(1);
-    expect(out[0]?.path).toBe("wiki/a.md");
+    const results = out.status === "ok" ? out.results : [];
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toBe("wiki/a.md");
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -221,16 +232,13 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
       );
     }
 
-    const error: unknown = await searchMemoryCorpusSupplements({
+    const out = await searchMemoryCorpusSupplements({
       query: "anything",
       corpus: "all",
-    }).then(
-      () => undefined,
-      (reason: unknown) => reason,
-    );
+    });
 
-    expect(error).toBeInstanceOf(Error);
-    const message = (error as Error).message;
+    expect(out.status).toBe("all-failed");
+    const message = out.status === "all-failed" ? out.failure : "";
     expect(message).toContain("all 6 corpus supplement searches failed");
     expect(message).toContain("+3 more");
     // 3 capped entries plus prefix; anything near the raw 60k concat is a leak.
