@@ -1020,6 +1020,16 @@ describe("gateway client capability tool filtering", () => {
     expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "screen")).toBe(true);
   });
 
+  it("exposes GitHub publication only from a prepared session capability", () => {
+    expect(hasTool(createOpenClawTools(), "github_publish")).toBe(false);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
+    ).toBe(false);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: true }), "github_publish"),
+    ).toBe(true);
+  });
+
   it("omits host UI runtime tools for sandboxed agents", () => {
     expect(hasTool(createOpenClawTools({ agentSessionKey: "agent:main:main" }), "terminal")).toBe(
       true,

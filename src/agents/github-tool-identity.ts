@@ -18,7 +18,7 @@ const PROFILE_COMMAND_TIMEOUT_MS = 15_000;
 const PROFILE_OUTPUT_LIMIT_BYTES = 32 * 1024;
 const MANAGED_GITHUB_ROOT_SEGMENTS = ["credentials", "github"] as const;
 
-type GitHubToolAccount = { login: string; avatarUrl: string | null };
+type GitHubToolAccount = { accountId: number; login: string; avatarUrl: string | null };
 
 export function createManagedGitHubProfileId(): string {
   return `ghp_${randomBytes(16).toString("hex")}`;
@@ -177,11 +177,13 @@ function parseAccount(stdout: Buffer): GitHubToolAccount | undefined {
     if (!isRecord(value)) {
       return undefined;
     }
+    const accountId = value.id;
     const login = readNonBlankString(value.login)?.trim();
-    if (!login) {
+    if (!Number.isSafeInteger(accountId) || Number(accountId) <= 0 || !login) {
       return undefined;
     }
     return {
+      accountId: Number(accountId),
       login,
       avatarUrl: readNonBlankString(value.avatarUrl)?.trim() ?? null,
     };
@@ -199,11 +201,14 @@ async function probeAccount(env?: NodeJS.ProcessEnv) {
       "--hostname",
       GITHUB_HOST,
       "--jq",
-      "{login: .login, avatarUrl: .avatar_url}",
+      "{id: .id, login: .login, avatarUrl: .avatar_url}",
     ],
     env,
   );
-  return { result, account: result.code === 0 ? parseAccount(result.stdout) : undefined };
+  return {
+    result,
+    account: result.code === 0 ? parseAccount(result.stdout) : undefined,
+  };
 }
 
 function isRateLimitedProbe(result: Awaited<ReturnType<typeof runIdentityCommand>>): boolean {
@@ -307,7 +312,7 @@ export async function resolveGitHubToolIdentityStatus(params: {
     agentId: params.agentId,
     source: identity.source,
     credentialState,
-    account,
+    account: account ? { login: account.login, avatarUrl: account.avatarUrl } : null,
     gitAuthor: author,
     evidence: account
       ? "github-api"
@@ -317,6 +322,69 @@ export async function resolveGitHubToolIdentityStatus(params: {
           ? "unverified"
           : "none",
   };
+}
+
+export type PreparedGitHubPublicationIdentity = Readonly<{
+  source: "system-detected" | "system-configured" | "agent-override";
+  profileId?: string;
+  account: GitHubToolAccount;
+  env: NodeJS.ProcessEnv;
+}>;
+
+/** Confirms the current config still selects the prepared publication profile. */
+export function matchesPreparedGitHubPublicationIdentity(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  identity: PreparedGitHubPublicationIdentity;
+}): boolean {
+  const current = resolveGitHubToolIdentity(params);
+  return (
+    current.source === params.identity.source &&
+    (current.source === "system-detected" || current.config.profileId === params.identity.profileId)
+  );
+}
+
+/** Resolves a Gateway-owned publication identity without exposing its child environment. */
+export async function prepareGitHubPublicationIdentity(params: {
+  config: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<PreparedGitHubPublicationIdentity> {
+  const identity = resolveGitHubToolIdentity(params);
+  const managed = identity.source !== "system-detected";
+  if (managed && !(await isPrivateManagedProfile(identity.profileDir))) {
+    throw new Error("The configured GitHub identity profile is unavailable.");
+  }
+  const hostEnv = params.env ?? process.env;
+  const prepared = prepareGitHubToolEnvironment({
+    config: params.config,
+    sourceConfig: params.sourceConfig,
+    agentId: params.agentId,
+    env: hostEnv,
+  });
+  const directScrubEnv = Object.fromEntries(
+    Object.keys(prepared.credentialScrubEnv).map((name) => [name, undefined]),
+  );
+  const env: NodeJS.ProcessEnv = {
+    ...hostEnv,
+    ...directScrubEnv,
+    ...prepared.localIdentityEnv,
+    // Direct gh calls must not see empty token variables: gh treats them as
+    // authoritative and will not fall through to a native or managed profile.
+    ...(managed ? { GH_TOKEN: undefined, GITHUB_TOKEN: undefined } : {}),
+    GH_PROMPT_DISABLED: "1",
+  };
+  const probe = await probeAccount(env);
+  if (!probe.account) {
+    throw new Error("The effective GitHub identity could not be verified.");
+  }
+  return Object.freeze({
+    source: identity.source,
+    ...(managed ? { profileId: identity.config.profileId } : {}),
+    account: probe.account,
+    env,
+  });
 }
 
 async function makePrivateTree(root: string): Promise<void> {
@@ -337,7 +405,7 @@ async function makePrivateTree(root: string): Promise<void> {
 export async function installManagedGitHubProfile(params: {
   profileDir: string;
   token: string;
-  commitConfig: () => Promise<void>;
+  commitConfig: (account: GitHubToolAccount) => Promise<void>;
 }): Promise<GitHubToolAccount> {
   const token = params.token.trim();
   if (!token || /[\r\n]/u.test(token)) {
@@ -372,7 +440,7 @@ export async function installManagedGitHubProfile(params: {
     await makePrivateTree(stagedProfile);
     await fs.rename(stagedProfile, params.profileDir);
     published = true;
-    await params.commitConfig();
+    await params.commitConfig(verified.account);
     committed = true;
     return verified.account;
   } finally {

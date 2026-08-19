@@ -165,6 +165,7 @@ export async function prepareGatewayKernelState(params: {
     nodeWorkerGatewayNamespace,
     bindDeviceNodeControl,
     bindNodeWorkspaceBindingResolver,
+    bindGitHubPublication,
     handleNodeWorkerBundleTransferRequest,
     handleNodeWorkspaceTransferRequest,
   } = workerEnvironmentRuntime;
@@ -174,24 +175,43 @@ export async function prepareGatewayKernelState(params: {
       throw new Error("Worker dispatch authority revocation is not ready");
     },
   };
+  const workerPlacementModule = workerEnvironmentStartup
+    ? await startupTrace.measure(
+        "worker-environments.placement-module",
+        loadWorkerPlacementStartupModule,
+      )
+    : undefined;
+  const githubPublicationRuntime =
+    workerEnvironmentStartup && workerPlacementModule
+      ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
+          placements: workerEnvironmentStartup.placementStore,
+          warn: (message) => log.warn(message),
+        })
+      : undefined;
   const workerPlacementRuntime =
-    workerEnvironmentService && workerEnvironmentStartup && nodeWorkerGatewayNamespace
-      ? await startupTrace.measure("worker-environments.placement-runtime", async () => {
-          const placementModule = await loadWorkerPlacementStartupModule();
-          return placementModule.createGatewayWorkerPlacementRuntime({
+    workerEnvironmentService &&
+    workerEnvironmentStartup &&
+    nodeWorkerGatewayNamespace &&
+    workerPlacementModule
+      ? await startupTrace.measure("worker-environments.placement-runtime", async () =>
+          workerPlacementModule.createGatewayWorkerPlacementRuntime({
             placements: workerEnvironmentStartup.placementStore,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
             warn: (message) => log.warn(message),
-          });
-        })
+            ...(githubPublicationRuntime ? { githubPublicationRuntime } : {}),
+          }),
+        )
       : undefined;
   if (workerPlacementRuntime) {
     bindNodeWorkspaceBindingResolver?.(workerPlacementRuntime.resolveNodeWorkspaceBinding);
     workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
       workerPlacementRuntime.dispatchService.dispatch,
     );
+  }
+  if (githubPublicationRuntime) {
+    bindGitHubPublication?.(githubPublicationRuntime.coordinator);
   }
   const bindDeviceNodeRuntime = bindDeviceNodeControl
     ? (transport: Parameters<NonNullable<typeof bindDeviceNodeControl>>[0]) => {
@@ -495,6 +515,8 @@ export async function prepareGatewayKernelState(params: {
     bindDeviceNodeControl: bindDeviceNodeRuntime,
     workerDispatchAuthority,
     workerPlacementRuntime,
+    githubPublicationRuntime,
+    githubPublicationService: githubPublicationRuntime?.coordinator,
     workerPlacementControlAvailable,
     workerPlacementDispatchAvailable,
     workerDesktopObserveAvailable,

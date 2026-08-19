@@ -1,3 +1,4 @@
+import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
 import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -11,6 +12,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
@@ -71,10 +73,35 @@ export type GatewayWorkerPlacementRuntimeParams = {
   warn: (message: string) => void;
 };
 
+export function createGatewayGitHubPublicationRuntime(params: {
+  placements: WorkerSessionPlacementStore;
+  warn: (message: string) => void;
+}) {
+  return createGitHubPublicationRuntime({
+    placements: params.placements,
+    loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+    warn: params.warn,
+  });
+}
+
+export type GatewayGitHubPublicationRuntime = ReturnType<
+  typeof createGatewayGitHubPublicationRuntime
+>;
 export type GatewayWorkerPlacementRuntime = ReturnType<typeof createGatewayWorkerPlacementRuntime>;
 
-export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlacementRuntimeParams) {
+export function createGatewayWorkerPlacementRuntime(
+  params: GatewayWorkerPlacementRuntimeParams & {
+    githubPublicationRuntime?: GatewayGitHubPublicationRuntime;
+  },
+) {
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
+  const {
+    coordinator: githubPublication,
+    prepareAcceptedWorkspacePublication,
+    publishAcceptedWorkspace,
+    reconcilePublications,
+  } = params.githubPublicationRuntime ??
+  createGatewayGitHubPublicationRuntime({ placements: params.placements, warn: params.warn });
   const diskSpace = createWorkerPlacementDiskSpaceMonitor({
     placements: params.placements,
     environments: params.environments,
@@ -416,6 +443,21 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       },
       resolveWorkspacePath,
       workspaceOperations,
+      prepareAcceptedWorkspacePublication,
+      publishAcceptedWorkspace,
+      resolveGitAuthor: (agentId) =>
+        (
+          resolveConfiguredGitHubToolIdentity({
+            config: getRuntimeConfig(),
+            agentId,
+            scope: "agent",
+          }) ??
+          resolveConfiguredGitHubToolIdentity({
+            config: getRuntimeConfig(),
+            agentId,
+            scope: "system",
+          })
+        )?.gitAuthor,
     }),
   );
   const sessionRetirement = createPlacementSessionRetirement({
@@ -436,6 +478,8 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       dispatch: dispatchService.dispatch,
     }),
     workspaceOperations,
+    prepareAcceptedWorkspacePublication,
+    publishAcceptedWorkspace,
   });
   const recoverPendingWorkspaceReconciliations = async (): Promise<void> => {
     const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations({
@@ -533,6 +577,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         (async () => {
           await sessionRetirement.reconcile();
           await dispatchService.reconcileActive();
+          await reconcilePublications();
           void nodeWorkspaceRetention.schedule();
         })(),
         "Worker placement reconcile sweep failed",
@@ -619,6 +664,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     const startupReconcile = (async () => {
       await dispatchService.reconcile();
       await sessionRetirement.reconcile();
+      await reconcilePublications();
     })();
     placementReconcile.current = startupReconcile;
     try {
@@ -663,6 +709,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     admissionProvider,
     diskSpace,
     placements: params.placements,
+    githubPublication,
     resolveNodeWorkspaceBinding,
     bindNodeWorkerSupervisorTransport: (transport: NodeWorkerSupervisorTransport) =>
       nodeWorkspaceRetention.bindTransport(transport),

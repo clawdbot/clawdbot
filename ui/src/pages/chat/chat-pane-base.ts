@@ -1,6 +1,7 @@
 import { consume } from "@lit/context";
 import { property, state as litState } from "lit/decorators.js";
 import type {
+  SessionGitHubPublicationResult,
   SessionCatalogHost,
   SessionCatalogSession,
   SessionDiscussionState,
@@ -408,6 +409,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   protected sessionPullRequestsRateLimited = false;
   protected sessionPullRequestsExpanded = false;
+  protected githubPublicationBusy = false;
+  protected githubPublicationResult: SessionGitHubPublicationResult | null = null;
+  protected githubPublicationError: string | null = null;
+  protected githubPublicationRequestVersion = 0;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
   @litState() protected catalogMessages: unknown[] = [];

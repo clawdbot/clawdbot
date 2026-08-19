@@ -83,6 +83,7 @@ type GatewayRequestContextParams = {
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
   workerPlacementDiskSpaceReader?: GatewayRequestContext["workerPlacementDiskSpaceReader"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
+  githubPublicationService?: GatewayRequestContext["githubPublicationService"];
   validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
@@ -383,6 +384,9 @@ export function createGatewayRequestContext(
     validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
     ...(params.workerPlacementDispatchService
       ? { workerPlacementDispatchService: params.workerPlacementDispatchService }
+      : {}),
+    ...(params.githubPublicationService
+      ? { githubPublicationService: params.githubPublicationService }
       : {}),
     terminalSessions: params.terminalSessions,
     agentRunSeq: params.agentRunSeq,

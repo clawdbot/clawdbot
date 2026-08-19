@@ -61,6 +61,7 @@ import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import {
   createCreateGoalTool,
   createGetGoalTool,
@@ -136,6 +137,8 @@ export function createOpenClawTools(
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
     runtimeToolAllowlist?: string[];
+    /** Host-prepared proof that this exact session can request Gateway publication. */
+    githubPublicationAvailable?: boolean;
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
     cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
     cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
@@ -546,6 +549,7 @@ export function createOpenClawTools(
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
+    ...(options?.githubPublicationAvailable === true ? [createGitHubPublishTool()] : []),
     ...collectPresentOpenClawTools([transcriptsTool]),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded

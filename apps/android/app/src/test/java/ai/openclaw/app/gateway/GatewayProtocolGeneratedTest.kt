@@ -65,4 +65,30 @@ class GatewayProtocolGeneratedTest {
     assertEquals(events.size, events.toSet().size)
     assertEquals("sessions.move", GatewayMethod.SessionsMove.rawValue)
   }
+
+  @Test
+  fun githubPublicationResultsRoundTripAsATypedUnion() {
+    val cases =
+      listOf(
+        """{"requestId":"request-1","status":"requested","message":"Accepted."}""" to
+          SessionGitHubPublicationRequested::class,
+        """{"requestId":"request-1","status":"publishing","message":"Publishing."}""" to
+          SessionGitHubPublicationPublishing::class,
+        """{"requestId":"request-1","status":"published","url":"https://github.com/openclaw/openclaw/pull/1","repository":"openclaw/openclaw","branch":"openclaw/task","headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}""" to
+          SessionGitHubPublicationPublished::class,
+        """{"requestId":"request-1","status":"failed","code":"push_rejected","message":"Failed.","nextAction":"Check access."}""" to
+          SessionGitHubPublicationFailed::class,
+      )
+
+    for ((payload, expectedType) in cases) {
+      val decoded = json.decodeFromString(SessionGitHubPublicationResult.serializer(), payload)
+      assertEquals(expectedType, decoded::class)
+      val encoded =
+        json.encodeToJsonElement(SessionGitHubPublicationResult.serializer(), decoded).jsonObject
+      assertEquals(
+        json.parseToJsonElement(payload).jsonObject.getValue("status").jsonPrimitive.content,
+        encoded.getValue("status").jsonPrimitive.content,
+      )
+    }
+  }
 }

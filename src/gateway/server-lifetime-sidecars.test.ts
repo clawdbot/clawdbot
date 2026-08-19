@@ -68,6 +68,34 @@ describe("gateway lifetime sidecars", () => {
     expect(worker.stop).toHaveBeenCalledOnce();
   });
 
+  test("owns standalone GitHub publication recovery when worker placement is unavailable", async () => {
+    vi.useFakeTimers();
+    const reconcileGitHubPublications = vi.fn(async () => {});
+    const sidecars: GatewayPostReadySidecarHandle[] = [];
+    const owner = createGatewaySidecarStopOwner({
+      getRegistered: () => sidecars,
+      setRegistered: (next) => sidecars.splice(0, sidecars.length, ...next),
+    });
+
+    await attachInitialGatewayLifetimeSidecars({
+      chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+      gatewayRequestContext: {} as never,
+      flushPendingSessionsChangedEvents: vi.fn(),
+      minimalTestGateway: false,
+      logWarning: vi.fn(),
+      reconcileGitHubPublications,
+      sidecars,
+    });
+    await vi.runAllTicks();
+    expect(reconcileGitHubPublications).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+    await owner.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+  });
+
   test.each([
     { minimalTestGateway: false, expectedHandoffRows: 0 },
     { minimalTestGateway: true, expectedHandoffRows: 1 },

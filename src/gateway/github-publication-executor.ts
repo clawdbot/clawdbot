@@ -1,0 +1,661 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { resolveGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
+import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import { managedWorktrees } from "../agents/worktrees/service.js";
+import { runCommandBuffered } from "../process/exec.js";
+import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  currentGitHubPublicationConfig,
+  matchesCurrentGitHubPublicationIdentity,
+  prepareCurrentGitHubPublicationIdentity,
+  resolveGitHubPublicationWorktreeOwner,
+} from "./github-publication-availability.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
+import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
+
+const COMMAND_TIMEOUT_MS = 60_000;
+const COMMAND_OUTPUT_LIMIT = 256 * 1024;
+const PUBLICATION_MARKER = "OpenClaw-Publication";
+
+type PublicationRow = StateDatabase["github_publication_requests"];
+type PublicationFailureCode = Extract<SessionGitHubPublicationResult, { status: "failed" }>["code"];
+
+export function matchesGitHubPublicationIdentityRow(
+  row: PublicationRow,
+  identity: PreparedGitHubPublicationIdentity,
+): boolean {
+  return (
+    row.identity_source === identity.source &&
+    row.identity_profile_id === (identity.profileId ?? null) &&
+    row.identity_account_id === identity.account.accountId &&
+    row.identity_login.toLowerCase() === identity.account.login.toLowerCase()
+  );
+}
+
+async function runCommand(
+  argv: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {},
+) {
+  return await runCommandBuffered(argv, {
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.input !== undefined ? { input: options.input } : {}),
+    timeoutMs: COMMAND_TIMEOUT_MS,
+    maxOutputBytes: COMMAND_OUTPUT_LIMIT,
+  });
+}
+
+async function requireCommand(
+  argv: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {},
+): Promise<string> {
+  const result = await runCommand(argv, options);
+  if (result.code !== 0) {
+    throw new Error(`${argv[0]} command failed`);
+  }
+  return result.stdout.toString("utf8").trim();
+}
+
+function parseJsonObject(value: string, label: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON`, { cause: error });
+  }
+  if (!isRecord(parsed)) {
+    throw new Error(`${label} returned an invalid response`);
+  }
+  return parsed;
+}
+
+function parseBaseBranch(baseRef: string, defaultBranch: string): string {
+  const trimmed = baseRef.trim();
+  if (!trimmed || trimmed === "HEAD" || /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(trimmed)) {
+    return defaultBranch;
+  }
+  if (trimmed.startsWith("refs/remotes/origin/")) {
+    return trimmed.slice("refs/remotes/origin/".length);
+  }
+  if (trimmed.startsWith("origin/")) {
+    return trimmed.slice("origin/".length);
+  }
+  if (trimmed.startsWith("refs/heads/")) {
+    return trimmed.slice("refs/heads/".length);
+  }
+  return trimmed;
+}
+
+function appendLines(base: string, lines: readonly string[]): string {
+  const present = new Set(base.split(/\r?\n/u).map((line) => line.trim()));
+  const missing = lines.filter((line) => !present.has(line));
+  return missing.length > 0 ? `${base.trimEnd()}\n\n${missing.join("\n")}` : base.trimEnd();
+}
+
+async function assertSafeGitPublicationConfig(cwd: string): Promise<void> {
+  const unsafe = await runCommand(
+    [
+      "git",
+      "config",
+      "--includes",
+      "--get-regexp",
+      "^(filter\\..*|url\\..*\\.(insteadof|pushinsteadof)|include(if)?\\..*|http\\..*|push\\..*|core\\.worktree)$",
+    ],
+    {
+      cwd,
+      env: { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
+    },
+  );
+  if (unsafe.code !== 1 || unsafe.stdout.length > 0) {
+    throw new Error("GitHub publication workspace has unsupported Git transport configuration.");
+  }
+}
+
+export async function captureGitHubPublicationWorkspaceSnapshot(params: {
+  cwd: string;
+  assertCurrent?: () => void;
+}): Promise<{ sourceHeadCommit: string; workspaceTree: string }> {
+  const step = async <T>(operation: () => Promise<T>): Promise<T> => {
+    params.assertCurrent?.();
+    const result = await operation();
+    params.assertCurrent?.();
+    return result;
+  };
+  await step(async () => await assertSafeGitPublicationConfig(params.cwd));
+  const sourceHeadCommit = await step(
+    async () =>
+      await requireCommand(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
+        cwd: params.cwd,
+      }),
+  );
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-snapshot-"));
+  try {
+    const env: NodeJS.ProcessEnv = {
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_INDEX_FILE: path.join(tempDir, "index"),
+    };
+    await step(async () => {
+      await requireCommand(
+        [
+          "git",
+          "-c",
+          `core.hooksPath=${os.devNull}`,
+          "-c",
+          "core.fsmonitor=false",
+          "read-tree",
+          sourceHeadCommit,
+        ],
+        { cwd: params.cwd, env },
+      );
+    });
+    await step(async () => {
+      await requireCommand(
+        ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "add", "-A"],
+        { cwd: params.cwd, env },
+      );
+    });
+    const workspaceTree = await step(
+      async () =>
+        await requireCommand(
+          ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
+          { cwd: params.cwd, env },
+        ),
+    );
+    return { sourceHeadCommit, workspaceTree };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+export function resolveGitHubPublicationFailure(error: unknown): {
+  code: PublicationFailureCode;
+  nextAction: string;
+} {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("identity")) {
+    return {
+      code: message.includes("changed") ? "identity_changed" : "identity_unavailable",
+      nextAction:
+        "Reconnect the GitHub identity in Agents → Tools, then request publication again.",
+    };
+  }
+  if (message.includes("session") || message.includes("worktree owner")) {
+    return {
+      code: "session_changed",
+      nextAction: "Open the current session worktree and request publication again.",
+    };
+  }
+  if (message.includes("workspace") || message.includes("branch changed")) {
+    return {
+      code: "workspace_changed",
+      nextAction:
+        "Wait for the current turn to finish, inspect the reconciled workspace, and retry.",
+    };
+  }
+  if (message.includes("not a git")) {
+    return { code: "not_git", nextAction: "Use a session-owned Git worktree to publish." };
+  }
+  if (message.includes("GitHub remote")) {
+    return { code: "not_github", nextAction: "Use a GitHub repository remote to publish." };
+  }
+  if (message.includes("no changes")) {
+    return { code: "no_changes", nextAction: "Make or restore a repository change, then retry." };
+  }
+  if (message.includes("push")) {
+    return {
+      code: "push_rejected",
+      nextAction:
+        "Check repository write access and branch drift, then retry without force-pushing.",
+    };
+  }
+  if (message.includes("pull request") || message.includes("GitHub")) {
+    return {
+      code: "github_rejected",
+      nextAction: "Check pull-request permission for the effective account, then retry.",
+    };
+  }
+  return { code: "unavailable", nextAction: "Retry after the Gateway and GitHub are available." };
+}
+
+export async function executeGitHubPublication(params: {
+  initial: PublicationRow;
+  validateAuthority: () => boolean;
+  projectResult: (row: PublicationRow) => SessionGitHubPublicationResult;
+  bindWorkspaceSnapshot: (input: {
+    row: PublicationRow;
+    sourceHeadCommit: string;
+    workspaceTree: string;
+  }) => PublicationRow;
+  updatePublishingFacts: (input: {
+    row: PublicationRow;
+    repository: string;
+    branch: string;
+    baseBranch: string;
+    sourceHeadCommit: string;
+    workspaceTree: string;
+    headCommit: string;
+  }) => PublicationRow;
+  complete: (row: PublicationRow, result: SessionGitHubPublicationResult) => PublicationRow;
+}): Promise<SessionGitHubPublicationResult> {
+  const { initial } = params;
+  if (initial.status === "published" || initial.status === "failed") {
+    return params.projectResult(initial);
+  }
+  let activeIdentity: PreparedGitHubPublicationIdentity | undefined;
+  const currentWorktree = () =>
+    resolveGitHubPublicationWorktreeOwner({
+      sessionId: initial.session_id,
+      sessionKey: initial.session_key,
+      agentId: initial.agent_id,
+      expected: {
+        worktreeId: initial.worktree_id,
+        repositoryFingerprint: initial.repository_fingerprint,
+        branch: initial.branch,
+      },
+    });
+  const assertAuthority = () => {
+    if (!params.validateAuthority()) {
+      throw new Error("GitHub publication session authority changed.");
+    }
+    currentWorktree();
+    if (
+      activeIdentity &&
+      !matchesCurrentGitHubPublicationIdentity({
+        agentId: initial.agent_id,
+        identity: activeIdentity,
+      })
+    ) {
+      throw new Error("GitHub publication identity changed.");
+    }
+  };
+  const step = async <T>(operation: () => Promise<T>): Promise<T> => {
+    assertAuthority();
+    const value = await operation();
+    assertAuthority();
+    return value;
+  };
+  try {
+    assertAuthority();
+    const { loaded, worktree } = currentWorktree();
+    const repositoryIdentity = await step(
+      async () => await managedWorktrees.resolveRepositoryIdentity(worktree.path),
+    );
+    if (
+      repositoryIdentity.checkoutRoot !== worktree.path ||
+      repositoryIdentity.repoRoot !== worktree.repoRoot ||
+      repositoryIdentity.fingerprint !== worktree.repoFingerprint
+    ) {
+      throw new Error("GitHub publication workspace repository changed.");
+    }
+    const remote = parseGitHubRemoteUrl(repositoryIdentity.originUrl);
+    if (
+      !remote ||
+      !/^[A-Za-z0-9_.-]+$/u.test(remote.owner) ||
+      !/^[A-Za-z0-9_.-]+$/u.test(remote.repo)
+    ) {
+      throw new Error("GitHub publication requires a GitHub remote.");
+    }
+    const pushRepository = `${remote.owner}/${remote.repo}`;
+    const branch = await step(
+      async () =>
+        await requireCommand(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], {
+          cwd: worktree.path,
+        }),
+    );
+    if (branch !== worktree.branch) {
+      throw new Error("GitHub publication branch changed.");
+    }
+    let row = initial;
+    let sourceHeadCommit = row.source_head_commit;
+    let workspaceTree = row.workspace_tree;
+    if (!sourceHeadCommit || !workspaceTree) {
+      const snapshot = await captureGitHubPublicationWorkspaceSnapshot({
+        cwd: worktree.path,
+        assertCurrent: assertAuthority,
+      });
+      row = params.bindWorkspaceSnapshot({ row, ...snapshot });
+      sourceHeadCommit = snapshot.sourceHeadCommit;
+      workspaceTree = snapshot.workspaceTree;
+    }
+    let headCommit = await step(
+      async () =>
+        await requireCommand(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
+          cwd: worktree.path,
+        }),
+    );
+    const refreshIdentity = async (): Promise<PreparedGitHubPublicationIdentity> => {
+      const identity = await step(
+        async () => await prepareCurrentGitHubPublicationIdentity(initial.agent_id),
+      );
+      if (!matchesGitHubPublicationIdentityRow(initial, identity)) {
+        throw new Error("GitHub publication identity changed.");
+      }
+      activeIdentity = identity;
+      assertAuthority();
+      return identity;
+    };
+    let identity = await refreshIdentity();
+    const repositoryTarget = resolveGitHubRepositoryTarget(
+      parseJsonObject(
+        await step(
+          async () =>
+            await requireCommand(
+              [
+                "gh",
+                "api",
+                `repos/${pushRepository}`,
+                "--jq",
+                "{fork, default_branch, parent: {name: .parent.name, default_branch: .parent.default_branch, owner: {login: .parent.owner.login}}}",
+              ],
+              { env: identity.env },
+            ),
+        ),
+        "GitHub repository lookup",
+      ),
+      { owner: remote.owner, repo: remote.repo },
+    );
+    if (!repositoryTarget) {
+      throw new Error("GitHub repository response omitted its publication target.");
+    }
+    const repository = `${repositoryTarget.pullRequest.owner}/${repositoryTarget.pullRequest.repo}`;
+    const baseBranch = repositoryTarget.fork
+      ? repositoryTarget.pullRequest.defaultBranch
+      : parseBaseBranch(worktree.baseRef, repositoryTarget.pullRequest.defaultBranch);
+    row = params.updatePublishingFacts({
+      row,
+      repository,
+      branch,
+      baseBranch,
+      sourceHeadCommit,
+      workspaceTree,
+      headCommit,
+    });
+
+    const marker = `${PUBLICATION_MARKER}: ${row.request_id}`;
+    const currentMessage = await step(
+      async () =>
+        await requireCommand(["git", "show", "-s", "--format=%B", "HEAD"], {
+          cwd: worktree.path,
+        }),
+    );
+    const markerPresent = currentMessage.split(/\r?\n/u).includes(marker);
+    const currentTree = await step(
+      async () => await requireCommand(["git", "rev-parse", "HEAD^{tree}"], { cwd: worktree.path }),
+    );
+    if (markerPresent) {
+      const markerParent = await step(
+        async () => await requireCommand(["git", "rev-parse", "HEAD^"], { cwd: worktree.path }),
+      );
+      if (markerParent !== sourceHeadCommit || currentTree !== workspaceTree) {
+        throw new Error("GitHub publication workspace changed after its accepted snapshot.");
+      }
+    } else {
+      if (headCommit !== sourceHeadCommit) {
+        throw new Error("GitHub publication workspace changed after its accepted snapshot.");
+      }
+      await step(async () => {
+        await requireCommand(["git", "cat-file", "-e", `${workspaceTree}^{tree}`], {
+          cwd: worktree.path,
+        });
+      });
+      if (workspaceTree !== currentTree) {
+        const attribution = resolveGitCoauthorAttribution({
+          agentId: row.agent_id,
+          config: currentGitHubPublicationConfig(),
+          excludeAccountId: identity.account.accountId,
+          sessionKey: row.session_key,
+          storePath: loaded.storePath,
+        });
+        const title = row.title?.trim() || `Publish ${branch}`;
+        const message = appendLines(title, [...(attribution?.trailers ?? []), marker]);
+        const timestamp = new Date(row.created_at_ms).toISOString();
+        identity = await refreshIdentity();
+        const authorEnv = {
+          ...identity.env,
+          GIT_AUTHOR_NAME: identity.account.login,
+          GIT_COMMITTER_NAME: identity.account.login,
+          GIT_AUTHOR_EMAIL: `${identity.account.accountId}+${identity.account.login}@users.noreply.github.com`,
+          GIT_COMMITTER_EMAIL: `${identity.account.accountId}+${identity.account.login}@users.noreply.github.com`,
+          GIT_AUTHOR_DATE: timestamp,
+          GIT_COMMITTER_DATE: timestamp,
+        };
+        const commit = await step(
+          async () =>
+            await requireCommand(["git", "commit-tree", workspaceTree, "-p", headCommit], {
+              cwd: worktree.path,
+              env: authorEnv,
+              input: `${message}\n`,
+            }),
+        );
+        const symbolicBranch = await step(
+          async () =>
+            await runCommand(["git", "symbolic-ref", "--quiet", `refs/heads/${branch}`], {
+              cwd: worktree.path,
+            }),
+        );
+        if (symbolicBranch.code === 0) {
+          throw new Error("GitHub publication workspace branch ref became symbolic.");
+        }
+        if (symbolicBranch.code !== 1) {
+          throw new Error("GitHub publication workspace branch ref could not be verified.");
+        }
+        await step(async () => {
+          await requireCommand(
+            [
+              "git",
+              "-c",
+              `core.hooksPath=${os.devNull}`,
+              "-c",
+              "core.fsmonitor=false",
+              "update-ref",
+              `refs/heads/${branch}`,
+              commit,
+              headCommit,
+            ],
+            { cwd: worktree.path },
+          );
+        });
+        headCommit = commit;
+      }
+    }
+    row = params.updatePublishingFacts({
+      row,
+      repository,
+      branch,
+      baseBranch,
+      sourceHeadCommit,
+      workspaceTree,
+      headCommit,
+    });
+
+    const baseCandidates = [worktree.baseRef, `refs/remotes/origin/${baseBranch}`];
+    let baseCommit: string | undefined;
+    for (const candidate of baseCandidates) {
+      const resolved = await step(
+        async () =>
+          await runCommand(
+            ["git", "rev-parse", "--verify", "--end-of-options", `${candidate}^{commit}`],
+            { cwd: worktree.path },
+          ),
+      );
+      if (resolved.code === 0) {
+        baseCommit = resolved.stdout.toString("utf8").trim();
+        break;
+      }
+    }
+    if (baseCommit === headCommit) {
+      throw new Error("GitHub publication has no changes to publish.");
+    }
+
+    await step(async () => await assertSafeGitPublicationConfig(worktree.path));
+    const httpsRemote = `https://github.com/${pushRepository}.git`;
+    identity = await refreshIdentity();
+    let transportEnv = {
+      ...identity.env,
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_SYSTEM: os.devNull,
+    };
+    const pushArgs = [
+      "git",
+      "-c",
+      `core.hooksPath=${os.devNull}`,
+      "-c",
+      "credential.helper=",
+      "-c",
+      "credential.helper=!gh auth git-credential",
+      "push",
+      "--porcelain",
+      "--no-follow-tags",
+      "--recurse-submodules=no",
+      "--",
+      httpsRemote,
+      `${headCommit}:refs/heads/${branch}`,
+    ];
+    const observeRemoteHead = async () => {
+      const observed = await requireCommand(
+        [
+          "git",
+          "-c",
+          "credential.helper=",
+          "-c",
+          "credential.helper=!gh auth git-credential",
+          "ls-remote",
+          "--refs",
+          httpsRemote,
+          `refs/heads/${branch}`,
+        ],
+        { cwd: worktree.path, env: transportEnv },
+      );
+      return observed.split(/\s+/u)[0] ?? "";
+    };
+    let remoteHead = await step(observeRemoteHead);
+    if (remoteHead !== headCommit) {
+      const pushed = await step(
+        async () => await runCommand(pushArgs, { cwd: worktree.path, env: transportEnv }),
+      );
+      identity = await refreshIdentity();
+      transportEnv = {
+        ...identity.env,
+        GIT_CONFIG_GLOBAL: os.devNull,
+        GIT_CONFIG_SYSTEM: os.devNull,
+      };
+      remoteHead = await step(observeRemoteHead);
+      if (remoteHead !== headCommit) {
+        throw new Error(
+          pushed.code === 0 ? "GitHub push verification failed." : "GitHub push was rejected.",
+        );
+      }
+    }
+
+    const findPullRequest = async (): Promise<string | undefined> => {
+      const lookupIdentity = await refreshIdentity();
+      const raw = await requireCommand(
+        [
+          "gh",
+          "api",
+          "--method",
+          "GET",
+          `repos/${repository}/pulls`,
+          "-f",
+          `head=${repositoryTarget.push.owner}:${branch}`,
+          "-f",
+          `base=${baseBranch}`,
+          "-f",
+          "state=open",
+          "--jq",
+          "map({url: .html_url, headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref})",
+        ],
+        { env: lookupIdentity.env },
+      );
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return undefined;
+      }
+      if (!Array.isArray(parsed)) {
+        return undefined;
+      }
+      const exact = parsed.find(
+        (candidate) =>
+          isRecord(candidate) &&
+          candidate.headSha === headCommit &&
+          candidate.headRef === branch &&
+          candidate.baseRef === baseBranch,
+      );
+      return isRecord(exact) ? readNonBlankString(exact.url) : undefined;
+    };
+    let pullRequestUrl = await step(findPullRequest);
+    if (!pullRequestUrl) {
+      const attribution = resolveGitCoauthorAttribution({
+        agentId: row.agent_id,
+        config: currentGitHubPublicationConfig(),
+        excludeAccountId: identity.account.accountId,
+        sessionKey: row.session_key,
+        storePath: loaded.storePath,
+      });
+      const participantCredit = attribution?.logins.length
+        ? `\n\n## Participants\n\n${attribution.logins.map((login) => `- @${login}`).join("\n")}`
+        : "";
+      const body = `${row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."}${participantCredit}\n\n<!-- openclaw-publication:${row.request_id} -->`;
+      identity = await refreshIdentity();
+      const created = await step(
+        async () =>
+          await runCommand(
+            ["gh", "api", "--method", "POST", `repos/${repository}/pulls`, "--input", "-"],
+            {
+              env: identity.env,
+              input: JSON.stringify({
+                title: row.title?.trim() || `Publish ${branch}`,
+                body,
+                head: `${repositoryTarget.push.owner}:${branch}`,
+                base: baseBranch,
+                draft: true,
+              }),
+            },
+          ),
+      );
+      if (created.code === 0) {
+        pullRequestUrl = readNonBlankString(
+          parseJsonObject(created.stdout.toString("utf8"), "GitHub pull request creation").html_url,
+        );
+      }
+      pullRequestUrl ??= await step(findPullRequest);
+    }
+    if (!pullRequestUrl) {
+      throw new Error("GitHub pull request creation was rejected.");
+    }
+    return params.projectResult(
+      params.complete(row, {
+        requestId: row.request_id,
+        status: "published",
+        url: pullRequestUrl,
+        repository,
+        branch,
+        headCommit,
+      }),
+    );
+  } catch (error) {
+    const failure = resolveGitHubPublicationFailure(error);
+    const result = params.projectResult(
+      params.complete(initial, {
+        requestId: initial.request_id,
+        status: "failed",
+        code: failure.code,
+        message: "GitHub publication failed.",
+        nextAction: failure.nextAction,
+      }),
+    );
+    if (error instanceof SessionMutationAuthorizationChangedError) {
+      throw error;
+    }
+    return result;
+  }
+}

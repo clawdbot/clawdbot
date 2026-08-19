@@ -96,6 +96,7 @@ export async function runEmbeddedFallbackCandidate(params: {
   notifyUserAboutCompaction: boolean;
   messageToolDeliveryState: MessageToolDeliveryState;
   preserveProgressCallbackStartOrder: boolean;
+  githubPublicationAvailable: boolean;
   presentation: EmbeddedPresentation;
   timing: AgentTurnTimingTracker;
   onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
@@ -213,6 +214,7 @@ export async function runEmbeddedFallbackCandidate(params: {
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
         preparedRunAdmission: params.preparedRunAdmission,
+        githubPublicationAvailable: params.githubPublicationAvailable,
         ...embeddedContext,
         messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),

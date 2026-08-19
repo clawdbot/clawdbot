@@ -61,6 +61,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
+      this.githubPublicationResult = null;
+      this.githubPublicationError = null;
+      this.githubPublicationBusy = false;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return;
@@ -119,11 +122,15 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected resetSessionPullRequests(): void {
+    this.githubPublicationRequestVersion += 1;
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
     this.sessionPullRequestsRateLimited = false;
     this.sessionPullRequestsExpanded = false;
+    this.githubPublicationResult = null;
+    this.githubPublicationError = null;
+    this.githubPublicationBusy = false;
     this.dismissedSessionPullRequestIds = new Set();
   }
 

@@ -10,6 +10,7 @@ import {
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
+import type { GitHubPublicationCoordinator } from "./github-publication.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
@@ -53,6 +54,7 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
+  bindGitHubPublication?: (coordinator: GitHubPublicationCoordinator) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
@@ -241,6 +243,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
   };
+  let githubPublication: Pick<GitHubPublicationCoordinator, "requestForClaim"> = {
+    requestForClaim: async () => {
+      throw new Error("GitHub publication is unavailable");
+    },
+  };
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
     store: params.startup.store,
     getConfig: getRuntimeConfig,
@@ -335,6 +342,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     placements: params.startup.placementStore,
     environments: workerEnvironmentService,
     dispatchChild: (request) => dispatchChild(request),
+    githubPublication: {
+      requestForClaim: (request) => githubPublication.requestForClaim(request),
+    },
   });
   return {
     workerEnvironmentService,
@@ -343,6 +353,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     nodeWorkerGatewayNamespace,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
+    },
+    bindGitHubPublication: (coordinator) => {
+      githubPublication = coordinator;
     },
     bindDeviceNodeControl: deviceRuntime.bindNodeTransport,
     bindNodeWorkspaceBindingResolver: (resolver) =>

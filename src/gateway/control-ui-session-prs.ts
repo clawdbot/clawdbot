@@ -32,6 +32,7 @@ import {
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
+import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const SUCCESS_CACHE_MS = 60_000;
@@ -385,13 +386,8 @@ async function fetchParentRepo(
 ): Promise<{ owner: string; repo: string } | null> {
   const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const value = await fetchGitHubJson(url, fetchImpl, token);
-  if (!isRecord(value) || value.fork !== true || !isRecord(value.parent)) {
-    return null;
-  }
-  const parentOwner = isRecord(value.parent.owner) ? value.parent.owner : {};
-  const parentLogin = readOptionalGitHubString(parentOwner, "login");
-  const parentName = readOptionalGitHubString(value.parent, "name");
-  return parentLogin && parentName ? { owner: parentLogin, repo: parentName } : null;
+  const target = resolveGitHubRepositoryTarget(value, { owner, repo });
+  return target?.fork ? target.pullRequest : null;
 }
 
 // Sub-fetch degradation: quota errors abort the whole refresh (so the caller

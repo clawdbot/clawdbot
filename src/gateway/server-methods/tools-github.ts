@@ -97,10 +97,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         throw new Error("temporary GitHub credential is unavailable");
       }
       const profileId = createManagedGitHubProfileId();
-      const identity = {
-        profileId,
-        ...(gitAuthor ? { gitAuthor } : {}),
-      };
       const profileDir = resolveManagedGitHubProfileDir({
         agentId: resolved.agentId,
         scope: params.scope,
@@ -110,7 +106,14 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
       await installManagedGitHubProfile({
         profileDir,
         token,
-        commitConfig: async () => {
+        commitConfig: async (account) => {
+          const identity = {
+            profileId,
+            gitAuthor: gitAuthor ?? {
+              name: account.login,
+              email: `${account.accountId}+${account.login}@users.noreply.github.com`,
+            },
+          };
           nextConfig = await updateGitHubToolIdentityConfig({
             scope: params.scope,
             agentId: resolved.agentId,

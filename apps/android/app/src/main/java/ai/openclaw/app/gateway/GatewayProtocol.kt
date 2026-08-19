@@ -3,7 +3,9 @@ package ai.openclaw.app.gateway
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonClassDiscriminator
 
 const val GATEWAY_PROTOCOL_VERSION = 4
 const val GATEWAY_MIN_PROTOCOL_VERSION = 3
@@ -172,6 +174,44 @@ data class ProjectsListResult(
   val recents: List<JsonElement>? = null,
   val observedProjects: List<ProjectsListResultObservedProjectsItem>? = null,
 )
+
+@SerialName("requested")
+@Serializable
+data class SessionGitHubPublicationRequested(
+  val requestId: String,
+  val message: String,
+) : SessionGitHubPublicationResult
+
+@SerialName("publishing")
+@Serializable
+data class SessionGitHubPublicationPublishing(
+  val requestId: String,
+  val message: String,
+) : SessionGitHubPublicationResult
+
+@SerialName("published")
+@Serializable
+data class SessionGitHubPublicationPublished(
+  val requestId: String,
+  val url: String,
+  val repository: String,
+  val branch: String,
+  val headCommit: String,
+) : SessionGitHubPublicationResult
+
+@SerialName("failed")
+@Serializable
+data class SessionGitHubPublicationFailed(
+  val requestId: String,
+  val code: String,
+  val message: String,
+  val nextAction: String,
+) : SessionGitHubPublicationResult
+
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+@JsonClassDiscriminator("status")
+sealed interface SessionGitHubPublicationResult
 
 @Serializable
 data class GatewayEventFrameStateVersion(
@@ -591,6 +631,7 @@ enum class GatewayMethod(
   ProgressCardPut("progressCard.put"),
   ToolsGithubStatus("tools.github.status"),
   ToolsGithubConfigure("tools.github.configure"),
+  SessionsGithubPublish("sessions.github.publish"),
   DiagnosticsLanes("diagnostics.lanes"),
 }
 

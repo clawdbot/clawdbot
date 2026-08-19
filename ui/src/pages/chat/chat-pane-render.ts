@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import type { SessionGitHubPublicationResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
@@ -10,6 +11,7 @@ import {
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
 import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -19,6 +21,7 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
@@ -85,7 +88,18 @@ export class ChatPane extends ChatPaneLayoutRender {
       digest: observerDigest,
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
+    const publishClient = state.client;
     const placement = selectedSession?.placement;
+    const publicationHasDirectPlacement = !placement || placement.state === "local";
+    const cloudIdlePublication =
+      Boolean(placement) && placement?.state !== "local" && !hasAbortableSessionRun(state);
+    const canPublishPullRequest =
+      Boolean(publishClient) &&
+      Boolean(selectedSession?.key) &&
+      !hasAbortableSessionRun(state) &&
+      publicationHasDirectPlacement &&
+      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.github.publish") === true;
     const diskSpace = placement?.state === "active" ? placement.diskSpace : undefined;
     const terminalReason = (placement as { terminalReason?: string } | undefined)?.terminalReason;
     const placementRunError = terminalReason
@@ -425,6 +439,57 @@ export class ChatPane extends ChatPaneLayoutRender {
         this.requestUpdate();
       },
       onDismissPullRequest: this.dismissSessionPullRequest,
+      githubPublicationBusy: this.githubPublicationBusy,
+      githubPublicationResult: this.githubPublicationResult,
+      githubPublicationError: this.githubPublicationError,
+      githubPublicationGuidance: cloudIdlePublication
+        ? t("chat.pullRequests.cloudPublicationGuidance")
+        : undefined,
+      onPublishPullRequest: canPublishPullRequest
+        ? () => {
+            if (this.githubPublicationBusy || !selectedSession?.key) {
+              return;
+            }
+            const scope = this.captureConnectionScope();
+            if (!scope) {
+              return;
+            }
+            const sessionKey = selectedSession.key;
+            const requestVersion = ++this.githubPublicationRequestVersion;
+            const ownsResult = () =>
+              this.presented &&
+              this.githubPublicationRequestVersion === requestVersion &&
+              this.isConnectionScopeCurrent(scope) &&
+              selectedChatSessionRow(scope.state)?.key === sessionKey;
+            this.githubPublicationBusy = true;
+            this.githubPublicationError = null;
+            this.requestUpdate();
+            void scope.client
+              .request<SessionGitHubPublicationResult>("sessions.github.publish", {
+                sessionKey,
+                idempotencyKey: generateUUID(),
+                ...(this.sessionPullRequestsBranch?.branch
+                  ? { title: `Publish ${this.sessionPullRequestsBranch.branch}` }
+                  : {}),
+              })
+              .then((result) => {
+                if (ownsResult()) {
+                  this.githubPublicationResult = result;
+                }
+              })
+              .catch((error: unknown) => {
+                if (ownsResult()) {
+                  this.githubPublicationError = formatUiError(error);
+                }
+              })
+              .finally(() => {
+                if (ownsResult()) {
+                  this.githubPublicationBusy = false;
+                  this.requestUpdate();
+                }
+              });
+          }
+        : undefined,
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),

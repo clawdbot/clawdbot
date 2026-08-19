@@ -49,6 +49,12 @@ export function createHarness(
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
+    prepareAcceptedWorkspacePublication?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["prepareAcceptedWorkspacePublication"];
+    publishAcceptedWorkspace?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["publishAcceptedWorkspace"];
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -390,6 +396,12 @@ export function createHarness(
     },
     reportWorkspaceResultConflict,
     resolveWorkspaceResultConflict: vi.fn(async () => options.priorWorkspaceResultConflict),
+    ...(options.prepareAcceptedWorkspacePublication
+      ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
+      : {}),
+    ...(options.publishAcceptedWorkspace
+      ? { publishAcceptedWorkspace: options.publishAcceptedWorkspace }
+      : {}),
   });
   return {
     log,

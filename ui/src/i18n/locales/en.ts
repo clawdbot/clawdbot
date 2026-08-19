@@ -2001,7 +2001,8 @@ export const en: TranslationMap = {
     githubSystem: "System",
     githubAgentOverride: "This Agent",
     githubToken: "Fine-grained PAT",
-    githubTokenDesc: "Stored in the Gateway secret store; used by gh and git for this scope.",
+    githubTokenDesc:
+      "Used once to create a private managed GitHub CLI profile; the setup handoff is removed after verification.",
     githubTokenToggle: "Toggle token visibility",
     githubPasteToken: "Paste a fine-grained personal access token first.",
     githubAuthorName: "Author Name",
@@ -2009,7 +2010,8 @@ export const en: TranslationMap = {
     githubConfigure: "Save Identity",
     githubUseSystem: "Remove Override",
     githubUseNative: "Use Native Credentials",
-    githubCloudNote: "Credentials already embedded in repository remotes are not overridden.",
+    githubCloudNote:
+      "Cloud workers stay credential-free. Publication runs on the Gateway through an exact HTTPS path; existing remotes and generic Git helpers are not rewritten.",
     connectedSource: "Connected: {id}",
     connected: "Connected",
     channelSource: "Channel: {id}",
@@ -5209,8 +5211,13 @@ export const en: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
-      createPr: "Create PR",
-      createPrLabel: "Create a pull request for {branch}",
+      publishPr: "Publish PR",
+      publishing: "Publishing…",
+      publicationRequested: "Requested",
+      retryPublication: "Retry publication",
+      openPublishedPr: "Open PR",
+      cloudPublicationGuidance:
+        "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
       dismiss: "Dismiss pull request #{number}",
       open: "Open",
       draft: "Draft",

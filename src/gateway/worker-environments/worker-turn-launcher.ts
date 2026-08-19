@@ -15,6 +15,7 @@ import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js"
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
+import { prepareGitHubPublicationAvailability } from "../github-publication-availability.js";
 import {
   STALE_WORKER_BUILD_REASON,
   StaleWorkerBuildError,
@@ -71,6 +72,8 @@ type WorkerTurnLauncherOptions = {
   reconcileActivePlacement: (environmentId: string) => Promise<void>;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
 
 async function executeLocalTurn<T>(params: {
@@ -105,6 +108,8 @@ async function executeWorkerTurn(params: {
   turn: SessionPlacementTurnParams;
   turnClaim: WorkerSessionTurnClaim;
   localWorkspaceDir: string;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }) {
   const { placement, turn } = params;
   const modelRef = assertSupportedTurn(turn);
@@ -132,6 +137,12 @@ async function executeWorkerTurn(params: {
     );
   }
   await recoverWorkspaceBeforeTurn(params);
+  const githubPublicationAvailable = await prepareGitHubPublicationAvailability({
+    sessionId: placement.sessionId,
+    sessionKey: placement.sessionKey,
+    agentId: placement.agentId,
+    assertCurrent: () => params.placements.validateTurnClaim(params.turnClaim),
+  });
 
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
@@ -201,6 +212,7 @@ async function executeWorkerTurn(params: {
     desktop: environment.desktop,
     modelRef,
     turn,
+    githubPublicationAvailable,
   });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity } = await prepareWorkerAgentRuntimeIdentity({
@@ -360,6 +372,12 @@ async function executeWorkerTurn(params: {
     localWorkspaceDir: params.localWorkspaceDir,
     transcriptTarget,
     tunnel,
+    ...(params.prepareAcceptedWorkspacePublication
+      ? { prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication }
+      : {}),
+    ...(params.publishAcceptedWorkspace
+      ? { publishAcceptedWorkspace: params.publishAcceptedWorkspace }
+      : {}),
   });
   if (workspaceConflict) {
     const reportedWorkspaceConflict = workspaceConflict;
@@ -531,6 +549,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           placements: options.placements,
           reconcileActivePlacement: options.reconcileActivePlacement,
           localWorkspaceDir,
+          ...(options.prepareAcceptedWorkspacePublication
+            ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
+            : {}),
+          ...(options.publishAcceptedWorkspace
+            ? { publishAcceptedWorkspace: options.publishAcceptedWorkspace }
+            : {}),
           workspaceOperations: options.workspaceOperations,
           turn,
           turnClaim,

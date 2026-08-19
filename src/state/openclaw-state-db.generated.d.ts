@@ -794,6 +794,42 @@ export interface GatewayRestartSentinel {
   version: number;
 }
 
+export interface GithubPublicationRequests {
+  agent_id: string;
+  base_branch: string | null;
+  body: string | null;
+  branch: string;
+  claim_id: string | null;
+  created_at_ms: number;
+  environment_id: string | null;
+  error_code: string | null;
+  gateway_instance_id: string | null;
+  head_commit: string | null;
+  idempotency_key: string;
+  identity_account_id: number;
+  identity_login: string;
+  identity_profile_id: string | null;
+  identity_source: string;
+  next_action: string | null;
+  owner_epoch: number | null;
+  placement_generation: number | null;
+  pull_request_url: string | null;
+  reported_at_ms: number | null;
+  repository: string | null;
+  repository_fingerprint: string;
+  request_digest: string;
+  request_id: string;
+  run_id: string | null;
+  session_id: string;
+  session_key: string;
+  source_head_commit: string | null;
+  status: string;
+  title: string | null;
+  updated_at_ms: number;
+  workspace_tree: string | null;
+  worktree_id: string;
+}
+
 export interface InstalledPluginIndex {
   compat_registry_version: string;
   diagnostics_json: string;
@@ -1829,6 +1865,7 @@ export interface DB {
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
+  github_publication_requests: GithubPublicationRequests;
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
