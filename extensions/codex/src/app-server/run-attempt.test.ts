@@ -58,6 +58,7 @@ import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexPluginAppCacheKey,
@@ -6203,6 +6204,39 @@ describe("runCodexAppServerAttempt", () => {
     expect(calledWithFailedClient).toBe(true);
     retireSpy.mockRestore();
   });
+  it("uses the prepared execution model without exposing it in lifecycle events", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const runtimeModelId = "codex-execution-model";
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) =>
+      method === "thread/start" ? { ...threadStartResult(), model: runtimeModelId } : undefined,
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.modelId = "gpt-5.6-sol";
+    params.model = {
+      ...params.model,
+      id: "gpt-5.6-sol",
+      params: {
+        ...params.model.params,
+        ...buildCodexRuntimeModelParams("gpt-5.6-sol", runtimeModelId),
+      },
+    };
+    const onAgentEvent = vi.fn();
+    params.onAgentEvent = onAgentEvent;
+
+    const run = runCodexAppServerAttempt(params, { runtimeModelId });
+    await completeStartedRun(run, waitForMethod, completeTurn);
+
+    for (const method of ["thread/start", "turn/start"]) {
+      const request = requests.find((entry) => entry.method === method);
+      const requestParams = request?.params as Record<string, unknown> | undefined;
+      expect(requestParams?.model).toBe(runtimeModelId);
+    }
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.lifecycle",
+      data: expect.objectContaining({ phase: "turn_starting", model: "gpt-5.6-sol" }),
+    });
+  });
+
   it("passes configured app-server policy, sandbox, service tier, and model on resume", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });

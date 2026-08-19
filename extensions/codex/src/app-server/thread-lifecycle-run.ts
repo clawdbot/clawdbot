@@ -45,6 +45,7 @@ import {
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
+import { rotateChangedCodexExecutionModel } from "./thread-model-rotation.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
@@ -292,6 +293,11 @@ export async function startOrResumeThread(
       await clearCurrentBinding("rotating a stale thread binding");
       binding = undefined;
     }
+    await rotateChangedCodexExecutionModel({
+      lifecycle: params,
+      binding,
+      clearCurrentBinding,
+    });
     if (
       binding?.threadId &&
       shouldRotateCodexGpt56MultiAgentBinding({
@@ -314,7 +320,7 @@ export async function startOrResumeThread(
     }
     const startModelSelection = resolveCodexAppServerThreadModelSelection({
       provider: params.params.provider,
-      model: params.params.modelId,
+      model: params.runtimeModelId ?? params.params.modelId,
       binding,
       authProfileId: params.params.authProfileId,
       authProfileStore: params.params.authProfileStore,

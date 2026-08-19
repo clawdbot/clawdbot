@@ -49,6 +49,25 @@ function routeVariantKey(entry: ModelCatalogEntry): string {
   ].join("\0");
 }
 
+function mergeHarnessCompat(
+  observed: ModelCatalogEntry["compat"],
+  provider: ModelCatalogEntry["compat"],
+): ModelCatalogEntry["compat"] {
+  if (!observed && !provider) {
+    return undefined;
+  }
+  const compat = { ...provider, ...observed };
+  if (observed?.supportedReasoningEfforts?.length === 0) {
+    return { ...compat, supportsReasoningEffort: false, supportedReasoningEfforts: [] };
+  }
+  const efforts = provider?.supportedReasoningEfforts?.length
+    ? provider.supportedReasoningEfforts
+    : observed?.supportedReasoningEfforts;
+  return efforts
+    ? { ...compat, supportsReasoningEffort: true, supportedReasoningEfforts: [...efforts] }
+    : compat;
+}
+
 function enrichHarnessRows(
   rows: readonly ModelCatalogEntry[],
   snapshot: ModelCatalogSnapshot,
@@ -63,13 +82,18 @@ function enrichHarnessRows(
   }
   return rows.map((entry) => {
     const donor = donors.get(resolveModelCatalogIdentityKey(entry));
-    return donor
-      ? {
-          ...donor,
-          ...entry,
-          ...(donor.compat || entry.compat ? { compat: { ...donor.compat, ...entry.compat } } : {}),
-        }
-      : entry;
+    if (!donor) {
+      return entry;
+    }
+    const compat = mergeHarnessCompat(entry.compat, donor.compat);
+    const mergedParams =
+      donor.params || entry.params ? { ...donor.params, ...entry.params } : undefined;
+    return {
+      ...donor,
+      ...entry,
+      ...(mergedParams ? { params: mergedParams } : {}),
+      ...(compat ? { compat } : {}),
+    };
   });
 }
 
