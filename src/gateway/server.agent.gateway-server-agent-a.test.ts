@@ -17,6 +17,7 @@ import {
   type AgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import * as mediaStore from "../media/store.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -900,9 +901,12 @@ describe("gateway server agent", () => {
       },
       { mode: "full", reason: "durable agent media custody regression" },
     );
+    // Inbound ids are random; compare the durable fact against its public
+    // redaction contract because an id can resemble sensitive text.
+    const transcriptMediaUrl = media?.[0]?.url ? redactSensitiveText(media[0].url) : undefined;
     expect(
       (transcript[0] as { __openclaw?: { media?: Array<{ url?: string }> } })["__openclaw"]?.media,
-    ).toEqual(expect.arrayContaining([expect.objectContaining({ url: media?.[0]?.url })]));
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ url: transcriptMediaUrl })]));
     const inboundAfter = await listInboundMedia();
     expect([...inboundAfter].filter((entry) => !inboundBefore.has(entry))).toHaveLength(1);
   });
