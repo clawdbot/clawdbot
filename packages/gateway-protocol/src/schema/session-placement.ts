@@ -182,7 +182,12 @@ const WorkerMachineClassSchema = Type.String({
   maxLength: WORKER_MACHINE_CLASS_MAX_LENGTH,
 });
 
-/** Requests one-way dispatch of an existing local session to an explicit or configured target. */
+/**
+ * Requests one-way dispatch to an explicit device (`operator.write`), an explicit profile
+ * (`operator.admin`), or an `operator.admin`-only `cloudWorkers.projectProfiles` lookup when no
+ * target is supplied. Explicit targets take precedence. An absent, unmatched, or invalid mapping
+ * is rejected with `INVALID_REQUEST` instead of provisioning or falling back to another target.
+ */
 export const SessionsDispatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,

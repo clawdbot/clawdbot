@@ -39,6 +39,13 @@ vi.mock("../session-utils.js", async () => {
 
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 
+export function getSessionDispatchHandler() {
+  return expectDefined(
+    sessionDispatchHandlers["sessions.dispatch"],
+    'sessionDispatchHandlers["sessions.dispatch"] test invariant',
+  );
+}
+
 export const dispatchTestSessionKey = "agent:main:cloud-test";
 export const dispatchTestSessionId = "session-cloud-test";
 
@@ -136,10 +143,7 @@ export async function invokeSessionDispatch(
   sessionMutationAuthorization?: SessionMutationAuthorization,
 ) {
   const respond = vi.fn() as unknown as RespondFn;
-  await expectDefined(
-    sessionDispatchHandlers["sessions.dispatch"],
-    'sessionDispatchHandlers["sessions.dispatch"] test invariant',
-  )({
+  await getSessionDispatchHandler()({
     req: { id: "dispatch-request" } as never,
     params: { key: dispatchTestSessionKey, ...target },
     respond,
