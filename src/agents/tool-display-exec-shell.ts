@@ -318,6 +318,15 @@ function findHeredocBodyEnd(
   return undefined;
 }
 
+function findArithmeticSecondParen(command: string, firstParenIndex: number): number | undefined {
+  let index = firstParenIndex + 1;
+  // Bash removes unquoted backslash-newline pairs before recognizing the `((` token.
+  while (command[index] === "\\" && command[index + 1] === "\n") {
+    index += 2;
+  }
+  return command[index] === "(" ? index : undefined;
+}
+
 export function scanTopLevelChars(
   command: string,
   visit: (char: string, index: number) => boolean | void,
@@ -386,11 +395,13 @@ export function scanTopLevelChars(
       continue;
     }
 
-    const startsArithmetic =
+    const arithmeticSecondParenIndex =
       arithmeticDepth === 0 &&
       char === "(" &&
-      command[i + 1] === "(" &&
-      (command[i - 1] === "$" || atWordStart);
+      (previousWasUnquotedDollar || atWordStart)
+        ? findArithmeticSecondParen(command, i)
+        : undefined;
+    const startsArithmetic = arithmeticSecondParenIndex !== undefined;
     const inArithmetic = arithmeticDepth > 0 || startsArithmetic;
 
     if (!inArithmetic) {
@@ -422,9 +433,12 @@ export function scanTopLevelChars(
       }
     }
 
-    if (startsArithmetic) {
+    if (arithmeticSecondParenIndex !== undefined) {
       // Expose only the `((` opener; separators inside the arithmetic body stay protected.
-      if (visit(char, i) === false || visit(command.charAt(i + 1), i + 1) === false) {
+      if (
+        visit(char, i) === false ||
+        visit(command.charAt(arithmeticSecondParenIndex), arithmeticSecondParenIndex) === false
+      ) {
         return;
       }
     } else if (!inArithmetic && visit(char, i) === false) {
@@ -513,19 +527,21 @@ const SHELL_COMMAND_START_PATTERN =
 const SHELL_TOKEN_END_PATTERN = String.raw`(?=$|[\s;&|()<>])`;
 const SHELL_NAMED_COMPOUND_START_PATTERN =
   `(?:(?:for|while|until|if|case|select|coproc)${SHELL_TOKEN_END_PATTERN}|` +
-  `(?:\\[\\[|\\{)${SHELL_TOKEN_END_PATTERN}|\\(\\()`;
-const SHELL_COMPOUND_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\()`;
+  `(?:\\[\\[|\\{)${SHELL_TOKEN_END_PATTERN})`;
+const SHELL_COMPOUND_START_PATTERN =
+  `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\((?!\\())`;
+const SHELL_FUNCTION_BODY_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\()`;
 const SHELL_COMPOUND_AT_COMMAND_START_RE = new RegExp(
   `${SHELL_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
   "u",
 );
 const SHELL_FUNCTION_NAME_PATTERN = `[^\\s;&|()<>]+`;
 const SHELL_FUNCTION_AT_COMMAND_START_RE = new RegExp(
-  `${SHELL_COMMAND_START_PATTERN}function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_COMPOUND_START_PATTERN}|\\((?!\\s*\\)))`,
+  `${SHELL_COMMAND_START_PATTERN}function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
   "u",
 );
 const SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE = new RegExp(
-  `${SHELL_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_COMPOUND_START_PATTERN}`,
+  `${SHELL_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
   "u",
 );
 

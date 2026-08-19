@@ -317,15 +317,10 @@ describe("tool display details", () => {
     const subshellFunction = "function sub() (echo one; echo two)";
     const posixConditionalFunction = "plain() if true; then echo ok; fi";
     const negatedDoubleBracket = "! [[ -f a && -f b ]] && pnpm test";
-    const timedArithmetic = "time (( n++ )) && pnpm test";
     const timedNegatedDoubleBracket = "time -p ! [[ -n x ]]";
     const negatedTimedDoubleBracket = "! time [[ -n x ]]";
-    const operatorTimedArithmetic = "time(( n++ )) && pnpm test";
-    const operatorPortableTimedArithmetic = "time -p(( n++ )) && pnpm test";
-    const operatorNegatedArithmetic = "!(( n++ )) && pnpm test";
     const operatorTimedSubshell = "time(echo one; echo two)";
     const operatorArithmeticFunction = "function bump(( n++ )) && pnpm test";
-    const portableTimedDoubleDashArithmetic = "time -p -- (( n++ )) && pnpm test";
 
     for (const command of [
       loop,
@@ -354,15 +349,10 @@ describe("tool display details", () => {
       "function worker(echo one; echo two)",
       posixConditionalFunction,
       negatedDoubleBracket,
-      timedArithmetic,
       timedNegatedDoubleBracket,
       negatedTimedDoubleBracket,
-      operatorTimedArithmetic,
-      operatorPortableTimedArithmetic,
-      operatorNegatedArithmetic,
       operatorTimedSubshell,
       operatorArithmeticFunction,
-      portableTimedDoubleDashArithmetic,
       "time -- if true; then echo one; echo two; fi",
     ]) {
       expect(splitTopLevelStages(command)).toEqual([command]);
@@ -371,6 +361,23 @@ describe("tool display details", () => {
           resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
         ),
       ).toBe(command);
+    }
+
+    for (const command of [
+      "time (( n++ )) && pnpm test",
+      "(( ready && enabled )) && pnpm test",
+      "time (( ready || fallback )) && pnpm test",
+      ["(\\", "( ready && enabled )) && pnpm test"].join("\n"),
+      ["echo $\\", "(( ready && enabled )) && pnpm test"].join("\n"),
+      "time(( n++ )) && pnpm test",
+      "time -p(( n++ )) && pnpm test",
+      "!(( n++ )) && pnpm test",
+      "time -p -- (( n++ )) && pnpm test",
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([
+        command.slice(0, command.lastIndexOf(" && ")),
+        "pnpm test",
+      ]);
     }
 
     for (const command of [
