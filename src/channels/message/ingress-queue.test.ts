@@ -960,7 +960,7 @@ describe("channel ingress queue", () => {
         });
 
         await expect(queue.enqueue("dup-claimed-bad", { text: "late" })).rejects.toThrow(
-          "Corrupt payload_json in claimed channel ingress event",
+          "Corrupt claimed channel ingress event",
         );
 
         const { db } = openIngressStateDatabase(stateDir);
@@ -1016,6 +1016,47 @@ describe("channel ingress queue", () => {
         expect(row?.claim_token).toBeNull();
         expect(row?.claimed_at).toBeNull();
         await expect(queue.recoverStaleClaims({ staleMs: Date.now() - oldTime })).resolves.toBe(0);
+      });
+    });
+
+    it("tombstones a claimed row with missing claim columns and keeps it resubmittable", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue<{ text: string }>(stateDir);
+        // Valid payload, but no claim token/owner/timestamp: no owner can ever
+        // release this row, and a NULL claimed_at dodges cutoff-based scans.
+        insertCorruptRow(stateDir, '["test","account"]', "claimless", {
+          payload_json: JSON.stringify({ text: "still valid" }),
+          status: "claimed",
+        });
+
+        await expect(queue.listClaims()).resolves.toEqual([]);
+
+        const shouldRecoverCorrupt = vi.fn(() => false);
+        await expect(
+          queue.recoverStaleClaims({ staleMs: 10, now: 20, shouldRecoverCorrupt }),
+        ).resolves.toBe(1);
+        // No reachable owner exists, so ownership policy is not consulted.
+        expect(shouldRecoverCorrupt).not.toHaveBeenCalled();
+
+        const { db } = openIngressStateDatabase(stateDir);
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+            .selectFrom("channel_ingress_events")
+            .select(["status", "failed_reason", "payload_json", "claim_token", "claimed_at"])
+            .where("queue_name", "=", '["test","account"]')
+            .where("event_id", "=", "claimless"),
+        );
+        expect(row).toEqual({
+          status: "failed",
+          failed_reason: "corrupt_claim",
+          payload_json: JSON.stringify({ text: "still valid" }),
+          claim_token: null,
+          claimed_at: null,
+        });
+
+        const resubmitted = await queue.resubmit?.("claimless");
+        expect(resubmitted?.kind).toBe("resubmitted");
       });
     });
 
