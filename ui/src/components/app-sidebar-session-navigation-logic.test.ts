@@ -286,6 +286,43 @@ describe("sidebar navigation lineage ownership", () => {
     ]);
   });
 
+  it("promotes an explicitly categorized child to a sidebar section root", () => {
+    const categorizedChild = { ...child, category: "P1 issues from beta feedback" };
+    const projected = projectSessionTree({
+      roots: [navigationParent, categorizedChild],
+      agentRows: [navigationParent, categorizedChild],
+      childRowsByParent: {},
+      loadingChildKeys: new Set(),
+      knownSessionAttention: [],
+      toSidebarSession: (row, isChild) =>
+        ({
+          key: row.key,
+          category: row.category,
+          isChild,
+          attention: { kind: "none" },
+          runningChildCount: 0,
+          failedChildCount: 0,
+        }) as SidebarRecentSession,
+    });
+
+    expect(
+      projected.map((row) => ({
+        key: row.key,
+        category: row.category,
+        isChild: row.isChild,
+        children: row.children.map((entry) => entry.key),
+      })),
+    ).toEqual([
+      { key: navigationParent.key, category: undefined, isChild: false, children: [] },
+      {
+        key: categorizedChild.key,
+        category: categorizedChild.category,
+        isChild: false,
+        children: [],
+      },
+    ]);
+  });
+
   it.each([
     ["legacy active child", { status: "running" }, 1, 0],
     ["stale running child", { status: "running", hasActiveRun: false }, 0, 0],
