@@ -461,6 +461,40 @@ describe("SessionManager.open", () => {
     expect(manager.getLeafId()).toBe(external.messageId);
   });
 
+  it("rebases the append after a header fold onto a foreign row instead of rejecting it", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const target = {
+      agentId: "main",
+      sessionId: "header-fold-rebase",
+      sessionKey: "agent:main:header-fold-rebase",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = SessionManager.open(target, dir);
+
+    // First append folds the still-deferred session header into its own transaction.
+    const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+
+    // A foreign writer appends directly against the same transcript, advancing the DB
+    // tail without this manager's tracked snapshot observing it -- the same shape as a
+    // second process appending mid-turn.
+    const foreign = await appendTranscriptMessage(target, {
+      message: { role: "user", content: "foreign", timestamp: 2 },
+      now: 2,
+      parentId: firstId,
+    });
+
+    // This active-branch append still declares the now-stale firstId as its parent. It
+    // must gracefully rebase onto the foreign row (like every other active-branch
+    // append) instead of being rejected as a snapshot conflict -- if the first append's
+    // header fold left persistenceHeaderPending stuck true, every later append keeps
+    // taking the guarded revalidation path and this throws SqliteTranscriptMutationConflictError.
+    const secondId = manager.appendMessage({ role: "user", content: "second", timestamp: 3 });
+
+    expect(manager.getLeafId()).toBe(secondId);
+    expect(manager.getEntry(secondId)?.parentId).toBe(foreign.messageId);
+  });
+
   it("clears side-append mode when switching to a header-only target", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");

@@ -202,6 +202,18 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return { expectedSnapshot: this.persistedRowSnapshot ?? [] };
   }
 
+  // A guard folding a still-deferred header commits it in the same transaction as this
+  // append, so once that append succeeds the header is no longer pending -- every other
+  // header-persisting path (replacePersistedTranscript, branch()) clears this the same way.
+  // Skipping this leaves persistenceHeaderPending stuck true, so every later append keeps
+  // taking the guarded "deferred header" branch above instead of an active-branch append's
+  // intended unguarded tail-rebase path, turning a graceful rebase into a hard rejection.
+  private clearHeaderPendingAfterFold(guard: PendingTranscriptHeader | undefined): void {
+    if (guard?.event) {
+      this.persistenceHeaderPending = false;
+    }
+  }
+
   private persistSqliteRecord(
     entry: unknown,
     options?: AppendPersistenceOptions,
@@ -230,17 +242,19 @@ export class SessionManagerPersistence extends SessionManagerCore {
   ): PersistRecordResult {
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
+      const guard = this.resolveAppendGuard(scope, false);
       const { result, snapshot } = appendTranscriptEventWithSnapshotSync(
         scope,
         entry,
         undefined,
-        this.resolveAppendGuard(scope, false),
+        guard,
       );
       requireTranscriptEventAppend(
         result,
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
       );
       this.applyPersistedRowSnapshot(snapshot);
+      this.clearHeaderPendingAfterFold(guard);
       return undefined;
     }
     if (!isIndexedSessionEntry(entry)) {
@@ -248,17 +262,19 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     if (entry.type !== "message") {
       const isActiveBranchAppend = options?.appendIntent === "active-branch";
+      const guard = this.resolveAppendGuard(scope, isActiveBranchAppend);
       const { result, snapshot, effectiveParentId } = appendTranscriptEventWithSnapshotSync(
         scope,
         entry,
         isActiveBranchAppend ? { appendIntent: options.appendIntent } : undefined,
-        this.resolveAppendGuard(scope, isActiveBranchAppend),
+        guard,
       );
       requireTranscriptEventAppend(
         result,
         `Session transcript entry was not persisted: ${entry.id}`,
       );
       this.applyPersistedRowSnapshot(snapshot);
+      this.clearHeaderPendingAfterFold(guard);
       // Raw appends rebase the same way message appends do (active-branch tail rebase),
       // but only messages returned that rebase to the caller until now. Surfacing it here
       // lets appendEntry's existing effectiveParentId check reload when a concurrent
@@ -276,15 +292,17 @@ export class SessionManagerPersistence extends SessionManagerCore {
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
     } satisfies Parameters<typeof appendTranscriptMessageWithSnapshotSync>[1];
+    const messageGuard = this.resolveAppendGuard(scope, options?.appendIntent === "active-branch");
     const { result, snapshot } = appendTranscriptMessageWithSnapshotSync(
       scope,
       appendOptions,
-      this.resolveAppendGuard(scope, options?.appendIntent === "active-branch"),
+      messageGuard,
     );
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
     this.applyPersistedRowSnapshot(snapshot);
+    this.clearHeaderPendingAfterFold(messageGuard);
     if (result.messageId !== entry.id) {
       const idempotencyKey =
         entry.message.role === "user" &&
