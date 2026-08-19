@@ -162,6 +162,8 @@ describe("resolveToolEmoji", () => {
     };
 
     expect(resolveToolEmoji("exec", emojis, overrides)).toBe("🧪");
+    expect(resolveToolEmoji("read", emojis, overrides)).toBe("🧪");
+    expect(resolveToolEmoji("write", emojis, overrides)).toBe("🧪");
     expect(resolveToolEmoji("web_search", emojis, overrides)).toBe("🛰️");
     expect(resolveToolEmoji("message", emojis, overrides)).toBe("🔧");
   });
