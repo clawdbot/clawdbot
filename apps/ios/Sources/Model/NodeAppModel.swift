@@ -10210,19 +10210,6 @@ extension NodeAppModel {
         self.admitTalkAfterSessionHydration()
     }
 
-    func _test_applyPendingForegroundNodeActions(
-        _ actions: [(id: String, command: String, paramsJSON: String?)]) async
-    {
-        let mapped = actions.map { action in
-            PendingForegroundNodeAction(
-                id: action.id,
-                command: action.command,
-                paramsJSON: action.paramsJSON,
-                enqueuedAtMs: nil)
-        }
-        await self.applyPendingForegroundNodeActions(mapped, trigger: "test")
-    }
-
     func _test_makeOperatorConnectOptions(
         clientId: String,
         displayName: String?,

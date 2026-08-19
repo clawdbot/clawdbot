@@ -1,5 +1,4 @@
 import OpenClawKit
-import OpenClawProtocol
 import SwiftUI
 import UIKit
 
@@ -784,10 +783,6 @@ struct RootTabs: View {
                 self.suppressExecApprovalPromptForNotificationSettings(approvalId)
                 self.selectSettingsRoute(.notifications)
             })
-    }
-
-    private var gatewayStatus: GatewayDisplayState {
-        GatewayStatusBuilder.build(appModel: self.appModel)
     }
 
     private func updateIdleTimer() {
