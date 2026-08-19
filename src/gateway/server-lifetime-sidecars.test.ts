@@ -86,7 +86,7 @@ describe("gateway lifetime sidecars", () => {
       reconcileGitHubPublications,
       sidecars,
     });
-    await vi.runAllTicks();
+    vi.runAllTicks();
     expect(reconcileGitHubPublications).toHaveBeenCalledOnce();
 
     await vi.advanceTimersByTimeAsync(60_000);

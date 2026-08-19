@@ -84,14 +84,11 @@ export function createGatewayGitHubPublicationRuntime(params: {
   });
 }
 
-export type GatewayGitHubPublicationRuntime = ReturnType<
-  typeof createGatewayGitHubPublicationRuntime
->;
 export type GatewayWorkerPlacementRuntime = ReturnType<typeof createGatewayWorkerPlacementRuntime>;
 
 export function createGatewayWorkerPlacementRuntime(
   params: GatewayWorkerPlacementRuntimeParams & {
-    githubPublicationRuntime?: GatewayGitHubPublicationRuntime;
+    githubPublicationRuntime?: ReturnType<typeof createGitHubPublicationRuntime>;
   },
 ) {
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
