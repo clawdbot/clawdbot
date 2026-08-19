@@ -3345,13 +3345,13 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("materializes session handoff denies before selectable CLI execution", async () => {
+  it("materializes the exact session handoff allowlist before selectable CLI execution", async () => {
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
       ...context.baseArgs,
     ]);
     const resolveMcpLoopbackPolicyTools = vi.fn(() => ({
       agentId: "main",
-      tools: [{ name: "write" }],
+      tools: ["write", "apply_patch"].map((name) => ({ name })),
     }));
     setRawCliBackendForPrepareTest({
       id: "selectable-cli",
@@ -3377,7 +3377,7 @@ describe("prepareCliRunContext", () => {
         inheritedToolPolicy: {
           version: 1,
           allow: ["write"],
-          deny: ["apply_patch"],
+          deny: [],
         },
         requester: {},
       },
@@ -3391,7 +3391,7 @@ describe("prepareCliRunContext", () => {
           inheritedToolPolicy: {
             version: 1,
             allow: ["write"],
-            deny: ["apply_patch"],
+            deny: [],
           },
           requester: {},
         },

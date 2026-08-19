@@ -1,4 +1,4 @@
-import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+import { normalizeToolPolicyName, normalizeToolPolicyNames } from "../../agents/tool-policy.js";
 
 export function resolveAgentRunToolAllowlist(params: {
   restoredCronToolsAllow?: string[];
@@ -9,5 +9,6 @@ export function resolveAgentRunToolAllowlist(params: {
   if (!restored || !handoff) {
     return restored ?? handoff;
   }
-  return handoff.filter((name) => isRuntimeToolAllowed(name, restored));
+  const restoredNames = normalizeToolPolicyNames(restored);
+  return handoff.filter((name) => restoredNames.has(normalizeToolPolicyName(name)));
 }

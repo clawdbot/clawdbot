@@ -267,7 +267,7 @@ function normalizeDeclaredPluginIds(values?: Iterable<string>): Set<string> {
   );
 }
 
-function normalizeDeclaredToolNames(values?: Iterable<string>): Set<string> {
+export function normalizeToolPolicyNames(values?: Iterable<string>): Set<string> {
   return new Set(
     Array.from(values ?? [], (value) => normalizeToolPolicyName(value)).filter(
       (value): value is string => Boolean(value),
@@ -310,7 +310,7 @@ export function analyzeAllowlistByToolType(
   ]);
   const pluginTools = new Set([
     ...groups.all,
-    ...normalizeDeclaredToolNames(declaredTools?.pluginToolNames),
+    ...normalizeToolPolicyNames(declaredTools?.pluginToolNames),
   ]);
   const mcpToolPrefixes = buildDeclaredMcpToolPrefixes(declaredTools?.mcpServerNames);
   const unknownAllowlist: string[] = [];

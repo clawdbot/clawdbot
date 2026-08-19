@@ -15,6 +15,6 @@ describe("resolveAgentRunToolAllowlist", () => {
         restoredCronToolsAllow: ["read", "write", "message"],
         sessionHandoffToolsAllow: ["read", "apply_patch"],
       }),
-    ).toEqual(["read", "apply_patch"]);
+    ).toEqual(["read"]);
   });
 });

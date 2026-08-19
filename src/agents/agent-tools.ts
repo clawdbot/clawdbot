@@ -97,6 +97,7 @@ import {
   expandToolGroups,
   hasRestrictiveAllowPolicy,
   normalizeToolPolicyName,
+  normalizeToolPolicyNames,
   replaceWithEffectiveToolAllowlist,
 } from "./tool-policy.js";
 import {
@@ -949,7 +950,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   });
   options?.recordToolPrepStage?.("model-provider-policy");
   const sessionHandoffToolAllowlist = options?.trustedSessionHandoff
-    ? new Set(options.trustedSessionHandoff.inheritedToolPolicy.allow.map(normalizeToolPolicyName))
+    ? normalizeToolPolicyNames(options.trustedSessionHandoff.inheritedToolPolicy.allow)
     : undefined;
   // Handoff allow entries are the sender's exact executable names. Filter before
   // ordinary policy aliases can widen them (for example, write -> apply_patch).

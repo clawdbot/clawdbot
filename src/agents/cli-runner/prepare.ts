@@ -115,7 +115,11 @@ import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { isToolAllowedByPolicyName } from "../tool-policy-match.js";
-import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
+import {
+  expandToolGroups,
+  normalizeToolPolicyName,
+  normalizeToolPolicyNames,
+} from "../tool-policy.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -498,6 +502,22 @@ export async function prepareCliRunContext(
       backendResolved.resolveExecutionArgs !== undefined) ||
       (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
         backendResolved.prepareExecution !== undefined));
+  const sessionHandoffToolAllowlist = params.trustedSessionHandoff
+    ? normalizeToolPolicyNames(params.trustedSessionHandoff.inheritedToolPolicy.allow)
+    : undefined;
+  // A handoff carries the sender's final executable names. Apply that exact cap
+  // before ordinary runtime-policy aliases can widen the receiving CLI surface.
+  const isSessionHandoffToolAllowed = (name: string) =>
+    !sessionHandoffToolAllowlist || sessionHandoffToolAllowlist.has(normalizeToolPolicyName(name));
+  if (params.cliToolAvailability && sessionHandoffToolAllowlist) {
+    params = {
+      ...params,
+      cliToolAvailability: {
+        native: params.cliToolAvailability.native,
+        openClaw: params.cliToolAvailability.openClaw.filter(isSessionHandoffToolAllowed),
+      },
+    };
+  }
   let runtimeToolsAllowPolicy: string[] | undefined;
   if (params.toolsAllow !== undefined) {
     if (params.cliToolAvailability !== undefined) {
@@ -513,12 +533,15 @@ export async function prepareCliRunContext(
         expandToolGroups(params.toolsAllow)
           .map((toolName) => normalizeToolPolicyName(toolName))
           .filter(Boolean),
-      ).filter((toolName) =>
-        isToolAllowedByPolicyName(toolName, params.trustedSessionHandoff?.inheritedToolPolicy),
+      ).filter(
+        (toolName) =>
+          isSessionHandoffToolAllowed(toolName) &&
+          isToolAllowedByPolicyName(toolName, params.trustedSessionHandoff?.inheritedToolPolicy),
       );
       if (
         fallbackOpenClawTools.includes("write") &&
         !fallbackOpenClawTools.includes("apply_patch") &&
+        isSessionHandoffToolAllowed("apply_patch") &&
         isToolAllowedByPolicyName("apply_patch", params.trustedSessionHandoff?.inheritedToolPolicy)
       ) {
         fallbackOpenClawTools.push("apply_patch");
@@ -1030,7 +1053,7 @@ export async function prepareCliRunContext(
   const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
     projectedToolsBeforePromptBuild,
     promptBuildToolsAllow,
-  );
+  ).filter((tool) => isSessionHandoffToolAllowed(tool.name));
   if (
     promptBuildRestrictsTools &&
     (backendResolved.nativeToolMode === "always-on" ||

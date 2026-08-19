@@ -173,6 +173,18 @@ describe("resolveWorkerToolAuthority", () => {
     ).toEqual(["read"]);
   });
 
+  it("keeps session handoff names exact before target policy aliases", () => {
+    expect(
+      authority({
+        toolsAllow: ["write"],
+        trustedSessionHandoff: {
+          inheritedToolPolicy: { version: 1, allow: ["write"], deny: [] },
+          requester: {},
+        },
+      }),
+    ).toEqual(["write"]);
+  });
+
   it("re-resolves current owner-group restrictions for every scheduled turn", () => {
     expect(
       authority({
