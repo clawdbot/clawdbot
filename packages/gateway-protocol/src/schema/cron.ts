@@ -97,6 +97,11 @@ function cronRunStatusSchema(options: Record<string, unknown> = {}) {
 }
 
 const CronRunStatusSchema = cronRunStatusSchema();
+const CronCompletionStatusSchema = Type.Union([
+  Type.Literal("succeeded"),
+  Type.Literal("failed"),
+  Type.Literal("unknown"),
+]);
 const CronConfigRevisionSchema = Type.String({ minLength: 1, maxLength: 128 });
 const DeprecatedCronRunStatusSchema = cronRunStatusSchema({
   deprecated: true,
@@ -753,6 +758,7 @@ export const CronRunLogEntrySchema = closedObject({
   jobId: NonEmptyString,
   action: Type.Literal("finished"),
   status: Type.Optional(CronRunStatusSchema),
+  completionStatus: Type.Optional(CronCompletionStatusSchema),
   error: Type.Optional(Type.String()),
   errorReason: Type.Optional(FailoverReasonSchema),
   summary: Type.Optional(Type.String()),

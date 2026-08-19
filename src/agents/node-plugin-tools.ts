@@ -33,11 +33,37 @@ function readNodeInvokePayload(value: unknown): unknown {
   return isRecord(value) && "payload" in value ? value.payload : value;
 }
 
-function mapMcpPayloadToAgentToolResult(payload: unknown): AgentToolResult<unknown> {
+function mapMcpPayloadToAgentToolResult(
+  payload: unknown,
+  mcp: { server: string; tool: string },
+): AgentToolResult<unknown> {
   if (!isRecord(payload)) {
     return jsonResult(payload);
   }
-  return projectMcpCallToolResult(payload, payload);
+  const projected = projectMcpCallToolResult(payload, {
+    mcpServer: mcp.server,
+    mcpTool: mcp.tool,
+  });
+  if (payload.structuredContent !== undefined || !isRecord(projected.details)) {
+    return projected;
+  }
+  const textContent = Array.isArray(payload.content)
+    ? payload.content.flatMap((block) =>
+        isRecord(block) && block.type === "text" && typeof block.text === "string"
+          ? [{ type: "text" as const, text: block.text }]
+          : [],
+      )
+    : [];
+  if (textContent.length === 0) {
+    return projected;
+  }
+  return {
+    ...projected,
+    details: {
+      ...projected.details,
+      content: textContent,
+    },
+  };
 }
 
 function normalizePolicyNames(values: readonly string[] | undefined): Set<string> {
@@ -226,7 +252,7 @@ export function createNodePluginTools(params: {
         );
         const payload = readNodeInvokePayload(raw);
         if (mcpTool) {
-          return mapMcpPayloadToAgentToolResult(payload);
+          return mapMcpPayloadToAgentToolResult(payload, mcpTool);
         }
         return isAgentToolResult(payload) ? payload : jsonResult(payload);
       },

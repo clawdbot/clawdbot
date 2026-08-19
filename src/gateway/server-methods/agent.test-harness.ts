@@ -151,6 +151,16 @@ vi.mock("../../commands/agent.js", () => ({
   agentCommandFromIngress: mocks.agentCommand,
 }));
 
+vi.mock("../../agents/prepared-model-runtime.js", () => ({
+  // Direct handler tests bypass Gateway startup, so provide the lifecycle fact
+  // that production publishes before admitting agent RPCs.
+  loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
+    agentId,
+    config: mocks.loadConfigReturn,
+    pluginGeneration: { pluginMetadataSnapshot: {} },
+  }),
+}));
+
 vi.mock("../../acp/runtime/session-meta.js", async () => {
   const actual = await vi.importActual<typeof import("../../acp/runtime/session-meta.js")>(
     "../../acp/runtime/session-meta.js",

@@ -483,7 +483,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       hasActiveRun: true,
-      session: { key: "agent:main:main", sessionId: "sess-main", hasActiveRun: true },
+      activeRunIds: null,
+      session: {
+        key: "agent:main:main",
+        sessionId: "sess-main",
+        hasActiveRun: true,
+        activeRunIds: null,
+      },
     });
     expect(resolveEmbeddedAgentRunProgressStateMock).toHaveBeenCalledWith("sess-main");
   });

@@ -96,7 +96,7 @@ export type OpenClawConfig = {
   /** ACP integration settings. */
   acp?: AcpConfig;
   env?: {
-    /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
+    /** Opt-in: import missing secrets from a login shell environment (interactive for Bash). */
     shellEnv?: {
       enabled?: boolean;
       /** Timeout for the login shell exec (ms). Default: 15000. */

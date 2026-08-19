@@ -66,6 +66,7 @@ type CreateError = {
 type CreateAgentResult = (CreateAgentSuccess & { config: OpenClawConfig }) | CreateError;
 type AgentEntryConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 type CreateAgentEntry = AgentEntryConfig & { id: string };
+type ConfigCommitRollback = () => void | Promise<void>;
 
 type CreateAgentParams = {
   name?: string;
@@ -87,6 +88,8 @@ type CreateAgentParams = {
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   bindingSpecs?: string[];
   transformConfig?: typeof transformConfigFileWithRetry;
+  /** Prepare guided staged state at the last reversible edge before config publication. */
+  prepareConfigCommit?: () => Promise<ConfigCommitRollback | void>;
   provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
@@ -255,6 +258,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     ? resolveUserPath(requestedAgentDir.trim())
     : undefined;
   const transformConfig = params.transformConfig ?? transformConfigFileWithRetry;
+  let configCommitRollback: ConfigCommitRollback | undefined;
 
   try {
     return await withConfigMutationExclusive(async (lockedConfig) => {
@@ -436,6 +440,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           if (!workspace.bootstrapPending) {
             await writeIdentityFile({ workspaceDir: workspace.dir, identity });
           }
+          // The receipt owns compensation until the config transform publishes this result.
+          const preparedRollback = await params.prepareConfigCommit?.();
+          configCommitRollback =
+            typeof preparedRollback === "function" ? preparedRollback : undefined;
 
           return {
             nextConfig,
@@ -452,6 +460,8 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           };
         },
       });
+      // Publication is now irreversible; later tombstone or provenance failures retain staged state.
+      configCommitRollback = undefined;
       if (
         deletion?.cleanupCompleted &&
         !tombstoneClaimed &&
@@ -473,6 +483,16 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       };
     });
   } catch (error) {
+    if (configCommitRollback) {
+      try {
+        await configCommitRollback();
+      } catch (rollbackError) {
+        throw new Error(
+          `${String(error)}\nstaged config rollback failed: ${String(rollbackError)}`,
+          { cause: rollbackError },
+        );
+      }
+    }
     if (error instanceof DuplicateAgentError) {
       return createError("already-exists", `agent "${agentId}" already exists`, agentId);
     }

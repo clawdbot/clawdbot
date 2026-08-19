@@ -32,7 +32,12 @@ describe("models.list configured static entries", () => {
         expect.objectContaining({
           id: "gpt-5.6-sol",
           provider: "openai",
-          agentRuntime: { id: "codex", cloudPlacementSupported: false, source: "model" },
+          agentRuntime: {
+            id: "codex",
+            cloudPlacementSupported: false,
+            devicePlacementSupported: false,
+            source: "model",
+          },
         }),
       ],
     });

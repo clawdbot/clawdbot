@@ -5,11 +5,9 @@
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
 import { resolveOwnerDisplaySetting } from "./owner-display.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
@@ -56,24 +54,10 @@ function resolveAgentSystemPromptConfig(params: {
 }): ResolvedAgentSystemPromptConfig {
   const { config, agentId, sessionKey, sourceReplyDeliveryMode } = params;
   const ownerDisplay = resolveOwnerDisplaySetting(config);
-  const agentSubagents =
-    config && agentId ? resolveAgentConfig(config, agentId)?.subagents : undefined;
-  const configuredDelegationMode =
-    agentSubagents?.delegationMode ?? config?.agents?.defaults?.subagents?.delegationMode;
-  const baseSessionKey = parseCronRunScopeSuffix(sessionKey).baseSessionKey;
-  const isMainSession =
-    agentId !== undefined &&
-    baseSessionKey !== undefined &&
-    baseSessionKey ===
-      resolveCanonicalMainSessionKey({
-        agentId,
-        mainKey: config?.session?.mainKey,
-        sessionScope: config?.session?.scope,
-      });
   return {
     ownerDisplay: ownerDisplay.ownerDisplay,
     ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-    subagentDelegationMode: configuredDelegationMode ?? (isMainSession ? "prefer" : "suggest"),
+    subagentDelegationMode: resolveMainSessionDelegationMode({ config, agentId, sessionKey }),
     ttsHint: config
       ? buildTtsSystemPromptHint(config, agentId, {
           messageToolOnly: sourceReplyDeliveryMode === "message_tool_only",

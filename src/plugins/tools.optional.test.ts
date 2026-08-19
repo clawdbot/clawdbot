@@ -1035,6 +1035,7 @@ describe("resolvePluginTools optional tools", () => {
     const context = createContext();
     const config = context.config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
+    const preparedConfig = structuredClone(config);
     const metadataSnapshot = installToolManifestSnapshots({
       config,
       plugins: [
@@ -1048,11 +1049,11 @@ describe("resolvePluginTools optional tools", () => {
       ...createResolveToolsParams({ context, toolAllowlist: ["optional_tool"] }),
       preparedRuntime: {
         loadContext: {
-          rawConfig: config,
-          config,
-          activationSourceConfig: config,
+          rawConfig: preparedConfig,
+          config: preparedConfig,
+          activationSourceConfig: preparedConfig,
           autoEnabledReasons: {},
-          workspaceDir: "/tmp",
+          workspaceDir: "/gateway/plugin-runtime",
           env: process.env,
           logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           manifestRegistry: metadataSnapshot.manifestRegistry as never,

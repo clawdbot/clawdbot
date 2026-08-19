@@ -2502,7 +2502,36 @@ describe("tui session actions", () => {
     expect(chatLog.addUser).toHaveBeenCalledWith("persisted");
     expect(chatLog.addPendingUser).toHaveBeenCalledWith("optimistic-run", "optimistic prompt");
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("reply");
-    expect(result).toEqual({ loaded: true, inFlightRunId: null });
+    expect(result).toEqual({
+      loaded: true,
+      runOutcome: { state: "completed" },
+    });
+  });
+
+  it.each([
+    {
+      name: "interrupted",
+      sessionInfo: { status: "killed", abortedLastRun: true },
+      runOutcome: { state: "interrupted" },
+    },
+    {
+      name: "failed",
+      sessionInfo: { status: "failed", lastRunError: "provider failed" },
+      runOutcome: { state: "failed", errorMessage: "provider failed" },
+    },
+  ])("projects a closed $name history outcome", async ({ sessionInfo, runOutcome }) => {
+    const { loadHistory } = createTestSessionActions({
+      client: makeTuiBackend({
+        listSessions: vi.fn(),
+        loadHistory: vi.fn().mockResolvedValue({
+          sessionId: "session-main",
+          sessionInfo,
+          messages: [],
+        }),
+      }),
+    });
+
+    await expect(loadHistory()).resolves.toEqual({ loaded: true, runOutcome });
   });
 
   it("restores attachment-only assistant rows from history without exposing references", async () => {

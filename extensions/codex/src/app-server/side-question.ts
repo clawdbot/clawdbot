@@ -171,6 +171,8 @@ export async function runCodexAppServerSideQuestion(
   options: {
     bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
+    /** Private app-server request identity; public side-run identity remains params.model. */
+    runtimeModelId?: string;
     nativeHookRelay?: {
       enabled?: boolean;
       events?: readonly NativeHookRelayEvent[];
@@ -245,7 +247,7 @@ export async function runCodexAppServerSideQuestion(
         bindingModelProvider: binding.modelProvider,
       }));
   const modelSelection = resolveCodexAppServerRequestModelSelection({
-    model: supervisionModelSelection?.model ?? params.model,
+    model: supervisionModelSelection?.model ?? options.runtimeModelId ?? params.model,
     modelProvider,
     authProfileId,
     authProfileStore: preparedRuntimeAuth.authProfileStore,

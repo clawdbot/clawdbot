@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
-import { computeLineDiff, type DiffLine, diffStat } from "../../lib/chat/tool-call-diff.ts";
+import { computeLineDiff, type DiffLine } from "../../lib/chat/tool-call-diff.ts";
 import type { SkillWorkshopAppliedSkill } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
 
@@ -22,18 +22,19 @@ function renderDiffRow(line: DiffLine) {
 }
 
 export function renderAppliedRevisionDiff(previousBody: string, body: string) {
-  const lines = computeLineDiff(previousBody, body, { compactUnchanged: true });
-  if (lines.length === 0) {
+  const result = computeLineDiff(previousBody, body, { compactUnchanged: true });
+  if (result.kind === "complete" && result.lines.length === 0) {
     return html`<p class="sw-muted">${t("skillWorkshop.diff.unchanged")}</p>`;
   }
-  const { added, removed } = diffStat(lines);
   return html`
     <div class="sw-diff">
-      <p class="sw-diff__stat">
-        <span class="sw-diff__stat-add">+${added}</span>
-        <span class="sw-diff__stat-del">-${removed}</span>
-      </p>
-      <div class="sw-diff__rows">${lines.map(renderDiffRow)}</div>
+      ${result.kind === "complete"
+        ? html`<p class="sw-diff__stat">
+            <span class="sw-diff__stat-add">+${result.stat.added}</span>
+            <span class="sw-diff__stat-del">-${result.stat.removed}</span>
+          </p>`
+        : html`<p class="sw-muted sw-diff__notice">${t("skillWorkshop.diff.truncated")}</p>`}
+      <div class="sw-diff__rows">${result.lines.map(renderDiffRow)}</div>
     </div>
   `;
 }

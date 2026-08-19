@@ -139,7 +139,9 @@ export async function withTempHomeCore<T>(
     return await fn(base);
   } finally {
     if (!opts.skipSessionCleanup) {
-      await cleanupSessionStateForTest().catch(() => undefined);
+      await cleanupSessionStateForTest({ stateDir: path.join(base, ".openclaw") }).catch(
+        () => undefined,
+      );
     }
     restoreExtraEnv(envSnapshot);
     restoreEnv(snapshot);

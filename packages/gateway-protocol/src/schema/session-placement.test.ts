@@ -46,7 +46,7 @@ const workerOwnedFields = {
 };
 
 describe("session dispatch protocol schemas", () => {
-  it("accepts exactly one profile or device dispatch target", () => {
+  it("accepts an explicit target or configured-default lookup", () => {
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",
@@ -61,7 +61,10 @@ describe("session dispatch protocol schemas", () => {
         deviceId: "device-1",
       }),
     ).toBe(true);
-    expect(validateSessionsDispatchParams({ key: "agent:main:dispatch" })).toBe(false);
+    expect(validateSessionsDispatchParams({ key: "agent:main:dispatch" })).toBe(true);
+    expect(
+      validateSessionsDispatchParams({ key: "agent:main:dispatch", machineClass: "beast" }),
+    ).toBe(false);
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",

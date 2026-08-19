@@ -1,5 +1,4 @@
 // Implements `openclaw agents add`, including config mutation, workspace setup, auth copy, and route binding setup.
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -18,22 +17,17 @@ import {
 import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
+  persistAuthProfileBatch,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import {
-  loadPersistedAuthProfileStore,
-  mergeAuthProfileStores,
-} from "../agents/auth-profiles/persisted.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -51,7 +45,7 @@ import { WizardCancelledError } from "../wizard/prompts.js";
 import { applyAgentBindings, buildChannelBindings, describeBinding } from "./agents.bindings.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
-import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
+import { prepareAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
 import { requireValidConfigFileSnapshot } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
@@ -296,7 +290,11 @@ export async function agentsAddCommand(
       workspace: workspaceDir,
       agentDir,
     });
-    let finalizePortableAuthCopy: (() => Promise<void>) | undefined;
+    const stagedAuthProfiles: Array<
+      Parameters<typeof persistAuthProfileBatch>[0]["profiles"][number]
+    > = [];
+    let stagedAuthOrder: AuthProfileStore["order"];
+    let reportPortableAuthCopy: (() => Promise<void>) | undefined;
 
     const defaultAgentId = resolveDefaultAgentId(cfg);
     if (defaultAgentId !== agentId) {
@@ -333,7 +331,6 @@ export async function agentsAddCommand(
             initialValue: false,
           });
           if (shouldCopy) {
-            const portableStore = portable.store;
             const copiedProfileIds = portable.copiedProfileIds;
             const copiedOAuthProfileIds = copiedProfileIds.filter(
               (profileId) => sourceStore.profiles[profileId]?.type === "oauth",
@@ -341,16 +338,11 @@ export async function agentsAddCommand(
             const sourceAgentId = defaultAgentId;
             const sourceInheritedMain = sourceIsInheritedMain;
             const destinationAgentDir = agentDir;
-            finalizePortableAuthCopy = async () => {
-              await fs.mkdir(destinationAgentDir, { recursive: true });
-              const destinationStore = loadPersistedAuthProfileStore(destinationAgentDir);
-              const storeToPersist = destinationStore
-                ? mergeAuthProfileStores(portableStore, destinationStore)
-                : portableStore;
-              saveAuthProfileStore(storeToPersist, destinationAgentDir, {
-                filterExternalAuthProfiles: false,
-                syncExternalCli: false,
-              });
+            for (const [profileId, credential] of Object.entries(portable.store.profiles)) {
+              stagedAuthProfiles.push({ profileId, credential, replaceExisting: false });
+            }
+            stagedAuthOrder = portable.store.order;
+            reportPortableAuthCopy = async () => {
               const persisted = loadPersistedAuthProfileStore(destinationAgentDir);
               const persistedIds = new Set(Object.keys(persisted?.profiles ?? {}));
               const copiedCount = copiedProfileIds.filter((profileId) =>
@@ -371,7 +363,7 @@ export async function agentsAddCommand(
         } else if (skippedOAuthProfiles) {
           const sourceAgentId = defaultAgentId;
           const sourceInheritedMain = sourceIsInheritedMain;
-          finalizePortableAuthCopy = async () => {
+          reportPortableAuthCopy = async () => {
             await prompter.note(
               formatSkippedOAuthProfilesMessage(sourceAgentId, sourceInheritedMain),
               "Auth profiles",
@@ -388,6 +380,8 @@ export async function agentsAddCommand(
     if (wantsAuth) {
       const authStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
+        readOnly: true,
+        syncExternalCli: false,
       });
       while (true) {
         const authChoice = await promptAuthChoiceGrouped({
@@ -397,7 +391,7 @@ export async function agentsAddCommand(
           config: nextConfig,
         });
 
-        const authResult = await applyAuthChoice({
+        const authResult = await prepareAuthChoice({
           authChoice,
           config: nextConfig,
           prompter,
@@ -410,6 +404,7 @@ export async function agentsAddCommand(
         if (authResult.retrySelection) {
           continue;
         }
+        stagedAuthProfiles.push(...authResult.authProfiles);
         if (authResult.agentModelOverride) {
           nextConfig = applyAgentConfig(nextConfig, {
             agentId,
@@ -423,6 +418,10 @@ export async function agentsAddCommand(
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
       agentId,
       agentDir,
+      pendingAuthProfiles: stagedAuthProfiles.map(({ profileId, credential }) => ({
+        profileId,
+        credential,
+      })),
       validateCatalog: false,
     });
 
@@ -479,6 +478,20 @@ export async function agentsAddCommand(
       }
     }
 
+    const stagedEntry = existingAgent
+      ? undefined
+      : listAgentEntries(nextConfig).find(
+          (candidate) => normalizeAgentId(candidate.id) === agentId,
+        );
+    const stagedAuthBatch =
+      stagedAuthProfiles.length > 0
+        ? {
+            profiles: stagedAuthProfiles,
+            ...(stagedAuthOrder ? { order: stagedAuthOrder } : {}),
+            agentDir,
+          }
+        : undefined;
+
     let payload: { agentId: string; name: string; workspace: string; agentDir: string };
     if (existingAgent) {
       const target = resolveOnboardingAgentTarget(nextConfig, agentId);
@@ -486,13 +499,21 @@ export async function agentsAddCommand(
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
-      nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
-        const committed = await commitConfigWithPendingPluginInstalls({
-          nextConfig: configToCommit,
-          ...(baseHash !== undefined ? { baseHash } : {}),
+      const authPersistence = stagedAuthBatch
+        ? await persistAuthProfileBatch(stagedAuthBatch)
+        : undefined;
+      try {
+        nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
+          const committed = await commitConfigWithPendingPluginInstalls({
+            nextConfig: configToCommit,
+            ...(baseHash !== undefined ? { baseHash } : {}),
+          });
+          return committed.config;
         });
-        return committed.config;
-      });
+      } catch (error) {
+        authPersistence?.rollback();
+        throw error;
+      }
       payload = {
         agentId: target.agentId,
         name: agentName,
@@ -500,17 +521,22 @@ export async function agentsAddCommand(
         agentDir: target.agentDir,
       };
     } else {
-      const entry = listAgentEntries(nextConfig).find(
-        (candidate) => normalizeAgentId(candidate.id) === agentId,
-      );
-      if (!entry) {
+      if (!stagedEntry) {
         throw new Error(`staged agent "${agentId}" is missing from config`);
       }
-      const created = await createAgent({
-        entry: { ...entry, id: agentId },
-        expectedConfigHash: baseHash ?? null,
-        stagedConfig: nextConfig,
-        transformConfig: transformConfigWithPendingPluginInstalls,
+      const created = await withPluginLifecycleLease({}, async () => {
+        return await createAgent({
+          entry: { ...stagedEntry, id: agentId },
+          expectedConfigHash: baseHash ?? null,
+          stagedConfig: nextConfig,
+          transformConfig: transformConfigWithPendingPluginInstalls,
+          ...(stagedAuthBatch
+            ? {
+                prepareConfigCommit: async () =>
+                  (await persistAuthProfileBatch(stagedAuthBatch)).rollback,
+              }
+            : {}),
+        });
       });
       if (created.status === "error") {
         await prompter.outro(created.message);
@@ -525,7 +551,7 @@ export async function agentsAddCommand(
       };
       await channelSetup.runPostWriteHooks(nextConfig);
     }
-    await finalizePortableAuthCopy?.();
+    await reportPortableAuthCopy?.();
     if (!opts.json) {
       logConfigUpdated(runtime);
     }

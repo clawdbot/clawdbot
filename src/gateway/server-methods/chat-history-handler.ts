@@ -502,7 +502,9 @@ async function handleChatHistoryRequest({
     defaultAgentId: compatibilityOwnerAgentId,
   });
   sessionInfo.hasActiveRun = activeRunState.active;
-  sessionInfo.activeRunIds = activeRunState.runIds;
+  if (activeRunState.runIds !== undefined) {
+    sessionInfo.activeRunIds = activeRunState.runIds;
+  }
   if (activeRunState.active) {
     sessionInfo.status = activeRunState.status ?? "running";
   }

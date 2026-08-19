@@ -26,15 +26,6 @@
   flex-shrink: 0;
 }
 
-/* Hub tab strip stays fixed; the board scrolls inside the panel below it.
-   The board is full-width, so the strip skips the settings-column centering. */
-.content--skill-workshop .plugins-hub-tabs-row {
-  flex-shrink: 0;
-  max-width: none;
-  margin: 0;
-  padding-inline: 0;
-}
-
 .sw-hub-panel {
   display: flex;
   flex-direction: column;
@@ -62,6 +53,16 @@
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
+}
+
+.sw-hub-panel::part(base) {
+  gap: var(--space-3);
+}
+
+.sw-workshop-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
 }
 
 .sw-hub-panel .skill-workshop {

@@ -18,6 +18,7 @@ export {
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
   type MissingScopeErrorDetails,
+  type SkillProposalRevisionChangedErrorDetails,
   type UserPrefsLimitExceededErrorDetails,
   type ProjectCloneErrorDetails,
   type ProjectCloneFailureCause,
@@ -27,6 +28,8 @@ export {
   isMcpAppViewExpiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
+  buildSkillProposalRevisionChangedErrorDetails,
+  readSkillProposalRevisionChangedError,
 } from "../gateway-error-details.js";
 
 export const CronJobNotFoundErrorDetailsSchema = closedObject({
@@ -67,12 +70,21 @@ export const ProjectCloneErrorDetailsSchema = closedObject({
   }),
 });
 
+const RevisionHashSchema = Type.String({ pattern: "^[a-fA-F0-9]{64}$" });
+
+export const SkillProposalRevisionChangedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED),
+  expectedRevisionHash: RevisionHashSchema,
+  currentRevisionHash: RevisionHashSchema,
+});
+
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
+  SkillProposalRevisionChangedErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,

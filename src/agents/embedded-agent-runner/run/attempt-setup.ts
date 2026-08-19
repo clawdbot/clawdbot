@@ -23,7 +23,6 @@ import {
   getActiveDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
-import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
@@ -224,17 +223,6 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
       return providerRuntimeHandle;
     }
     const pluginMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
-    const compatibleMetadataSnapshot =
-      pluginMetadataSnapshot &&
-      pluginMetadataSnapshot.pluginIds === undefined &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: pluginMetadataSnapshot,
-        config: params.config,
-        env: process.env,
-        workspaceDir: effectiveWorkspace,
-      })
-        ? pluginMetadataSnapshot
-        : undefined;
     providerRuntimeHandle = {
       ...resolveProviderRuntimePluginHandle({
         provider: params.provider,
@@ -242,9 +230,7 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
         config: params.config,
         workspaceDir: effectiveWorkspace,
         env: process.env,
-        ...(compatibleMetadataSnapshot
-          ? { pluginMetadataSnapshot: compatibleMetadataSnapshot }
-          : {}),
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
       }),
       provider: params.provider,
       modelId: params.modelId,

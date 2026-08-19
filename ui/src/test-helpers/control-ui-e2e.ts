@@ -203,6 +203,7 @@ export const defaultControlUiFeatureMethods = [
   "chat.startup",
   "config.apply",
   "config.patch",
+  "config.schema",
   "config.set",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
@@ -247,6 +248,7 @@ export type ControlUiMockGatewayScenario = {
   agentModel?: string | null;
   assistantAgentId?: string;
   assistantName?: string;
+  automaticallyFetchFavicons?: boolean;
   basePath?: string;
   controlUiTabs?: Array<{
     group?: string;
@@ -848,6 +850,7 @@ function normalizeScenario(
       : basePathWithSlash;
   return {
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
+    automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -906,6 +909,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
   const normalizedScenario = normalizeScenario(scenario);
   return {
     allowExternalEmbedUrls: false,
+    automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
     assistantAgentId: normalizedScenario.assistantAgentId,
     assistantAvatar: "",
     assistantName: normalizedScenario.assistantName,

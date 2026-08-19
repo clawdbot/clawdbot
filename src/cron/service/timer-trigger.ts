@@ -4,9 +4,9 @@ import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
-  CronDeliveryStatus,
   CronFailureNotificationDelivery,
   CronJob,
+  CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
 } from "../types.js";
@@ -296,12 +296,7 @@ export function resolveDeliveryState(params: {
   deliveryAttempted?: boolean;
   error?: string;
   globalFailureDestination?: CronConfig["failureAlert"];
-}): {
-  delivered?: boolean;
-  status: CronDeliveryStatus;
-  error?: string;
-  failureNotification: CronFailureNotificationDelivery;
-} {
+}): CronResolvedDeliveryState {
   const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
   const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   // Failure destinations can receive alerts even when the primary delivery

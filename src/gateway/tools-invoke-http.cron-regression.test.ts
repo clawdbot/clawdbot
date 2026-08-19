@@ -159,6 +159,24 @@ describe("tools invoke HTTP denylist", () => {
     expect(cronRes.status).toBe(200);
   });
 
+  it.each(["cron", " CRON ", "CrOn"])(
+    "keeps deny spelling %j authoritative over a canonical allow",
+    async (deniedTool) => {
+      cfg = {
+        gateway: {
+          tools: {
+            allow: ["automations"],
+            deny: [deniedTool],
+          },
+        },
+      };
+
+      const cronRes = await invoke("cron", "operator.admin");
+
+      expect(cronRes.status).toBe(404);
+    },
+  );
+
   it("keeps gateway denied under the coding profile while honoring explicit cron allow", async () => {
     cfg = {
       tools: {

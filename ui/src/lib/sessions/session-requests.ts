@@ -22,7 +22,6 @@ import type {
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
-  SessionSteerResult,
 } from "./session-capability.ts";
 
 /** Gateway rosters omit recency so Chat and Settings agree; the cap bounds list work. */
@@ -193,18 +192,6 @@ export function requestSessionCompact(
     "sessions.compact",
     buildSessionRequestParams(key, options.agentId),
   );
-}
-
-export function requestSessionSteer(
-  client: SessionRequestClient,
-  key: string,
-  message: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionSteerResult> {
-  return client.request<SessionSteerResult>("sessions.steer", {
-    ...buildSessionRequestParams(key, options.agentId),
-    message,
-  });
 }
 
 export function requestSessionFilesList(

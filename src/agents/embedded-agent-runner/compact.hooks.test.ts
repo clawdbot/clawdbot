@@ -1171,6 +1171,23 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("preserves the recorded session permission policy when building compaction tools", async () => {
+    await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        workspaceDir: "/tmp/workspace",
+        sessionEntry: {
+          sessionId: "session-1",
+          permissionMode: "full",
+          sessionRoot: "/tmp/workspace",
+        },
+      }),
+    );
+
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+      sessionPermissionPolicy: { mode: "full", root: "/tmp/workspace" },
+    });
+  });
+
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";
     const metadataSnapshot = {

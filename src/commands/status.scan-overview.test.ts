@@ -220,4 +220,57 @@ describe("collectStatusScanOverview", () => {
     expect(result.channelsStatus).toBeNull();
     expect(result.channelIssues).toStrictEqual([]);
   });
+
+  it("returns the base overview when a reachable gateway lacks read scope", async () => {
+    mocks.createStatusScanCoreBootstrap.mockResolvedValueOnce({
+      tailscaleMode: "off",
+      tailscaleDnsPromise: Promise.resolve(null),
+      updatePromise: Promise.resolve({ installKind: "git" }),
+      agentStatusPromise: Promise.resolve({
+        defaultId: "main",
+        agents: [],
+        totalSessions: 0,
+        bootstrapPendingCount: 0,
+      }),
+      gatewayProbePromise: Promise.resolve({
+        gatewayConnection: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "default",
+        },
+        remoteUrlMissing: false,
+        gatewayMode: "local",
+        gatewayProbeAuth: {},
+        gatewayProbeAuthWarning: undefined,
+        gatewayProbe: {
+          ok: false,
+          connectLatencyMs: 12,
+          error: "missing scope: operator.read",
+          auth: {
+            role: "operator",
+            scopes: [],
+            capability: "connected_no_operator_scope",
+          },
+        },
+        gatewayReachable: true,
+        gatewaySelf: null,
+      }),
+      resolveTailscaleHttpsUrl: vi.fn(async () => null),
+      skipColdStartNetworkChecks: false,
+    });
+    mocks.callGateway.mockRejectedValueOnce(new Error("missing scope: operator.read"));
+
+    const result = await collectStatusScanOverview({
+      commandName: "status",
+      opts: {},
+      showSecrets: false,
+      includeChannelsData: false,
+    });
+
+    expect(result.gatewaySnapshot.gatewayReachable).toBe(true);
+    expect(result.gatewaySnapshot.gatewayProbe).toMatchObject({
+      ok: false,
+      error: "missing scope: operator.read",
+    });
+    expect(result.runtimeDegradation).toBeNull();
+  });
 });

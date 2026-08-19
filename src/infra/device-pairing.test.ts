@@ -9,11 +9,8 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
-import {
-  approveNodePairing,
-  requestNodePairing,
-  updatePairedNodeBins,
-} from "./device-pairing-node.js";
+import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
+import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
 import {
   loadDevicePairingStoreState,
   persistDeviceBootstrapTokenRecords,
@@ -1026,6 +1023,15 @@ describe("device pairing tokens", () => {
     await expect(updatePairedNodeBins("node-1", ["retired-bin"], original, baseDir)).resolves.toBe(
       true,
     );
+    await expect(
+      updatePairedNodeSessionHost({
+        nodeId: "node-1",
+        sessionHost: true,
+        expectedPairingGeneration: original,
+        isConnectionCurrent: () => true,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
 
     const rotated = await rotateDeviceToken({
       deviceId: "node-1",
@@ -1047,6 +1053,7 @@ describe("device pairing tokens", () => {
     ).resolves.toBe(false);
     const paired = await getPairedDevice("node-1", baseDir);
     expect(paired?.nodeSurface?.bins).toBeUndefined();
+    expect(paired?.nodeSurface?.sessionHost).toBeUndefined();
     expect(paired?.lastSeenAtMs).toBeUndefined();
     expect(paired?.lastSeenReason).toBeUndefined();
   });

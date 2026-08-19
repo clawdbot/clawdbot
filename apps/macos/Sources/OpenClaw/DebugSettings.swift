@@ -17,6 +17,7 @@ struct DebugSettings: View {
     @State private var debugSendInFlight = false
     @State private var debugSendStatus: String?
     @State private var debugSendError: String?
+    @State private var testNotificationOutcome: TestNotificationOutcome?
     @State private var portCheckInFlight = false
     @State private var portReports: [DebugActions.PortReport] = []
     @State private var portKillStatus: String?
@@ -460,9 +461,26 @@ struct DebugSettings: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Button("Send Test Notification") {
-                        Task { await DebugActions.sendTestNotification() }
+                        Task { await self.sendTestNotification() }
                     }
                     .buttonStyle(.bordered)
+                    .disabled(self.testNotificationOutcome == .pending)
+
+                    if let testNotificationOutcome {
+                        switch testNotificationOutcome {
+                        case .pending:
+                            ProgressView("Sending test notification…")
+                                .controlSize(.small)
+                        case .sent:
+                            Text("Test notification queued.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case let .error(message):
+                            Text(message)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
 
                     Button("Open Agent Events") {
                         DebugActions.openAgentEventsWindow()
@@ -713,6 +731,13 @@ struct DebugSettings: View {
                 self.debugSendError = error.localizedDescription
             }
         }
+    }
+
+    @MainActor
+    private func sendTestNotification() async {
+        guard self.testNotificationOutcome != .pending else { return }
+        self.testNotificationOutcome = .pending
+        self.testNotificationOutcome = await DebugActions.sendTestNotification()
     }
 
     private func revealApp() {

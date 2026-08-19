@@ -254,7 +254,7 @@ openclaw-chat-sidebar-region,
   z-index: 2;
 }
 
-.sidebar-region--narrow {
+.sidebar-region--narrow:not(.sidebar-region--expanded) {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(200px, 1fr) minmax(160px, 1fr);

@@ -3,11 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { tryResolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import {
   isSessionSkillEnabled,
@@ -34,7 +37,7 @@ import {
   readSkillFrontmatterSafe,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
-import { resolvePluginSkillDirs } from "./plugin-skills.js";
+import { resolvePluginSkillDirs, resolvePluginSkillDirsFromMetadata } from "./plugin-skills.js";
 import type { Skill } from "./skill-contract.js";
 import { compactSkillPath, resolveSkillsUserHomeDir } from "./skill-paths.js";
 import {
@@ -48,6 +51,7 @@ import {
 import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
 
 const skillsLogger = createSubsystemLogger("skills");
+const CUSTODIAN_SKILLS_DIR_NAME = "custodian-skills";
 const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.json");
 const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
@@ -71,9 +75,16 @@ type WorkspaceSkillLoadOptions = {
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
   agentId?: string;
+  /**
+   * "ignore" keeps agentId scoping source discovery (custodian skills) without
+   * activating the agent allowlist filter — status/inventory views need the
+   * full entry list so excluded skills stay present-but-marked.
+   */
+  agentSkillFilter?: "apply" | "ignore";
   eligibility?: SkillEligibilityContext;
   workspaceOnly?: boolean;
   includeArchived?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export function normalizeWorkspaceSkillRoots(roots: WorkspaceSkillRoots): WorkspaceSkillRoots {
@@ -334,6 +345,7 @@ function loadSkillEntries(
     workspaceSkillsDir?: string;
     workspaceOnly?: boolean;
     includeArchived?: boolean;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
   const limits = resolveSkillDiscoveryLimits(opts?.config);
@@ -352,11 +364,31 @@ function loadSkillEntries(
   const extraDirs = normalizeTrimmedStringList(extraDirsRaw);
   const pluginSkillDirs = workspaceOnly
     ? []
-    : resolvePluginSkillDirs({ workspaceDir, config: opts?.config, pluginSkillsDir });
+    : opts?.pluginMetadataSnapshot
+      ? resolvePluginSkillDirsFromMetadata({
+          workspaceDir,
+          config: opts.config,
+          pluginSkillsDir,
+          metadataSnapshot: opts.pluginMetadataSnapshot,
+        })
+      : resolvePluginSkillDirs({ workspaceDir, config: opts?.config, pluginSkillsDir });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
   const bundledSkills = bundledSkillsDir
     ? loadSkills({ dir: bundledSkillsDir, source: "openclaw-bundled" })
+    : [];
+  const custodianAgentId = opts?.config
+    ? tryResolveSystemAgentTargetAgentId(opts.config)
+    : undefined;
+  const custodianSkillsDir =
+    bundledSkillsDir &&
+    opts?.agentId &&
+    custodianAgentId &&
+    normalizeAgentId(opts.agentId) === custodianAgentId
+      ? path.join(path.dirname(bundledSkillsDir), CUSTODIAN_SKILLS_DIR_NAME)
+      : undefined;
+  const custodianSkills = custodianSkillsDir
+    ? loadSkills({ dir: custodianSkillsDir, source: "openclaw-custodian" })
     : [];
   const extraSkills = [
     ...mergedExtraDirs.flatMap((dir) =>
@@ -401,7 +433,14 @@ function loadSkillEntries(
   for (const record of extraSkills) {
     mergeRecord(record);
   }
-  for (const record of bundledSkills) {
+  // Custodian skills share bundled precedence. Sort the tier so source traversal
+  // remains deterministic even if a package accidentally ships a duplicate name.
+  const bundledTierSkills = [...bundledSkills, ...custodianSkills].toSorted(
+    (left, right) =>
+      left.skill.name.localeCompare(right.skill.name, "en") ||
+      left.skill.source.localeCompare(right.skill.source, "en"),
+  );
+  for (const record of bundledTierSkills) {
     mergeRecord(record);
   }
   for (const record of managedSkills) {
@@ -459,12 +498,13 @@ function filterArchivedSkillEntries(entries: SkillEntry[]): SkillEntry[] {
 function resolveEffectiveWorkspaceSkillFilter(opts?: {
   config?: OpenClawConfig;
   agentId?: string;
+  agentSkillFilter?: "apply" | "ignore";
   skillFilter?: string[];
 }): string[] | undefined {
   if (opts?.skillFilter !== undefined) {
     return normalizeSkillFilter(opts.skillFilter);
   }
-  if (!opts?.config || !opts.agentId) {
+  if (opts?.agentSkillFilter === "ignore" || !opts?.config || !opts.agentId) {
     return undefined;
   }
   return resolveEffectiveAgentSkillFilter(opts.config, opts.agentId);
@@ -481,6 +521,7 @@ export function resolveWorkspaceSkillPromptEntries(
     skillFilter?: string[];
     skillOverrides?: Record<string, boolean>;
     eligibility?: SkillEligibilityContext;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): { eligible: SkillEntry[]; skillFilter: string[] | undefined } {
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
@@ -573,6 +614,7 @@ export function loadVisibleSkills(
     skillOverrides?: Record<string, boolean>;
     agentId?: string;
     eligibility?: SkillEligibilityContext;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
   const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {

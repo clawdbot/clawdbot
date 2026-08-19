@@ -145,15 +145,18 @@ export type ReplyBackendHandle = {
 export const replyMessageInjectionTargetOperation = Symbol("replyMessageInjectionTargetOperation");
 export type ReplyMessageInjectionTarget = {
   readonly [replyMessageInjectionTargetOperation]: ReplyOperation;
-  readonly identity: "operation" | "run";
   readonly runId?: string;
+};
+
+export const replyRunInterruptTargetOperation = Symbol("replyRunInterruptTargetOperation");
+export type ReplyRunInterruptTarget = {
+  readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
 type ReplyMessageInjectionRejectionReason =
   | "no_active_run"
   | "not_running"
   | "stale_run"
-  | "run_mismatch"
   | "injection_unavailable"
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
@@ -323,14 +326,10 @@ export type ReplyRunRegistry = {
   }): ReplyOperation;
   get(sessionKey: string): ReplyOperation | undefined;
   isActive(sessionKey: string): boolean;
-  resolveMessageInjectionTarget(params: {
-    sessionKey: string;
-    /** Retained in the internal call shape until expected-leaf removal; injection ignores it. */
-    originatingLeafEntryId: string | null | undefined;
-    expectedRunId?: string;
-  }): ReplyMessageInjectionTarget | undefined;
   /** Captures the current direct owner without requiring client-supplied run identity. */
   resolveCurrentMessageInjectionTarget(sessionKey: string): ReplyMessageInjectionTarget | undefined;
+  /** Captures the current direct owner for exact-instance interruption. */
+  resolveCurrentInterruptTarget(sessionKey: string): ReplyRunInterruptTarget | undefined;
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,

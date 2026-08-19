@@ -247,9 +247,9 @@ export async function collectStatusScanOverview(params: {
         params: { includeChannelSummary: false },
         timeoutMs: Math.min(5000, params.opts.timeoutMs ?? 10_000),
         ...gatewaySnapshot.gatewayCallOverrides,
-      }),
+      }).catch(() => null),
     );
-    runtimeDegradation = {
+    runtimeDegradation = status && {
       degradedSecretOwners: status.degradedSecretOwners ?? [],
       degradedPlugins: status.degradedPlugins ?? [],
     };

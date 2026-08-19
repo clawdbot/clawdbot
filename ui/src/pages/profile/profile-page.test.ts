@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
@@ -234,6 +235,89 @@ it("renders identity before a Usage statistics link without requesting usage dat
 
   usageRow?.click();
   expect(harness.context.navigate).toHaveBeenCalledWith("usage");
+});
+
+it("loads and updates co-author consent separately from verified GitHub identity", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: [],
+    githubIdentity: {
+      login: "octocat",
+      profileUrl: "https://github.com/octocat",
+      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+    },
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.prefs.get") {
+      expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
+      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: "not-a-boolean" } };
+    }
+    if (method === "users.prefs.set") {
+      expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } });
+      return { status: "ok" };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["users.self", "users.prefs.get"]);
+  expect(page.querySelector(".identity-github-form")).toBeNull();
+  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  expect(toggle?.checked).toBe(false);
+
+  toggle!.checked = true;
+  toggle?.dispatchEvent(new Event("change", { bubbles: true }));
+
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
+  );
+  await waitForFast(() => expect(toggle?.checked).toBe(true));
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "users.self",
+    "users.prefs.get",
+    "users.prefs.set",
+  ]);
+});
+
+it("renders a write-access note without calling users.self for read-only viewers", async () => {
+  const request = vi.fn();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: "profile-1",
+    email: "ada@example.test",
+    name: "Ada",
+  });
+  harness.context.gateway.snapshot.hello = {
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: ["operator.read"] },
+    features: { methods: ["users.self"] },
+  } as ApplicationGatewaySnapshot["hello"];
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  expect(request).not.toHaveBeenCalled();
+  expect(page.textContent).toContain("Profile editing requires operator.write access.");
+  expect(page.querySelector(".identity-name-control")).toBeNull();
 });
 
 it("keeps identity UI and profile RPCs absent for unidentified connections", async () => {

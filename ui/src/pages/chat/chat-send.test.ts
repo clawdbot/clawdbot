@@ -847,14 +847,14 @@ describe("refreshChatAvatar", () => {
   it.each([
     {
       name: "uses a route-relative avatar endpoint before basePath bootstrap finishes",
-      basePath: "",
+      resourceBasePath: "",
       objectUrl: "blob:local-avatar",
       expectedToken: undefined,
       overrides: {},
     },
     {
       name: "prefers the paired device token for avatar metadata and local avatar URLs",
-      basePath: "/openclaw/",
+      resourceBasePath: "/openclaw/",
       objectUrl: "blob:device-avatar",
       expectedToken: "device-token",
       overrides: {
@@ -868,12 +868,12 @@ describe("refreshChatAvatar", () => {
     },
     {
       name: "fetches local avatars through Authorization headers instead of tokenized URLs",
-      basePath: "/openclaw/",
+      resourceBasePath: "/openclaw/",
       objectUrl: "blob:session-avatar",
       expectedToken: "session-token",
       overrides: { settings: { token: "session-token" } },
     },
-  ])("$name", async ({ basePath, objectUrl, expectedToken, overrides }) => {
+  ])("$name", async ({ resourceBasePath, objectUrl, expectedToken, overrides }) => {
     const createObjectURL = vi.fn(() => objectUrl);
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
@@ -883,7 +883,7 @@ describe("refreshChatAvatar", () => {
         static override revokeObjectURL = revokeObjectURL;
       },
     );
-    const metadataUrl = `${basePath.replace(/\/$/, "")}/avatar/main?meta=1`;
+    const metadataUrl = `${resourceBasePath.replace(/\/$/, "")}/avatar/main?meta=1`;
     const fetchMock = vi.fn<typeof fetch>((input: string | URL | Request) => {
       const url = requestUrl(input);
       if (url === metadataUrl) {
@@ -895,7 +895,7 @@ describe("refreshChatAvatar", () => {
       throw new Error(`Unexpected avatar URL: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    const host = makeChatHost({ basePath, sessionKey: "agent:main", ...overrides });
+    const host = makeChatHost({ resourceBasePath, sessionKey: "agent:main", ...overrides });
 
     await refreshChatAvatar(host);
 
@@ -919,7 +919,10 @@ describe("refreshChatAvatar", () => {
       .mockResolvedValue(createJsonResponse({}, { ok: false }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const host = makeChatHost({ basePath: "/openclaw/", sessionKey: "agent:ops:main" });
+    const host = makeChatHost({
+      resourceBasePath: "/openclaw/",
+      sessionKey: "agent:ops:main",
+    });
     await refreshChatAvatar(host);
 
     expect(fetchUrl(fetchMock, 0)).toBe("/openclaw/avatar/ops?meta=1");
@@ -938,7 +941,7 @@ describe("refreshChatAvatar", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const host = makeChatHost({ basePath: "", sessionKey: "agent:main" });
+    const host = makeChatHost({ resourceBasePath: "", sessionKey: "agent:main" });
     await refreshChatAvatar(host);
 
     expect(host.chatAvatarUrl).toBeNull();
@@ -957,7 +960,7 @@ describe("refreshChatAvatar", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const host = makeChatHost({ basePath: "", sessionKey: "agent:main" });
+    const host = makeChatHost({ resourceBasePath: "", sessionKey: "agent:main" });
     await refreshChatAvatar(host);
 
     expect(host.chatAvatarUrl).toBeNull();
@@ -1015,7 +1018,7 @@ describe("refreshChatAvatar", () => {
       throw new Error(`Unexpected avatar URL: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    const host = makeChatHost({ basePath: "", ...overrides });
+    const host = makeChatHost({ resourceBasePath: "", ...overrides });
 
     const firstRefresh = refreshChatAvatar(host);
     fixture.switchAgent(host);
@@ -1422,7 +1425,7 @@ describe("handleSendChat", () => {
 
     const host = makeChatHost({
       requestHandlers: {
-        "sessions.steer": {
+        "chat.send": {
           status: "started",
           runId: "redirect-run",
           messageSeq: 2,
@@ -1445,9 +1448,11 @@ describe("handleSendChat", () => {
     settingsPatch.resolve(true);
     await send;
 
-    expect(host.request).toHaveBeenCalledWith("sessions.steer", {
-      key: "agent:main",
+    expect(host.request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "agent:main",
       message: "start over",
+      queueMode: "interrupt",
+      idempotencyKey: expect.any(String),
     });
     expect(host.request).toHaveBeenCalledTimes(1);
     expect(host.chatMessage).toBe("new draft");
@@ -3783,7 +3788,8 @@ describe("handleSendChat", () => {
         }),
       ),
     );
-    expect(host.chatRunId).toBe("steer-run");
+    expect(host.chatRunId).toBe("run-1");
+    expect(host.chatStream).toBe("Working...");
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
         queueMode: "steer",
@@ -3794,6 +3800,19 @@ describe("handleSendChat", () => {
     const payload = findRequestPayload(host.request, "chat.send", "default steer payload");
     expect(payload).not.toHaveProperty("expectedRunId");
     expect(payload).not.toHaveProperty("expectedLeafEntryId");
+  });
+
+  it("adopts a steer-mode ACK when no run is active", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { status: "started", runId: "started-run" },
+      },
+      chatMessage: "start through steer mode",
+    });
+
+    await handleSendChat(host, undefined, { followUpMode: "steer" });
+
+    expect(host.chatRunId).toBe("started-run");
   });
 
   it("sends a fresh mode-bearing row ahead of older outbox reconciliation", async () => {
@@ -5975,181 +5994,6 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("retry this");
   });
 
-  it("routes queued Skill Workshop revisions through the proposal request RPC", async () => {
-    const sent = createDeferred<unknown>();
-
-    const host = makeChatHost({
-      requestHandlers: {
-        "skills.proposals.requestRevision": () => sent.promise,
-      },
-      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
-      chatMessage: "keep my draft",
-    });
-    (host as ChatHost & { currentSessionId?: string }).currentSessionId = "session-current";
-
-    const send = handleSendChat(host, "Make the support files 5", {
-      restoreDraft: true,
-      skillWorkshopRevision: {
-        proposalId: "support-file-sampler-20260531-68207b7b7f",
-        agentId: "proposal-owner",
-      },
-    });
-    await Promise.resolve();
-
-    expect(host.chatQueue[0]).toMatchObject({
-      text: "Make the support files 5",
-      skillWorkshopRevision: {
-        proposalId: "support-file-sampler-20260531-68207b7b7f",
-        agentId: "proposal-owner",
-      },
-    });
-    const payload = findRequestPayload(
-      host.request,
-      "skills.proposals.requestRevision",
-      "revision request payload",
-    );
-    expect(payload).toMatchObject({
-      agentId: "proposal-owner",
-      proposalId: "support-file-sampler-20260531-68207b7b7f",
-      instructions: "Make the support files 5",
-      sessionKey: "agent:main",
-      sessionId: "session-current",
-    });
-    expect(payload).not.toHaveProperty("message");
-    expect(payload).not.toHaveProperty("targetAgentId");
-
-    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
-    await send;
-
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(JSON.stringify(host.chatMessages[0])).toContain("Make the support files 5");
-  });
-
-  it("fails an in-flight Skill Workshop revision after connection replacement", async () => {
-    const sent = createDeferred<unknown>();
-    const host = makeChatHost({
-      connectionEpoch: 1,
-      requestHandlers: {
-        "skills.proposals.requestRevision": () => sent.promise,
-      },
-      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
-    });
-
-    const send = handleSendChat(host, "Keep the source connection", {
-      restoreDraft: true,
-      skillWorkshopRevision: { proposalId: "proposal-1" },
-    });
-    await vi.waitFor(() =>
-      expect(
-        host.request.mock.calls.filter(([method]) => method === "skills.proposals.requestRevision"),
-      ).toHaveLength(1),
-    );
-    const replacementRequest = vi.fn(async () => ({}));
-    host.client = clientWithRequest(replacementRequest);
-    host.connectionEpoch = 2;
-    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
-    await send;
-
-    expect(replacementRequest).not.toHaveBeenCalled();
-    expect(host.chatQueue[0]).toMatchObject({
-      sendState: "failed",
-      sendError: expect.stringContaining("Gateway connection changed"),
-    });
-    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
-  });
-
-  it("fails a rejected in-flight Skill Workshop revision after connection replacement", async () => {
-    const sent = createDeferred<unknown>();
-    const host = makeChatHost({
-      connectionEpoch: 1,
-      requestHandlers: {
-        "skills.proposals.requestRevision": () => sent.promise,
-      },
-      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
-    });
-
-    const send = handleSendChat(host, "Keep the rejected request visible", {
-      restoreDraft: true,
-      skillWorkshopRevision: { proposalId: "proposal-1" },
-    });
-    await vi.waitFor(() =>
-      expect(
-        host.request.mock.calls.filter(([method]) => method === "skills.proposals.requestRevision"),
-      ).toHaveLength(1),
-    );
-    host.connectionEpoch = 2;
-    sent.reject(new Error("socket closed"));
-    await send;
-
-    expect(host.chatQueue[0]).toMatchObject({
-      sendState: "failed",
-      sendError: expect.stringContaining("Gateway connection changed"),
-    });
-    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
-  });
-
-  it("does not send queued Skill Workshop revisions with read-only operator access", async () => {
-    const host = makeChatHost({
-      requestHandlers: {
-        "skills.proposals.requestRevision": {},
-      },
-      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"], ["operator.read"]),
-    });
-
-    await handleSendChat(host, "Revise this proposal", {
-      restoreDraft: true,
-      skillWorkshopRevision: { proposalId: "proposal-1" },
-    });
-
-    expect(
-      host.request.mock.calls.filter(([method]) => method === "skills.proposals.requestRevision"),
-    ).toHaveLength(0);
-  });
-
-  it("treats slash-like Skill Workshop revision drafts as revision instructions", async () => {
-    const sent = createDeferred<unknown>();
-
-    const host = makeChatHost({
-      requestHandlers: {
-        "skills.proposals.requestRevision": () => sent.promise,
-      },
-      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
-    });
-
-    const send = handleSendChat(host, "/reset examples", {
-      restoreDraft: true,
-      skillWorkshopRevision: {
-        proposalId: "support-file-sampler-20260531-68207b7b7f",
-      },
-    });
-    await Promise.resolve();
-
-    const payload = findRequestPayload(
-      host.request,
-      "skills.proposals.requestRevision",
-      "revision slash payload",
-    );
-    expect(payload).toMatchObject({
-      proposalId: "support-file-sampler-20260531-68207b7b7f",
-      instructions: "/reset examples",
-      sessionKey: "agent:main",
-    });
-    expect(payload).not.toHaveProperty("message");
-    expect(host.chatQueue[0]).toMatchObject({
-      refreshSessions: false,
-      text: "/reset examples",
-      skillWorkshopRevision: {
-        proposalId: "support-file-sampler-20260531-68207b7b7f",
-      },
-    });
-
-    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
-    await send;
-
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(JSON.stringify(host.chatMessages[0])).toContain("/reset examples");
-  });
-
   it("keeps delayed chat.send ACK effects scoped to the submitted session", async () => {
     const sent = createDeferred<unknown>();
 
@@ -6678,9 +6522,13 @@ describe("handleSendChat", () => {
       });
       expect(sendAttempts).toBe(1);
       await vi.advanceTimersByTimeAsync(100);
-      expect(sendAttempts).toBe(2);
+      // The retry timer only kicks off a fire-and-forget drain, so the resend
+      // lands after the tick returns. Wait for the outcome, not the tick.
+      await waitForFast(() => {
+        expect(sendAttempts).toBe(2);
+        expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      });
       expect(sendRunIds[1]).toBe(sendRunIds[0]);
-      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -6727,9 +6575,12 @@ describe("handleSendChat", () => {
       expect(historyAttempts).toBe(1);
       expect(sendAttempts).toBe(0);
       await vi.advanceTimersByTimeAsync(100);
-      expect(sendAttempts).toBe(1);
-      expect(historyAttempts).toBeGreaterThanOrEqual(2);
-      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      // Same fire-and-forget retry hand-off as the send-rejection case above.
+      await waitForFast(() => {
+        expect(sendAttempts).toBe(1);
+        expect(historyAttempts).toBeGreaterThanOrEqual(2);
+        expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -7251,57 +7102,6 @@ describe("handleSendChat", () => {
     expect(historyRequests).toBe(3);
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
-  });
-
-  it("keeps a settings-blocked Skill Workshop revision retryable", async () => {
-    const settingsPatch = createDeferred<boolean>();
-
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": () => idleChatHistory(),
-        "skills.proposals.requestRevision": { runId: "revision-retry", status: "started" },
-      },
-      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
-      chatMessage: "keep my draft",
-      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
-    });
-    const revision = {
-      proposalId: "support-file-sampler-20260531-68207b7b7f",
-      agentId: "proposal-owner",
-    };
-
-    const send = handleSendChat(host, "Make the support files 6", {
-      restoreDraft: true,
-      skillWorkshopRevision: revision,
-    });
-    expect(await raceWithMacrotask(send)).toBe("pending");
-    settingsPatch.resolve(false);
-    await send;
-
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("keep my draft");
-    expect(host.chatQueue[0]).toMatchObject({
-      sendError: "Chat settings update was interrupted. Review and retry when ready.",
-      sendState: "failed",
-      skillWorkshopRevision: revision,
-      text: "Make the support files 6",
-    });
-
-    await retryQueuedChatMessage(host, host.chatQueue[0]!.id);
-
-    expect(
-      findRequestPayload(
-        host.request,
-        "skills.proposals.requestRevision",
-        "revision retry payload",
-      ),
-    ).toMatchObject({
-      agentId: "proposal-owner",
-      instructions: "Make the support files 6",
-      proposalId: revision.proposalId,
-    });
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(JSON.stringify(host.chatMessages[0])).toContain("Make the support files 6");
   });
 
   it("stops delivered-send reconciliation when durable removal fails", async () => {

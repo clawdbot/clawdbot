@@ -55,6 +55,7 @@ export type SessionOrigin = {
   to?: string;
   nativeChannelId?: string;
   nativeDirectUserId?: string;
+  avatar?: string;
   accountId?: string;
   threadId?: string | number;
 };

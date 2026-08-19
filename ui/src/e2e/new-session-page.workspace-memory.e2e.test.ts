@@ -564,10 +564,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
-      expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
+      expect(await page.locator('[data-value="recent:/shared"]').count()).toBe(0);
       expect(await page.locator('[data-value="recent-project:registered"]').count()).toBe(0);
       const project = page.locator('[data-value="project:registered"]');
-      const recentFolder = page.locator(`[data-value="recent::${WORKSPACE}/scratch"]`);
+      const recentFolder = page.locator(`[data-value="recent:${WORKSPACE}/scratch"]`);
       await project.waitFor();
       await recentFolder.waitFor();
       await captureProjectUiProof(page, "identity-project-recents-after.png");

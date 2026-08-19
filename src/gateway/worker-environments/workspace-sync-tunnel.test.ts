@@ -193,7 +193,6 @@ describe("worker tunnel manager", () => {
       expect(ports).toEqual(expect.arrayContaining([2222, 22]));
       expect(new Set(ports)).toEqual(new Set([2222, 22]));
       const transfers = freshConnections.filter((entry) => entry.argv[0] === "rsync");
-      expect(transfers).toHaveLength(2);
       expect(transfers.map((entry) => rsyncReceiverNonce(entry.argv))).toEqual([
         expect.stringMatching(/^[a-f0-9]{32}$/u),
         expect.stringMatching(/^[a-f0-9]{32}$/u),

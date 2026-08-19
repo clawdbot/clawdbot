@@ -2,9 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnv, withPathResolutionEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
@@ -67,6 +69,34 @@ function buildSnapshot(workspaceDir: string, options?: Parameters<typeof buildSk
   );
 }
 
+const CUSTODIAN_SKILL_NAMES = [
+  "add-model-provider",
+  "cloud-image-bake",
+  "configure-channel",
+  "diagnose-gateway",
+] as const;
+
+async function writeCustodianSkillFixture(workspaceDir: string): Promise<void> {
+  for (const name of CUSTODIAN_SKILL_NAMES) {
+    await writeSkill({
+      dir: path.join(workspaceDir, "custodian-skills", name),
+      name,
+      description: `Custodian ${name}`,
+    });
+  }
+}
+
+function buildAgentSnapshot(params: {
+  workspaceDir: string;
+  config: OpenClawConfig;
+  agentId: string;
+}) {
+  return buildSnapshot(params.workspaceDir, {
+    config: params.config,
+    agentId: params.agentId,
+  });
+}
+
 async function cloneTemplateDir(templateDir: string, prefix: string): Promise<string> {
   const cloned = await fixtureSuite.createCaseDir(prefix);
   await fs.cp(templateDir, cloned, { recursive: true });
@@ -121,6 +151,101 @@ function expectSnapshotNamesAndPrompt(
 }
 
 describe("buildSkillSnapshot", () => {
+  it("keeps custodian skills absent from every non-custodian discovery surface", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("custodian-gate");
+    await writeCustodianSkillFixture(workspaceDir);
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, writer: {} },
+      },
+    };
+
+    const firstCustodianSnapshot = buildAgentSnapshot({ workspaceDir, config, agentId: "ops" });
+    const secondCustodianSnapshot = buildAgentSnapshot({ workspaceDir, config, agentId: "ops" });
+    const writerSnapshot = buildAgentSnapshot({ workspaceDir, config, agentId: "writer" });
+    const custodianStatus = buildWorkspaceSkillStatus(workspaceDir, {
+      config,
+      agentId: "ops",
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+    const writerStatus = buildWorkspaceSkillStatus(workspaceDir, {
+      config,
+      agentId: "writer",
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+
+    expect(firstCustodianSnapshot.skills.map((skill) => skill.name)).toEqual(CUSTODIAN_SKILL_NAMES);
+    expect(firstCustodianSnapshot.resolvedSkills?.map((skill) => skill.source)).toEqual(
+      CUSTODIAN_SKILL_NAMES.map(() => "openclaw-custodian"),
+    );
+    expect(secondCustodianSnapshot.skills).toEqual(firstCustodianSnapshot.skills);
+    expect(secondCustodianSnapshot.prompt).toBe(firstCustodianSnapshot.prompt);
+    expect(writerSnapshot.skills).toEqual([]);
+    expect(writerSnapshot.prompt).toBe("");
+    expect(
+      custodianStatus.skills
+        .filter((skill) => skill.source === "openclaw-custodian")
+        .map((skill) => skill.name),
+    ).toEqual(CUSTODIAN_SKILL_NAMES);
+    expect(writerStatus.skills.filter((skill) => skill.source === "openclaw-custodian")).toEqual(
+      [],
+    );
+  });
+
+  it("mirrors the system-agent resolver fallback when no owner is configured", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("custodian-owner-fallback");
+    await writeCustodianSkillFixture(workspaceDir);
+
+    const soleAgentConfig: OpenClawConfig = {
+      agents: { entries: { caretaker: {} } },
+    };
+    const ambiguousConfig: OpenClawConfig = {
+      agents: { entries: { ops: {}, writer: {} } },
+    };
+    const soleSnapshot = buildAgentSnapshot({
+      workspaceDir,
+      config: soleAgentConfig,
+      agentId: "caretaker",
+    });
+    const mainSnapshot = buildAgentSnapshot({ workspaceDir, config: {}, agentId: "main" });
+    const ambiguousSnapshot = buildAgentSnapshot({
+      workspaceDir,
+      config: ambiguousConfig,
+      agentId: "ops",
+    });
+
+    expect(soleSnapshot.skills.map((skill) => skill.name)).toEqual(CUSTODIAN_SKILL_NAMES);
+    expect(mainSnapshot.skills.map((skill) => skill.name)).toEqual(CUSTODIAN_SKILL_NAMES);
+    expect(ambiguousSnapshot.skills).toEqual([]);
+    expect(ambiguousSnapshot.prompt).toBe("");
+  });
+
+  it("applies per-skill disabled overrides to custodian skills", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("custodian-disabled");
+    await writeCustodianSkillFixture(workspaceDir);
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {} },
+      },
+      skills: {
+        entries: {
+          "cloud-image-bake": { enabled: false },
+        },
+      },
+    };
+
+    const snapshot = buildAgentSnapshot({ workspaceDir, config, agentId: "ops" });
+
+    expect(snapshot.skills.map((skill) => skill.name)).toEqual([
+      "add-model-provider",
+      "configure-channel",
+      "diagnose-gateway",
+    ]);
+    expect(snapshot.prompt).not.toContain("cloud-image-bake");
+  });
+
   it("orders agent skills before execution skills with lexical order inside each root", async () => {
     const { snapshot } = await createMultiRootFixture();
 

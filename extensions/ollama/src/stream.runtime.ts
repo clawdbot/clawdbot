@@ -75,6 +75,36 @@ function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
   }
 }
 
+async function runOllamaResponseHook(params: {
+  hook: (() => void | Promise<void>) | undefined;
+  signal: AbortSignal | undefined;
+}): Promise<void> {
+  const { hook, signal } = params;
+  if (!hook) {
+    return;
+  }
+  throwIfOllamaStreamAborted(signal);
+  if (!signal) {
+    await hook();
+    return;
+  }
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(hook),
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(new Error("Request was aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+  throwIfOllamaStreamAborted(signal);
+}
+
 function createOllamaStreamCooperativeScheduler(
   signal?: AbortSignal,
 ): OllamaStreamCooperativeScheduler {
@@ -1025,6 +1055,26 @@ function createRawOllamaStreamFn(
         });
 
         try {
+          const responseHook = options?.onResponse;
+          try {
+            await runOllamaResponseHook({
+              hook: responseHook
+                ? () =>
+                    responseHook(
+                      {
+                        status: response.status,
+                        headers: Object.fromEntries(response.headers.entries()),
+                      },
+                      model,
+                    )
+                : undefined,
+              signal: options?.signal,
+            });
+          } catch (error) {
+            // A pending body cancel must not stall release or the terminal error.
+            void response.body?.cancel().catch(() => undefined);
+            throw error;
+          }
           if (!response.ok) {
             const errorText = await readResponseTextLimited(
               response,

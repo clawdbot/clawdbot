@@ -22,6 +22,11 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteStoreScope,
+  runExclusiveSqliteSessionWrite,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -42,6 +47,10 @@ import {
   prepareGatewayLocalUserIngress,
 } from "./local-user-ingress.js";
 import { listSessionGroups } from "./session-groups.js";
+import {
+  resolveSessionMutationAuthorization,
+  SessionMutationAuthorizationChangedError,
+} from "./session-sharing.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   agentCommandMock,
@@ -271,6 +280,113 @@ test("sessions.create carries keyed adoption authorization through the durable c
   expect(adopted.ok).toBe(true);
   expect(assertCurrent).toHaveBeenCalled();
   expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Projects");
+});
+
+test("sessions.create revalidates parent participation before committing a fork transcript", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:dashboard:participation-race-parent";
+  const parentSessionId = "participation-race-parent-session";
+  const childSessionKey = "agent:main:dashboard:participation-race-child";
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry(parentSessionId, {
+        visibility: "read-only",
+        createdActor: { type: "human", id: "owner" },
+      }),
+    },
+  });
+  await seedSessionTranscript({
+    agentId: "main",
+    sessionId: parentSessionId,
+    sessionKey: parentSessionKey,
+    storePath,
+    messages: [{ role: "user", content: "private parent context" }],
+  });
+  addSessionMember(
+    { agentId: "main", sessionKey: parentSessionKey, storePath },
+    { identityId: "member", addedBy: "owner", expectedSessionId: parentSessionId },
+  );
+  const client = {
+    authenticatedUserId: "member@example.com",
+    authenticatedUserProfile: {
+      profileId: "member",
+      displayName: "Member",
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+    connect: { role: "operator", scopes: ["operator.write"] },
+  } as never;
+  const requestParams = {
+    agentId: "main",
+    key: childSessionKey,
+    parentSessionKey,
+    fork: true,
+  };
+  const authorization = resolveSessionMutationAuthorization({
+    client,
+    method: "sessions.create",
+    requestParams,
+    context: { getRuntimeConfig } as never,
+  });
+  expect(authorization.error).toBeNull();
+  const assertCurrent = authorization.authorization?.assertCurrent;
+  if (!assertCurrent) {
+    throw new Error("sessions.create did not capture parent participation");
+  }
+
+  const writerEntered = createDeferredCore();
+  const releaseWriter = createDeferredCore();
+  const resolvedStore = resolveSqliteStoreScope(storePath, { agentId: "main" });
+  const heldWriter = runExclusiveSqliteSessionWrite(resolvedStore, async () => {
+    writerEntered.resolve();
+    await releaseWriter.promise;
+  });
+  await writerEntered.promise;
+  const database = openOpenClawAgentDatabase({
+    agentId: "main",
+    ...(resolvedStore.path ? { path: resolvedStore.path } : {}),
+  });
+  const transcriptCount = () =>
+    (
+      database.db.prepare("SELECT count(*) AS count FROM transcript_events").get() as {
+        count: number;
+      }
+    ).count;
+  const beforeTranscriptCount = transcriptCount();
+  const firstGuard = createDeferredCore();
+  let guardCalls = 0;
+  const { createGatewaySession } = await import("./session-create-service.js");
+  const creating = createGatewaySession({
+    cfg: getRuntimeConfig(),
+    ...requestParams,
+    commandSource: "test",
+    commitGuard: () => {
+      assertCurrent();
+      guardCalls += 1;
+      if (guardCalls === 1) {
+        firstGuard.resolve();
+      }
+    },
+  });
+
+  try {
+    await firstGuard.promise;
+    removeSessionMember(
+      { agentId: "main", sessionKey: parentSessionKey, storePath },
+      "member",
+      undefined,
+      parentSessionId,
+    );
+  } finally {
+    releaseWriter.resolve();
+    await heldWriter;
+  }
+
+  await expect(creating).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
+  ).toBeUndefined();
+  expect(transcriptCount()).toBe(beforeTranscriptCount);
 });
 
 test("sessions.create registers a category only after the session commit succeeds", async () => {
@@ -1315,7 +1431,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       await managedWorktrees.remove({
         id: successorWorktreeId,
         reason: "test-cleanup",
-        force: true,
+        allowSnapshotLoss: true,
       });
     }
     closeOpenClawStateDatabaseForTest();
@@ -1409,7 +1525,11 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   } finally {
     createSpy.mockRestore();
     if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
@@ -1548,7 +1668,11 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
   } finally {
     ws.close();
     getAcpSessionManager.mockRestore();
-    await managedWorktrees.remove({ id: worktree.id, reason: "test-cleanup", force: true });
+    await managedWorktrees.remove({
+      id: worktree.id,
+      reason: "test-cleanup",
+      allowSnapshotLoss: true,
+    });
     closeOpenClawStateDatabaseForTest();
     testState.agentsConfig = undefined;
     await openClawState.cleanup();
@@ -1570,19 +1694,34 @@ test("sessions.create preserves a committed worktree when initial-turn setup fai
     new Error("synthetic post-commit initial-turn failure"),
   );
   try {
-    await expect(
-      directSessionReq(
-        "sessions.create",
-        {
-          agentId: "main",
-          key,
-          message: "start the committed session",
-          worktree: true,
-          worktreeName: "post-commit-worktree",
+    const created = await directSessionReq<{
+      key: string;
+      runError: { code: string; message: string };
+      runStarted: boolean;
+      sessionId: string;
+    }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        key,
+        message: "start the committed session",
+        worktree: true,
+        worktreeName: "post-commit-worktree",
+      },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+    expect(created).toMatchObject({
+      ok: true,
+      payload: {
+        key,
+        runError: {
+          code: "UNAVAILABLE",
+          message: "synthetic post-commit initial-turn failure",
         },
-        { client: { connect: { scopes: ["operator.admin"] } } as never },
-      ),
-    ).rejects.toThrow("synthetic post-commit initial-turn failure");
+        runStarted: false,
+        sessionId: expect.any(String),
+      },
+    });
 
     expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
       sessionId: expect.any(String),
@@ -1596,7 +1735,11 @@ test("sessions.create preserves a committed worktree when initial-turn setup fai
     worktreeId = owned?.id;
   } finally {
     if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
@@ -1772,7 +1915,11 @@ test.each([
       expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
     } finally {
       if (worktreeId) {
-        await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+        await managedWorktrees.remove({
+          id: worktreeId,
+          reason: "test-cleanup",
+          allowSnapshotLoss: true,
+        });
       }
       setActivePluginRegistry(createEmptyPluginRegistry());
       closeOpenClawStateDatabaseForTest();
@@ -1870,7 +2017,11 @@ test.each([
       expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
     } finally {
       if (worktreeId) {
-        await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+        await managedWorktrees.remove({
+          id: worktreeId,
+          reason: "test-cleanup",
+          allowSnapshotLoss: true,
+        });
       }
       closeOpenClawStateDatabaseForTest();
       testState.agentConfig = undefined;
@@ -1906,7 +2057,11 @@ test("sessions.create keeps the crustacean fallback when no title source exists"
     expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
   } finally {
     if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
@@ -2424,7 +2579,11 @@ test("sessions.create skips the worktree setup script for non-admin callers", as
     await expect(fs.stat(path.join(worktree, "setup-marker.txt"))).rejects.toThrow();
   } finally {
     if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
@@ -2568,7 +2727,11 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     releaseWorktreeRemoval();
     restoreRemoveIfLossless();
     if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;

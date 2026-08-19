@@ -17,7 +17,10 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   config: {} as { gateway?: { mode: "local" | "remote" } },
   gatewayApply: undefined as
-    | ((request: { method: string; params?: { proposalId?: string } }) => Promise<unknown>)
+    | ((request: {
+        method: string;
+        params?: { proposalId?: string; expectedRevisionHash?: string };
+      }) => Promise<unknown>)
     | undefined,
   acquireGatewayLock: vi.fn(),
   releaseGatewayLock: vi.fn(),
@@ -82,9 +85,6 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.exit.mockClear();
     mocks.callGateway.mockReset().mockImplementation(async (request) => {
-      if (request.method === "health") {
-        return {};
-      }
       if (!mocks.gatewayApply) {
         throw new Error("gateway unavailable");
       }
@@ -117,11 +117,15 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const { resolvedSkills: _runtimeOnly, ...persistedSnapshot } = beforeApply;
     const beforeVersion = gatewayRefreshState.getSkillsSnapshotVersion(mocks.workspaceDir);
     mocks.gatewayApply = async (request) => {
+      if (request.method === "skills.proposals.inspect") {
+        return await gatewayWorkshop.inspectSkillProposal(proposal.record.id);
+      }
       expect(request.method).toBe("skills.proposals.apply");
       return await gatewayWorkshop.applySkillProposal({
         workspaceDir: mocks.workspaceDir,
         config: mocks.config,
         proposalId: request.params?.proposalId ?? "",
+        expectedRevisionHash: request.params?.expectedRevisionHash,
       });
     };
 
@@ -137,7 +141,11 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "skills.proposals.apply",
-        params: { agentId: "main", proposalId: proposal.record.id },
+        params: {
+          agentId: "main",
+          proposalId: proposal.record.id,
+          expectedRevisionHash: proposal.revisionHash,
+        },
         timeoutMs: 1_850_000,
       }),
     );
@@ -160,7 +168,10 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       description: "Apply only in the process that owns snapshot state",
       content: "# Single Dispatch\n\nDo not replay this mutation.\n",
     });
-    mocks.gatewayApply = async () => {
+    mocks.gatewayApply = async (request) => {
+      if (request.method === "skills.proposals.inspect") {
+        return await gatewayWorkshop.inspectSkillProposal(proposal.record.id);
+      }
       throw new Error("gateway apply failed");
     };
 
@@ -172,7 +183,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
-      "health",
+      "skills.proposals.inspect",
       "skills.proposals.apply",
     ]);
     await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
@@ -187,9 +198,9 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       description: "Keep shipped configless Workshop apply behavior",
       content: "# Offline Upgrade\n\nApply without a running gateway.\n",
     });
-    const authError = Object.assign(new Error("gateway health requires credentials"), {
+    const authError = Object.assign(new Error("gateway proposal inspection requires credentials"), {
       name: "GatewayCredentialsRequiredError",
-      method: "health",
+      method: "skills.proposals.inspect",
       configPath: "/tmp/openclaw.json",
     });
     mocks.callGateway.mockRejectedValueOnce(authError);
@@ -221,9 +232,9 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       description: "Keep snapshot invalidation in the running gateway",
       content: "# Gateway Owned Upgrade\n\nDo not apply in the CLI process.\n",
     });
-    const authError = Object.assign(new Error("gateway health requires credentials"), {
+    const authError = Object.assign(new Error("gateway proposal inspection requires credentials"), {
       name: "GatewayCredentialsRequiredError",
-      method: "health",
+      method: "skills.proposals.inspect",
       configPath: "/tmp/openclaw.json",
     });
     mocks.callGateway.mockRejectedValueOnce(authError);
@@ -236,8 +247,8 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       program.parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
     ).rejects.toMatchObject({
       name: "GatewayCredentialsRequiredError",
-      message: "gateway health requires credentials",
-      method: "health",
+      message: "gateway proposal inspection requires credentials",
+      method: "skills.proposals.inspect",
       configPath: "/tmp/openclaw.json",
     });
 

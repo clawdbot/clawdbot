@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createSkillWorkshopRevisionAdmissions } from "../../app/skill-workshop-revision-admissions.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
@@ -48,7 +49,7 @@ function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
       subscribe,
     },
     sessions: { state: { result: null, loading: false } },
-    skillWorkshopRevision: { prepare: vi.fn() },
+    skillWorkshopRevisionAdmissions: createSkillWorkshopRevisionAdmissions(),
     runtimeConfig: {
       state: { configSnapshot: null, configLoading: false, lastError: null },
       ensureLoaded: vi.fn(async () => undefined),
@@ -206,6 +207,38 @@ describe("Skill Workshop applied history", () => {
     expect(modeButton(page, "Full body")?.getAttribute("aria-pressed")).toBe("true");
     expect(modeButton(page, "Changes")?.getAttribute("aria-pressed")).toBe("false");
   });
+
+  it.each([
+    { label: "late-only", changedIndexes: [650], hasVisibleChange: false },
+    { label: "visible-only", changedIndexes: [500], hasVisibleChange: true },
+    { label: "visible-and-late", changedIndexes: [500, 650], hasVisibleChange: true },
+  ])(
+    "labels $label revision comparisons as incomplete",
+    async ({ changedIndexes, hasVisibleChange }) => {
+      const previousBody = Array.from({ length: 700 }, (_, index) => `line ${index}`);
+      const latestBody = [...previousBody];
+      for (const changedIndex of changedIndexes) {
+        latestBody[changedIndex] = `changed line ${changedIndex}`;
+      }
+      const proposals = appliedProposals();
+      proposals[2]!.body = previousBody.join("\n");
+      proposals[3]!.body = latestBody.join("\n");
+
+      const page = await mountAppliedPage(inspectRequest(), proposals);
+      await vi.waitFor(
+        () => {
+          expect(page.querySelector(".sw-diff__notice")?.textContent).toContain(
+            "This comparison is truncated.",
+          );
+        },
+        { interval: 1 },
+      );
+
+      expect(page.querySelector(".sw-diff__stat")).toBeNull();
+      expect(page.querySelector(".sw-diff__row--add") !== null).toBe(hasVisibleChange);
+      expect(page.querySelector(".sw-body-card")?.textContent).toContain("Full body");
+    },
+  );
 
   it("shows the oldest revision as a full body with no diff toggle", async () => {
     const page = await mountAppliedPage(inspectRequest(), appliedProposals());

@@ -118,9 +118,9 @@ export const EnvironmentsListParamsSchema = closedObject({});
 export const WorkerMachineOptionSchema = closedObject({
   id: Type.String({ minLength: 1, maxLength: 128 }),
   label: Type.String({ minLength: 1, maxLength: 128 }),
-  description: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  cpu: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
+  memoryGb: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
   default: Type.Optional(Type.Boolean()),
-  // CPU, memory, and price stay absent until providers expose authoritative values.
 });
 
 export const WorkerMachineOptionsSchema = Type.Array(WorkerMachineOptionSchema, {

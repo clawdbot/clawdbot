@@ -385,7 +385,7 @@ describe("worker session placement moves", () => {
     expect(store.getPlacementMove(SESSION.sessionId)).toBeUndefined();
   });
 
-  it("restart-recovers a profile move with its persisted machine class", async () => {
+  it("fails a pending profile move after restart loses request authority", async () => {
     const source = advanceToActive();
     seedAttachedEnvironment({
       environmentId: source.environmentId,
@@ -412,23 +412,7 @@ describe("worker session placement moves", () => {
       sessionId: source.sessionId,
       expectedGeneration: reconciling.generation,
     });
-    const requested = store.startDispatch(SESSION);
-    const provisioning = store.transition({
-      sessionId: source.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: requested.generation,
-      patch: { environmentId: "missing-destination-environment" },
-    });
-    store.fail({
-      sessionId: source.sessionId,
-      expectedGeneration: provisioning.generation,
-      recoveryError: "destination provisioning failed",
-    });
-    const dispatchError = new Error("destination retry reached dispatch");
-    const dispatch = vi.fn(async () => {
-      throw dispatchError;
-    });
+    const dispatch = vi.fn();
     const reclaimSource = vi.fn(async () => {
       throw new Error("failed destination must not reclaim the old source");
     });
@@ -454,21 +438,13 @@ describe("worker session placement moves", () => {
     await moves.recoverAll();
 
     expect(reclaimSource).not.toHaveBeenCalled();
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        machineClass: "beast",
-        idempotencyKey: `session-move:${begun.intent.operationId}:dispatch`,
-      }),
-      undefined,
-    );
+    expect(dispatch).not.toHaveBeenCalled();
     expect(restartedStore.get(source.sessionId)).toMatchObject({
-      state: "local",
-      generation: local.generation + 4,
+      state: "failed",
+      generation: local.generation + 1,
+      recoveryError:
+        "Cloud worker move request authority expired after Gateway restart; retry move",
     });
-    expect(restartedStore.getPlacementMove(source.sessionId)).toMatchObject({
-      operationId: begun.intent.operationId,
-      lastError: dispatchError.message,
-    });
+    expect(restartedStore.getPlacementMove(source.sessionId)).toBeUndefined();
   });
 });

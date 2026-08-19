@@ -158,6 +158,7 @@ describe("dispatchReplyFromConfig", () => {
       config: cfg,
       modelCatalog: { entries: [], routeVariants: [] },
       inboundPluginRegistry: preparedRegistry,
+      pluginGeneration: {} as never,
     });
     const preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")

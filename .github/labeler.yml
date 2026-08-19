@@ -285,6 +285,16 @@
       - any-glob-to-any-file:
           - "docs/**"
 
+"r: skill":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "custodian-skills/**"
+          - "skills/**"
+          - "src/skills/**"
+          - "docs/tools/custodian-skills.md"
+          - "docs/tools/skills-config.md"
+          - "docs/tools/skills.md"
+
 "cli":
   - changed-files:
       - any-glob-to-any-file:

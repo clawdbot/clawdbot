@@ -7,7 +7,7 @@ import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ChannelOnboardingPostWriteHook } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
@@ -20,7 +20,7 @@ import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-hel
 
 type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
 type EnsureWorkspaceAndSessions = typeof import("./onboard-helpers.js").ensureWorkspaceAndSessions;
-type ApplyAuthChoice = typeof import("./auth-choice.js").applyAuthChoice;
+type PrepareAuthChoice = typeof import("./auth-choice.js").prepareAuthChoice;
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -79,12 +79,32 @@ const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
 }));
+const pluginLifecycleMocks = vi.hoisted(() => {
+  const state = { active: false };
+  return {
+    state,
+    withPluginLifecycleLease: vi.fn(async (_options, run: () => Promise<unknown>) => {
+      state.active = true;
+      try {
+        return await run();
+      } finally {
+        state.active = false;
+      }
+    }),
+  };
+});
 const terminalMocks = vi.hoisted(() => ({
   isTerminalInteractive: vi.fn(() => true),
 }));
 const authChoiceMocks = vi.hoisted(() => ({
-  applyAuthChoice: vi.fn<ApplyAuthChoice>(),
+  prepareAuthChoice: vi.fn<PrepareAuthChoice>(),
   warnIfModelConfigLooksOff: vi.fn(async () => {}),
+}));
+const authProfileMocks = vi.hoisted(() => ({
+  persistBatch: vi.fn(),
+}));
+const authPromptMocks = vi.hoisted(() => ({
+  promptAuthChoiceGrouped: vi.fn(async () => "fixture-auth"),
 }));
 const onboardChannelsMocks = vi.hoisted(() => ({
   setupChannels: vi.fn<SetupChannels>(async (config) => config),
@@ -122,14 +142,26 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardMocks.createClackPrompter,
 }));
 
+vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease: pluginLifecycleMocks.withPluginLifecycleLease,
+}));
+
 vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
   isTerminalInteractive: terminalMocks.isTerminalInteractive,
 }));
 
 vi.mock("./auth-choice.js", () => ({
-  applyAuthChoice: authChoiceMocks.applyAuthChoice,
+  prepareAuthChoice: authChoiceMocks.prepareAuthChoice,
   warnIfModelConfigLooksOff: authChoiceMocks.warnIfModelConfigLooksOff,
+}));
+
+vi.mock("./auth-choice-prompt.js", () => ({
+  promptAuthChoiceGrouped: authPromptMocks.promptAuthChoiceGrouped,
+}));
+
+vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
+  persistAuthProfileBatch: authProfileMocks.persistBatch,
 }));
 
 vi.mock("./onboard-channels.js", () => ({
@@ -142,6 +174,10 @@ vi.mock("./onboard-helpers.js", () => ({
 
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { agentsAddCommand } from "./agents.commands.add.js";
+
+const { persistAuthProfileBatch } = await vi.importActual<
+  typeof import("../agents/auth-profiles/upsert-with-lock.js")
+>("../agents/auth-profiles/upsert-with-lock.js");
 
 const runtime = createTestRuntime();
 const RESERVED_SYSTEM_AGENT_IDS_FOR_TEST = ["openclaw", "crestodian"] as const; // reserved ids
@@ -174,6 +210,7 @@ describe("agents add command", () => {
         entry?: { id: string; name?: string; workspace?: string; agentDir?: string };
         bindingSpecs?: string[];
         stagedConfig?: Record<string, unknown>;
+        prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
       }) => {
         const name = params.name ?? params.entry?.name ?? params.entry?.id ?? "";
         const agentId = (params.entry?.id ?? name).toLowerCase();
@@ -187,6 +224,7 @@ describe("agents add command", () => {
               match: { channel: params.bindingSpecs[0].split(":")[0] },
             }
           : undefined;
+        await params.prepareConfigCommit?.();
         return {
           status: "created" as const,
           agentId,
@@ -210,9 +248,13 @@ describe("agents add command", () => {
       },
     );
     wizardMocks.createClackPrompter.mockClear();
+    pluginLifecycleMocks.withPluginLifecycleLease.mockClear();
+    pluginLifecycleMocks.state.active = false;
     terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
-    authChoiceMocks.applyAuthChoice.mockClear();
+    authChoiceMocks.prepareAuthChoice.mockReset();
     authChoiceMocks.warnIfModelConfigLooksOff.mockClear();
+    authPromptMocks.promptAuthChoiceGrouped.mockClear();
+    authProfileMocks.persistBatch.mockReset().mockImplementation(persistAuthProfileBatch);
     onboardChannelsMocks.setupChannels.mockClear();
     onboardHelpersMocks.ensureWorkspaceAndSessions.mockClear();
     runtime.log.mockClear();
@@ -263,6 +305,24 @@ describe("agents add command", () => {
     });
     wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
     return wizard;
+  }
+
+  function stageGuidedAuth(
+    profiles: Array<{ profileId: string; credential: AuthProfileCredential }> = [
+      {
+        profileId: "openai:primary",
+        credential: { type: "api_key", provider: "openai", key: "sk-primary" },
+      },
+    ],
+  ): void {
+    authChoiceMocks.prepareAuthChoice.mockImplementationOnce(async ({ config }) => ({
+      config: {
+        ...config,
+        auth: { profiles: { "openai:primary": { provider: "openai", mode: "api_key" } } },
+      },
+      authProfiles: profiles,
+      persistAuthProfiles: async () => {},
+    }));
   }
 
   function stageChannelPostWriteHook(run: ChannelOnboardingPostWriteHook["run"]): void {
@@ -523,7 +583,7 @@ describe("agents add command", () => {
     expect(checkAgentCreationGateMock).toHaveBeenCalledWith("main");
     expect(prompter.outro).toHaveBeenCalledWith("Run openclaw doctor --fix, then retry.");
     expect(prompter.text).not.toHaveBeenCalled();
-    expect(authChoiceMocks.applyAuthChoice).not.toHaveBeenCalled();
+    expect(authChoiceMocks.prepareAuthChoice).not.toHaveBeenCalled();
     expect(createAgentMock).not.toHaveBeenCalled();
   });
 
@@ -628,7 +688,25 @@ describe("agents add command", () => {
     });
   });
 
-  it("keeps guided auth written after portable copy acceptance when finalizing the copy", async () => {
+  it("does not persist prepared provider auth when a later prompt is cancelled", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-cancel-provider-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      useFreshAgentWizard({ workspaceDir, confirmValues: [true] });
+      stageGuidedAuth();
+      authChoiceMocks.warnIfModelConfigLooksOff.mockRejectedValueOnce(new WizardCancelledError());
+
+      await agentsAddCommand({}, runtime);
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+      expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
+      expect(createAgentMock).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    });
+  });
+
+  it("keeps guided auth while applying portable profiles without overwriting", async () => {
     await withAgentsAddStateRoot("openclaw-agents-add-auth-guided-", async (root) => {
       const destAgentDir = path.join(root, "agents", "work", "agent");
       const workspaceDir = path.join(root, "workspace-work");
@@ -655,28 +733,16 @@ describe("agents add command", () => {
         selectValues: ["openai", "openai-api-key"],
       });
       wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
-      authChoiceMocks.applyAuthChoice.mockImplementationOnce(async ({ config, agentDir }) => {
-        saveAuthProfileStore(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: {
-              "openai:api-key": {
-                type: "api_key",
-                provider: "openai",
-                key: "guided-wins",
-              },
-              "openai:guided": {
-                type: "api_key",
-                provider: "openai",
-                key: "guided-retained",
-              },
-            },
-            order: { openai: ["openai:guided", "openai:api-key"] },
-          },
-          agentDir,
-        );
-        return { config, retrySelection: false };
-      });
+      stageGuidedAuth([
+        {
+          profileId: "openai:api-key",
+          credential: { type: "api_key", provider: "openai", key: "guided-wins" },
+        },
+        {
+          profileId: "openai:guided",
+          credential: { type: "api_key", provider: "openai", key: "guided-retained" },
+        },
+      ]);
 
       await agentsAddCommand({}, runtime);
 
@@ -686,11 +752,143 @@ describe("agents add command", () => {
         "openai:portable": { key: "portable-retained" },
         "openai:guided": { key: "guided-retained" },
       });
-      expect(persisted?.order?.openai).toEqual(["openai:guided", "openai:api-key"]);
+      expect(persisted?.order?.openai).toEqual(["openai:api-key", "openai:portable"]);
       expect(wizard.note).toHaveBeenCalledWith(
         'Copied 2 portable auth profiles from "main".',
         "Auth profiles",
       );
+    });
+  });
+
+  it("persists staged provider auth only at the agent config commit edge", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-create-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      useFreshAgentWizard({ workspaceDir, confirmValues: [true] });
+      stageGuidedAuth();
+      createAgentMock.mockImplementationOnce(
+        async (params: {
+          stagedConfig?: Record<string, unknown>;
+          prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
+        }) => {
+          expect(pluginLifecycleMocks.state.active).toBe(true);
+          expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
+          await params.prepareConfigCommit?.();
+          return {
+            status: "created" as const,
+            agentId: "work",
+            name: "work",
+            workspace: workspaceDir,
+            agentDir,
+            bootstrapPending: true,
+            config: params.stagedConfig ?? {},
+          };
+        },
+      );
+
+      await agentsAddCommand({}, runtime);
+
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:primary"]).toMatchObject({
+        key: "sk-primary",
+      });
+      expect(authProfileMocks.persistBatch).toHaveBeenCalledOnce();
+      expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.any(Object),
+        expect.objectContaining({
+          pendingAuthProfiles: [expect.objectContaining({ profileId: "openai:primary" })],
+        }),
+      );
+      expect(createAgentMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stagedConfig: expect.objectContaining({ auth: expect.any(Object) }),
+          prepareConfigCommit: expect.any(Function),
+        }),
+      );
+    });
+  });
+
+  it("publishes no agent when staged provider auth cannot persist atomically", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-persist-failure-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      const profiles = ["first", "second"].map((name) => ({
+        profileId: `openai:${name}`,
+        credential: { type: "api_key" as const, provider: "openai", key: `sk-${name}` },
+      }));
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      useFreshAgentWizard({ workspaceDir, confirmValues: [true] });
+      stageGuidedAuth(profiles);
+      authProfileMocks.persistBatch.mockRejectedValueOnce(
+        new Error("injected auth batch persistence failure"),
+      );
+
+      await expect(agentsAddCommand({}, runtime)).rejects.toThrow(
+        "injected auth batch persistence failure",
+      );
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+      expect(createAgentMock).toHaveBeenCalledOnce();
+      expect(commitConfigWithPendingPluginInstallsMock).not.toHaveBeenCalled();
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("retains existing-agent auth after config publication when later output fails", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-existing-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      setConfigSnapshot({
+        agents: { entries: { work: { id: "work", workspace: workspaceDir, agentDir } } },
+      });
+      const wizard = createQueuedWizardPrompter({
+        textValues: [workspaceDir],
+        confirmValues: [true, true],
+      });
+      wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+      stageGuidedAuth();
+      wizard.outro.mockRejectedValueOnce(new Error("injected late failure"));
+
+      await expect(agentsAddCommand({ name: "work" }, runtime)).rejects.toThrow(
+        "injected late failure",
+      );
+
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:primary"]).toMatchObject({
+        key: "sk-primary",
+      });
+      expect(commitConfigWithPendingPluginInstallsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nextConfig: expect.objectContaining({ auth: expect.any(Object) }),
+        }),
+      );
+      expect(createAgentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rolls existing-agent auth back when config publication fails", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-existing-rollback-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      setConfigSnapshot({
+        agents: { entries: { work: { id: "work", workspace: workspaceDir, agentDir } } },
+      });
+      const wizard = createQueuedWizardPrompter({
+        textValues: [workspaceDir],
+        confirmValues: [true, true],
+      });
+      wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+      stageGuidedAuth();
+      commitConfigWithPendingPluginInstallsMock.mockRejectedValueOnce(
+        new Error("injected config publication failure"),
+      );
+
+      await expect(agentsAddCommand({ name: "work" }, runtime)).rejects.toThrow(
+        "injected config publication failure",
+      );
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+      expect(createAgentMock).not.toHaveBeenCalled();
     });
   });
 

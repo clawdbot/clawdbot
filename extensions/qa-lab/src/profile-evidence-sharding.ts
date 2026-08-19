@@ -112,13 +112,7 @@ function selectQaProfileScenarioCategory(
 }
 
 function listQaProfileScenarioLiveChannels(scenario: QaSeedScenarioWithSource) {
-  const channel = scenario.execution.channel?.trim().toLowerCase();
-  if (channel) {
-    return [channel];
-  }
-  return scenario.execution.kind === "flow"
-    ? (scenario.execution.channels?.filter((candidate) => candidate !== "qa-channel") ?? [])
-    : [];
+  return (scenario.execution.channels ?? []).filter((candidate) => candidate !== "qa-channel");
 }
 
 function listExclusiveQaProfileChannels(

@@ -14,6 +14,7 @@ import { canvasA2UIBoardWidgetKind } from "./src/board-widget.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui-shared.js";
 import { CanvasToolSchema } from "./src/tool-schema.js";
+import { createCanvasWidgetPresenter } from "./src/widget-presenter.js";
 
 const CANVAS_NODE_COMMANDS = [
   "canvas.present",
@@ -106,6 +107,7 @@ export default definePluginEntry({
         handler: handleHttpRequest,
         handleUpgrade,
       });
+      api.registerWidgetPresenter(createCanvasWidgetPresenter(api.runtime.nodes));
     }
     api.registerService({
       id: "canvas-host",

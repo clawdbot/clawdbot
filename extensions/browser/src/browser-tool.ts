@@ -5,7 +5,10 @@
  * maps high-level actions onto browser control client calls.
  */
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
+import {
+  createBrowserNodeProxyRequest,
+  createBrowserNodeSessionTabRoute,
+} from "./browser-node-proxy.js";
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
 import { applyBrowserTabToolBinding, parseBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { describeBrowserTool } from "./browser-tool-description.js";
@@ -23,7 +26,9 @@ import {
 import {
   type AnyAgentTool,
   BrowserToolOutputSchema,
-  BrowserToolSchema,
+  createBrowserToolSchema,
+  resolveBrowserToolCapabilities,
+  type BrowserToolCapabilities,
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
@@ -329,20 +334,6 @@ async function readHostSystemProfiles(params: {
   }
 }
 
-function shouldPreferHostForProfile(profileName: string | undefined) {
-  if (!profileName) {
-    return false;
-  }
-  const cfg = browserToolDeps.getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const profile = resolveProfile(resolved, profileName);
-  if (!profile) {
-    return false;
-  }
-  const capabilities = getBrowserProfileCapabilities(profile);
-  return capabilities.usesChromeMcp;
-}
-
 const DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS = 45_000;
 const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
   "status",
@@ -355,19 +346,7 @@ const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
   "close",
 ]);
 
-function usesExistingSessionManageFlow(params: { action: string; profileName?: string }) {
-  if (!EXISTING_SESSION_MANAGE_ACTIONS.has(params.action)) {
-    return false;
-  }
-  const cfg = browserToolDeps.getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const profile = resolveProfile(resolved, params.profileName ?? resolved.defaultProfile);
-  if (profile && getBrowserProfileCapabilities(profile).usesChromeMcp) {
-    return true;
-  }
-  if (params.action !== "profiles") {
-    return false;
-  }
+function hasExistingSessionProfile(resolved: ReturnType<typeof resolveBrowserConfig>) {
   return Object.keys(resolved.profiles).some((name) => {
     const candidate = resolveProfile(resolved, name);
     return candidate ? getBrowserProfileCapabilities(candidate).usesChromeMcp : false;
@@ -403,7 +382,34 @@ export function createBrowserTool(opts?: {
     chatType?: string;
   };
   runToolBinding?: unknown;
+  toolCapabilities?: BrowserToolCapabilities;
 }): AnyAgentTool {
+  const bindingResult =
+    opts?.runToolBinding === undefined
+      ? undefined
+      : parseBrowserTabToolBinding(opts.runToolBinding);
+  if (bindingResult && !bindingResult.ok) {
+    throw new Error(`invalid browser run binding: ${bindingResult.error}`);
+  }
+  const capabilities =
+    opts?.toolCapabilities ??
+    (() => {
+      const config = browserToolDeps.getRuntimeConfig();
+      const boundProfile =
+        bindingResult?.ok && bindingResult.binding.target === "host"
+          ? resolveProfile(
+              resolveBrowserConfig(config.browser, config),
+              bindingResult.binding.profile,
+            )
+          : undefined;
+      return resolveBrowserToolCapabilities({
+        tabBound: bindingResult?.ok,
+        evaluateEnabled: config.browser?.evaluateEnabled !== false,
+        ...(boundProfile
+          ? { profileCapabilities: getBrowserProfileCapabilities(boundProfile) }
+          : {}),
+      });
+    })();
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -411,27 +417,29 @@ export function createBrowserTool(opts?: {
     label: "Browser",
     name: "browser",
     resultContentSource: "network",
-    description: describeBrowserTool({ targetDefault, hostHint }),
-    parameters: BrowserToolSchema,
+    description: describeBrowserTool({ targetDefault, hostHint, capabilities }),
+    parameters: createBrowserToolSchema(capabilities),
     outputSchema: BrowserToolOutputSchema,
     execute: async (_toolCallId, args, signal) => {
-      const bindingResult =
-        opts?.runToolBinding === undefined
-          ? undefined
-          : parseBrowserTabToolBinding(opts.runToolBinding);
-      if (bindingResult && !bindingResult.ok) {
-        throw new Error(`invalid browser run binding: ${bindingResult.error}`);
-      }
       const params = bindingResult?.ok
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, bindingResult.binding)
         : (args as Record<string, unknown>);
       const action = readStringParam(params, "action", { required: true });
-      const profile = readStringParam(params, "profile");
+      if (!capabilities.actions.some((candidate) => candidate === action)) {
+        throw new Error(`browser action ${JSON.stringify(action)} is unavailable for this run`);
+      }
+      const requestedProfile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
       const requestedTimeoutMs = readToolTimeoutMs(params);
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
       const runtimeConfig = browserToolDeps.getRuntimeConfig();
       const resolvedBrowser = resolveBrowserConfig(runtimeConfig.browser, runtimeConfig);
+      const effectiveProfile = requestedProfile ?? resolvedBrowser.defaultProfile;
+      const resolvedProfile = resolveProfile(resolvedBrowser, effectiveProfile);
+      const profileCapabilities = resolvedProfile
+        ? getBrowserProfileCapabilities(resolvedProfile)
+        : undefined;
+      let profile = profileCapabilities?.usesChromeMcp ? effectiveProfile : requestedProfile;
       const configuredNode = runtimeConfig.gateway?.nodes?.browser?.node?.trim();
 
       if (requestedNode && target && target !== "node") {
@@ -451,7 +459,7 @@ export function createBrowserTool(opts?: {
       }
       // existing-session profiles can attach through the selected host or browser node,
       // but they must never fall back into the sandbox browser.
-      const isUserBrowserProfile = shouldPreferHostForProfile(profile);
+      const isUserBrowserProfile = profileCapabilities?.usesChromeMcp === true;
       if (isUserBrowserProfile) {
         if (target === "sandbox") {
           throw new Error(
@@ -500,9 +508,17 @@ export function createBrowserTool(opts?: {
       const proxyRequest = nodeTarget
         ? createBrowserNodeProxyRequest({ nodeTarget, allowAutomaticHostFallback, signal })
         : null;
+      if (proxyRequest) {
+        // The node resolves omissions against its own config; Gateway defaults
+        // never cross this execution-owner boundary.
+        profile = requestedProfile;
+      }
+      const nodeRoute = nodeTarget ? createBrowserNodeSessionTabRoute(nodeTarget) : undefined;
       const toolTimeoutMs =
         requestedTimeoutMs ??
-        (usesExistingSessionManageFlow({ action, profileName: profile })
+        (EXISTING_SESSION_MANAGE_ACTIONS.has(action) &&
+        (isUserBrowserProfile ||
+          (action === "profiles" && hasExistingSessionProfile(resolvedBrowser)))
           ? DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS
           : undefined);
       const sessionTabs = createBrowserToolSessionTabs({
@@ -510,6 +526,11 @@ export function createBrowserTool(opts?: {
         requestedProfile: profile,
         defaultProfile: resolvedBrowser.defaultProfile,
         baseUrl,
+        nodeRoute,
+        routeProfile: () => {
+          const route = proxyRequest?.route();
+          return route?.status === "resolved" ? route.profile : undefined;
+        },
         isHostFallbackActive: proxyRequest?.isHostFallbackActive,
         registry: browserToolDeps,
       });
@@ -640,6 +661,10 @@ export function createBrowserTool(opts?: {
                 signal,
               });
           const closeOpenedTab = async (targetId: string, openedProfile?: string) => {
+            if (nodeRoute && !proxyRequest?.isHostFallbackActive()) {
+              await nodeRoute.closeTarget({ targetId, profile: openedProfile });
+              return;
+            }
             await browserToolDeps.browserCloseTab(baseUrl, targetId, {
               profile: openedProfile,
               timeoutMs: toolTimeoutMs,
@@ -1017,10 +1042,16 @@ export function createBrowserTool(opts?: {
           if (!request) {
             throw new Error("request required");
           }
+          if (!capabilities.actKinds.some((kind) => kind === request.kind)) {
+            throw new Error(
+              `browser act kind ${JSON.stringify(request.kind)} is unavailable for this run`,
+            );
+          }
           return await executeActAction({
             request,
             baseUrl,
             profile,
+            usesChromeMcp: isUserBrowserProfile,
             proxyRequest,
             signal,
             onTabActivity: sessionTabs.touch,

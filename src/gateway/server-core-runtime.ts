@@ -147,12 +147,14 @@ export async function startGatewayCoreRuntime(input: {
     baseMethods,
     pluginWorkspaceDir,
     ambientEnvTriggers,
+    resolvePluginGatewayContext,
     workerEnvironmentStartup,
     broadcastPluginEvent,
     activateRuntimeSecrets,
     residentRegistry,
     shutdownRuntime,
   } = runtime;
+  let currentPluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
   if (desktopSessionRegistry) {
     kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
   }
@@ -234,7 +236,7 @@ export async function startGatewayCoreRuntime(input: {
     start: async () => await discoveryResident.start(),
     stop: async () => {
       const earlyRuntime = await startEarlyRuntime();
-      earlyRuntime.skillsChangeUnsub();
+      await earlyRuntime.skillsChangeUnsub();
       shutdownRuntime.stopTaskRegistryMaintenance();
     },
   });
@@ -432,6 +434,10 @@ export async function startGatewayCoreRuntime(input: {
     );
   };
   let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
+  let retireAttachedPluginRuntimeBindings = () => {};
+  kernel.addGatewayLifetimeSidecar({
+    stop: async () => retireAttachedPluginRuntimeBindings(),
+  });
   const listAttachedGatewayMethods = () => {
     const methods = attachedGatewayMethodRegistry.listAdvertisedMethods();
     methods.push(...listStartupChannelGatewayMethods());
@@ -441,7 +447,11 @@ export async function startGatewayCoreRuntime(input: {
   const replaceAttachedPluginRuntime = (loaded: {
     pluginRegistry: typeof pluginRuntime.registry;
     gatewayMethods: string[];
+    retireGatewayRuntimeBindings?: () => void;
   }) => {
+    const retirePreviousBindings = retireAttachedPluginRuntimeBindings;
+    retireAttachedPluginRuntimeBindings = loaded.retireGatewayRuntimeBindings ?? (() => {});
+    retirePreviousBindings();
     pluginRuntime.registry = loaded.pluginRegistry;
     pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
     for (const key of attachedPluginGatewayHandlerKeys) {
@@ -600,6 +610,7 @@ export async function startGatewayCoreRuntime(input: {
       baseMethods,
       pluginLookUpTable: nextPluginLookUpTable,
       ambientEnvTriggers,
+      resolveGatewayContext: resolvePluginGatewayContext,
     });
     const nextPluginMetadataSnapshot = completePluginMetadataSnapshot({
       snapshot: nextPluginLookUpTable,
@@ -612,6 +623,7 @@ export async function startGatewayCoreRuntime(input: {
       env: params.env,
       workspaceDir: pluginWorkspaceDir,
     });
+    currentPluginMetadataSnapshot = nextPluginMetadataSnapshot;
     replaceAttachedPluginRuntime(loaded);
     kernel.setPluginServices(null);
     if (previousPluginServices) {
@@ -673,5 +685,6 @@ export async function startGatewayCoreRuntime(input: {
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
+    getPluginMetadataSnapshot: () => currentPluginMetadataSnapshot,
   };
 }
