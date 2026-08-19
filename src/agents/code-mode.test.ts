@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as codeModeExecution from "./code-mode-execution.js";
 import {
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
@@ -13,6 +14,7 @@ import {
   resetCodeModeTestState,
   fakeTool,
   pluginTool,
+  pluginToolWithExecute,
   mcpTool,
   createCodeModeHarness,
 } from "./code-mode.test-support.js";
@@ -22,7 +24,10 @@ import {
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
+  resolveToolSearchConfig,
+  ToolSearchRuntime,
 } from "./tool-search.js";
+import { jsonResult } from "./tools/common.js";
 
 describe("Code Mode catalog and model-visible surface", () => {
   beforeEach(() => {
@@ -31,7 +36,95 @@ describe("Code Mode catalog and model-visible surface", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     resetCodeModeTestState();
+  });
+
+  const runTerminalNestedCall = async (
+    params: Pick<
+      Parameters<typeof codeModeExecution.runCodeModeExec>[0],
+      "toolCallId" | "ctx" | "onRuntime"
+    >,
+  ) => {
+    const runtime = new ToolSearchRuntime(params.ctx, resolveToolSearchConfig({} as never));
+    params.onRuntime?.(runtime);
+    await runtime.call("terminal_action", {}, { parentToolCallId: params.toolCallId });
+    return {
+      status: "completed" as const,
+      value: null,
+      output: [],
+      replaySafe: false,
+      telemetry: {
+        ...runtime.telemetry(),
+        visibleTools: [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME],
+      },
+    };
+  };
+
+  it("projects a nested terminal result from exec", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    vi.spyOn(codeModeExecution, "runCodeModeExec").mockImplementation(runTerminalNestedCall);
+    const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
+      ...jsonResult({ terminal: true }),
+      terminate: true,
+    }));
+    applyCodeModeCatalog({
+      tools: [...tools, terminal],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const result = await expectDefined(tools[0], "exec tool").execute("exec-terminal", {
+      code: 'return await tools.call("terminal_action", {});',
+    });
+
+    expect(result.details).toMatchObject({ status: "completed" });
+    expect(result.terminate).toBe(true);
+  });
+
+  it("projects a terminal result reached through wait", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    vi.spyOn(codeModeExecution, "runCodeModeExec").mockImplementation(async (params) => {
+      const runtime = new ToolSearchRuntime(params.ctx, resolveToolSearchConfig({} as never));
+      return {
+        status: "waiting",
+        runId: "terminal-run",
+        reason: "yield",
+        pendingToolCalls: [],
+        output: [],
+        replaySafe: false,
+        telemetry: {
+          ...runtime.telemetry(),
+          visibleTools: [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME],
+        },
+      };
+    });
+    vi.spyOn(codeModeExecution, "runWait").mockImplementation(runTerminalNestedCall);
+    const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
+      ...jsonResult({ terminal: true }),
+      terminate: true,
+    }));
+    applyCodeModeCatalog({
+      tools: [...tools, terminal],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const suspended = await expectDefined(tools[0], "exec tool").execute("exec-wait-terminal", {
+      code: 'await yield_control("pause"); return await tools.call("terminal_action", {});',
+    });
+    expect(suspended.details).toMatchObject({ status: "waiting", reason: "yield" });
+    const result = await expectDefined(tools[1], "wait tool").execute("wait-terminal", {
+      runId: (suspended.details as { runId: string }).runId,
+    });
+
+    expect(result.terminate).toBe(true);
   });
 
   it("hides all normal tools behind exec and wait", () => {

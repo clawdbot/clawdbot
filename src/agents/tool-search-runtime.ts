@@ -30,6 +30,7 @@ import {
 } from "./tool-search-catalog.js";
 import {
   buildLexicalIndex,
+  readParameterText,
   scoreLexical,
   tokenizeDocument,
   tokenizeQuery,
@@ -75,30 +76,6 @@ function toolSearchEntryText(entry: ToolSearchCatalogEntry, parameterText?: stri
   return [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
     .filter(Boolean)
     .join(" ");
-}
-
-/** Collects property names and descriptions from a JSON-Schema-shaped value. */
-function readParameterText(parameters: unknown, depth = 0): string {
-  if (depth > 4 || !isRecord(parameters)) {
-    return "";
-  }
-  const parts: string[] = [];
-  const description = parameters.description;
-  if (typeof description === "string") {
-    parts.push(description);
-  }
-  const properties = parameters.properties;
-  if (isRecord(properties)) {
-    for (const [name, child] of Object.entries(properties)) {
-      parts.push(name);
-      parts.push(readParameterText(child, depth + 1));
-    }
-  }
-  const items = parameters.items;
-  if (items !== undefined) {
-    parts.push(readParameterText(items, depth + 1));
-  }
-  return parts.filter(Boolean).join(" ");
 }
 
 function tokenizeLookupValue(input: string): Set<string> {
@@ -474,6 +451,7 @@ function sanitizeToolCallIdPart(value: string): string {
 
 export class ToolSearchRuntime {
   private callSequence = 0;
+  private readonly terminalTargetBatchByParent = new Map<string, boolean>();
   private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
   private readonly searchIndexes = new WeakMap<
     ToolSearchCatalogSession,
@@ -596,6 +574,16 @@ export class ToolSearchRuntime {
       : this.networkInvocations.size > 0;
   }
 
+  takeTerminalTargetBatch(parentToolCallId?: string): boolean {
+    const parent =
+      parentToolCallId ??
+      (this.terminalTargetBatchByParent.size === 1
+        ? (this.terminalTargetBatchByParent.keys().next().value ?? "")
+        : "");
+    const terminal = this.terminalTargetBatchByParent.get(parent) === true;
+    return this.terminalTargetBatchByParent.delete(parent) && terminal;
+  }
+
   isReplaySafeExactId = (id: string): boolean => {
     let entry: ToolSearchCatalogEntry;
     try {
@@ -713,6 +701,14 @@ export class ToolSearchRuntime {
         )
       : await runExecution();
     const acceptedResult = await acceptResultBeforeProjection(result);
+    const parentToolCallId = options?.parentToolCallId;
+    if (parentToolCallId) {
+      this.terminalTargetBatchByParent.set(
+        parentToolCallId,
+        this.terminalTargetBatchByParent.get(parentToolCallId) !== false &&
+          acceptedResult.terminate === true,
+      );
+    }
     return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
   };
 
@@ -727,17 +723,19 @@ export function formatToolSearchControlResult<T>(
   runtime: ToolSearchRuntime | undefined,
   parentToolCallId?: string,
 ): AgentToolResult<T> {
-  const result = jsonResult(payload);
+  let result: AgentToolResult<T> = jsonResult(payload);
   const content = result.content[0];
-  if (!runtime?.hasNetworkContent(parentToolCallId) || content?.type !== "text") {
-    return result;
+  if (runtime?.hasNetworkContent(parentToolCallId) && content?.type === "text") {
+    const bounded = truncateSanitizedExternalContent(content.text, 20_000);
+    const modelText = bounded.truncated
+      ? `${truncateSanitizedExternalContent(content.text, 19_988).text}\n[truncated]`
+      : bounded.text;
+    const text = wrapExternalContent(modelText, { source: "api" });
+    result = { ...result, content: [{ ...content, text }] };
   }
-  const bounded = truncateSanitizedExternalContent(content.text, 20_000);
-  const modelText = bounded.truncated
-    ? `${truncateSanitizedExternalContent(content.text, 19_988).text}\n[truncated]`
-    : bounded.text;
-  const text = wrapExternalContent(modelText, { source: "api" });
-  return { ...result, content: [{ ...content, text }] };
+  return runtime?.takeTerminalTargetBatch(parentToolCallId)
+    ? { ...result, terminate: true }
+    : result;
 }
 
 /** Keep dynamic failures rejected without exposing network-controlled error text. */

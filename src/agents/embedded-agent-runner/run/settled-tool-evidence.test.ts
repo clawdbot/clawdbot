@@ -153,6 +153,74 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 
+  it("suppresses continuation for an exactly matched all-terminal current batch", () => {
+    const attempt = makeSettledIdleWriteAttempt();
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        ...attempt,
+        toolMetas: [
+          {
+            toolName: "write",
+            toolCallId: "tool_1",
+            replaySafe: false,
+            terminate: true,
+          },
+        ],
+      }),
+    );
+
+    expect(instruction).toBeNull();
+  });
+
+  it("continues when terminal metadata belongs to a stale prior call", () => {
+    const attempt = makeSettledIdleWriteAttempt();
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        ...attempt,
+        toolMetas: [
+          {
+            toolName: "write",
+            toolCallId: "tool_stale",
+            replaySafe: false,
+            terminate: true,
+          },
+        ],
+      }),
+    );
+
+    expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
+  it("continues when the current requested batch mixes terminal and nonterminal results", () => {
+    const attempt = makeSettledIdleWriteAttempt();
+    const toolUseAssistant = makeLastAssistant({
+      stopReason: "toolUse",
+      content: [
+        { type: "toolCall", id: "tool_1", name: "write", arguments: {} },
+        { type: "toolCall", id: "tool_2", name: "read", arguments: {} },
+      ],
+    });
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        ...attempt,
+        toolMetas: [
+          { toolName: "write", toolCallId: "tool_1", terminate: true },
+          { toolName: "read", toolCallId: "tool_2" },
+        ],
+        itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+        messagesSnapshot: [
+          { role: "user", content: [{ type: "text", text: "current turn" }] },
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+          { role: "toolResult", toolCallId: "tool_2", toolName: "read", isError: false },
+          attempt.currentAttemptAssistant!,
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+      }),
+    );
+
+    expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
   it.each([
     {
       label: "provider failure with finalization context",

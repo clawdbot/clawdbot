@@ -2142,6 +2142,29 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
   });
 
+  it("records intentional termination with its exact tool call id", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "terminal_action",
+      toolCallId: "tool-terminal-current",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Done." }],
+        details: { status: "done" },
+        terminate: true,
+      },
+    });
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "terminal_action",
+        toolCallId: "tool-terminal-current",
+        terminate: true,
+      }),
+    ]);
+  });
+
   it("retains every failed call after later successes change the last-error slot", async () => {
     const { ctx } = createTestContext();
 

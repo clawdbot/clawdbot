@@ -302,6 +302,13 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     ),
   );
   const hasSettledTerminalToolFailure = allToolsProvenSettled && failedTerminalToolNames.size > 0;
+  const hasIntentionalTerminalToolBatch =
+    allToolsProvenSettled &&
+    requestedToolCalls.every(({ id, name }) =>
+      params.attempt.toolMetas.some(
+        (meta) => meta.toolCallId === id && meta.toolName === name && meta.terminate === true,
+      ),
+    );
   // ToolErrorSummary has no call id: its owner must match a failed result in the
   // proven terminal batch, or a stale/unrelated error could authorize finalization.
   const hasUnsettledToolError = Boolean(
@@ -317,6 +324,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     ((params.timedOut || params.attempt.terminal.kind === "timeout") && !idlePromptTimeout) ||
     (terminal.kind === "failed" && !params.attempt.settledTurnFinalizationContext) ||
     (assistant?.stopReason === "toolUse" ? !allToolsProvenSettled : !emptyStopAfterSettledTools) ||
+    hasIntentionalTerminalToolBatch ||
     hasUnsettledToolError ||
     hasAsyncActivity(params.attempt.toolMetas) ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
