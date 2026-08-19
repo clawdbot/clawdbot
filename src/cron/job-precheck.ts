@@ -223,6 +223,7 @@ function resolvePrecheckSafeBinPolicy(authz: CronJobPrecheckAuthz) {
     global: authz.toolsExec
       ? {
           safeBins: authz.toolsExec.safeBins,
+          // SAFETY: tools.exec.safeBinProfiles is a string-keyed profile map; runtime policy expects its Record shape.
           safeBinProfiles: authz.toolsExec.safeBinProfiles as never,
           safeBinTrustedDirs: authz.toolsExec.safeBinTrustedDirs,
         }
@@ -230,6 +231,7 @@ function resolvePrecheckSafeBinPolicy(authz: CronJobPrecheckAuthz) {
     local: authz.agentToolsExec
       ? {
           safeBins: authz.agentToolsExec.safeBins,
+          // SAFETY: agent tools.exec.safeBinProfiles is a string-keyed profile map; runtime policy expects its Record shape.
           safeBinProfiles: authz.agentToolsExec.safeBinProfiles as never,
           safeBinTrustedDirs: authz.agentToolsExec.safeBinTrustedDirs,
         }

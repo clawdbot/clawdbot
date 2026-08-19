@@ -29,7 +29,7 @@ export function assertNoCronShellExecution(value: unknown): void {
   // not create, edit, or clear it via the automations tool (CLI/Gateway only).
   // Own-key presence matters: `precheck: null` would otherwise delete an
   // operator-configured gate through applyJobPatch.
-  if (Object.prototype.hasOwnProperty.call(value, "precheck")) {
+  if (Object.hasOwn(value, "precheck")) {
     throw new Error(
       "automation precheck host-shell gates cannot be created, edited, or cleared through the agent automations tool; use the CLI or Gateway API.",
     );
