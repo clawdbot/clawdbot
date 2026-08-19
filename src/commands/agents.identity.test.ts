@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../cli/failure-output.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
   baseConfigSnapshot,
@@ -492,5 +494,32 @@ describe("agents set-identity command", () => {
       identitySource,
       identityFile: null,
     });
+  });
+
+  it("quotes the relocation hint when the locator path contains spaces", async () => {
+    const { root, workspace: storedWorkspace } = await createIdentityWorkspace("stored");
+    const identitySource = path.join(root, "My workspace");
+    await fs.mkdir(identitySource, { recursive: true });
+
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { worker: { workspace: storedWorkspace } } } },
+    });
+
+    const { runtime, logs } = createCapturingTestRuntime();
+    await agentsSetIdentityCommand(
+      {
+        agent: "worker",
+        workspace: identitySource,
+        name: "Worker",
+      },
+      runtime,
+    );
+
+    expect(logs).toContain(
+      `Stored workspace unchanged. Relocate with ${formatCliCommand(
+        `openclaw config set agents.entries.worker.workspace ${quoteCliArg(identitySource)}`,
+      )}.`,
+    );
   });
 });
