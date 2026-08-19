@@ -113,7 +113,7 @@ const state = vi.hoisted(() => ({
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
-  loadManifestModelCatalogMock: vi.fn(() => []),
+  loadManifestModelCatalogMock: vi.fn((): ModelCatalogSnapshot["entries"] => []),
   manifestMetadataSnapshot: { plugins: [] },
   resolvePluginMetadataSnapshotMock: vi.fn(),
   listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
@@ -3720,6 +3720,75 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       },
     );
     expect(lifecycleFinishingCalls).toHaveLength(1);
+  });
+
+  it("forwards harness-augmented GPT-5.6 thinking capability to the attempt", async () => {
+    const modelId = "gpt-5.6-sol";
+    const modelKey = `openai/${modelId}`;
+    const providerReasoningEfforts = ["low", "medium", "high", "xhigh", "max"];
+    const harnessReasoningEfforts = [...providerReasoningEfforts, "ultra"];
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: modelKey },
+          models: { [modelKey]: { agentRuntime: { id: "codex" } } },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([
+      {
+        provider: "openai",
+        id: modelId,
+        name: modelId,
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: providerReasoningEfforts,
+        },
+      },
+    ]);
+    state.loadProviderScopedThinkingCatalogMock.mockResolvedValue([
+      {
+        provider: "openai",
+        id: modelId,
+        name: modelId,
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: harnessReasoningEfforts,
+        },
+      },
+    ]);
+    setupSuccessfulAttempt("openai", modelId);
+
+    await agentCommand({ message: "hello", to: "+1234567890", thinking: "ultra" });
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      modelOverride: modelId,
+      resolvedThinkLevel: "ultra",
+      modelThinkingCapability: {
+        provider: "openai",
+        modelId,
+        agentRuntime: "codex",
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: harnessReasoningEfforts,
+        },
+      },
+    });
   });
 
   it.each([

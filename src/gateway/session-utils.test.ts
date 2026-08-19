@@ -1128,16 +1128,15 @@ describe("gateway session utils", () => {
     );
   });
 
-  test("preserves persisted Ultra while projecting picker levels without a catalog", () => {
+  test("preserves validated persisted Ultra when a route-scoped catalog is narrower", () => {
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
-      resolveThinkingProfile: ({ modelId, agentRuntime }) => ({
+      resolveThinkingProfile: ({ compat }) => ({
         levels: [
           { id: "off" },
           { id: "high" },
           { id: "xhigh" },
           { id: "max" },
-          ...(modelId.startsWith("gpt-5.6") &&
-          (agentRuntime === "openclaw" || !modelId.startsWith("gpt-5.6-luna"))
+          ...(compat?.supportedReasoningEfforts?.includes("ultra")
             ? [{ id: "ultra" as const }]
             : []),
         ],
@@ -1146,14 +1145,22 @@ describe("gateway session utils", () => {
     const cfg = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
+          model: { primary: "openai/gpt-5.6-sol" },
           models: {
-            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
           },
         },
       },
     } as OpenClawConfig;
-    const defaults = getSessionDefaults(cfg);
+    const modelCatalog = [
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol (API route)",
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      },
+    ];
+    const defaults = getSessionDefaults(cfg, modelCatalog);
     const row = (entry: SessionEntry) =>
       buildGatewaySessionRow({
         cfg,
@@ -1161,6 +1168,7 @@ describe("gateway session utils", () => {
         store: {},
         key: "agent:main:main",
         entry,
+        modelCatalog,
       });
 
     const codex = row({ sessionId: "codex", thinkingLevel: "ultra" } as SessionEntry);

@@ -1811,7 +1811,7 @@ src/agents/embedded-agent-runner/compaction-hooks.ts	1
 src/agents/embedded-agent-runner/compaction-session-agent.ts	7
 src/agents/embedded-agent-runner/context-engine-maintenance.ts	3
 src/agents/embedded-agent-runner/delivery-evidence.ts	12
-src/agents/embedded-agent-runner/direct-compaction-preparation.ts	3
+src/agents/embedded-agent-runner/direct-compaction-preparation.ts	1
 src/agents/embedded-agent-runner/empty-assistant-turn.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
 src/agents/embedded-agent-runner/extra-params.ts	12
@@ -2041,7 +2041,7 @@ src/agents/sessions/model-registry.ts	13
 src/agents/sessions/model-resolver.ts	1
 src/agents/sessions/package-manager.ts	8
 src/agents/sessions/resolve-config-value.ts	1
-src/agents/sessions/sdk.ts	4
+src/agents/sessions/sdk.ts	3
 src/agents/sessions/session-manager-branching.ts	1
 src/agents/sessions/session-manager-codec.ts	7
 src/agents/sessions/session-manager-core.ts	1

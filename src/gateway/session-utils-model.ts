@@ -274,17 +274,9 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     rowContext: params.rowContext,
     providerPolicySource: params.providerPolicySource,
   });
-  const storedThinkingLevel = normalizeThinkLevel(params.entry?.thinkingLevel);
-  const thinkingLevel = storedThinkingLevel
-    ? resolveGatewaySessionThinkingLevel({
-        provider: params.provider,
-        model: params.model,
-        level: storedThinkingLevel,
-        modelCatalog: params.modelCatalog,
-        agentRuntime: thinkingRuntime,
-        providerPolicySource: params.providerPolicySource,
-      })
-    : undefined;
+  // The patch/run owners validate persisted selections. Route-scoped catalog views may be
+  // narrower than the owning harness, so row projection must not rewrite the stored fact.
+  const thinkingLevel = normalizeThinkLevel(params.entry?.thinkingLevel);
   return {
     agentRuntime,
     thinkingLevel,
