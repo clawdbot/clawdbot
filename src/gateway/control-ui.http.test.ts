@@ -1524,7 +1524,10 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(end).toHaveBeenCalledWith(
-          html.replace("<html", '<html data-openclaw-terminal-enabled="true"'),
+          html.replace(
+            "<html",
+            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true"',
+          ),
         );
       },
     });
@@ -1564,29 +1567,35 @@ describe("handleControlUiHttpRequest", () => {
       name: "root-mounted focus routes",
       requestPath: "/focus/dashboard/roboclaw/session-ref",
       basePath: undefined,
-      expectedPrefix: "",
+      expectedResourceBasePath: "",
     },
     {
       name: "base-mounted focus routes",
       requestPath: "/openclaw/focus/desktop/control",
       basePath: "/openclaw",
-      expectedPrefix: "/openclaw",
+      expectedResourceBasePath: "/openclaw",
     },
     {
       name: "root-mounted ordinary deep routes",
       requestPath: "/settings/approvals",
       basePath: undefined,
-      expectedPrefix: "",
+      expectedResourceBasePath: "",
+    },
+    {
+      name: "root-mounted application namespace routes",
+      requestPath: "/__openclaw__/new",
+      basePath: undefined,
+      expectedResourceBasePath: "",
     },
     {
       name: "base-mounted ordinary deep routes",
       requestPath: "/openclaw/settings/approvals",
       basePath: "/openclaw",
-      expectedPrefix: "/openclaw",
+      expectedResourceBasePath: "/openclaw",
     },
   ])(
     "anchors Vite-relative asset references for $name",
-    async ({ requestPath, basePath, expectedPrefix }) => {
+    async ({ requestPath, basePath, expectedResourceBasePath }) => {
       const emittedAssets = [
         ["index.js", "index-js\n", "application/javascript; charset=utf-8"],
         ["runtime.js", "runtime-js\n", "application/javascript; charset=utf-8"],
@@ -1627,13 +1636,16 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled).toBe(true);
           const body = String(end.mock.calls[0]?.[0] ?? "");
+          expect(body).toContain(
+            `data-openclaw-control-ui-base-path="${expectedResourceBasePath}"`,
+          );
           for (const asset of publicAssets) {
-            expect(body).toContain(`href="${expectedPrefix}/${asset}"`);
+            expect(body).toContain(`href="${expectedResourceBasePath}/${asset}"`);
             expect(body).not.toContain(`href="./${asset}"`);
           }
-          expect(body).toContain(`src="${expectedPrefix}/assets/index.js"`);
-          expect(body).toContain(`href="${expectedPrefix}/assets/runtime.js"`);
-          expect(body).toContain(`href="${expectedPrefix}/assets/index.css"`);
+          expect(body).toContain(`src="${expectedResourceBasePath}/assets/index.js"`);
+          expect(body).toContain(`href="${expectedResourceBasePath}/assets/runtime.js"`);
+          expect(body).toContain(`href="${expectedResourceBasePath}/assets/index.css"`);
           expect(body).not.toContain('="./assets/');
           expect(body).not.toContain(`${requestPath}/assets/`);
 
@@ -1641,7 +1653,7 @@ describe("handleControlUiHttpRequest", () => {
             body.matchAll(/(?:src|href)="([^" ]*\/assets\/[^" ]+)"/g),
           ).flatMap((match) => (match[1] ? [match[1]] : []));
           expect(new Set(emittedAssetUrls)).toEqual(
-            new Set(emittedAssets.map(([asset]) => `${expectedPrefix}/assets/${asset}`)),
+            new Set(emittedAssets.map(([asset]) => `${expectedResourceBasePath}/assets/${asset}`)),
           );
           for (const url of emittedAssetUrls) {
             const emittedAsset = emittedAssets.find(([asset]) => url.endsWith(`/${asset}`));
@@ -3470,7 +3482,7 @@ describe("handleControlUiHttpRequest", () => {
           expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
           expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
           expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
-            '<html data-openclaw-terminal-enabled="true">',
+            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">',
           );
           expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
             end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,

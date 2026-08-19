@@ -1,5 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { routeIdFromPath, type RouteId } from "../app-routes.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
@@ -552,6 +553,43 @@ describe("normalizeInitialApplicationLocation", () => {
       runtime?.stop();
       window.history.replaceState({}, "", previousUrl);
       saveSettings(previousSettings);
+    }
+  });
+
+  it("keeps an inferred route namespace separate from the root resource mount", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    const previousResourceBasePath = document.documentElement.getAttribute(
+      CONTROL_UI_BASE_PATH_ATTRIBUTE,
+    );
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "agent:main:main",
+      lastActiveSessionKey: "agent:main:main",
+    });
+    document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, "");
+    window.history.replaceState({}, "", "/__openclaw__/new");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+
+    try {
+      await runtime.start();
+
+      expect(runtime.context.basePath).toBe("/__openclaw__");
+      expect(runtime.context.resourceBasePath).toBe("");
+      expect(runtime.router.getState().matches[0]?.routeId).toBe("new-session");
+      expect(window.location.pathname).toBe("/__openclaw__/new");
+    } finally {
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+      if (previousResourceBasePath === null) {
+        document.documentElement.removeAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
+      } else {
+        document.documentElement.setAttribute(
+          CONTROL_UI_BASE_PATH_ATTRIBUTE,
+          previousResourceBasePath,
+        );
+      }
     }
   });
 

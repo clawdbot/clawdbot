@@ -130,7 +130,12 @@ vi.mock("./model-ref.js", () => ({
     provider,
     model,
   }),
-  parseAgentCommandModelRef: (_cfg: OpenClawConfig, raw: string, defaultProvider: string) => {
+  parseAgentCommandModelRef: (
+    _cfg: OpenClawConfig,
+    _agentId: string,
+    raw: string,
+    defaultProvider: string,
+  ) => {
     const slash = raw.indexOf("/");
     return slash > 0
       ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }

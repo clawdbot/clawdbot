@@ -9,6 +9,7 @@ import {
   type WorkerAdmissionFailureReason,
   type WorkerConnectParams,
   type WorkerLiveEventErrorDetails,
+  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   type WorkerSessionToolResult,
@@ -41,6 +42,7 @@ const HANDSHAKE = {
     WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
     WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
     WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
+    WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
     WORKER_INFERENCE_PROTOCOL_FEATURE,
   ],
 };
@@ -130,6 +132,30 @@ const INFERENCE_EVENT: WorkerInferenceEventFrame = {
     event: { type: "text_delta", contentIndex: 0, delta: "x" },
   },
 };
+const SESSION_TOOL_CASES = [
+  {
+    name: "spawn",
+    method: "worker.sessions.spawn",
+    toolName: "sessions_spawn",
+    request: { toolCallId: "call-spawn", task: "run the child" },
+  },
+  {
+    name: "send",
+    method: "worker.sessions.send",
+    toolName: "sessions_send",
+    request: {
+      toolCallId: "call-send",
+      sessionKey: "agent:main:dashboard:child",
+      message: "status",
+    },
+  },
+  {
+    name: "publish",
+    method: "worker.github.publish",
+    toolName: "github_publish",
+    request: { toolCallId: "call-publish", title: "Publish the fix" },
+  },
+] as const;
 const cleanups: Array<() => void> = [];
 
 function waitForWorkerProtocol(assertion: () => void) {
@@ -468,64 +494,126 @@ describe("dedicated worker websocket protocol", () => {
     expect(harness.service.cancelInference).toHaveBeenCalledWith(ATTACHED_IDENTITY, INFERENCE_IDS);
   });
 
-  it("keeps heartbeats flowing while a session operation is pending", async () => {
-    const operation = createDeferredCore<WorkerSessionToolResult>();
-    const harness = attachHarness({
-      identity: ATTACHED_IDENTITY,
-      onSessionTool: () => operation.promise,
-    });
+  it.each(SESSION_TOOL_CASES)(
+    "keeps heartbeats flowing while $name is pending",
+    async (testCase) => {
+      const operation = createDeferredCore<WorkerSessionToolResult>();
+      const harness = attachHarness({
+        identity: ATTACHED_IDENTITY,
+        onSessionTool: () => operation.promise,
+      });
+      await admit(harness);
+      harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-1`);
+      await waitForWorkerProtocol(() =>
+        expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
+      );
+
+      harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" }, "heartbeat-1");
+      await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
+      expect(harness.responses[1]).toMatchObject({
+        id: "heartbeat-1",
+        ok: true,
+        payload: { status: "ok" },
+      });
+
+      operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+      await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(3));
+      expect(harness.responses[2]).toMatchObject({ id: `${testCase.name}-1`, ok: true });
+    },
+  );
+
+  it.each(SESSION_TOOL_CASES)(
+    "rejects an in-flight duplicate $name request id",
+    async (testCase) => {
+      const operation = createDeferredCore<WorkerSessionToolResult>();
+      const harness = attachHarness({
+        identity: ATTACHED_IDENTITY,
+        onSessionTool: () => operation.promise,
+      });
+      await admit(harness);
+      harness.sendRequest(testCase.method, testCase.request, "duplicate-session-operation");
+      await waitForWorkerProtocol(() =>
+        expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
+      );
+
+      harness.sendRequest(testCase.method, testCase.request, "duplicate-session-operation");
+      await waitForWorkerProtocol(() =>
+        expect(harness.close).toHaveBeenCalledWith(1008, "invalid-frame"),
+      );
+      expect(harness.service.executeSessionTool).toHaveBeenCalledOnce();
+      operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+    },
+  );
+
+  it.each(SESSION_TOOL_CASES)(
+    "continues durable $name work but suppresses its response after cleanup",
+    async (testCase) => {
+      let operationStarted = false;
+      let operationSignal: AbortSignal | undefined;
+      const operation = createDeferredCore<WorkerSessionToolResult>();
+      const harness = attachHarness({
+        identity: ATTACHED_IDENTITY,
+        onSessionTool: (signal) => {
+          operationStarted = true;
+          operationSignal = signal;
+          return operation.promise;
+        },
+      });
+      await admit(harness);
+      harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-1`);
+      await waitForWorkerProtocol(() => expect(operationStarted).toBe(true));
+
+      harness.cleanup();
+      expect(operationSignal).toBeUndefined();
+      operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+      await Promise.resolve();
+      expect(harness.responses).toHaveLength(1);
+    },
+  );
+
+  it.each(SESSION_TOOL_CASES)("routes and frames $name responses", async (testCase) => {
+    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
     await admit(harness);
-    harness.sendRequest(
-      "worker.sessions.spawn",
-      { toolCallId: "call-spawn", task: "run the child" },
-      "spawn-1",
-    );
-    await waitForWorkerProtocol(() =>
-      expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
-    );
+    harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-route`);
 
-    harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" }, "heartbeat-1");
     await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.service.executeSessionTool).toHaveBeenCalledWith(
+      ATTACHED_IDENTITY,
+      testCase.toolName,
+      testCase.request,
+      undefined,
+    );
     expect(harness.responses[1]).toMatchObject({
-      id: "heartbeat-1",
+      id: `${testCase.name}-route`,
       ok: true,
-      payload: { status: "ok" },
+      payload: { resultJson: expect.any(String) },
     });
-
-    operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
-    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(3));
-    expect(harness.responses[2]).toMatchObject({ id: "spawn-1", ok: true });
+    expect(harness.setLastFrameMeta).toHaveBeenLastCalledWith({
+      type: "req",
+      method: testCase.method,
+    });
   });
 
-  it("continues durable session work but suppresses its response after connection cleanup", async () => {
-    let operationStarted = false;
-    let operationSignal: AbortSignal | undefined;
-    const operation = createDeferredCore<WorkerSessionToolResult>();
+  it.each(SESSION_TOOL_CASES)("feature-gates $name independently", async (testCase) => {
+    const requiredFeature =
+      testCase.toolName === "github_publish"
+        ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
+        : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
     const harness = attachHarness({
-      identity: ATTACHED_IDENTITY,
-      onSessionTool: (signal) => {
-        operationStarted = true;
-        operationSignal = signal;
-        return operation.promise;
+      identity: {
+        ...ATTACHED_IDENTITY,
+        protocolFeatures: ATTACHED_IDENTITY.protocolFeatures.filter(
+          (feature) => feature !== requiredFeature,
+        ),
       },
     });
     await admit(harness);
-    harness.sendRequest(
-      "worker.sessions.send",
-      {
-        toolCallId: "call-send",
-        sessionKey: "agent:main:dashboard:child",
-        message: "status",
-      },
-      "send-1",
-    );
-    await waitForWorkerProtocol(() => expect(operationStarted).toBe(true));
+    harness.sendRequest(testCase.method, testCase.request);
 
-    harness.cleanup();
-    expect(operationSignal).toBeUndefined();
-    operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
-    await Promise.resolve();
-    expect(harness.responses).toHaveLength(1);
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
+    );
+    expect(harness.service.executeSessionTool).not.toHaveBeenCalled();
   });
 
   it("dispatches semantic transcript commits on the closed worker allowlist", async () => {

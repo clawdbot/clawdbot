@@ -31,7 +31,7 @@ async function mountLoginGate(page: Page): Promise<void> {
     };
     document.body.dataset.connectCount = "0";
     gate.props = {
-      basePath: "",
+      resourceBasePath: "",
       connected: false,
       lastError: "unauthorized: gateway token required",
       lastErrorCode: null,

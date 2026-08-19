@@ -2,6 +2,7 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { ReactiveElement, render } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -293,6 +294,22 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (currentProgressCard !== undefined) {
       this.lastProgressCard = currentProgressCard;
     }
+    const gateway = this.applicationGateway;
+    const channelAvatarAuth = {
+      authTokens: gateway
+        ? resolveControlUiAuthCandidates({
+            hello: gateway.snapshot.hello,
+            settings: { token: gateway.connection.token },
+            password: gateway.connection.password,
+          })
+        : [],
+      authReady: Boolean(
+        gateway &&
+        (gateway.snapshot.hello ||
+          gateway.connection.token.trim() ||
+          gateway.connection.password.trim()),
+      ),
+    };
     const revision = JSON.stringify({
       progress: this.lastProgressCard?.revision ?? null,
       pullRequests: pullRequests
@@ -300,6 +317,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
         : null,
       row: sidebarRow
         ? {
+            channelAvatarUrl: sidebarRow.channelAvatarUrl,
             label: sidebarRow.label,
             lastMessagePreview: sidebarRow.lastMessagePreview,
             owner: sidebarRow.owner?.actor ?? sidebarRow.createdActor,
@@ -321,6 +339,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     render(
       renderSessionHovercard({
         row: sidebarRow,
+        channelAvatarAuth,
         pullRequests,
         progressCard: this.lastProgressCard,
       }),

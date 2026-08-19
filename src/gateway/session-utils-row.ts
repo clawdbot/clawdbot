@@ -44,10 +44,10 @@ import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import {
-  buildControlUiAvatarUrl,
   buildControlUiChannelAvatarUrl,
-  normalizeControlUiBasePath,
-} from "./control-ui-shared.js";
+  buildControlUiResourcePath,
+} from "./control-ui-contract.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
@@ -105,7 +105,11 @@ export function projectSessionActor(
     const avatar = normalizeOptionalString(identity?.avatar);
     const avatarUrl =
       avatar && looksLikeAvatarPath(avatar)
-        ? buildControlUiAvatarUrl(normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath), id)
+        ? buildControlUiResourcePath(
+            "agentAvatar",
+            normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath),
+            id,
+          )
         : undefined;
     return {
       type: actor.type,

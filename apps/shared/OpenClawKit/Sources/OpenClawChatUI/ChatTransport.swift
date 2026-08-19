@@ -709,7 +709,7 @@ public protocol OpenClawChatTransport: Sendable {
     func gatewayAdvertisesProgressCardStore() async -> Bool?
     func fetchProgressCard(sessionKey: String) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
-    func listModels() async throws -> [OpenClawChatModelChoice]
+    func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
     func isSwarmEnabled(sessionKey: String) async throws -> Bool
     var supportsSlashCommandCatalog: Bool { get }
     func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice]
@@ -1161,7 +1161,7 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.branches.switch not supported by this transport"])
     }
 
-    public func listModels() async throws -> [OpenClawChatModelChoice] {
+    public func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,

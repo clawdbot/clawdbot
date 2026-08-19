@@ -232,7 +232,7 @@ export function renderGroupedMessage(
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     onRequestUpdate?: () => void;
     canvasPluginSurfaceUrl?: string | null;
-    basePath?: string;
+    resourceBasePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
     resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -269,7 +269,7 @@ export function renderGroupedMessage(
   const hasToolCards = toolCards.length > 0;
   const imageRenderOptions = {
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
-    basePath: opts.basePath,
+    resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
     onRequestUpdate: opts.onRequestUpdate,
     onRequestOpenImage: opts.onRequestOpenImage,
@@ -516,14 +516,8 @@ export function renderGroupedMessage(
                       ${renderMessageImages(images, imageRenderOptions)}
                       ${renderAssistantAttachments(
                         visibleAttachments,
-                        opts.localMediaPreviewRoots ?? [],
-                        opts.basePath,
-                        opts.assistantAttachmentAuthToken,
-                        opts.onRequestUpdate,
+                        imageRenderOptions,
                         opts.onAssistantAttachmentLoaded,
-                        opts.onRequestOpenImage,
-                        opts.onOpenImage,
-                        opts.resolveArtifactDownload,
                       )}
                       ${assistantViewContent}
                       ${reasoningMarkdown
@@ -597,14 +591,8 @@ export function renderGroupedMessage(
             ${renderMessageImages(images, imageRenderOptions)}
             ${renderAssistantAttachments(
               visibleAttachments,
-              opts.localMediaPreviewRoots ?? [],
-              opts.basePath,
-              opts.assistantAttachmentAuthToken,
-              opts.onRequestUpdate,
+              imageRenderOptions,
               opts.onAssistantAttachmentLoaded,
-              opts.onRequestOpenImage,
-              opts.onOpenImage,
-              opts.resolveArtifactDownload,
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">

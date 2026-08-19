@@ -231,6 +231,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "github_publish",
+    label: "github_publish",
+    description: "Publish the reconciled session worktree as a draft GitHub pull request",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "agents_wait",
     label: "agents_wait",
     description: AGENTS_WAIT_TOOL_DISPLAY_SUMMARY,
@@ -559,7 +567,10 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 }
 
 /** Lists core tools grouped into UI sections. */
-export function listCoreToolSections(params?: { swarmEnabled?: boolean }): CoreToolSection[] {
+export function listCoreToolSections(params?: {
+  swarmEnabled?: boolean;
+  githubPublicationAvailable?: boolean;
+}): CoreToolSection[] {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
   // would couple this ui-shared module to the server graph.
   const swarmEnabled = params?.swarmEnabled === true;
@@ -567,7 +578,10 @@ export function listCoreToolSections(params?: { swarmEnabled?: boolean }): CoreT
     id: section.id,
     label: section.label,
     tools: CORE_TOOL_DEFINITIONS.filter(
-      (tool) => tool.sectionId === section.id && (tool.id !== "agents_wait" || swarmEnabled),
+      (tool) =>
+        tool.sectionId === section.id &&
+        (tool.id !== "agents_wait" || swarmEnabled) &&
+        (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),
     ).map((tool) => ({
       id: tool.id,
       label: tool.label,

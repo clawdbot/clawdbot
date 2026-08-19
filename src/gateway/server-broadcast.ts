@@ -9,7 +9,10 @@ import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
-import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
+import {
+  GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
+  GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+} from "./events.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -69,6 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "skills.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
+  [GATEWAY_EVENT_DEVICE_PAIR_CHANGED]: [PAIRING_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
   "device.pair.resolved": [PAIRING_SCOPE],
   "device.pair.setup.completed": [PAIRING_SCOPE],

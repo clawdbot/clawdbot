@@ -501,7 +501,7 @@ export async function startQaGatewayChild(params: {
     };
     for (let attempt = 1; attempt <= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS; attempt += 1) {
       if (!reuseStartupLaunchState) {
-        gatewayPortReservation = await reserveQaGatewayPort(() => net.createServer());
+        gatewayPortReservation = await reserveQaGatewayPort(net.createServer());
         gatewayPort = gatewayPortReservation.port;
         baseUrl = `http://127.0.0.1:${gatewayPort}`;
         wsUrl = `ws://127.0.0.1:${gatewayPort}`;

@@ -62,6 +62,7 @@ export type ChatPageHost = ChatHost &
     chatSendingScopeKey: string | null;
     chatMessagesBySession: ChatMessageCache;
     basePath: string;
+    resourceBasePath: string;
     chatAvatarUrl: string | null;
     chatAvatarSource: string | null;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;

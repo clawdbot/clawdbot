@@ -652,6 +652,7 @@ async function dispatchInvoke(
         paramsJSON: frame.paramsJSON,
         gatewayUrl: runtime.gatewayUrl,
         gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+        gatewayCloudflareAccess: runtime.gatewayCloudflareAccess,
         config: runtime.desktopHostConfig,
         signal: runtime.signal,
         emitStatus: runtime.emitProgress,

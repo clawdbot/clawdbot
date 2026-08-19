@@ -21,6 +21,7 @@ describe("GATEWAY_EVENTS", () => {
   it("advertises node topology updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
     expect(GATEWAY_EVENTS).toContain("device.pair.setup.completed");
+    expect(GATEWAY_EVENTS).toContain("device.pair.changed");
     expect(GATEWAY_EVENTS).toContain("node.runnerInventory.changed");
   });
 
@@ -72,7 +73,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-60)).toEqual([
+    expect(listGatewayMethods().slice(-61)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -132,6 +133,7 @@ describe("listGatewayMethods", () => {
       "progressCard.put",
       "tools.github.status",
       "tools.github.configure",
+      "sessions.github.publish",
       "diagnostics.lanes",
     ]);
     const methods = listGatewayMethods();
@@ -238,7 +240,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-67)).toEqual([
+    expect(coreMethods.slice(-68)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -305,6 +307,7 @@ describe("listGatewayMethods", () => {
       "progressCard.put",
       "tools.github.status",
       "tools.github.configure",
+      "sessions.github.publish",
       "diagnostics.lanes",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

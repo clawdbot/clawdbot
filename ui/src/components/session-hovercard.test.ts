@@ -42,17 +42,19 @@ describe("renderSessionHovercard", () => {
   });
 
   afterEach(() => {
+    document.body.replaceChildren();
     vi.useRealTimers();
   });
 
-  it("renders synchronous row metadata without inventing a progress section", () => {
+  it("renders initials and synchronous row metadata without inventing a progress section", () => {
     const container = document.createElement("div");
     render(renderSessionHovercard({ row: row() }), container);
 
     expect(container.querySelector(".session-hovercard__title")?.textContent).toBe(
       "Ship the release",
     );
-    expect(container.querySelector(".session-hovercard__avatar")?.textContent).toBe("AB");
+    expect(container.querySelector("span.session-hovercard__avatar")?.textContent).toBe("AB");
+    expect(container.querySelector("openclaw-channel-avatar")).toBeNull();
     const metadata = container.querySelector(".session-hovercard__meta")?.textContent ?? "";
     expect(metadata).toContain("Alice Baker");
     expect(metadata).toContain("created");
@@ -60,6 +62,57 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-progress-card")).toBeNull();
     expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
     expect(container.querySelector(".session-hovercard__divider")).toBeNull();
+  });
+
+  it("renders the channel avatar with gateway auth instead of an initials span", () => {
+    const container = document.createElement("div");
+    const channelAvatarUrl = "/__openclaw__/channel-avatar/agent%3Amain%3Awork";
+    render(
+      renderSessionHovercard({
+        row: row({ channelAvatarUrl }),
+        channelAvatarAuth: {
+          authTokens: ["device-token", "saved-token"],
+          authReady: true,
+        },
+      }),
+      container,
+    );
+
+    const avatar = container.querySelector<
+      HTMLElement & {
+        routeUrl: string;
+        authTokens: readonly string[];
+        authReady: boolean;
+      }
+    >("openclaw-channel-avatar");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.routeUrl).toBe(channelAvatarUrl);
+    expect(avatar?.authTokens).toEqual(["device-token", "saved-token"]);
+    expect(avatar?.authReady).toBe(true);
+    expect(container.querySelector("span.session-hovercard__avatar")).toBeNull();
+  });
+
+  it("keeps initials visible inside the channel avatar while auth is unavailable", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderSessionHovercard({
+        row: row({ channelAvatarUrl: "/__openclaw__/channel-avatar/pending" }),
+        channelAvatarAuth: { authTokens: [], authReady: false },
+      }),
+      container,
+    );
+
+    await customElements.whenDefined("openclaw-channel-avatar");
+    const avatar = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-channel-avatar",
+    );
+    await avatar?.updateComplete;
+
+    await vi.waitFor(() => {
+      expect(avatar?.querySelector(".session-hovercard__avatar-fallback")?.textContent).toBe("AB");
+    });
+    expect(avatar?.querySelector("img.channel-avatar")).toBeNull();
+    expect(container.querySelector("span.session-hovercard__avatar")).toBeNull();
   });
 
   it("renders bounded linked PR chips with state, CI, and diff facts", () => {

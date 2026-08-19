@@ -26,6 +26,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveAgentDir: (_config: object, agentId: string) =>
     mocks.agentDirs.get(agentId) ?? "/tmp/prepared-model-catalog-agent",
   resolveAgentWorkspaceDir: () => "/tmp/prepared-model-catalog-workspace",
+  resolveAmbientOwnerAgentId: () => "main",
   resolveDefaultAgentDir: () => "/tmp/prepared-model-catalog-agent",
   resolveDefaultAgentId: () => "main",
   tryResolveLegacyCompatibilityAgentId: () => "main",

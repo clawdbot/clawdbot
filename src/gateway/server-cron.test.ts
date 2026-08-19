@@ -29,6 +29,7 @@ const {
   loadConfigMock,
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
+  sendFailureNotificationAnnounceMock,
   runCronIsolatedAgentTurnMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
@@ -50,6 +51,7 @@ const {
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   sendCronAnnouncePayloadStrictMock: vi.fn(async () => {}),
+  sendFailureNotificationAnnounceMock: vi.fn(async () => {}),
   runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
     status: "ok",
     summary: "ok",
@@ -179,6 +181,7 @@ vi.mock("../cron/delivery.js", async () => {
   return {
     ...actual,
     sendCronAnnouncePayloadStrict: sendCronAnnouncePayloadStrictMock,
+    sendFailureNotificationAnnounce: sendFailureNotificationAnnounceMock,
   };
 });
 
@@ -311,6 +314,7 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();
+    sendFailureNotificationAnnounceMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
     runCronChangedMock.mockClear();
     getGlobalHookRunnerMock.mockClear();
@@ -1932,6 +1936,93 @@ describe("buildGatewayCronService", () => {
         }),
       );
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("keeps script failure detail transient while preserving structured error payloads", async () => {
+    const cfg = createCronConfig("server-cron-script-failure-detail");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const rawError =
+      "TOKEN=opaque-secret /private/script.sh https://internal.example.test/run provider-body Error: stack";
+    cronScriptExecutorMock.mockResolvedValueOnce({
+      kind: "error",
+      code: "internal_error",
+      error: rawError,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(null, { status: 204 }),
+      finalUrl: "https://example.invalid/cron",
+      release: vi.fn(async () => {}),
+    });
+    const broadcast = vi.fn();
+    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast });
+
+    try {
+      const job = await state.cron.add({
+        name: "script failure detail",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "script", script: "return invalid" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/cron-finished",
+          },
+          failureDestination: { mode: "announce", channel: "telegram", to: "456" },
+        },
+      });
+      broadcast.mockClear();
+      runCronChangedMock.mockClear();
+
+      await state.cron.run(job.id, "force");
+      await vi.waitFor(() => expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce());
+
+      const announce = requireRecord(
+        callArg(sendFailureNotificationAnnounceMock, 0, 5, "script failure announce"),
+        "script failure announce",
+      );
+      expect(announce.text).toContain(
+        '⚠️ Automation "script failure detail" failed\nCause: automation script failed internally',
+      );
+      expect(announce.text).not.toContain(rawError);
+
+      const broadcastEvent = broadcast.mock.calls
+        .filter(([name]) => name === "cron")
+        .map(([, event]) => requireRecord(event, "cron broadcast event"))
+        .find((event) => event.action === "finished" && event.jobId === job.id);
+      expect(broadcastEvent).not.toHaveProperty("failureNotificationDetail");
+      expect(JSON.stringify(broadcastEvent)).not.toContain("failureNotificationDetail");
+
+      const hookEvent = runCronChangedMock.mock.calls
+        .map((_, index) =>
+          requireRecord(
+            callArg(runCronChangedMock, index, 0, "cron_changed event"),
+            "cron_changed event",
+          ),
+        )
+        .find((event) => event.action === "finished" && event.jobId === job.id);
+      expect(hookEvent).not.toHaveProperty("failureNotificationDetail");
+      expect(JSON.stringify(hookEvent)).not.toContain("failureNotificationDetail");
+
+      const webhookRequest = requireRecord(
+        callArg(fetchWithSsrFGuardMock, 0, 0, "script failure webhook request"),
+        "script failure webhook request",
+      );
+      const webhookBody = JSON.parse(
+        String(requireRecord(webhookRequest.init, "script failure webhook init").body),
+      ) as Record<string, unknown>;
+      expect(webhookBody.error).toContain(rawError);
+      expect(webhookBody).not.toHaveProperty("failureNotificationDetail");
     } finally {
       state.cron.stop();
     }

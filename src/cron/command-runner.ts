@@ -129,9 +129,18 @@ export async function runCronCommandJob(params: {
           signal: result.signal,
           termination: result.termination,
         });
+    const failureNotificationDetail =
+      result.termination === "timeout"
+        ? ({ kind: "command-timeout", mode: "wall-clock" } as const)
+        : result.termination === "no-output-timeout"
+          ? ({ kind: "command-timeout", mode: "no-output" } as const)
+          : result.termination === "exit" && typeof result.code === "number" && result.code !== 0
+            ? ({ kind: "command-exit", exitCode: result.code } as const)
+            : undefined;
     return {
       status,
       ...(error ? { error } : {}),
+      ...(failureNotificationDetail ? { failureNotificationDetail } : {}),
       ...(summary ? { summary } : {}),
       diagnostics: buildDiagnostics({
         command,

@@ -471,6 +471,70 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+  it.each([
+    {
+      name: "blocked plus skipped without a pass",
+      statuses: ["blocked", "skipped"] as const,
+      allowBlockedEvidence: true,
+      expectedStatus: "blocked",
+    },
+    {
+      name: "all skipped",
+      statuses: ["skipped"] as const,
+      allowBlockedEvidence: false,
+      expectedStatus: "skipped",
+    },
+    {
+      name: "pass plus skipped",
+      statuses: ["pass", "skipped"] as const,
+      allowBlockedEvidence: false,
+      expectedStatus: "skipped",
+    },
+    {
+      name: "allowed blocked plus pass plus skipped",
+      statuses: ["blocked", "pass", "skipped"] as const,
+      allowBlockedEvidence: true,
+      expectedStatus: "skipped",
+    },
+  ])(
+    "keeps $name producer precedence",
+    async ({ statuses, allowBlockedEvidence, expectedStatus }) => {
+      const repoRoot = await makeTempRepo("qa-script-producer-skipped-");
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-skipped");
+      const [firstStatus, ...additionalStatuses] = statuses;
+      const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+      if (scenario.execution.kind !== "script") {
+        throw new Error("expected script scenario");
+      }
+      scenario.execution.allowBlockedEvidence = allowBlockedEvidence;
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        ...QA_TEST_RUNNER_DEFAULTS,
+        scenarios: [scenario],
+        runCommand: async () => {
+          await writeScriptProducerEvidence({
+            additionalEntries: additionalStatuses.flatMap(
+              (status, index) =>
+                buildScriptProducerEvidence({
+                  producerId: `script-producer.web-ui.additional-${index}`,
+                  status,
+                }).entries,
+            ),
+            outputDir,
+            status: firstStatus,
+          });
+          return { exitCode: 0, stdout: "script completed\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({ status: expectedStatus });
+      expect(
+        result.results[0]?.producerEvidence?.entries.map((entry) => entry.result.status),
+      ).toEqual(statuses);
+    },
+  );
+
   it("carries the suite profile into merged producer evidence", async () => {
     const repoRoot = await makeTempRepo("qa-script-profile-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-profile");

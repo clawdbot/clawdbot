@@ -292,6 +292,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           spawnWorkspaceDir,
           config: toolSearchRuntimeConfig,
           webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
+          githubPublicationAvailable: attempt.githubPublicationAvailable,
           abortSignal: params.runAbortController.signal,
           modelProvider: attempt.provider,
           modelId: attempt.modelId,

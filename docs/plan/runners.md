@@ -390,9 +390,9 @@ speak. Additions:
   …", and the legacy/unclean-exit fallback "Last seen …". Connected rows stay
   silent. This adds no config, event, or SQLite schema-version surface.
 - **Offline host identity is producer-owned.** After accepting the current
-  generation's current v5 runner inventory, the paired-node transaction
+  generation's current v6 runner inventory, the paired-node transaction
   records its exact `workerHost.enabled` consent. An explicit disabled or
-  empty current publication records false; legacy v1-v4 and update-required
+  empty current publication records false; legacy v1-v5 and update-required
   dialects never overwrite the last current fact. Live inventory remains
   authoritative while connected. Offline catalog rows use the stored boolean,
   missing means false, and exact worker slots are never persisted. This adds

@@ -10,6 +10,7 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -248,6 +249,133 @@ describe("canonical session message recovery", () => {
       { role: "assistant", text: "Before steer." },
       { role: "user", text: "Steer prompt" },
       { role: "assistant", text: "After steer. Final unseen suffix." },
+    ]);
+  });
+
+  it.each([
+    { name: "the persisted reply lands after the terminal event", persistedFirst: false },
+    { name: "the persisted reply lands before the terminal event", persistedFirst: true },
+  ])("renders one assistant reply when $name", async ({ persistedFirst }) => {
+    const activeRunId = "active-run";
+    const replyText = "Here is the answer.";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Original prompt" }],
+      __openclaw: { id: "original-user", idempotencyKey: `${activeRunId}:user`, seq: 1 },
+    };
+    const persistedReply = {
+      role: "assistant",
+      content: [{ type: "text", text: replyText }],
+      __openclaw: { id: "persisted-reply", seq: 2 },
+    };
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatRunId: activeRunId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      client: {
+        request: vi.fn().mockResolvedValue({
+          messages: [prompt, persistedReply],
+          sessionId: "selected-session",
+          sessionInfo: {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            activeRunIds: [],
+            status: "done",
+          },
+        }),
+      } as unknown as GatewayBrowserClient,
+    });
+    // The Gateway persists the reply and ends the run on independent lanes, so
+    // the pane must reconcile the durable row with its own terminal projection
+    // in either arrival order.
+    const persistedEvent = {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        hasActiveRun: false,
+        messageId: "persisted-reply",
+        messageSeq: 2,
+        message: persistedReply,
+      },
+    } satisfies Parameters<typeof handlePageGatewayEvent>[1];
+    const terminalEvent = {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: activeRunId,
+        state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: replyText }] },
+      },
+    } satisfies Parameters<typeof handlePageGatewayEvent>[1];
+
+    for (const event of persistedFirst
+      ? [persistedEvent, terminalEvent]
+      : [terminalEvent, persistedEvent]) {
+      handlePageGatewayEvent(state, event);
+    }
+    await loadChatHistory(state as unknown as Parameters<typeof loadChatHistory>[0]);
+
+    // Rendering collapses consecutive identical messages behind a count badge,
+    // so the transcript itself has to hold exactly one copy of the reply.
+    expect(state.chatMessages.filter((message) => extractText(message) === replyText)).toEqual([
+      persistedReply,
+    ]);
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Original prompt" },
+      { role: "assistant", text: replyText },
+    ]);
+  });
+
+  it("never lets a delayed older assistant row displace a newer run's reply", () => {
+    const olderReply = {
+      role: "assistant",
+      content: [{ type: "text", text: "Answer from the older run." }],
+      __openclaw: { id: "older-reply", seq: 2 },
+    };
+    const { state } = createSessionEventState({
+      chatMessages: [],
+      chatRunId: "newer-run",
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: "newer-run",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Answer from the newer run." }],
+        },
+      },
+    });
+    expect(state.chatRunId).toBeNull();
+
+    // The terminal tombstone outlives its run, so a late row carrying some
+    // other reply must not borrow that run's ownership and replace it.
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        hasActiveRun: false,
+        messageId: "older-reply",
+        messageSeq: 2,
+        message: olderReply,
+      },
+    });
+
+    expect(state.chatMessages.map((message) => extractText(message))).toEqual([
+      "Answer from the newer run.",
     ]);
   });
 

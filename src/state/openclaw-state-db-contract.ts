@@ -42,6 +42,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "user_preferences",
   "device_pair_setup_completions",
   "gateway_origin_device_tokens",
+  "github_publication_requests",
   "device_pairing_join_codes",
   "sidebar_sections",
   "skill_workshop_proposal_events",
@@ -56,6 +57,7 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,
   "idx_cron_run_receipts_active_job",
   "idx_cron_run_receipts_job_history",
+  "idx_github_publication_requests_pending",
   "idx_skill_workshop_collection_reviews_workspace_time",
   "secret_store_entries_live_idx",
 ] as const;

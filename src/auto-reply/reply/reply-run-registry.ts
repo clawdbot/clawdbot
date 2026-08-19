@@ -36,6 +36,7 @@ export {
   isReplyRunAbortableForCompaction,
   isReplyRunActiveForSessionId,
   isReplyRunEvidenceStaleBySessionId,
+  interruptReplyRunTarget,
   listActiveReplyRunSessionIds,
   listActiveReplyRunSessionKeys,
   markReplyOperationGlobalLaneWaitProgress,

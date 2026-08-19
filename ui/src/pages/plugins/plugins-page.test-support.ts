@@ -255,6 +255,7 @@ export function createContext(
   return {
     gateway,
     basePath: "",
+    resourceBasePath: "",
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
     replace: vi.fn(),

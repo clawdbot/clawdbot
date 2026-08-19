@@ -8,9 +8,12 @@ import {
   listAgentIds,
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
+  resolveAmbientOwnerAgentId,
+  resolveDefaultAgentDir,
   resolveDefaultAgentId,
   resolveSoleAgentId,
   resolveSystemAgentTargetAgentId,
+  tryResolveAmbientOwnerAgentId,
   tryResolveDefaultAgentId,
   tryResolveSoleAgentId,
   tryResolveSystemAgentTargetAgentId,
@@ -89,6 +92,35 @@ describe("agent roster resolution", () => {
         agents: { entries: { main: { default: true }, ops: {} } },
       }),
     ).toThrow("Set agents.defaults.systemAgent.agentId");
+  });
+
+  it("resolves ambient owners through the system-agent chain", () => {
+    const systemOwnedFleet = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: { agentDir: "/tmp/openclaw-ops-agent" }, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(tryResolveAmbientOwnerAgentId(systemOwnedFleet)).toBe("ops");
+    expect(resolveAmbientOwnerAgentId(systemOwnedFleet)).toBe("ops");
+    // Ambient dir resolution is the shared producer behind auth, model, and
+    // doctor surfaces; before the system-agent leg it threw for these rosters.
+    expect(resolveDefaultAgentDir(systemOwnedFleet)).toBe("/tmp/openclaw-ops-agent");
+
+    const ownerlessFleet = {
+      agents: { ownership: "explicit" as const, entries: { ops: {}, research: {} } },
+    } satisfies OpenClawConfig;
+
+    expect(tryResolveAmbientOwnerAgentId(ownerlessFleet)).toBeUndefined();
+    expect(() => resolveAmbientOwnerAgentId(ownerlessFleet)).toThrow(AgentSelectionRequiredError);
+    expect(() =>
+      resolveAmbientOwnerAgentId(ownerlessFleet, {
+        surface: "Talk relay ownership",
+        hint: "Set talk.agentId.",
+      }),
+    ).toThrow("Talk relay ownership");
   });
 
   it("resolves defaults only for the rosterless implicit main agent", () => {

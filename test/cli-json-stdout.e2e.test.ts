@@ -295,6 +295,30 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it("returns one canonical document when docs search fails", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
+        )}`;
+        const result = runBuiltCli(tempHome, ["docs", "offline", "--json"], {
+          NODE_OPTIONS: `--import=${preload}`,
+        });
+
+        expect(result.status).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: "Docs search failed: offline fixture",
+          },
+        });
+        expect(result.stderr).toContain("Docs search failed: offline fixture");
+      },
+      { prefix: "openclaw-docs-json-failure-e2e-" },
+    );
+  });
+
   it("keeps Commander parse failures machine-readable in JSON mode", async () => {
     await withTempHome(
       async (tempHome) => {
@@ -506,7 +530,7 @@ describe("cli json stdout contract", () => {
         const memoryCoreDir = path.join(bundledPluginsDir, "memory-core");
         await fs.mkdir(memoryCoreDir, { recursive: true });
         await fs.writeFile(
-          path.join(memoryCoreDir, "api.js"),
+          path.join(memoryCoreDir, "doctor-health-api.js"),
           [
             "export function registerMemoryCoreDoctorChecks(host) {",
             "  host.registerHealthCheck({",

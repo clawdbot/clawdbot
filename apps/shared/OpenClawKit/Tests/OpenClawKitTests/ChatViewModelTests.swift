@@ -699,6 +699,7 @@ private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
     var modelsCallCount: Int = 0
+    var modelAgentIDs: [String?] = []
     var commandsCallCount: Int = 0
     var healthCallCount: Int = 0
     var activeSessionKeys: [String] = []
@@ -1000,8 +1001,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         }
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
-        let idx = await state.nextModelsCallIndex()
+    func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice] {
+        let idx = await state.recordModelsCall(agentID: agentID)
         if idx < self.modelResponses.count {
             return self.modelResponses[idx]
         }
@@ -1201,6 +1202,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.commandSessionKeys
     }
 
+    func modelAgentIDs() async -> [String?] {
+        await self.state.modelAgentIDs
+    }
+
     func lastSentSessionKey() async -> String? {
         let keys = await state.sentSessionKeys
         return keys.last
@@ -1304,7 +1309,8 @@ extension TestChatTransportState {
         return self.nextSessionsCallIndex()
     }
 
-    fileprivate func nextModelsCallIndex() -> Int {
+    fileprivate func recordModelsCall(agentID: String?) -> Int {
+        self.modelAgentIDs.append(agentID)
         defer { self.modelsCallCount += 1 }
         return self.modelsCallCount
     }
@@ -7428,6 +7434,25 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.showsModelPicker })
         #expect(await MainActor.run { vm.modelSelectionID } == "anthropic/claude-opus-4-6")
         #expect(await MainActor.run { vm.defaultModelLabel } == "Default: openai/gpt-4.1-mini")
+    }
+
+    @Test func `model catalog requests follow the selected session agent`() async throws {
+        let (workerTransport, workerViewModel) = await makeViewModel(
+            sessionKey: "agent:worker:main",
+            historyResponses: [historyPayload(sessionKey: "agent:worker:main")],
+            sessionsResponses: [sessionsResponse(
+                sessionEntry(key: "agent:worker:main", updatedAt: 1))],
+            modelResponses: [[]])
+        try await loadAndWaitBootstrap(vm: workerViewModel)
+
+        let (defaultTransport, defaultViewModel) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(key: "main", updatedAt: 1))],
+            modelResponses: [[]])
+        try await loadAndWaitBootstrap(vm: defaultViewModel)
+
+        #expect(await workerTransport.modelAgentIDs() == ["worker"])
+        #expect(await defaultTransport.modelAgentIDs() == [nil])
     }
 
     @Test func `selecting default model patches nil and updates selection`() async throws {

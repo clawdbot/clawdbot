@@ -339,7 +339,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
         break;
 
       case "call.speech":
-        if (event.isFinal) {
+        if (event.isFinal && event.transcript.trim()) {
           const waiter = ctx.transcriptWaiters.get(activeCall.callId);
           if (waiter?.turnToken && waiter.turnToken !== event.turnToken) {
             log.warn(`Ignoring speech event with mismatched turn token for ${activeCall.callId}`);

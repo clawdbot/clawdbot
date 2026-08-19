@@ -60,6 +60,8 @@ const state = vi.hoisted(() => ({
   createAcpVisibleTextAccumulatorMock: vi.fn(),
   emitAcpLifecycleEndMock: vi.fn(),
   emitAcpLifecycleErrorMock: vi.fn(),
+  emitAcpRuntimeEventMock: vi.fn(),
+  gatewayCallMock: vi.fn(),
   persistCliTurnTranscriptMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
   appendExactAssistantMessageMock: vi.fn(),
@@ -180,7 +182,7 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   emitAcpLifecycleError: (...args: unknown[]) => state.emitAcpLifecycleErrorMock(...args),
   emitAcpLifecycleStart: vi.fn(),
   emitAcpPromptSubmitted: vi.fn(),
-  emitAcpRuntimeEvent: vi.fn(),
+  emitAcpRuntimeEvent: (...args: unknown[]) => state.emitAcpRuntimeEventMock(...args),
   persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
   persistSessionEntry: vi.fn(),
@@ -323,6 +325,10 @@ vi.mock("../acp/policy.js", () => ({
 
 vi.mock("../acp/runtime/errors.js", () => ({
   toAcpRuntimeError: ({ error }: { error: unknown }) => toStringifiedError(error),
+}));
+
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: (...args: unknown[]) => state.gatewayCallMock(...args),
 }));
 
 vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({
@@ -4843,6 +4849,98 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.resolveAcpExplicitTurnPolicyErrorMock).toHaveBeenCalledTimes(1);
     expect(state.resolveAcpDispatchPolicyErrorMock).not.toHaveBeenCalled();
     expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps manual ACP elicitation owned by the child turn without channel delivery", async () => {
+    setupAcpSession();
+    const childSessionKey = "agent:codex:acp:child";
+    state.resolvedSessionKeyMock = childSessionKey;
+    let answerQuestion: ((value: unknown) => void) | undefined;
+    let questionRequest:
+      | { id: string; questions: Array<{ questionId: string }>; sessionKey?: string }
+      | undefined;
+    state.gatewayCallMock.mockImplementation(
+      async (method: string, _opts: unknown, rawParams: unknown) => {
+        const params = rawParams as { id: string; questions: Array<{ questionId: string }> };
+        if (method === "question.request") {
+          questionRequest = params;
+          return { id: params.id };
+        }
+        if (method === "question.waitAnswer") {
+          return await new Promise((resolve) => {
+            answerQuestion = resolve;
+          });
+        }
+        if (method === "question.resolve") {
+          return { status: "cancelled" };
+        }
+        throw new Error(`unexpected Gateway question method: ${method}`);
+      },
+    );
+    state.acpRunTurnMock.mockImplementationOnce(async (rawTurn: unknown) => {
+      const turn = rawTurn as {
+        onElicitation?: (
+          request: Record<string, unknown>,
+          context: { requestId: string; signal: AbortSignal },
+        ) => Promise<{ action: string; content?: Record<string, unknown> }>;
+        onEvent?: (event: unknown) => void;
+      };
+      expect(turn.onElicitation).toBeTypeOf("function");
+      const response = turn.onElicitation!(
+        {
+          mode: "form",
+          sessionId: "acp-session",
+          message: "Choose a flavor",
+          requestedSchema: {
+            type: "object",
+            properties: {
+              flavor: { type: "string", enum: ["Vanilla", "Chocolate"] },
+            },
+            required: ["flavor"],
+          },
+        },
+        { requestId: "elicitation-1", signal: new AbortController().signal },
+      );
+      await vi.waitFor(() =>
+        expect(state.emitAcpRuntimeEventMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: childSessionKey,
+            event: expect.objectContaining({
+              type: "status",
+              text: expect.stringContaining("flavor"),
+            }),
+          }),
+        ),
+      );
+      const questionId = expectDefined(
+        questionRequest?.questions[0]?.questionId,
+        "manual ACP question id",
+      );
+      answerQuestion?.({
+        status: "answered",
+        answers: { answers: { [questionId]: ["Vanilla"] } },
+      });
+      const resolved = await response;
+      expect(resolved).toEqual({ action: "accept", content: { flavor: "Vanilla" } });
+      turn.onEvent?.({ type: "text_delta", stream: "output", text: "FLAVOR:Vanilla" });
+      turn.onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
+
+    await agentCommand({
+      message: "bootstrap ACP child",
+      sessionKey: childSessionKey,
+      acpTurnSource: "manual_spawn",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:parent",
+        sourceTool: "sessions_spawn",
+      },
+    });
+
+    expect(questionRequest).toMatchObject({ sessionKey: childSessionKey });
+    expect(state.buildAcpResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payloadText: "FLAVOR:Vanilla" }),
+    );
   });
 
   it("keeps ordinary ACP turns blocked when ACP dispatch is disabled", async () => {

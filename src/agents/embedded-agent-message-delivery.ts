@@ -298,6 +298,37 @@ export function attachEmbeddedMessageDeliveryFact(
   return { ...result, details: { ...details, messageDelivery: fact } };
 }
 
+export function isDeliveredCoreCurrentChannelWidgetResult(params: {
+  coreBuiltinToolNames?: ReadonlySet<string>;
+  sourceReplyDeliveryMode?: string;
+  toolName: string;
+  result: unknown;
+  isToolError: boolean;
+}): boolean {
+  if (
+    params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    params.toolName !== "show_widget" ||
+    params.isToolError ||
+    params.coreBuiltinToolNames?.has("show_widget") !== true
+  ) {
+    return false;
+  }
+  const details = asOptionalRecord(params.result)?.details;
+  const presentation = asOptionalRecord(asOptionalRecord(details)?.presentation);
+  const receipt = asOptionalRecord(presentation?.receipt);
+  if (asOptionalRecord(details)?.kind !== "widget" || presentation?.target !== "current_channel") {
+    return false;
+  }
+  const receiptIds = [
+    receipt?.primaryPlatformMessageId,
+    ...(Array.isArray(receipt?.platformMessageIds) ? receipt.platformMessageIds : []),
+    ...(Array.isArray(receipt?.parts)
+      ? receipt.parts.map((part) => asOptionalRecord(part)?.platformMessageId)
+      : []),
+  ];
+  return receiptIds.some((id) => hasNonEmptyString(id));
+}
+
 export function readEmbeddedMessageDeliveryFact(
   value: unknown,
 ): EmbeddedMessageDeliveryFact | undefined {

@@ -8,11 +8,7 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
-import {
-  failureNotificationDeliveryFromJobState,
-  maybeEmitFailureAlert,
-  resolveFailureAlert,
-} from "./failure-alerts.js";
+import { maybeEmitFailureAlert, resolveFailureAlert } from "./failure-alerts.js";
 import {
   computeJobNextRunAtMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
@@ -20,14 +16,15 @@ import {
   isJobEnabled,
   recordScheduleComputeError,
 } from "./jobs-scheduling.js";
-import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
-import { tryFinishCronTaskRun, tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
   type CronJobRunResult,
   type CronTriggerEvalOutcome,
   MIN_REFIRE_GAP_MS,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
+import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
 import {
   applyTriggerEvaluationState,
   applyTriggerRunResult,
@@ -158,6 +155,7 @@ export function applyJobResult(
       status: "error",
       error: result.error,
       errorReason: job.state.lastErrorReason,
+      failureNotificationDetail: result.failureNotificationDetail,
       runAtMs: result.startedAt,
       consecutiveCount: job.state.consecutiveErrors,
       ...(opts?.replayFailureAlertAtMs !== undefined
@@ -731,55 +729,4 @@ function emitCronOutcomeForJob(
   }
   recordCronOutcomeForJob(state, job, result);
   emitCronOutcomeEventForJob(state, job, result);
-}
-
-function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: number) {
-  return {
-    jobId: job.id,
-    action: "finished",
-    job,
-    status: result.status,
-    completionStatus: result.completionStatus,
-    error: result.error,
-    summary: result.summary,
-    diagnostics: result.diagnostics,
-    delivered: job.state.lastDelivered,
-    deliveryStatus: job.state.lastDeliveryStatus,
-    deliveryError: job.state.lastDeliveryError,
-    failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-    delivery: result.delivery,
-    sessionId: result.sessionId,
-    sessionKey: result.sessionKey,
-    runAtMs,
-    durationMs: job.state.lastDurationMs,
-    nextRunAtMs: job.state.nextRunAtMs,
-    ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
-    model: result.model,
-    provider: result.provider,
-    usage: result.usage,
-  } as const;
-}
-
-export function recordCronOutcomeForJob(
-  state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-): void {
-  const event = cronOutcomeEvent(job, result, result.startedAt);
-  tryFinishCronTaskRun(state, {
-    taskRunId: result.taskRunId,
-    job,
-    event,
-    errorClassification: result.errorClassification,
-    ...(result.scriptStateChanged === true ? { scriptResult: result } : {}),
-    ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
-  });
-}
-
-export function emitCronOutcomeEventForJob(
-  state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-): void {
-  emit(state, cronOutcomeEvent(job, result, result.startedAt));
 }

@@ -747,6 +747,7 @@ describe("modelsStatusCommand auth overview", () => {
         readOnly: true,
       }),
     );
+    expect(mocks.loadModelCatalog.mock.calls.at(-1)?.[0]).not.toHaveProperty("agentId");
 
     expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
@@ -989,6 +990,51 @@ describe("modelsStatusCommand auth overview", () => {
         });
       },
     );
+  });
+
+  it("uses system-agent storage without changing unscoped model output", async () => {
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+          systemAgent: { agentId: "jeremiah" },
+        },
+        entries: { main: {}, jeremiah: {} },
+      },
+      models: { providers: {} },
+    });
+    mocks.resolveAgentExplicitModelPrimary.mockClear();
+    mocks.resolveAgentModelFallbacksOverride.mockClear();
+    mocks.loadModelCatalog.mockClear();
+
+    try {
+      await withAgentScopeOverrides(
+        {
+          primary: "openai/gpt-5.6-luna",
+          fallbacks: ["openai/gpt-5.6-sol"],
+        },
+        async () => {
+          const localRuntime = createRuntime();
+          await modelsStatusCommand({ json: true }, localRuntime as never);
+
+          expectResolveAgentDirCalledFor("jeremiah");
+          expect(mocks.resolveAgentExplicitModelPrimary).not.toHaveBeenCalled();
+          expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+            expect.objectContaining({ agentId: "jeremiah", readOnly: true }),
+          );
+          expect(parseFirstJsonLog(localRuntime)).toMatchObject({
+            defaultModel: "anthropic/claude-opus-4-6",
+            fallbacks: [],
+          });
+        },
+      );
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
   });
 
   it("rejects API-key auth for subscription-only Codex Spark", async () => {

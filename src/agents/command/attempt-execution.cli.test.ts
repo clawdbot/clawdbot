@@ -2964,6 +2964,40 @@ describe("CLI attempt execution", () => {
     expect(embeddedArg.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
+  it.each([
+    {
+      name: "subagent lane",
+      lane: "subagent" as const,
+      sessionKey: "agent:main:subagent:cli-empty-completion",
+      expected: true,
+    },
+    {
+      name: "ordinary lane",
+      lane: undefined,
+      sessionKey: "agent:main:direct:cli-empty-completion",
+      expected: false,
+    },
+  ])("allows empty CLI output only for $name runs", async ({ lane, sessionKey, expected }) => {
+    const sessionEntry = makeSessionEntry(`session-${lane ?? "ordinary"}`);
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli completion"));
+
+    await runStoredAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      sessionEntry,
+      sessionKey,
+      body: "complete the task",
+      runId: `run-${lane ?? "ordinary"}-cli-empty-completion`,
+      opts: lane ? { lane } : {},
+      sessionStore,
+    });
+
+    expect(firstRunCliAgentArg().allowEmptyAssistantReplyAsSilent).toBe(expected);
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("forwards exact cron creator authority into embedded execution", async () => {
     const runId = "embedded-cron-creator-authority";
     const capability = createCronCreatorAuthorityCapability(runId);

@@ -6,6 +6,7 @@ const hoisted = vi.hoisted(() => ({
   getActivePluginRegistry: vi.fn(),
   loadPluginRegistryHandle: vi.fn(),
   adoptRuntimeContextEngineRegistrations: vi.fn((target: unknown) => target),
+  adoptRuntimeWidgetPresenterRegistrations: vi.fn((target: unknown) => target),
   resolveAgentRuntimePluginLoadPlan: vi.fn(),
   resolveAgentRuntimePluginSelections: vi.fn(
     (_config: unknown, selections: readonly unknown[]) => selections,
@@ -18,6 +19,10 @@ vi.mock("../context-engine/registry.js", () => ({
 
 vi.mock("../plugins/runtime.js", () => ({
   getActivePluginRegistry: hoisted.getActivePluginRegistry,
+}));
+
+vi.mock("../plugins/widget-presenters.js", () => ({
+  adoptRuntimeWidgetPresenterRegistrations: hoisted.adoptRuntimeWidgetPresenterRegistrations,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
@@ -68,6 +73,9 @@ describe("agent runtime plugin registries", () => {
     hoisted.adoptRuntimeContextEngineRegistrations
       .mockReset()
       .mockImplementation((target) => target);
+    hoisted.adoptRuntimeWidgetPresenterRegistrations
+      .mockReset()
+      .mockImplementation((target) => target);
     hoisted.resolveAgentRuntimePluginLoadPlan.mockReset().mockImplementation(({ config }) => ({
       config,
       pluginIds: ["codex", "memory-core"],
@@ -77,17 +85,23 @@ describe("agent runtime plugin registries", () => {
       .mockImplementation((_config, selections) => selections);
   });
 
-  it("adopts runtime context engines from the active composition-root registry", () => {
+  it("adopts full-only runtime capabilities from the active composition-root registry", () => {
     const activeRegistry = { active: true };
-    const adopted = { handle: "adopted" };
+    const contextEnginesAdopted = { handle: "context-engines" };
+    const presentersAdopted = { handle: "presenters" };
     hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
-    hoisted.adoptRuntimeContextEngineRegistrations.mockReturnValue(adopted);
+    hoisted.adoptRuntimeContextEngineRegistrations.mockReturnValue(contextEnginesAdopted);
+    hoisted.adoptRuntimeWidgetPresenterRegistrations.mockReturnValue(presentersAdopted);
 
     expect(
       loadAgentRuntimePluginRegistryHandle({ config: {} as never, workspaceDir: "/tmp/workspace" }),
-    ).toBe(adopted);
+    ).toBe(presentersAdopted);
     expect(hoisted.adoptRuntimeContextEngineRegistrations).toHaveBeenCalledWith(
       { handle: true },
+      activeRegistry,
+    );
+    expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).toHaveBeenCalledWith(
+      contextEnginesAdopted,
       activeRegistry,
     );
   });

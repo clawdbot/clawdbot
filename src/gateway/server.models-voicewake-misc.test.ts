@@ -94,6 +94,7 @@ type ModelCatalogRpcEntry = {
   input?: string[];
   reasoning?: boolean;
   supportsTools?: boolean;
+  tags?: string[];
   agentRuntime?: GatewayAgentRuntime;
 };
 
@@ -126,7 +127,7 @@ const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
   },
 ];
 
-const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
+const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] => [
   {
     id: "claude-test-a",
     name: "A-Model",
@@ -165,6 +166,7 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
       source: "implicit",
     },
     available: false,
+    ...(gptTestZTags ? { tags: gptTestZTags } : {}),
   },
 ];
 
@@ -251,6 +253,7 @@ const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture)
   provider: params.provider,
   contextWindow: params.contextWindow,
   ...(params.supportsTools === undefined ? {} : { supportsTools: params.supportsTools }),
+  tags: ["default", "configured"],
 });
 
 describe("gateway server models + voicewake", () => {
@@ -406,6 +409,9 @@ describe("gateway server models + voicewake", () => {
     }
     if (expected.supportsTools !== undefined) {
       expect(models[0]?.supportsTools).toBe(expected.supportsTools);
+    }
+    if (expected.tags !== undefined) {
+      expect(models[0]?.tags).toEqual(expected.tags);
     }
   };
 
@@ -792,6 +798,7 @@ describe("gateway server models + voicewake", () => {
               source: "implicit",
             },
             available: false,
+            tags: ["default", "configured"],
           },
         ]);
       },
@@ -816,7 +823,7 @@ describe("gateway server models + voicewake", () => {
         await seedAgentModelCatalog();
         const res = await listModels({ view: "all", preparedOnly: true });
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(expectedSortedCatalog());
+        expect(res.payload?.models).toEqual(expectedSortedCatalog(["default", "configured"]));
       },
     );
   });
@@ -835,6 +842,7 @@ describe("gateway server models + voicewake", () => {
           provider: "anthropic",
           available: false,
           contextWindow: 200_000,
+          tags: ["configured"],
         },
         {
           id: "gpt-test-z",
@@ -847,6 +855,7 @@ describe("gateway server models + voicewake", () => {
             source: "implicit",
           },
           available: false,
+          tags: ["default", "configured"],
         },
       ],
     });
@@ -870,6 +879,7 @@ describe("gateway server models + voicewake", () => {
             source: "implicit",
           },
           available: false,
+          tags: ["default", "configured"],
         },
       ],
     });

@@ -99,4 +99,44 @@ describe("turn model selection harness-path differential", () => {
   it.each(TURN_MODEL_DIFFERENTIAL_FIXTURES)("pins observed $name behavior", (fixture) => {
     expect(observeHarnessSelection(fixture)).toEqual(fixture.expected.harness);
   });
+
+  it("resolves turn aliases in the session agent scope", () => {
+    const sessionKey = "agent:worker:telegram:group:selection";
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/global-model",
+          models: {
+            "openai/global-model": { alias: "fast" },
+          },
+        },
+        entries: {
+          worker: {
+            models: {
+              "anthropic/worker-model": { alias: "fast" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    selectAgentHarnessMock.mockClear();
+    resolveVisibleRepliesPolicy({
+      cfg,
+      chatType: "direct",
+      ctx: buildTestCtx({ SessionKey: sessionKey }),
+      entry: { sessionId: "worker-session", updatedAt: Date.now() },
+      sessionAgentId: "worker",
+      sessionKey,
+      turnModelOverride: "fast",
+    });
+
+    expect(selectAgentHarnessMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        modelId: "worker-model",
+        agentId: "worker",
+      }),
+    );
+  });
 });

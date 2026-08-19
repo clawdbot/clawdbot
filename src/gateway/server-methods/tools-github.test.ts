@@ -95,10 +95,14 @@ describe("tools.github handlers", () => {
 
   it("consumes a setup handoff, rotates config, and returns fresh status", async () => {
     secrets.consumeHandoff.mockReturnValue("temporary-test-token");
-    github.install.mockImplementation(async (params: { commitConfig: () => Promise<void> }) => {
-      await params.commitConfig();
-      return status.account;
-    });
+    github.install.mockImplementation(
+      async (params: {
+        commitConfig: (account: { accountId: number; login: string }) => Promise<void>;
+      }) => {
+        await params.commitConfig({ accountId: 100, login: "managed-user" });
+        return status.account;
+      },
+    );
 
     const respond = await invoke("tools.github.configure", {
       scope: "agent",
@@ -120,6 +124,38 @@ describe("tools.github handlers", () => {
     expect(github.status).toHaveBeenLastCalledWith({ config: { next: true }, agentId: "main" });
     expect(respond).toHaveBeenCalledWith(true, status);
     expect(JSON.stringify(respond.mock.calls)).not.toContain("temporary-test-token");
+  });
+
+  it("defaults managed commit authorship to the verified GitHub user", async () => {
+    secrets.consumeHandoff.mockReturnValue("temporary-test-token");
+    github.install.mockImplementation(
+      async (params: {
+        commitConfig: (account: { accountId: number; login: string }) => Promise<void>;
+      }) => {
+        await params.commitConfig({ accountId: 123, login: "roboclaw-bot" });
+        return status.account;
+      },
+    );
+
+    await invoke("tools.github.configure", {
+      scope: "system",
+      agentId: "main",
+      mode: "managed",
+      secretName: "github-setup-22222222222222222222222222222222",
+    });
+
+    expect(github.updateConfig).toHaveBeenCalledWith({
+      scope: "system",
+      agentId: "main",
+      identity: {
+        profileId: "ghp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        gitAuthor: {
+          name: "roboclaw-bot",
+          email: "123+roboclaw-bot@users.noreply.github.com",
+        },
+      },
+      expectedIdentity: null,
+    });
   });
 
   it("rejects blank author data without consuming the setup handoff", async () => {

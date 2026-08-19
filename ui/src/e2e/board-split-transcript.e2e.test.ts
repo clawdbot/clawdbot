@@ -11,6 +11,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -52,6 +53,30 @@ async function visibleTranscriptState(page: Page) {
     ).length;
     return { present: true, intersectingRows };
   });
+}
+
+async function showDashboard(page: Page) {
+  const settingsKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
+  await page.addInitScript(
+    ({ key, storageKey }) => {
+      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
+        string,
+        unknown
+      >;
+      settings.boardSessionViews = { [key]: { activeTabId: "main" } };
+      localStorage.setItem(storageKey, JSON.stringify(settings));
+    },
+    { key: sessionKey, storageKey: settingsKey },
+  );
+  await page.goto(`${controlUi.baseUrl}dashboard`);
+}
+
+async function expectSidePanelTabs(page: Page, expected: string[]) {
+  const labels = page.locator(".side-panel > .side-panel__header .tabstrip-tab__label");
+  await expect
+    .poll(() => labels.allTextContents().then((values) => values.toSorted()))
+    .toEqual(expected.toSorted());
+  await labels.first().waitFor({ state: "visible" });
 }
 
 describeControlUiE2e("Board split transcript restore", () => {
@@ -96,19 +121,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       })),
     });
 
-    const settingsKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
-    await page.addInitScript(
-      ({ key, storageKey }) => {
-        const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
-          string,
-          unknown
-        >;
-        settings.boardSessionViews = { [key]: { activeTabId: "main" } };
-        localStorage.setItem(storageKey, JSON.stringify(settings));
-      },
-      { key: sessionKey, storageKey: settingsKey },
-    );
-    await page.goto(`${controlUi.baseUrl}dashboard`);
+    await showDashboard(page);
     await page.locator(".board-session-surface").waitFor();
     await page.getByText("Message number 39:").first().waitFor({ timeout: 15_000 });
 
@@ -143,5 +156,107 @@ describeControlUiE2e("Board split transcript restore", () => {
       .getByText("Message number 39:")
       .first()
       .waitFor({ state: "visible", timeout: 2_000 });
+  }, 120_000);
+
+  it("closes and reopens the whole multi-tab dashboard side panel", async () => {
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    contexts.add(context);
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      terminalEnabled: true,
+      featureMethods: [
+        "board.get",
+        "board.update",
+        "browser.request",
+        "chat.metadata",
+        "chat.startup",
+        "terminal.open",
+      ],
+      methodResponses: {
+        "board.get": boardSnapshot("right"),
+        "board.update": boardSnapshot("right", 2),
+        "browser.request": {
+          cases: [
+            { match: { method: "GET", path: "/tabs" }, response: { running: false, tabs: [] } },
+          ],
+        },
+      },
+    });
+    await showDashboard(page);
+    await page.locator(".side-panel").waitFor();
+    await openChatSidePanelType(page, "Browser");
+    await openChatSidePanelType(page, "Terminal");
+
+    const board = page.locator(".board-session-surface__board");
+    const sidePanel = page.locator(".side-panel");
+    await sidePanel.waitFor();
+    const expectedTabLabels = ["Board chat", "Browser", "Terminal"];
+    await expectSidePanelTabs(page, expectedTabLabels);
+    await sidePanel
+      .locator(".side-panel-type-menu wa-dropdown-item")
+      .first()
+      .waitFor({ state: "hidden" });
+    const widthBeforeClose = await board.evaluate(
+      (element) => element.getBoundingClientRect().width,
+    );
+
+    await sidePanel.getByRole("button", { name: "Close", exact: true }).click();
+
+    await expect.poll(() => sidePanel.count()).toBe(0);
+    await expect
+      .poll(() => board.evaluate((element) => element.getBoundingClientRect().width))
+      .toBeGreaterThan(widthBeforeClose);
+    expect(await gateway.getRequests("board.update")).toEqual([]);
+
+    await page.getByRole("button", { name: "Side panel", exact: true }).click();
+    await sidePanel.waitFor();
+    await expectSidePanelTabs(page, expectedTabLabels);
+    expect(await sidePanel.locator('[data-panel-slot="chat"]').count()).toBe(1);
+    expect(await gateway.getRequests("board.update")).toEqual([]);
+  }, 120_000);
+
+  it("closes and reopens sole projected Board chat from either close control", async () => {
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    contexts.add(context);
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      featureMethods: ["board.get", "board.update", "chat.metadata", "chat.startup"],
+      methodResponses: {
+        "board.get": boardSnapshot("right"),
+        "board.update": boardSnapshot("right", 2),
+      },
+    });
+    await showDashboard(page);
+
+    const sidePanel = page.locator(".side-panel");
+    const headerToggle = page.locator(".chat-side-panel-toggle").first();
+    await sidePanel.waitFor();
+    await expectSidePanelTabs(page, ["Board chat"]);
+    await expect.poll(() => headerToggle.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => headerToggle.getAttribute("aria-label")).toBe("Minimize side panel");
+
+    await sidePanel.getByRole("button", { name: "Close", exact: true }).click();
+
+    await expect.poll(() => sidePanel.count()).toBe(0);
+    expect(await headerToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(await headerToggle.getAttribute("aria-label")).toBe("Side panel");
+    expect(await gateway.getRequests("board.update")).toEqual([]);
+
+    await headerToggle.click();
+    await sidePanel.waitFor();
+    await expectSidePanelTabs(page, ["Board chat"]);
+    expect(await headerToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(await gateway.getRequests("board.update")).toEqual([]);
+
+    await headerToggle.click();
+    await expect.poll(() => sidePanel.count()).toBe(0);
+    expect(await headerToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(await gateway.getRequests("board.update")).toEqual([]);
+
+    await headerToggle.click();
+    await sidePanel.waitFor();
+    await expectSidePanelTabs(page, ["Board chat"]);
   }, 120_000);
 });

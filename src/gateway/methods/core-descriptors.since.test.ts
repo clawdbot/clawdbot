@@ -89,6 +89,7 @@ const CURRENT_TRAIN_METHODS = [
   "sessions.recover",
   "update.hold",
   "sessions.catalog.startTerminal",
+  "sessions.github.publish",
   "worker.desktop.observe",
   "projects.list",
   "projects.register",

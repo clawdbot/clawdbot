@@ -941,10 +941,13 @@ export const en: TranslationMap = {
     actionRequiresRead: "This action requires operator.read access.",
     actionRequiresWrite: "This action requires operator.write access.",
     actionRequiresAdmin: "This action requires operator.admin access.",
-    deletePreservedWorktrees:
-      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
-    deletePreservedWorktreeConfirm:
-      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+    deletePreservedReasons: {
+      "owner-mismatch": "owned elsewhere",
+      busy: "live run or cleanup active",
+      "foreign-lock": "foreign Git lock",
+      "snapshot-failed": "OpenClaw could not create a safety snapshot",
+      "cleanup-failed": "cleanup failed",
+    },
     draftCleanupFailed: "Session deleted; browser draft remains. Clear site data.",
     title: "Sessions",
     subtitle: "Browse sessions and manage per-session overrides.",
@@ -2001,7 +2004,8 @@ export const en: TranslationMap = {
     githubSystem: "System",
     githubAgentOverride: "This Agent",
     githubToken: "Fine-grained PAT",
-    githubTokenDesc: "Stored in the Gateway secret store; used by gh and git for this scope.",
+    githubTokenDesc:
+      "Stored in a private managed GitHub CLI profile; only the setup handoff is removed.",
     githubTokenToggle: "Toggle token visibility",
     githubPasteToken: "Paste a fine-grained personal access token first.",
     githubAuthorName: "Author Name",
@@ -2009,7 +2013,8 @@ export const en: TranslationMap = {
     githubConfigure: "Save Identity",
     githubUseSystem: "Remove Override",
     githubUseNative: "Use Native Credentials",
-    githubCloudNote: "Credentials already embedded in repository remotes are not overridden.",
+    githubCloudNote:
+      "Cloud workers stay credential-free; the Gateway publishes over HTTPS without rewriting Git remotes or helpers.",
     connectedSource: "Connected: {id}",
     connected: "Connected",
     channelSource: "Channel: {id}",
@@ -2460,7 +2465,8 @@ export const en: TranslationMap = {
       setupHelp: "Optional idempotent shell command run before OpenClaw is installed.",
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
-      desktopHelp: "Provision a desktop-capable worker for Browser and Terminal access.",
+      desktopHelp:
+        "Warm a direct or coordinator-backed AWS worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
@@ -3300,7 +3306,7 @@ export const en: TranslationMap = {
     workerDesktop: {
       title: "Cloud Worker Desktop",
       description:
-        "Watch and control desktop-capable cloud worker environments live from a Desktop panel; requires crabbox profiles with desktop: true.",
+        "Watch and control node-carried desktops from capable Crabbox AWS or Hetzner profiles with desktop: true.",
     },
   },
   aboutPage: {
@@ -5211,6 +5217,13 @@ export const en: TranslationMap = {
       linkLabel: "Pull request #{number}: {title}",
       createPr: "Create PR",
       createPrLabel: "Create a pull request for {branch}",
+      publishPr: "Publish PR",
+      publishing: "Publishing…",
+      publicationRequested: "Requested",
+      retryPublication: "Retry publication",
+      openPublishedPr: "Open PR",
+      cloudPublicationGuidance:
+        "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
       dismiss: "Dismiss pull request #{number}",
       open: "Open",
       draft: "Draft",

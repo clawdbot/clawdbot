@@ -17,6 +17,7 @@ import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronFailureNotificationDelivery,
+  CronFailureNotificationDetail,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
@@ -57,6 +58,18 @@ export type CronEvent = {
   nextRunAtMs?: number;
   triggerFired?: boolean;
 } & CronRunTelemetry;
+
+/** Transient internal context delivered beside, but never projected into, a CronEvent. */
+type CronEventContext = {
+  failureNotificationDetail?: CronFailureNotificationDetail;
+};
+
+/** Builds event context only when a closed notification fact exists. */
+export function cronFailureNotificationEventContext(
+  failureNotificationDetail?: CronFailureNotificationDetail,
+): CronEventContext | undefined {
+  return failureNotificationDetail ? { failureNotificationDetail } : undefined;
+}
 
 /** Logger contract consumed by cron service internals. */
 export type Logger = {
@@ -248,7 +261,7 @@ export type CronServiceDeps = {
     accountId?: string;
     threadId?: string | number;
   }) => Promise<void>;
-  onEvent?: (evt: CronEvent) => void;
+  onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
 };
 
 /** Cron deps after optional defaults have been made concrete. */
@@ -333,9 +346,13 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
 }
 
 /** Dispatches a cron event without letting subscriber errors escape scheduler work. */
-export function emit(state: CronServiceState, evt: CronEvent) {
+export function emit(state: CronServiceState, evt: CronEvent, context?: CronEventContext) {
   try {
-    state.deps.onEvent?.(evt);
+    if (context) {
+      state.deps.onEvent?.(evt, context);
+    } else {
+      state.deps.onEvent?.(evt);
+    }
   } catch {
     /* ignore */
   }

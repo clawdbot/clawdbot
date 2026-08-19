@@ -18,6 +18,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -397,6 +398,106 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
+  });
+
+  test("chat.send interrupt drains the captured admission before starting", async () => {
+    await withMainSessionStore(async () => {
+      const activeRunStarted = createDeferred();
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        activeRunStarted.resolve(undefined);
+        if (!opts?.abortSignal?.aborted) {
+          await new Promise<void>((resolve) => {
+            opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+        return undefined;
+      });
+      const active = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "captured active turn",
+        idempotencyKey: "idem-chat-interrupt-old",
+      });
+      expect(active.ok).toBe(true);
+      await activeRunStarted.promise;
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "replace the captured turn",
+        queueMode: "interrupt",
+        idempotencyKey: "idem-chat-interrupt-active",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload).toMatchObject({
+        runId: "idem-chat-interrupt-active",
+        status: "started",
+        interruptedActiveRun: true,
+      });
+      await waitForAgentRunDrained("idem-chat-interrupt-active");
+    });
+  });
+
+  test("chat.send interrupt drains a non-reply session admission before dispatching", async () => {
+    await withMainSessionStore(async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const onInterrupt = vi.fn();
+      const interrupted = createDeferred();
+      const activeAdmission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: ["agent:main:main", "sess-main"],
+        assertAllowed: () => {},
+        onInterrupt: () => {
+          onInterrupt();
+          interrupted.resolve(undefined);
+        },
+      });
+      const activeWork = activeAdmission.run(async () => {
+        await interrupted.promise;
+        activeAdmission.release();
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "replace non-reply session work",
+          queueMode: "interrupt",
+          idempotencyKey: "idem-chat-interrupt-non-reply",
+        });
+
+        expect(res.ok).toBe(true);
+        expect(onInterrupt).toHaveBeenCalledOnce();
+        expect(res.payload).toMatchObject({
+          runId: "idem-chat-interrupt-non-reply",
+          status: "started",
+          interruptedActiveRun: true,
+        });
+        await waitForAgentRunDrained("idem-chat-interrupt-non-reply");
+      } finally {
+        interrupted.resolve(undefined);
+        activeAdmission.release();
+        await activeWork;
+      }
+    });
+  });
+
+  test("chat.send interrupt starts normally when the session is idle", async () => {
+    await withMainSessionStore(async () => {
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "start from idle",
+        queueMode: "interrupt",
+        idempotencyKey: "idem-chat-interrupt-idle",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload).toMatchObject({
+        runId: "idem-chat-interrupt-idle",
+        status: "started",
+      });
+      expect(res.payload).not.toHaveProperty("interruptedActiveRun");
+      await waitForAgentRunDrained("idem-chat-interrupt-idle");
+    });
   });
 
   test("sessions.send creates a configured agent main session before sending", async () => {

@@ -209,6 +209,11 @@
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
+  /* Transient surfaces use one edge and elevation treatment. Persistent
+     panels and dialogs keep their independent elevation hierarchy. */
+  --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
+  --overlay-shadow: 0 1px 2px rgb(0 0 0 / 0.18), 0 8px 24px rgb(0 0 0 / 0.24);
+
   /* Spacing scale. Settings surfaces use these (see
      ui/docs/design-system/settings-design.md); elsewhere raw px padding/gap is
      grandfathered — adopt the scale when rewriting a rule, don't mass-migrate. */
@@ -566,6 +571,8 @@
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
   --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
   --shadow-glow: 0 0 20px var(--accent-glow);
+  --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
+  --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
 
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
@@ -647,6 +654,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(255, 255, 255, 0.025);
 }
@@ -713,6 +721,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
+  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(0, 0, 0, 0.04);
 }
@@ -788,6 +797,7 @@
   --shadow-sm: 0 1px 2px rgba(10, 6, 4, 0.35);
   --shadow-md: 0 4px 16px rgba(10, 6, 4, 0.45);
   --shadow-lg: 0 12px 32px rgba(10, 6, 4, 0.55);
+  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(255, 240, 225, 0.03);
 }
@@ -852,6 +862,7 @@
   --shadow-sm: 0 1px 2px rgba(60, 40, 20, 0.06);
   --shadow-md: 0 4px 12px rgba(60, 40, 20, 0.08);
   --shadow-lg: 0 12px 28px rgba(60, 40, 20, 0.1);
+  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(80, 50, 20, 0.04);
 }
@@ -1070,6 +1081,15 @@ wa-dropdown-item[type="checkbox"]::part(checkmark) {
 wa-dropdown-item[type="checkbox"] {
   display: flex;
   align-items: center;
+}
+
+/* Web Awesome owns these popup panels in shadow DOM, so shared tokens enter
+   through exported parts; feature styles continue to own content geometry. */
+wa-dropdown::part(menu),
+wa-popover::part(body),
+wa-select::part(listbox) {
+  border-color: var(--overlay-border);
+  box-shadow: var(--overlay-shadow);
 }
 
 button,

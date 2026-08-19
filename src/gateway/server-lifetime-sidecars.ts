@@ -5,6 +5,38 @@ import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
 const SECRET_STORE_EXPIRY_INTERVAL_MS = 60_000;
+const GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS = 60_000;
+
+function startGitHubPublicationMaintenance(
+  reconcile: () => Promise<void>,
+  logWarning: (message: string) => void,
+): GatewayPostReadySidecarHandle {
+  let current: Promise<void> | undefined;
+  let stopped = false;
+  const run = () => {
+    if (stopped || current) {
+      return;
+    }
+    const operation = reconcile()
+      .catch(() => logWarning("GitHub publication recovery failed; will retry."))
+      .finally(() => {
+        if (current === operation) {
+          current = undefined;
+        }
+      });
+    current = operation;
+  };
+  run();
+  const interval = setInterval(run, GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS);
+  interval.unref?.();
+  return {
+    stop: async () => {
+      stopped = true;
+      clearInterval(interval);
+      await current;
+    },
+  };
+}
 
 function startSecretStoreExpiryMaintenance(
   logWarning: (message: string) => void,
@@ -33,11 +65,17 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   flushPendingSessionsChangedEvents: (context?: object) => void;
   minimalTestGateway: boolean;
   logWarning: (message: string) => void;
+  reconcileGitHubPublications?: () => Promise<void>;
   sidecars: GatewayPostReadySidecarHandle[];
 }): Promise<void> {
   await params.chatMetadataLifecycle.attachContext(params.gatewayRequestContext, params.sidecars);
   if (!params.minimalTestGateway) {
     params.sidecars.push(startSecretStoreExpiryMaintenance(params.logWarning));
+  }
+  if (params.reconcileGitHubPublications) {
+    params.sidecars.push(
+      startGitHubPublicationMaintenance(params.reconcileGitHubPublications, params.logWarning),
+    );
   }
   params.sidecars.push({
     stop: () => {

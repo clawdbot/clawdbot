@@ -86,6 +86,8 @@ function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): 
   }
   const agentId =
     requestedAgentId ??
+    // Status reporting narrows to one workspace, so it keeps demanding an explicit
+    // choice rather than adopting the system agent and hiding the other agents' hooks.
     tryResolveLegacyCompatibilityAgentId(config) ??
     resolveDefaultAgentId(config, {
       surface: "hooks status reporting",

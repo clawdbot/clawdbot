@@ -3,12 +3,12 @@ import { validateWorkerAdmissionHandshake } from "../../packages/gateway-protoco
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
-export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v5";
-export const NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE = "node-worker-supervisor-v4";
-export const NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE =
-  "node-worker-supervisor-v3";
-export const NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
-export const NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
+export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
+const NODE_WORKER_SUPERVISOR_EXACT_CAPACITY_PROTOCOL_FEATURE = "node-worker-supervisor-v5";
+const NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE = "node-worker-supervisor-v4";
+const NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE = "node-worker-supervisor-v3";
+const NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
+const NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
 export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
 export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 export const NODE_WORKER_CAPACITY_MAX = 1_024;
@@ -43,7 +43,8 @@ export type NodeRunnerInventoryDeclaration =
         | typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
         | typeof NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE
         | typeof NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE
-        | typeof NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE,
+        | typeof NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE
+        | typeof NODE_WORKER_SUPERVISOR_EXACT_CAPACITY_PROTOCOL_FEATURE,
       ];
     }
   | {
@@ -187,6 +188,11 @@ export function parseNodeRunnerInventoryDeclaration(
     feature === NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE
   ) {
     return keys.length === 2 && isBinaryCapacityWorkerHostDeclaration(value.workerHost)
+      ? { protocolFeatures: [feature] }
+      : null;
+  }
+  if (feature === NODE_WORKER_SUPERVISOR_EXACT_CAPACITY_PROTOCOL_FEATURE) {
+    return keys.length === 2 && parseWorkerHostDeclaration(value.workerHost)
       ? { protocolFeatures: [feature] }
       : null;
   }
