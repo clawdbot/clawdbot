@@ -82,6 +82,7 @@ import {
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 /** Adds current actor display data without persisting rename-prone metadata. */
 /** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
@@ -633,7 +634,7 @@ export function buildGatewaySessionRow(params: {
     modelProvider: rowModelProvider,
     model: rowModel,
     modelSelectionLocked: entry?.modelSelectionLocked,
-    agentRuntime: thinkingProjection.agentRuntime,
+    agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,
     contextBudgetStatus: entry?.contextBudgetStatus,
     deliveryContext: deliveryFields.deliveryContext,

@@ -55,6 +55,7 @@ export type ChatPageHost = ChatHost &
     localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
+    automaticallyFetchFavicons: boolean;
     chatToolMessages: Record<string, unknown>[];
     guardianNotices: ChatGuardianNotice[];
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;

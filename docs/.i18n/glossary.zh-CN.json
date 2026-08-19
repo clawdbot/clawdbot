@@ -1762,5 +1762,25 @@
   {
     "source": "Portals",
     "target": "门户"
+  },
+  {
+    "source": "Channels",
+    "target": "渠道"
+  },
+  {
+    "source": "Docker VM Runtime",
+    "target": "Docker VM 运行时"
+  },
+  {
+    "source": "Updating",
+    "target": "更新"
+  },
+  {
+    "source": "Onboarding (CLI)",
+    "target": "引导设置（CLI）"
+  },
+  {
+    "source": "CLI Automation",
+    "target": "CLI 自动化"
   }
 ]

@@ -8,6 +8,7 @@ import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import {
   isSessionSkillEnabled,
@@ -34,7 +35,7 @@ import {
   readSkillFrontmatterSafe,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
-import { resolvePluginSkillDirs } from "./plugin-skills.js";
+import { resolvePluginSkillDirs, resolvePluginSkillDirsFromMetadata } from "./plugin-skills.js";
 import type { Skill } from "./skill-contract.js";
 import { compactSkillPath, resolveSkillsUserHomeDir } from "./skill-paths.js";
 import {
@@ -74,6 +75,7 @@ type WorkspaceSkillLoadOptions = {
   eligibility?: SkillEligibilityContext;
   workspaceOnly?: boolean;
   includeArchived?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export function normalizeWorkspaceSkillRoots(roots: WorkspaceSkillRoots): WorkspaceSkillRoots {
@@ -334,6 +336,7 @@ function loadSkillEntries(
     workspaceSkillsDir?: string;
     workspaceOnly?: boolean;
     includeArchived?: boolean;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
   const limits = resolveSkillDiscoveryLimits(opts?.config);
@@ -352,7 +355,14 @@ function loadSkillEntries(
   const extraDirs = normalizeTrimmedStringList(extraDirsRaw);
   const pluginSkillDirs = workspaceOnly
     ? []
-    : resolvePluginSkillDirs({ workspaceDir, config: opts?.config, pluginSkillsDir });
+    : opts?.pluginMetadataSnapshot
+      ? resolvePluginSkillDirsFromMetadata({
+          workspaceDir,
+          config: opts.config,
+          pluginSkillsDir,
+          metadataSnapshot: opts.pluginMetadataSnapshot,
+        })
+      : resolvePluginSkillDirs({ workspaceDir, config: opts?.config, pluginSkillsDir });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
   const bundledSkills = bundledSkillsDir
@@ -481,6 +491,7 @@ export function resolveWorkspaceSkillPromptEntries(
     skillFilter?: string[];
     skillOverrides?: Record<string, boolean>;
     eligibility?: SkillEligibilityContext;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): { eligible: SkillEntry[]; skillFilter: string[] | undefined } {
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
@@ -573,6 +584,7 @@ export function loadVisibleSkills(
     skillOverrides?: Record<string, boolean>;
     agentId?: string;
     eligibility?: SkillEligibilityContext;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
   const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {

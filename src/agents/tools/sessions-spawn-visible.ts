@@ -42,7 +42,13 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent sidebar UI session; use for work the user will watch or return to, or when they ask for a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+    }),
+  ),
+  category: Type.Optional(
+    Type.String({
+      description:
+        "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -129,8 +135,11 @@ export async function maybeSpawnVisibleSession(params: {
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
+  const categoryProvided = Object.hasOwn(params.raw, "category");
+  const requestedCategory = readToolStringParam(params.raw, "category", { allowEmpty: true });
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
+      ["category", categoryProvided ? requestedCategory : undefined],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -222,6 +231,7 @@ export async function maybeSpawnVisibleSession(params: {
     sessionKey: requesterKey,
     agentId: params.options?.requesterAgentIdOverride,
   });
+  const category = normalizeOptionalString(requestedCategory);
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -335,6 +345,7 @@ export async function maybeSpawnVisibleSession(params: {
       response = await createGatewayCall("sessions.create", {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
+        ...(category ? { category } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,

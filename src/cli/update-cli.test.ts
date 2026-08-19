@@ -8,7 +8,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
-import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
@@ -1145,7 +1144,7 @@ describe("update-cli", () => {
   const writeOpenClawPackageFixture = async (
     root: string,
     version: string,
-    options: { entrySource?: string; sidecars?: boolean; inventory?: boolean } = {},
+    options: { entrySource?: string; inventory?: boolean } = {},
   ) => {
     const entryPath = path.join(root, "dist", "index.js");
     await fs.mkdir(options.entrySource === undefined ? root : path.dirname(entryPath), {
@@ -1158,13 +1157,6 @@ describe("update-cli", () => {
     );
     if (options.entrySource !== undefined) {
       await fs.writeFile(entryPath, options.entrySource, "utf-8");
-    }
-    if (options.sidecars) {
-      for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
-        const absolutePath = path.join(root, relativePath);
-        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-        await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-      }
     }
     if (options.inventory) {
       await writePackageDistInventory(root);
@@ -4356,12 +4348,6 @@ describe("update-cli", () => {
       expectedSpec: "openclaw@9999.0.0",
     },
     {
-      name: "main shorthand",
-      options: { yes: true, tag: "main" },
-      packageSpec: undefined,
-      expectedSpec: "github:openclaw/openclaw#main",
-    },
-    {
       name: "explicit git package spec",
       options: { yes: true, tag: "github:openclaw/openclaw#main" },
       packageSpec: undefined,
@@ -4429,13 +4415,39 @@ describe("update-cli", () => {
     },
   );
 
+  it.each([
+    { name: "real run", options: { yes: true, json: true, tag: "main" } },
+    { name: "normalized alias", options: { yes: true, json: true, tag: "openclaw@main" } },
+    {
+      name: "dry-run",
+      options: { dryRun: true, json: true, tag: "main", yes: true },
+    },
+  ] as const)("refuses --tag main before package resolution: $name", async ({ options }) => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update-main-refusal"));
+
+    await updateCommand(options);
+
+    const result = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "unsupported-package-target",
+      steps: [],
+    });
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(resolveGlobalManager, replaceConfigFile, runGatewayUpdate);
+    if ("dryRun" in options && options.dryRun) {
+      expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    }
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(getErrorOutput()).toContain("openclaw update --channel dev");
+  });
+
   it("fails package updates when the installed correction version does not match the requested target", async () => {
     const tempDir = createCaseDir("openclaw-update");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(tempDir);
     await writeOpenClawPackageFixture(pkgRoot, "2026.3.23", {
-      sidecars: true,
       inventory: true,
     });
     readPackageVersion.mockResolvedValue("2026.3.23");
@@ -5527,7 +5539,6 @@ describe("update-cli", () => {
       version: "2026.4.23",
     });
     await writeOpenClawPackageFixture(pkgRoot, "2026.4.23", {
-      sidecars: true,
       inventory: true,
     });
     mockFileBackedPathExists();
@@ -5558,7 +5569,6 @@ describe("update-cli", () => {
     mockPackageInstallStatus(pkgRoot);
     mockCurrentProcessFreshDoctor();
     await writeOpenClawPackageFixture(pkgRoot, "9999.0.0", {
-      sidecars: true,
       inventory: true,
     });
 

@@ -289,11 +289,17 @@ async function updateCommandInternal(
   }
 
   const explicitTag = normalizeTag(opts.tag);
-  if (channel === "extended-stable" && explicitTag) {
+  const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
+  if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
     await reportPreMutationUpdateFailure({
       root,
       installKind: updateInstallKind,
-      reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      reason: unsupportedMainTag
+        ? "unsupported-package-target"
+        : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      message: unsupportedMainTag
+        ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
+        : undefined,
       opts,
       controlPlaneUpdateSentinelMeta,
     });

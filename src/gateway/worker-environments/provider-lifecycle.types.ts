@@ -18,7 +18,7 @@ import type {
 } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
-export type WorkerProviderLifecycleOptions = {
+export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
@@ -42,6 +42,9 @@ export type WorkerProviderLifecycleOptions = {
   prepareNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<WorkerNodeEnrollment>;
   retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;
   providerCallTimeoutMs?: number;
+};
+
+export type WorkerProviderLifecycleOptions = WorkerProviderLifecycleInputOptions & {
   tunnelManager?: Pick<WorkerTunnelManager, "stop">;
   credentialBroker: WorkerCredentialBroker;
   callBootstrap: <T>(

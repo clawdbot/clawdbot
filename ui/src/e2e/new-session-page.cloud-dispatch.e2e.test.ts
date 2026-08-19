@@ -10,7 +10,7 @@ import {
   controlUiSessionUrl,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
-  expectPendingCloudStartupBeforeRuntime,
+  expectPendingSessionPlacementStartupBeforeRuntime,
   installMockGateway,
   pastePng,
   pollLocatorText,
@@ -19,8 +19,8 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const CLOUD_STARTUP_RUNTIME_REQUEST =
-  /\/assets\/cloud-session-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
+const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
+  /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
 
 suite.define(() => {
   it("dispatches a cloud target before sending its first turn and shows placement", async () => {
@@ -32,7 +32,7 @@ suite.define(() => {
     const page = await context.newPage();
     const runtimeLoad = createDeferred();
     let runtimeRequested = false;
-    await page.route(CLOUD_STARTUP_RUNTIME_REQUEST, async (route) => {
+    await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
       runtimeRequested = true;
       await runtimeLoad.promise;
       await route.continue();
@@ -40,6 +40,7 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
+      operatorScopes: ["operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [
         "chat.metadata",
@@ -86,10 +87,11 @@ suite.define(() => {
                 {
                   id: "standard",
                   label: "Standard",
-                  description: "Balanced capacity",
+                  cpu: 32,
+                  memoryGb: 64,
                   default: true,
                 },
-                { id: "fast", label: "Fast", description: "More compute" },
+                { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
               ],
             },
           ],
@@ -282,7 +284,11 @@ suite.define(() => {
       expect(create.params).not.toHaveProperty("attachments");
       expect(create.params).not.toHaveProperty("cwd");
       await expect.poll(() => runtimeRequested).toBe(true);
-      const startupStatus = await expectPendingCloudStartupBeforeRuntime(page, gateway, sessionKey);
+      const startupStatus = await expectPendingSessionPlacementStartupBeforeRuntime(
+        page,
+        gateway,
+        sessionKey,
+      );
       runtimeLoad.resolve();
       const dispatch = await gateway.waitForRequest("sessions.dispatch");
       expect(dispatch.params).toMatchObject({
@@ -465,6 +471,7 @@ suite.define(() => {
       await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key: managedSessionKey, agentId: "cloud" });
+      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
     } finally {
       await context.close();
     }

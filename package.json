@@ -108,6 +108,7 @@
     "!dist/plugin-sdk/llm.d.ts",
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
+    "!dist/plugin-sdk/meeting-page-script-runtime.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-curated.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
@@ -1161,6 +1162,9 @@
     },
     "./plugin-sdk/realtime-voice": {
       "default": "./dist/plugin-sdk/realtime-voice.js"
+    },
+    "./plugin-sdk/meeting-page-script-runtime": {
+      "default": "./dist/plugin-sdk/meeting-page-script-runtime.js"
     },
     "./plugin-sdk/meeting-runtime": {
       "types": "./dist/plugin-sdk/meeting-runtime.d.ts",

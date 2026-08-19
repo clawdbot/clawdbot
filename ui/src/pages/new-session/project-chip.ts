@@ -244,6 +244,7 @@ export function renderProjectChip(params: {
           })
         : html`
             <div class="new-session-page__picker-root">
+              <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
               ${params.state.mode === "projects"
                 ? html`
                     ${params.workspace && params.state.showWorkspace

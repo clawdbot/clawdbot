@@ -52,7 +52,7 @@ extensions/browser/src/browser-proxy-envelope.ts	8
 extensions/browser/src/browser-proxy-upload.ts	2
 extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	3
-extensions/browser/src/browser-tool.actions.ts	17
+extensions/browser/src/browser-tool.actions.ts	14
 extensions/browser/src/browser-tool.snapshot.ts	2
 extensions/browser/src/browser-tool.ts	18
 extensions/browser/src/browser/bridge-server.ts	3
@@ -219,7 +219,7 @@ extensions/codex/src/app-server/remote-workspace-media.ts	6
 extensions/codex/src/app-server/request.ts	2
 extensions/codex/src/app-server/run-attempt-context.ts	2
 extensions/codex/src/app-server/run-attempt-prompt.ts	2
-extensions/codex/src/app-server/run-attempt-resources.ts	14
+extensions/codex/src/app-server/run-attempt-resources.ts	13
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
 extensions/codex/src/app-server/run-attempt-server-requests.ts	2
 extensions/codex/src/app-server/run-attempt-tool-setup.ts	1
@@ -245,7 +245,6 @@ extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/thread-supervision.ts	2
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/tool-progress-normalization.ts	1
-extensions/codex/src/app-server/trajectory.ts	3
 extensions/codex/src/app-server/transcript-history-projection.ts	2
 extensions/codex/src/app-server/transcript-mirror-attestation.ts	2
 extensions/codex/src/app-server/transcript-mirror.ts	4
@@ -293,7 +292,7 @@ extensions/copilot/src/provider-bridge.ts	1
 extensions/copilot/src/replay-shim.ts	3
 extensions/copilot/src/runtime.ts	1
 extensions/copilot/src/sdk-loader.ts	2
-extensions/copilot/src/tool-bridge.ts	7
+extensions/copilot/src/tool-bridge.ts	6
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/crabbox/src/crabbox-worker-inspect.ts	3
 extensions/crabbox/src/crabbox-worker-provider.ts	1
@@ -1837,7 +1836,7 @@ src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
 src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
 src/agents/embedded-agent-runner/replay-history.ts	60
 src/agents/embedded-agent-runner/result-fallback-classifier.ts	3
-src/agents/embedded-agent-runner/run-entry.ts	4
+src/agents/embedded-agent-runner/run-entry.ts	3
 src/agents/embedded-agent-runner/run-orchestrator.ts	1
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	5
 src/agents/embedded-agent-runner/run/abortable.ts	2
@@ -1853,7 +1852,6 @@ src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	2
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
 src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts	2
-src/agents/embedded-agent-runner/run/attempt-prompt-support.ts	2
 src/agents/embedded-agent-runner/run/attempt-queue-message.ts	7
 src/agents/embedded-agent-runner/run/attempt-session-prepare.ts	4
 src/agents/embedded-agent-runner/run/attempt-sessions-yield.ts	1
@@ -1991,7 +1989,6 @@ src/agents/plugin-model-catalog.ts	4
 src/agents/plugin-text-transforms.ts	5
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
-src/agents/prepared-model-runtime-lease.ts	1
 src/agents/prepared-model-runtime.configured.ts	2
 src/agents/prepared-model-runtime.facts.ts	1
 src/agents/prepared-model-runtime.plugin-context.ts	2
@@ -2012,7 +2009,6 @@ src/agents/run-timeout-attribution.ts	1
 src/agents/run-wait.ts	8
 src/agents/runtime-plan/build.ts	4
 src/agents/runtime-plan/tools.ts	5
-src/agents/runtime-plugins.ts	1
 src/agents/runtime/proxy.ts	7
 src/agents/sandbox-paths.ts	1
 src/agents/sandbox-tool-policy.ts	1
@@ -2211,7 +2207,7 @@ src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-failure-reply.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
 src/auto-reply/reply/agent-runner-memory.ts	8
-src/auto-reply/reply/agent-runner-result-complete.ts	4
+src/auto-reply/reply/agent-runner-result-complete.ts	3
 src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-session-reset.ts	1
 src/auto-reply/reply/agent-runner-trace.ts	1
@@ -2965,7 +2961,7 @@ src/gateway/server-broadcast.ts	2
 src/gateway/server-channels.ts	1
 src/gateway/server-chat-state.ts	1
 src/gateway/server-chat.ts	5
-src/gateway/server-close.ts	2
+src/gateway/server-close.ts	1
 src/gateway/server-core-runtime.ts	2
 src/gateway/server-cron-reconciled.ts	1
 src/gateway/server-cron.ts	5
@@ -3047,7 +3043,6 @@ src/gateway/server-methods/sessions-abort.ts	3
 src/gateway/server-methods/sessions-archive-lifecycle.ts	3
 src/gateway/server-methods/sessions-compact.ts	1
 src/gateway/server-methods/sessions-create.ts	1
-src/gateway/server-methods/sessions-dispatch.ts	1
 src/gateway/server-methods/sessions-messaging.ts	11
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/sessions-read.ts	2
@@ -3995,7 +3990,6 @@ ui/src/app/app-shell-gateway.ts	1
 ui/src/app/assistant-identity.ts	2
 ui/src/app/browser.ts	1
 ui/src/app/canvas-surface-lease.runtime.ts	3
-ui/src/app/cloud-session-startup.runtime.ts	1
 ui/src/app/config.ts	1
 ui/src/app/custom-theme.ts	2
 ui/src/app/gateway-store.ts	1
@@ -4131,7 +4125,6 @@ ui/src/lib/nodes/index.ts	3
 ui/src/lib/nodes/inventory.ts	1
 ui/src/lib/plugin-activation.ts	3
 ui/src/lib/session-pull-requests.ts	2
-ui/src/lib/sessions/cloud-recovery.ts	3
 ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	2

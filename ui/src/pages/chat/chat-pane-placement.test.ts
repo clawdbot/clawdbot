@@ -51,7 +51,7 @@ function activePlacementSession(
 }
 
 describe("chat pane placement", () => {
-  it("does not reclaim a provisioning placement with a destroyable environment", async () => {
+  it("reclaims a provisioning placement through its session", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane } = createTestChatPane({
       client: { request } as unknown as GatewayBrowserClient,
@@ -59,7 +59,7 @@ describe("chat pane placement", () => {
     });
     pane.context.gateway.snapshot.hello = {
       features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     } as never;
 
     const session = {
@@ -77,16 +77,20 @@ describe("chat pane placement", () => {
       reclaimingKey: null,
       row: session,
     });
-    const dialogsBefore = document.body.querySelectorAll("openclaw-modal-dialog").length;
-    await pane.reclaimHeaderPlacement(session);
+    const reclaim = pane.reclaimHeaderPlacement(session);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    await reclaim;
 
     expect(placement).toEqual({
       moving: false,
       moveDisabledReason: "This Gateway does not support this session action.",
-      reclaimDisabledReason: "This Gateway does not support this session action.",
+      reclaimDisabledReason: undefined,
     });
-    expect(document.body.querySelectorAll("openclaw-modal-dialog")).toHaveLength(dialogsBefore);
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: session.key, agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
+    );
   });
 
   it("reclaims an active placement after the operator confirms", async () => {
@@ -104,7 +108,7 @@ describe("chat pane placement", () => {
     });
     pane.context.gateway.snapshot.hello = {
       features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     } as never;
     const session = activePlacementSession();
 
@@ -139,7 +143,7 @@ describe("chat pane placement", () => {
     });
     pane.context.gateway.snapshot.hello = {
       features: { methods: ["sessions.move"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     } as never;
     const session = { ...activePlacementSession(), hasActiveRun: true };
 
@@ -196,7 +200,7 @@ describe("chat pane placement", () => {
     });
     pane.context.gateway.snapshot.hello = {
       features: { methods: ["sessions.move"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     } as never;
     const session = activePlacementSession();
 
@@ -221,6 +225,124 @@ describe("chat pane placement", () => {
         ownerEpoch: 1,
       },
       target: { kind: "profile", profileId: "aws", machineClass: "beast" },
+    });
+    expect(refreshReplacement).toHaveBeenCalledWith("main");
+  });
+
+  it("disables paired-device moves for a runtime that cannot dispatch there", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return { profiles: [], environments: [] };
+      }
+      if (method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "build-mac",
+              displayName: "Build Mac",
+              connected: true,
+              commands: ["system.run"],
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {
+        refreshReplacement: vi.fn(async () => undefined),
+      } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
+    } as never;
+    const session = {
+      ...activePlacementSession(),
+      agentRuntime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        devicePlacementSupported: false,
+        source: "model",
+      },
+    } satisfies GatewaySessionRow;
+
+    const moving = pane.moveHeaderPlacement(session);
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
+    });
+    const device = document.body.querySelector<HTMLButtonElement>(
+      '[data-value="device:build-mac"]',
+    );
+    expect(device?.disabled).toBe(true);
+    expect(device?.textContent).toContain("Needs the embedded runtime");
+    expect(device?.title).toBe("Needs the embedded runtime");
+    [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Cancel")
+      ?.click();
+    await moving;
+
+    expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
+  });
+
+  it("moves an embedded-runtime session to a paired device", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return { profiles: [], environments: [] };
+      }
+      if (method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "build-mac",
+              displayName: "Build Mac",
+              connected: true,
+              commands: ["system.run"],
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const refreshReplacement = vi.fn(async () => undefined);
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { refreshReplacement } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
+    } as never;
+    const session = {
+      ...activePlacementSession(),
+      agentRuntime: {
+        id: "openclaw",
+        cloudPlacementSupported: true,
+        devicePlacementSupported: true,
+        source: "model",
+      },
+    } satisfies GatewaySessionRow;
+
+    const moving = pane.moveHeaderPlacement(session);
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
+    });
+    document.body.querySelector<HTMLButtonElement>('[data-value="device:build-mac"]')?.click();
+    [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Move session")
+      ?.click();
+    await moving;
+
+    expect(request).toHaveBeenCalledWith("sessions.move", {
+      key: session.key,
+      agentId: "main",
+      expected: {
+        generation: 1,
+        environmentId: "worker:one",
+        ownerEpoch: 1,
+      },
+      target: { kind: "device", deviceId: "build-mac" },
     });
     expect(refreshReplacement).toHaveBeenCalledWith("main");
   });

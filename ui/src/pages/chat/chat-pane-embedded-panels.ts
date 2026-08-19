@@ -19,6 +19,7 @@ import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
   agentId: string | null;
+  browserPresented: boolean;
   desktopAvailable: boolean;
   hasBoard: boolean;
   chat: TemplateResult;
@@ -32,6 +33,7 @@ type SidebarPanelDefinitionParams = {
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
   progressCard: ProgressCard | null;
+  onDismissProgressCard?: (card: ProgressCard) => void;
   companion: ChatSessionCompanionThread;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
@@ -100,6 +102,7 @@ export function sidebarPanelDefinitions(
           data-chat-autotype-exempt
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
+          .presented=${params?.browserPresented ?? false}
           .basePath=${state.basePath}
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`
@@ -114,6 +117,7 @@ export function sidebarPanelDefinitions(
         .startedAt=${params.startedAt}
         .lastReadAt=${params.lastReadAt}
         .progressCard=${params.progressCard}
+        .onDismissProgressCard=${params.onDismissProgressCard}
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}

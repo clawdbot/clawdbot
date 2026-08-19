@@ -153,7 +153,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       if (descendantPid === undefined) {
         throw new Error("scenario command descendant did not expose its pid");
       }
-      expect(isProcessRunning(descendantPid)).toBe(false);
+      await waitForProcessExit(descendantPid);
     } finally {
       if (descendantPid && isProcessRunning(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");

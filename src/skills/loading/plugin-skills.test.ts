@@ -47,6 +47,7 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
+let resolvePluginSkillDirsFromMetadata: typeof import("./plugin-skills.js").resolvePluginSkillDirsFromMetadata;
 
 const tempDirs = createTrackedTempDirs();
 
@@ -188,7 +189,29 @@ afterEach(async () => {
 
 describe("resolvePluginSkillDirs", () => {
   beforeAll(async () => {
-    ({ resolvePluginSkillDirs } = await import("./plugin-skills.js"));
+    ({ resolvePluginSkillDirs, resolvePluginSkillDirsFromMetadata } =
+      await import("./plugin-skills.js"));
+  });
+
+  it("uses supplied lifecycle metadata without a cold load", async () => {
+    const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+    registerHealthyAcpBackend();
+    const manifestRegistry = buildRegistry({ acpxRoot, helperRoot });
+
+    const dirs = resolvePluginSkillDirsFromMetadata({
+      workspaceDir,
+      config: {
+        acp: { enabled: true },
+        plugins: { entries: { acpx: { enabled: true }, helper: { enabled: true } } },
+      } as OpenClawConfig,
+      metadataSnapshot: {
+        manifestRegistry,
+        normalizePluginId: (pluginId: string) => pluginId,
+      } as never,
+    });
+
+    expect(dirs).toEqual([path.resolve(acpxRoot, "skills"), path.resolve(helperRoot, "skills")]);
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {

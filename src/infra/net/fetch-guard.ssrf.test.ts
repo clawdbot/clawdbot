@@ -751,6 +751,20 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects HTTPS-to-HTTP redirects when the caller requires HTTPS", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://cdn.example/asset"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/favicon.ico",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        requireHttps: true,
+      }),
+    ).rejects.toThrow(/must use https/i);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("does not carry exact-origin trust across private-host redirects to another port", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1:11435/"));
 

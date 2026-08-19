@@ -2,9 +2,8 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
-import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -407,14 +406,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         agentId,
         sessionKey: context.runtimePolicySessionKey,
       });
-  const resolveAcceptedAuthProfileProviders = () =>
-    agentHarnessPolicy
-      ? listOpenAIAuthProfileProvidersForAgentRuntime({
-          provider,
-          harnessRuntime: agentHarnessPolicy.runtime,
-          config: cfg,
-        })
-      : [provider];
   const resolveRuntimeAuthProfile = async () => {
     if (useFastReplyRuntime) {
       return {
@@ -437,10 +428,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       shouldUseEphemeralSession && authSessionEntry
         ? { [authSessionKey]: authSessionEntry }
         : sessionStore;
-    const resolvedAuthProfileId = await resolveSessionAuthProfileOverride({
+    const selection = await resolveSessionAuthSelection({
       cfg,
       provider,
-      acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+      modelId: model,
+      ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       sessionEntry: authSessionEntry,
       sessionStore: authSessionStore,
@@ -449,11 +441,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       isNewSession,
     });
     return {
-      authProfileId: resolvedAuthProfileId,
-      authProfileIdSource:
-        resolvedAuthProfileId && authSessionEntry?.authProfileOverride === resolvedAuthProfileId
-          ? resolveSessionAuthProfileOverrideSource(authSessionEntry)
-          : undefined,
+      authProfileId: selection?.profileId,
+      authProfileIdSource: selection?.source,
     };
   };
   let { authProfileId, authProfileIdSource } = await traceRunPhase(

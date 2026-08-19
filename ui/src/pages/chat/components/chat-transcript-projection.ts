@@ -208,7 +208,7 @@ export function projectChatTranscript(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
+    runId: props.runId ?? null,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -355,6 +355,7 @@ export function projectChatTranscript(
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+    fetchLinkFavicon: props.fetchLinkFavicon,
     showAssistantAvatar: false,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
@@ -654,6 +655,7 @@ export function projectChatTranscript(
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
+    Boolean(props.fetchLinkFavicon),
     threadContextWindow,
     Boolean(props.onSetReply),
     props.replyMessageAccess?.revision ?? 0,

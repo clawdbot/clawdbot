@@ -81,6 +81,8 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Require HTTPS for the initial URL and every redirect target. */
+  requireHttps?: boolean;
   /** Abort the complete guarded fetch and body operation after this deadline (ms). */
   timeoutMs?: number;
   /** Abort if final response headers have not arrived by this deadline (ms). */
@@ -288,6 +290,7 @@ async function fetchGuardedMediaResponse(
     fetchImpl,
     requestInit,
     maxRedirects,
+    requireHttps,
     timeoutMs,
     responseHeaderTimeoutMs = DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     ssrfPolicy,
@@ -320,6 +323,7 @@ async function fetchGuardedMediaResponse(
         fetchImpl,
         init: requestInit,
         maxRedirects,
+        ...(requireHttps !== undefined ? { requireHttps } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(requestSignal ? { signal: requestSignal } : {}),
         policy: ssrfPolicy,

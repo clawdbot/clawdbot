@@ -65,6 +65,7 @@ function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
   const routes: Array<Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]> = [];
   const services: Array<Parameters<OpenClawPluginApi["registerService"]>[0]> = [];
   const resolvers: Array<Parameters<OpenClawPluginApi["registerHostedMediaResolver"]>[0]> = [];
+  const widgetPresenters: Array<Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0]> = [];
   const tools: Array<{
     tool: Parameters<OpenClawPluginApi["registerTool"]>[0];
     opts: Parameters<OpenClawPluginApi["registerTool"]>[1];
@@ -86,6 +87,7 @@ function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
       registerHttpRoute: (route) => routes.push(route),
       registerService: (service) => services.push(service),
       registerHostedMediaResolver: (resolver) => resolvers.push(resolver),
+      registerWidgetPresenter: (presenter) => widgetPresenters.push(presenter),
       registerTool: (tool, opts) => tools.push({ tool, opts }),
       registerNodeCliFeature: (registrar, opts) => cliFeatures.push({ registrar, opts }),
       registerNodeInvokePolicy: (policy) => nodeInvokePolicies.push(policy),
@@ -96,6 +98,7 @@ function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
     routes,
     services,
     resolvers,
+    widgetPresenters,
     tools,
     cliFeatures,
     nodeInvokePolicies,
@@ -122,7 +125,7 @@ describe("Canvas plugin entry", () => {
   });
 
   it("allowlists Canvas on every native node platform, including Linux", () => {
-    const { nodeInvokePolicies } = registerCanvas();
+    const { nodeInvokePolicies, widgetPresenters } = registerCanvas();
 
     expect(nodeInvokePolicies[0]?.defaultPlatforms).toEqual([
       "ios",
@@ -132,10 +135,18 @@ describe("Canvas plugin entry", () => {
       "linux",
       "unknown",
     ]);
+    expect(widgetPresenters).toEqual([
+      expect.objectContaining({
+        target: "node_panel",
+        description: "Show on a connected device panel",
+        availability: expect.any(Function),
+        present: expect.any(Function),
+      }),
+    ]);
   });
 
   it("registers A2UI board content while the Canvas file host is disabled", () => {
-    const { boardWidgetContentKinds, routes } = registerCanvas({
+    const { boardWidgetContentKinds, routes, widgetPresenters } = registerCanvas({
       plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
     });
 
@@ -143,6 +154,7 @@ describe("Canvas plugin entry", () => {
       expect.objectContaining({ kind: "a2ui", label: "A2UI" }),
     ]);
     expect(routes.map((route) => route.path)).toEqual(["/__openclaw__/a2ui"]);
+    expect(widgetPresenters).toEqual([]);
   });
 
   it("defers Canvas host implementation until a registered route is used", async () => {

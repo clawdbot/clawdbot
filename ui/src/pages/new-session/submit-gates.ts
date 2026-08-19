@@ -4,11 +4,14 @@
 import { t } from "../../i18n/index.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import * as catalog from "./catalog-target.ts";
-import type { PendingCloudRecoveryState, SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
+import type {
+  PendingSessionPlacementRecoveryState,
+  SubmissionOutcomeReason,
+} from "./session-placement-recovery-state.ts";
 
 // Silent gates are the only submit blocks allowed to omit a visible reason:
 // the busy Start button and an empty draft already explain themselves. Every
@@ -29,6 +32,7 @@ type ReasonedSubmitGate =
   | "agents"
   | "agent-not-allowed"
   | "node"
+  | "node-runtime"
   | "cloud"
   | "worktree-unavailable"
   | "worktree-name"
@@ -48,7 +52,7 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
 type SubmitGateHost = {
   readonly gatewayState: DraftGatewayState;
   readonly placeState: DraftPlaceState;
-  readonly pendingCloud: PendingCloudRecoveryState;
+  readonly pendingPlacement: PendingSessionPlacementRecoveryState;
   readonly submitting: boolean;
   readonly message: string;
   readonly submissionOutcomeUnknown: SubmissionOutcomeReason | null;
@@ -70,7 +74,7 @@ export function resolveNewSessionSubmitBlock(
   const gateway = host.gatewayState;
   const place = host.placeState;
   const snapshot = host.submissionSnapshot();
-  const pendingCloudActive = Boolean(host.pendingCloud.sessionKey);
+  const pendingPlacementActive = Boolean(host.pendingPlacement.sessionKey);
   if (host.submitting) {
     return { gate: "submitting" };
   }
@@ -96,7 +100,7 @@ export function resolveNewSessionSubmitBlock(
   if (host.pendingAttachmentReads > 0) {
     return { gate: "attachment-reads", reason: t("newSession.readingAttachment") };
   }
-  if (!pendingCloudActive && host.submissionOutcomeUnknown) {
+  if (!pendingPlacementActive && host.submissionOutcomeUnknown) {
     return {
       gate: "outcome-unknown",
       reason: t(
@@ -121,20 +125,19 @@ export function resolveNewSessionSubmitBlock(
   if (place.folderSubmissionBlocked()) {
     return { gate: "folder", reason: t("newSession.checkingPlace") };
   }
-  if (pendingCloudActive) {
+  if (pendingPlacementActive) {
     const retryReady = Boolean(
-      host.pendingCloud.retryAllowed &&
+      host.pendingPlacement.retryAllowed &&
       client.recoveryScopeReady &&
       host.cloudProfileForSubmission() &&
-      host.pendingCloud.agentId &&
-      host.pendingCloud.gatewayUrl === connection.connection.gatewayUrl &&
-      host.pendingCloud.recoveryScope === client.recoveryScope &&
-      place.isAdmin(),
+      host.pendingPlacement.agentId &&
+      host.pendingPlacement.gatewayUrl === connection.connection.gatewayUrl &&
+      host.pendingPlacement.recoveryScope === client.recoveryScope,
     );
     // Recovery retries own the remaining draft state; the place gates
     // below intentionally do not apply to a restored cloud draft.
     return retryReady
-      ? emptyDraftBlock(host, kind, pendingCloudActive)
+      ? emptyDraftBlock(host, kind, pendingPlacementActive)
       : { gate: "cloud-recovery", reason: t("newSession.cloudNotReady") };
   }
   if (place.agents().length === 0) {
@@ -146,11 +149,14 @@ export function resolveNewSessionSubmitBlock(
   if (!place.execNodeReady()) {
     return { gate: "node", reason: t("newSession.nodeUnavailable") };
   }
+  const deviceRuntimeUnsupportedReason = place.modelControl.devicePlacementUnsupportedReason();
+  if (place.execNode && deviceRuntimeUnsupportedReason) {
+    return { gate: "node-runtime", reason: deviceRuntimeUnsupportedReason };
+  }
   const cloudProfileId = host.cloudProfileForSubmission();
   if (
     cloudProfileId &&
-    (!place.isAdmin() ||
-      !client.recoveryScope ||
+    (!client.recoveryScope ||
       !client.recoveryScopeReady ||
       !gateway.cloudProfilesReady ||
       gateway.cloudProfilesPending ||
@@ -180,21 +186,21 @@ export function resolveNewSessionSubmitBlock(
   if (kind === "terminal" && !(place.folder.trim() || place.workspacePath())) {
     return { gate: "terminal-folder", reason: t("newSession.terminalNeedsFolder") };
   }
-  return emptyDraftBlock(host, kind, pendingCloudActive);
+  return emptyDraftBlock(host, kind, pendingPlacementActive);
 }
 
 // Last so an empty draft never masks a reasoned gate in the tooltip.
 function emptyDraftBlock(
   host: SubmitGateHost,
   kind: "session" | "terminal",
-  pendingCloudActive: boolean,
+  pendingPlacementActive: boolean,
 ): NewSessionSubmitBlock | undefined {
   if (kind !== "session") {
     return undefined;
   }
-  const message = pendingCloudActive ? host.pendingCloud.message : host.message.trim();
-  const hasAttachments = pendingCloudActive
-    ? Boolean(host.pendingCloud.attachments?.length)
+  const message = pendingPlacementActive ? host.pendingPlacement.message : host.message.trim();
+  const hasAttachments = pendingPlacementActive
+    ? Boolean(host.pendingPlacement.attachments?.length)
     : host.hasDraftAttachments;
   return message || hasAttachments ? undefined : { gate: "empty-draft" };
 }

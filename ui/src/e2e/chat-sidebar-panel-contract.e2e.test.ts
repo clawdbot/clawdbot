@@ -3,15 +3,19 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "chat sidebar cold-open invariant",
   startServerBeforeBrowser: true,
 });
+
+const HIDDEN_BOARD_SESSION_KEY = "agent:main:hidden-board-slot";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
@@ -232,6 +236,38 @@ async function openColdSidebar(page: Page, scenario = coldOpenScenario()) {
   return choices;
 }
 
+async function seedHiddenBoardSlot(page: Page) {
+  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  await page.addInitScript(
+    ({ key, sessionKey }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          sessionKey,
+          sidebarSessionLayouts: {
+            [sessionKey]: {
+              columns: [
+                {
+                  id: "side-panel-column",
+                  side: "right",
+                  panels: [{ id: "chat", slot: "chat" }],
+                  activePanelId: "chat",
+                  height: 360,
+                  width: 480,
+                },
+              ],
+              dock: "right",
+              open: true,
+              expanded: false,
+            },
+          },
+        }),
+      );
+    },
+    { key: settingsKey, sessionKey: HIDDEN_BOARD_SESSION_KEY },
+  );
+}
+
 async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
   const activePanel = page.locator(".side-panel__panel:not([hidden])");
   await activePanel.waitFor();
@@ -280,6 +316,132 @@ async function readSlotColdOpenOutcome(
 }
 
 suite.define(() => {
+  it("closes a projected-empty side panel when a hidden board tab remains persisted", async () => {
+    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+    try {
+      const page = await context.newPage();
+      await seedHiddenBoardSlot(page);
+      await installMockGateway(page, {
+        ...coldOpenScenario(),
+        sessionKey: HIDDEN_BOARD_SESSION_KEY,
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiGatewayReady(page);
+
+      const panel = page.locator(".sidebar-region__right-runtime .side-panel");
+      await panel.locator(".side-panel-empty--selector").waitFor();
+      expect(await panel.locator("wa-tab").count()).toBe(0);
+
+      await panel.getByRole("button", { name: "Close", exact: true }).click();
+      await expect.poll(() => panel.count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("refreshes retained Browser state when its sidebar tab becomes active", async () => {
+    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+    try {
+      const page = await context.newPage();
+      await page.route("**/__openclaw__/assistant-media?*", (route) =>
+        route.fulfill({ body: ONE_PIXEL_PNG, contentType: "image/png" }),
+      );
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["browser.request", "chat.metadata", "chat.startup"],
+        methodResponses: {
+          "browser.request": {
+            cases: [
+              {
+                match: { method: "GET", path: "/tabs" },
+                response: { running: true, tabs: [] },
+              },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiGatewayReady(page);
+      await openChatSidePanelType(page, "Browser");
+      const browser = page.locator("openclaw-browser-panel");
+      await browser.locator("openclaw-panel-empty-state").waitFor();
+
+      const initialRequests = await gateway.getRequests("browser.request");
+      expect(initialRequests.map((request) => request.params)).toEqual([
+        { method: "GET", path: "/tabs" },
+      ]);
+
+      await openChatSidePanelType(page, "Files");
+      expect(await browser.evaluate((element) => element.isConnected)).toBe(true);
+      const hiddenRequestCount = (await gateway.getRequests("browser.request")).length;
+      await gateway.setMethodResponse("browser.request", {
+        cases: [
+          {
+            match: { method: "GET", path: "/tabs" },
+            response: {
+              running: true,
+              tabs: [
+                {
+                  targetId: "blacksmith-target",
+                  tabId: "blacksmith-tab",
+                  title: "Blacksmith",
+                  url: "https://blacksmith.sh/",
+                },
+              ],
+            },
+          },
+          {
+            match: { method: "POST", path: "/screenshot" },
+            response: {
+              path: "/proof/blacksmith.png",
+              targetId: "blacksmith-target",
+              url: "https://blacksmith.sh/",
+            },
+          },
+        ],
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect((await gateway.getRequests("browser.request")).length).toBe(hiddenRequestCount);
+
+      await page
+        .locator(".side-panel__header .tabstrip-tab")
+        .filter({ hasText: "Browser" })
+        .click();
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests("browser.request");
+          return requests.filter((request) => {
+            const params = request.params as { method?: string; path?: string };
+            return params.method === "GET" && params.path === "/tabs";
+          }).length;
+        })
+        .toBe(2);
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("browser.request")).map((request) => request.params),
+        )
+        .toContainEqual({
+          body: { targetId: "blacksmith-tab", type: "png" },
+          method: "POST",
+          path: "/screenshot",
+        });
+
+      await browser.locator(".bp-shot").waitFor();
+      expect(await browser.locator(".bp-shot").getAttribute("src")).toMatch(
+        /^data:image\/png;base64,/,
+      );
+      expect(await browser.locator(".bp-url").inputValue()).toBe("https://blacksmith.sh/");
+      expect(await browser.locator(".bp-loading").count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("preserves the production header-action shapes for Side chat and Discussion", async () => {
     const context = await suite.newBrowserContext({ serviceWorkers: "block" });
     const page = await context.newPage();

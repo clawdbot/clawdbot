@@ -82,7 +82,10 @@ import {
   resolveEdgeAuthHeaders,
   type EdgeAuthHeadersConfig,
 } from "./edge-auth.js";
-import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
+import {
+  canSkipGatewayConfigLoad,
+  isExplicitGatewayConnection,
+} from "./explicit-connection-policy.js";
 import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
@@ -407,6 +410,19 @@ async function loadGatewayConfig(): Promise<OpenClawConfig> {
   return await defaultGetRuntimeConfig();
 }
 
+/**
+ * Load config for a fully flag-addressed connection. Config only supplies
+ * gateway.remote.edgeAuth here, so an unreadable or invalid config degrades to
+ * empty rather than blocking a connection the flags already describe.
+ */
+async function loadGatewayConfigForExplicitConnection(): Promise<OpenClawConfig> {
+  try {
+    return await loadGatewayConfig();
+  } catch {
+    return {};
+  }
+}
+
 function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
   return readGatewayDispatchConfig();
 }
@@ -624,8 +640,18 @@ async function resolveGatewayCallContext(
     urlOverride,
     explicitAuth,
   });
+  const explicitConnection = isExplicitGatewayConnection({
+    config: opts.config,
+    urlOverride,
+    explicitAuth,
+  });
   const config =
-    opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : await loadGatewayConfig());
+    opts.config ??
+    (canSkipConfigLoad
+      ? ({} as OpenClawConfig)
+      : explicitConnection
+        ? await loadGatewayConfigForExplicitConnection()
+        : await loadGatewayConfig());
   const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = opts.localPortOverride === undefined && config.gateway?.mode === "remote";
   return {

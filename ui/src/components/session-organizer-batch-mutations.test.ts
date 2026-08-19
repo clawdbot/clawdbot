@@ -424,7 +424,11 @@ function cloudWorkerRow(hasActiveRun: boolean): SidebarRecentSession {
   return {
     ...sessionRow(0),
     hasActiveRun,
-    cloudWorkerStopAction: { method: "sessions.reclaim", requiredScope: "operator.admin" },
+    cloudWorkerStopAction: {
+      method: "sessions.reclaim",
+      requiredScope: "operator.write",
+      blocksActiveRun: true,
+    },
   } as SidebarRecentSession;
 }
 

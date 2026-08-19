@@ -4,6 +4,7 @@ import {
   validateWorkerInferenceTerminalOutcome,
   type WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import type { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
@@ -43,7 +44,7 @@ type Deps = {
   applyStreamPolicy: typeof applyExtraParamsToAgent;
   acquireRuntimeLease: typeof acquireAgentRunPreparedModelRuntime;
   prepareModel: typeof prepareSimpleCompletionModel;
-  resolveAuthProfileMode: () => string | undefined;
+  resolveSessionAuthSelection: typeof resolveSessionAuthSelection;
   resolveModel: typeof resolveModelAsync;
   resolveProviderStream: typeof registerProviderStreamForModel;
   resolveStream: typeof resolveEmbeddedAgentStreamFn;
@@ -247,7 +248,15 @@ function setup(
       },
     };
   });
-  const resolveAuthProfileMode = vi.fn<Deps["resolveAuthProfileMode"]>(() => undefined);
+  const resolveAuthSelection = vi.fn<Deps["resolveSessionAuthSelection"]>(async () =>
+    entry.authProfileOverride
+      ? {
+          profileId: entry.authProfileOverride,
+          source: entry.authProfileOverrideSource ?? "user",
+          routeRequirement: undefined,
+        }
+      : undefined,
+  );
   const observedRegistry = () => getPluginRuntimeGenerationRegistry() ?? getActivePluginRegistry();
   const stream = vi.fn<StreamFn>(() => {
     options.observeStage?.("execution", observedRegistry());
@@ -288,10 +297,9 @@ function setup(
     })),
     acquireRuntimeLease,
     resolveDefaultModel: vi.fn(() => ({ provider: PROVIDER, model: MODEL })),
-    resolveSessionAuthProfile: vi.fn(async () => entry.authProfileOverride),
+    resolveSessionAuthSelection: resolveAuthSelection,
     resolveModel,
     prepareModel,
-    resolveAuthProfileMode,
     resolveProviderStream,
     resolveStream,
     applyStreamPolicy,
@@ -307,7 +315,7 @@ function setup(
     acquireRuntimeLease,
     prepareModel,
     releaseRuntime,
-    resolveAuthProfileMode,
+    resolveAuthSelection,
     scope,
     stream,
   };
@@ -363,12 +371,20 @@ describe("worker inference provider runtime", () => {
 
   it("projects the gateway-owned auth profile onto the provider route", async () => {
     const oauthRuntime = setup();
-    oauthRuntime.resolveAuthProfileMode.mockReturnValue("oauth");
+    oauthRuntime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "user",
+      routeRequirement: "subscription",
+    });
     await oauthRuntime.executor(params(request(), vi.fn()));
     const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
     const apiKeyRuntime = setup();
-    apiKeyRuntime.resolveAuthProfileMode.mockReturnValue("api_key");
+    apiKeyRuntime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "user",
+      routeRequirement: "api-key",
+    });
     await apiKeyRuntime.executor(params(request(), vi.fn()));
     const apiKey = apiKeyRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
@@ -386,7 +402,11 @@ describe("worker inference provider runtime", () => {
 
   it("prepares the selected model against its gateway-owned OAuth route", async () => {
     const runtime = setup();
-    runtime.resolveAuthProfileMode.mockReturnValue("oauth");
+    runtime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "user",
+      routeRequirement: "subscription",
+    });
 
     await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
       type: "done",
@@ -405,7 +425,11 @@ describe("worker inference provider runtime", () => {
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 1,
     });
-    runtime.resolveAuthProfileMode.mockReturnValue("oauth");
+    runtime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "auto",
+      routeRequirement: "subscription",
+    });
 
     await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
       type: "done",

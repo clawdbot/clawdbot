@@ -317,6 +317,7 @@ function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgen
     authProfileProvider: provider,
     sessionHasHistory: false,
     ...overrides,
+    pluginGeneration: overrides.pluginGeneration,
     preparedRunAdmission: overrides.preparedRunAdmission ?? createTestPreparedRunAdmission(runId),
     lifecycleGeneration: overrides.lifecycleGeneration ?? "test-generation",
     opts: { ...overrides.opts } as RunAgentAttemptParams["opts"],

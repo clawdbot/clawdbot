@@ -59,7 +59,8 @@ export class DraftPlaceBrowser {
   private browserProjectPathValue: string | null = null;
   private browserRegisteringValue = false;
   private openPopoverValue: DraftPickerKind | null = null;
-  private hidingPopoverValue: DraftPickerKind | null = null;
+  // Independent hide animations can overlap; keep every trigger fenced until its own completes.
+  private readonly hidingPopovers = new Set<DraftPickerKind>();
   // Live head input; absolute paths stay applicable even without fs.listDir.
   private browserPathDraftValue = "";
   private browserRequestToken = 0;
@@ -217,7 +218,7 @@ export class DraftPlaceBrowser {
   }
 
   popoverHiding(kind: DraftPickerKind): boolean {
-    return this.hidingPopoverValue === kind;
+    return this.hidingPopovers.has(kind);
   }
 
   popoverCallbacks(kind: DraftPickerKind) {
@@ -524,7 +525,7 @@ export class DraftPlaceBrowser {
     if (this.openPopoverValue === kind) {
       this.openPopoverValue = null;
     }
-    this.hidingPopoverValue = kind;
+    this.hidingPopovers.add(kind);
     if (kind === "project") {
       this.showRoot();
     } else {
@@ -533,15 +534,13 @@ export class DraftPlaceBrowser {
   }
 
   onPopoverAfterHide(kind: DraftPickerKind) {
-    if (this.hidingPopoverValue === kind) {
-      this.hidingPopoverValue = null;
-    }
+    this.hidingPopovers.delete(kind);
     this.restorePopoverTrigger(`new-session-${kind}-trigger`, `.new-session-page__${kind}-popover`);
     this.callbacks.requestUpdate();
   }
 
   guardPopoverTransition(event: Event, kind: DraftPickerKind) {
-    if (this.hidingPopoverValue !== kind) {
+    if (!this.hidingPopovers.has(kind)) {
       return;
     }
     event.preventDefault();
@@ -549,7 +548,7 @@ export class DraftPlaceBrowser {
   }
 
   clearPopoverHiding() {
-    this.hidingPopoverValue = null;
+    this.hidingPopovers.clear();
     this.callbacks.requestUpdate();
   }
 

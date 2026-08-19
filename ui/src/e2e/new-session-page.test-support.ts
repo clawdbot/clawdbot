@@ -71,6 +71,12 @@ const environmentMetadataProofArtifactDir = path.join(
   "control-ui-e2e",
   "environment-metadata",
 );
+const deviceRuntimeProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "device-runtime-gating",
+);
 
 export async function prepareProjectUiProof() {
   if (captureUiProofEnabled) {
@@ -122,7 +128,7 @@ export function createdSessionListResult(sessionKey: string) {
   };
 }
 
-export async function expectPendingCloudStartupBeforeRuntime(
+export async function expectPendingSessionPlacementStartupBeforeRuntime(
   page: Page,
   gateway: MockGatewayControls,
   sessionKey: string,
@@ -175,6 +181,18 @@ export async function captureEnvironmentMetadataUiProof(page: Page) {
     animations: "disabled",
     fullPage: true,
     path: path.join(environmentMetadataProofArtifactDir, `${proofName}.png`),
+  });
+}
+
+export async function captureDeviceRuntimeUiProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(deviceRuntimeProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(deviceRuntimeProofArtifactDir, fileName),
   });
 }
 

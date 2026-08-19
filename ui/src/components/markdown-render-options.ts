@@ -9,6 +9,7 @@ export type MarkdownRenderOptions = {
   codeBlockInteraction?: MarkdownCodeBlockInteraction;
   fileLinks?: boolean;
   interactiveImages?: boolean;
+  linkFavicons?: boolean;
   progressBars?: boolean;
   mode?: MarkdownRenderMode;
   sessionLinks?: boolean;
@@ -26,6 +27,7 @@ export function normalizeMarkdownRenderOptions(
     codeBlockInteraction: options.codeBlockInteraction ?? "static",
     fileLinks: options.fileLinks ?? false,
     interactiveImages: options.interactiveImages ?? false,
+    linkFavicons: options.linkFavicons ?? false,
     progressBars: options.progressBars ?? false,
     mode: options.mode ?? "message",
     sessionLinks: options.sessionLinks ?? false,

@@ -244,6 +244,25 @@ async function narrowestRailTabLabel(page: Page): Promise<number> {
     );
 }
 
+async function expectExpandedSidePanelFillsRegion(page: Page): Promise<void> {
+  const geometry = await sidePanel(page).evaluate((element) => {
+    const panel = element.getBoundingClientRect();
+    const region = element.closest(".sidebar-region")?.getBoundingClientRect();
+    if (!region) {
+      throw new Error("Expanded side panel has no sidebar region");
+    }
+    return {
+      bottom: Math.abs(panel.bottom - region.bottom),
+      left: Math.abs(panel.left - region.left),
+      right: Math.abs(panel.right - region.right),
+      top: Math.abs(panel.top - region.top),
+    };
+  });
+  for (const delta of Object.values(geometry)) {
+    expect(delta).toBeLessThanOrEqual(1);
+  }
+}
+
 async function captureRichPanel(page: Page, name: string) {
   if (!proofDir) {
     return;
@@ -736,6 +755,8 @@ suite.define(() => {
                 .evaluate((element) => getComputedStyle(element).display),
             )
             .toBe("none");
+          await expectExpandedSidePanelFillsRegion(page);
+          await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
           await sidePanel(page).getByRole("button", { name: "Restore side panel" }).click();
 
           await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
@@ -947,6 +968,7 @@ suite.define(() => {
               .evaluate((element) => getComputedStyle(element).display),
           )
           .toBe("none");
+        await expectExpandedSidePanelFillsRegion(page);
         await captureRichPanel(page, "rails-tabs-mobile-light");
       },
     );

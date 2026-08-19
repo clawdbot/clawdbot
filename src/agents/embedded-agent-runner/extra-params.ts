@@ -81,7 +81,6 @@ function supportsGptParallelToolCallsPayload(api: unknown): boolean {
 }
 
 const testing = {
-  supportsGptParallelToolCallsPayload,
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
   ): void {

@@ -562,34 +562,45 @@ describe("config cli integration", () => {
     );
   });
 
-  it.each([
-    {
-      name: "setting an authored value to itself",
-      run: (runtime: ReturnType<typeof createTestRuntime>["runtime"]) =>
-        runConfigSet({
-          path: "gateway.port",
-          value: "18789",
-          cliOptions: { strictJson: true },
-          runtime,
-        }),
-    },
-    {
-      name: "unsetting an absent authored value",
-      run: (runtime: ReturnType<typeof createTestRuntime>["runtime"]) =>
-        runConfigUnset({ path: "gateway.bind", runtime }),
-    },
-  ])("preserves exact JSON5 bytes when $name is a no-op", async (testCase) => {
+  it("preserves exact JSON5 bytes when setting an authored value to itself", async () => {
     const raw =
       '{\n  // preserve this comment and order\n  gateway: { port: 18789 },\n  logging: { level: "info" },\n}\n';
     await withConfigFileHarness("openclaw-config-cli-noop-", raw, async ({ configPath }) => {
       const output = createTestRuntime();
 
-      await testCase.run(output.runtime);
+      await runConfigSet({
+        path: "gateway.port",
+        value: "18789",
+        cliOptions: { strictJson: true },
+        runtime: output.runtime,
+      });
 
       expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
       expect(output.errors).toStrictEqual([]);
       expect(output.logs).toStrictEqual(["No change"]);
     });
+  });
+
+  it("preserves exact JSON5 bytes while rejecting an absent authored unset", async () => {
+    const raw =
+      '{\n  // preserve this comment and order\n  gateway: { port: 18789 },\n  logging: { level: "info" },\n}\n';
+    await withConfigFileHarness(
+      "openclaw-config-cli-missing-unset-",
+      raw,
+      async ({ configPath }) => {
+        const output = createTestRuntime();
+
+        await expect(
+          runConfigUnset({ path: "gateway.bind", runtime: output.runtime }),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        expect(output.logs).toStrictEqual([]);
+        expect(output.errors.join("\n")).toContain(
+          "Config path not found: gateway.bind. Nothing was changed. Run openclaw config get <path> first if you are unsure of the path.",
+        );
+      },
+    );
   });
 
   it("writes an absent key even when its value equals the resolved default", async () => {

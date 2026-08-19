@@ -8,6 +8,7 @@ import {
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../sessions/agent-harness-session-key.js";
@@ -83,9 +84,7 @@ export async function resolveEmbeddedModelSelection(params: {
   sessionAgentId: string;
   workspaceDir: string;
   pluginsEnabled: boolean;
-  manifestMetadataSnapshot?: NonNullable<
-    Parameters<typeof resolveProviderIdForAuth>[1]
-  >["metadataSnapshot"];
+  manifestMetadataSnapshot?: PluginMetadataSnapshot;
   modelManifestContext: ModelManifestNormalizationContext;
   configuredThinkingCatalog: ReturnType<typeof loadManifestModelCatalog>;
   requestedThinkLevel?: ThinkLevel;
@@ -155,7 +154,11 @@ export async function resolveEmbeddedModelSelection(params: {
     Object.keys(agentModels ?? {}).length > 0;
   if (hasAllowlist || hasConfiguredModels) {
     modelCatalog = params.pluginsEnabled
-      ? loadManifestModelCatalog({ config: params.cfg, workspaceDir: params.workspaceDir })
+      ? loadManifestModelCatalog({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          metadataSnapshot: params.manifestMetadataSnapshot,
+        })
       : [];
     visibilityPolicy = createModelVisibilityPolicy({
       cfg: params.cfg,

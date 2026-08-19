@@ -55,6 +55,7 @@ import {
   formatGatewayPidList,
 } from "../../infra/gateway-processes.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
+import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -478,6 +479,7 @@ function resolveGatewayLockErrorExitCode(err: unknown): number {
 
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
   return isInvalidConfigError(err) ||
+    isTailscaleRouteOwnershipConflictError(err) ||
     findOpenClawAgentDatabaseMediaMigrationRequiredError(err) ||
     findOpenClawStateDatabaseSchemaMigrationRequiredError(err)
     ? EXIT_CONFIG_ERROR

@@ -42,6 +42,7 @@ describe("sessions.dispatch", () => {
     const codexHarness: AgentHarness & { cloudPlacement: { mode: "remote-exec" } } = {
       id: "codex",
       label: "Codex",
+      autoSelection: { providerIds: ["codex", "openai"] },
       cloudPlacement: { mode: "remote-exec" },
       supports: () => ({ supported: true, priority: 10 }),
       async runAttempt() {
@@ -212,6 +213,7 @@ describe("sessions.dispatch", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ executionMode: "remote-exec" }),
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -249,7 +251,37 @@ describe("sessions.dispatch", () => {
       undefined,
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
-        message: "runtime codex requires an SSH-backed cloud worker provider",
+        message:
+          'runtime codex requires an SSH-backed cloud worker provider; choose a provider that supports remote-exec, or select an agent/model route with agentRuntime.id "openclaw"',
+      }),
+    );
+  });
+
+  it("explains how to make a codex session eligible for paired-device dispatch", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        agentRuntimeOverride: "codex",
+        worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
+      }),
+    );
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { deviceId: "device-1" },
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          'runtime codex cannot dispatch to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or choose an SSH-backed cloud worker provider',
       }),
     );
   });
@@ -278,6 +310,7 @@ describe("sessions.dispatch", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "test", machineClass: "large" }),
       expect.any(Function),
+      undefined,
     );
   });
 
@@ -375,6 +408,7 @@ describe("sessions.dispatch", () => {
         target: { kind: "gateway" },
       },
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -420,6 +454,7 @@ describe("sessions.dispatch", () => {
         target: { kind: "profile", profileId: "test", machineClass: "beast" },
       }),
       expect.any(Function),
+      undefined,
     );
   });
 
@@ -503,6 +538,7 @@ describe("sessions.dispatch", () => {
         profileId: "test",
       }),
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -796,6 +832,7 @@ describe("sessions.dispatch", () => {
         profileId: "test",
       }),
       expect.any(Function),
+      undefined,
     );
     expect(readSessionsMutationVersion(context)).toBe(priorMutationVersion + 5);
     expect(respond).toHaveBeenCalledWith(

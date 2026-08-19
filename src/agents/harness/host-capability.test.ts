@@ -241,6 +241,37 @@ describe("agent harness host capability", () => {
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
   });
 
+  it("delegates trajectory events and rejects a flush that outlives the capability", async () => {
+    const flushStarted = createDeferred();
+    const flushResult = createDeferred();
+    const recordEvent = vi.fn();
+    const flush = vi.fn(async () => {
+      flushStarted.resolve();
+      await flushResult.promise;
+    });
+    const { attempt } = await admittedAttempt("run-trajectory", {
+      trajectoryRecorder: {
+        recordEvent,
+        flush,
+      },
+    });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const trajectory = host.capabilities.trajectory;
+    if (!trajectory) {
+      throw new Error("expected trajectory capability");
+    }
+
+    trajectory.recordEvent("plugin.event", { ok: true });
+    expect(recordEvent).toHaveBeenCalledWith("plugin.event", { ok: true });
+    const pending = trajectory.flush();
+    await flushStarted.promise;
+    host.close();
+    flushResult.resolve();
+
+    await expect(pending).rejects.toThrow("no longer active");
+    expect(() => trajectory.recordEvent("late.event")).toThrow("no longer active");
+  });
+
   it("preserves ambient GitHub service tokens for a native local identity", async () => {
     vi.stubEnv("GH_TOKEN", "ambient-service-token");
     vi.stubEnv("GITHUB_TOKEN", "ambient-fallback-token");

@@ -26,6 +26,7 @@ import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
@@ -99,6 +100,7 @@ export type ChatThreadProps = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  fetchLinkFavicon?: LinkFaviconFetcher;
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   typingActors?: readonly { id: string; label: string }[];

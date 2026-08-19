@@ -1,6 +1,7 @@
 // Hook request handler validates hook tokens, applies mappings, dedupes requests, and dispatches wake or agent work.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { closeRequestAfterResponse } from "../../infra/http-body.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
@@ -296,6 +297,9 @@ export function createHooksRequestHandler(
           : body.error === "request body timeout"
             ? 408
             : 400;
+      if (status === 413 || status === 408) {
+        closeRequestAfterResponse(req, res);
+      }
       sendJson(res, status, { ok: false, error: body.error });
       return true;
     }

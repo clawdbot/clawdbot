@@ -36,7 +36,10 @@ import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
-import { type ChatCloudStartupNoticeProps, renderChatViewNotices } from "./chat-view-notices.ts";
+import {
+  type ChatPlacementStartupNoticeProps,
+  renderChatViewNotices,
+} from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import type {
@@ -63,6 +66,7 @@ import {
 import { renderChatThread } from "./components/chat-thread.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
+import type { LinkFaviconFetcher } from "./link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
@@ -78,7 +82,7 @@ type ChatReplyTarget = {
   sourceMessageId?: string | null;
 };
 export type ChatProps = ChatTaskSuggestionTrayProps &
-  ChatCloudStartupNoticeProps & {
+  ChatPlacementStartupNoticeProps & {
     transcript: ChatTranscriptController;
     paneId: string;
     sessionKey: string;
@@ -97,6 +101,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     compactionStatus?: CompactionStatus | null;
     fallbackStatus?: FallbackStatus | null;
     progressCard?: ProgressCard | null;
+    onDismissProgressCard?: (card: ProgressCard) => void;
     gatewayQuestionPrompts?: readonly QuestionPrompt[];
     onGatewayQuestionChange?: () => void;
     onGatewayQuestionSubmit?: (
@@ -170,6 +175,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     boardProvider?: BoardProvider;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    fetchLinkFavicon?: LinkFaviconFetcher;
     chatMessageMaxWidth?: string | null;
     assistantName: string;
     sendShortcut?: ChatSendShortcut;
@@ -334,6 +340,7 @@ export function renderChat(props: ChatProps) {
       canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
       embedSandboxMode: props.embedSandboxMode,
       allowExternalEmbedUrls: props.allowExternalEmbedUrls,
+      fetchLinkFavicon: props.fetchLinkFavicon,
       autoExpandToolCalls: props.autoExpandToolCalls,
       realtimeTalkConversation: props.realtimeTalkConversation,
       typingActors: props.typingActors,
@@ -386,6 +393,7 @@ export function renderChat(props: ChatProps) {
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
     progressCard: props.progressCard,
+    onDismissProgressCard: props.onDismissProgressCard,
     gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
     stream: props.stream,

@@ -578,7 +578,7 @@ Query-string tokens are rejected.
       Target agent. When supplied, it must name a configured agent. It is required when the configured agent fleet has no implicit or retained legacy owner.
     </ParamField>
     <ParamField path="sessionKey" type="string">
-      Target session. Requires `hooks.allowRequestSessionKey: true` and must match `hooks.allowedSessionKeyPrefixes` when configured. Both wake modes can target an explicit session.
+      Target session. Requires `mode: "now"` and `hooks.allowRequestSessionKey: true`, and must match `hooks.allowedSessionKeyPrefixes` when configured. Deferred `next-heartbeat` wakes use the agent's main session.
     </ParamField>
 
   </Accordion>

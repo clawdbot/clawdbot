@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -151,7 +151,12 @@ vi.mock("./runtime-loaders.js", () => ({
 
 const { resolveEmbeddedModelSelection } = await import("./model-selection.js");
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+let suiteTempRoot = "";
+
+beforeAll(() => {
+  suiteTempRoot = tempDirs.make("turn-model-command-");
+});
 
 function createConfig(fixture: TurnModelDifferentialFixture): OpenClawConfig {
   return {
@@ -161,6 +166,7 @@ function createConfig(fixture: TurnModelDifferentialFixture): OpenClawConfig {
 }
 
 async function observeCommandSelection(fixture: TurnModelDifferentialFixture) {
+  const fixtureIndex = TURN_MODEL_DIFFERENTIAL_FIXTURES.indexOf(fixture);
   const sessionKey = "agent:main:telegram:group:selection";
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: fixture.child };
   if (fixture.parent) {
@@ -194,9 +200,9 @@ async function observeCommandSelection(fixture: TurnModelDifferentialFixture) {
     sessionStore,
     sessionKey,
     sessionId: fixture.child.sessionId,
-    storePath: path.join(tempDirs.make("turn-model-command-"), "sessions.json"),
+    storePath: path.join(suiteTempRoot, `sessions-${fixtureIndex}.json`),
     sessionAgentId: "main",
-    workspaceDir: tempDirs.make("turn-model-command-workspace-"),
+    workspaceDir: suiteTempRoot,
     pluginsEnabled: false,
     modelManifestContext: {},
     configuredThinkingCatalog: [],

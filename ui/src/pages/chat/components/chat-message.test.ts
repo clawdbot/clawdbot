@@ -963,6 +963,7 @@ describe("grouped chat rendering", () => {
       codeBlockInteraction: "static",
       fileLinks: true,
       interactiveImages: false,
+      linkFavicons: false,
       sessionLinks: true,
       tableInteractions: "enabled",
     });
@@ -1086,6 +1087,7 @@ describe("grouped chat rendering", () => {
       codeBlockInteraction: "interactive",
       fileLinks: true,
       interactiveImages: false,
+      linkFavicons: false,
       sessionLinks: true,
       tableInteractions: "enabled",
     });
@@ -1631,6 +1633,7 @@ describe("grouped chat rendering", () => {
       codeBlockInteraction: "interactive",
       fileLinks: true,
       interactiveImages: false,
+      linkFavicons: false,
       sessionLinks: true,
       tableInteractions: "enabled",
     });

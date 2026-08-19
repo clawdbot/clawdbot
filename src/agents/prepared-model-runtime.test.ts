@@ -111,12 +111,15 @@ describe("prepared model runtime snapshots", () => {
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
 
     expect(
-      prepareWorkspacePluginRegistries({
-        config: {},
-        agentDir: "/tmp/native-provider-probe",
-        readOnly: true,
-        loadRuntimePlugins: true,
-      }).runtimePluginRegistry,
+      prepareWorkspacePluginRegistries(
+        {
+          config: {},
+          agentDir: "/tmp/native-provider-probe",
+          readOnly: true,
+          loadRuntimePlugins: true,
+        },
+        mocks.pluginMetadataSnapshot as never,
+      ).runtimePluginRegistry,
     ).toBe(pluginRegistry);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
       expect.objectContaining({ selections: undefined }),
@@ -180,6 +183,7 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
       env: process.env,
+      metadataSnapshot: mocks.pluginMetadataSnapshot,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
       selections: undefined,
     });
