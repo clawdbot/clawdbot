@@ -132,8 +132,8 @@ function formatUnknownToolIdError(
   const recoveryText =
     options.recoverySurface === "code-mode"
       ? "Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name."
-      : options.recoverySurface === "tools"
-        ? "Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name."
+      : options.recoverySurface === "catalog"
+        ? "Use catalog.search to find a callable tool handle, then call the handle or use its describe method."
         : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
   if (suggestions.length === 0) {
     return `Unknown tool id: ${needle}. ${recoveryText}`;

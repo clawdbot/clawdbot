@@ -8,6 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { CODE_MODE_NODES_TOOL_ID } from "./code-mode-bridge.js";
 import {
+  createCodeModeCatalogProjection,
+  type CodeModeCatalogBinding,
+} from "./code-mode-catalog.js";
+import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
   isCodeModeControlTool,
@@ -15,7 +19,10 @@ import {
 } from "./code-mode-control-tools.js";
 import { runCodeModeExec, runWait } from "./code-mode-execution.js";
 import { runCodeModeScriptHeadless } from "./code-mode-headless.js";
-import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
+import {
+  createCodeModeNamespaceRuntime,
+  describeCodeModeNamespacesForPrompt,
+} from "./code-mode-namespaces.js";
 import {
   isCodeModeEngagedForModel,
   readCode,
@@ -62,17 +69,15 @@ type CodeModeToolContext = ToolSearchToolContext;
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 
 const CODE_MODE_CATALOG_INDEX_HEADING = [
-  "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
-  "Each line is `id input -> output`; `-> ?` means unknown.",
-  "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
-  "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
+  "Enabled async tool globals (descriptions are intentionally deferred):",
+  "Each line is `callableName input -> output`; `-> ?` means unknown output.",
 ].join("\n");
 
 function codeModeCatalogIndexFooter(included: number, total: number): string {
   const omitted = total - included;
   return omitted > 0
-    ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
-    : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
+    ? `${omitted} additional tools omitted from this prompt index. Use catalog.search(query); results are callable.`
+    : "Call these globals directly; use catalog.search(query) when lookup is ambiguous.";
 }
 
 function renderCodeModeCatalogIndex(lines: readonly string[], total: number): string {
@@ -84,17 +89,17 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
   ].join("\n");
 }
 
-function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]): string {
-  const lines = catalog
-    .filter((entry) => entry.source === "openclaw")
-    .map((entry) => compactToolSearchCatalogEntry(entry))
+function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[]): string {
+  const lines = bindings
     // Declared-output entries sort first so byte truncation drops `-> ?`
-    // lines, which stay fully discoverable through ALL_TOOLS, before it drops
+    // lines, which stay fully discoverable through catalog.search, before it drops
     // contracts the model can one-pass on. Deterministic within each tier.
-    .toSorted((a, b) => (a.output ? 0 : 1) - (b.output ? 0 : 1) || a.id.localeCompare(b.id))
+    .toSorted(
+      (a, b) =>
+        (a.output ? 0 : 1) - (b.output ? 0 : 1) || a.callableName.localeCompare(b.callableName),
+    )
     .map(
-      (entry) =>
-        `- ${JSON.stringify(entry.id)} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
+      (entry) => `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
     );
   if (lines.length === 0) {
     return "";
@@ -109,7 +114,7 @@ function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]):
   // cut let one oversized entry — a pathological plugin id or input hint — blank
   // the entire index; skipping it keeps every other declared contract visible
   // and fits more of them when the declared tier alone overflows. Skipped
-  // entries stay discoverable through ALL_TOOLS, and the stable input order
+  // entries stay discoverable through catalog.search, and the stable input order
   // keeps prompt bytes deterministic for provider caches.
   const included: string[] = [];
   let includedLineLength = 0;
@@ -160,9 +165,19 @@ function createCodeModeExecDescription(
     ctx.runtimeConfig ?? ctx.config,
     ctx.agentId,
   ).maxOutputBytes;
-  const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
+  const projection = catalog
+    ? createCodeModeCatalogProjection(
+        catalog.map((entry) => compactToolSearchCatalogEntry(entry)),
+        {
+          reservedNames: createCodeModeNamespaceRuntime(catalog).descriptors.map(
+            (descriptor) => descriptor.globalName,
+          ),
+        },
+      )
+    : undefined;
+  const catalogIndex = projection ? formatCodeModeCatalogIndex(projection.bindings) : "";
   return (
-    `Run JavaScript or TypeScript in OpenClaw code mode. Use \`return\` to pass the final value back; otherwise the result is \`null\`. Quick-index arrows show trusted declared output hints; \`-> ?\` means never guess result field names. For declared fields, process them in the first exec; do not spend another exec inspecting them. Perform dependent reads, checks, and follow-up calls in order; parallelize independent work only. \`setTimeout\` and \`clearTimeout\` work. For an unknown output, including a final dependent call after declared-output calls, return the raw tool value unchanged; do not wrap it in the requested answer shape or guess fields; filter or map it only in a later exec. Nested calls enforce normal tool policy and approvals. Nested results, output, and final value share ${maxOutputBytes} bytes; truncation reports omitted bytes and asks you to rerun with narrower args. \`ALL_TOOLS\` is the complete compact catalog. Select exact ids with \`tools.search(query: string, options?)\`; use \`tools.describe(id: string)\` only when needed. Never invent or transform a tool id. \`tools.callValue(id: string, args?)\` returns its JSON value directly; \`tools.call(id: string, args?)\` preserves \`{ tool, result }\`. \`const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});\`. Node.js modules and \`require\`/\`import\` are NOT available; use enabled catalog tools allowed by policy for shell, file, network, or external actions.` +
+    `Run JavaScript or TypeScript in OpenClaw code mode. Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable and expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Nested results, output, and final value share ${maxOutputBytes} bytes; truncation reports omitted bytes and asks you to rerun with narrower args. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
     apiGuidance +
     mcpGuidance +
     swarmGuidance +
@@ -170,7 +185,7 @@ function createCodeModeExecDescription(
     skillsGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
     " The `code` field contains JavaScript or TypeScript, never a shell command. " +
-    "For shell or file operations, call the exact catalog tool from guest JavaScript; do not retry failed shell source." +
+    "For shell or file operations, call an enabled global from guest JavaScript; do not retry failed shell source." +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
   );
@@ -186,7 +201,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       // model-facing field prevents schema-valid empty calls from constrained models.
       code: Type.String({
         description:
-          'Required JS/TS; no Python, shell, `require`, `import`. Use explicit `return value`; a trailing expression is discarded and yields `null`. Use `callValue`, not `call`, for data; `call` wraps it under `.result`. Core text reads: `{kind:"text",content:string}`; use `.content`. Unknown format: return it first, then parse it in a later exec; never guess separators. Example: `const file=await tools.callValue("openclaw:core:read", { path: "notes.txt" }); if(file.kind!=="text") return file; return file.content;`. Use exact ids from `ALL_TOOLS` or `tools.search(query)`; never invent ids or parallelize dependent calls.',
+          "Required JS/TS; no Python, shell, `require`, or `import`. Use `return value`; a trailing expression yields `null`. Call enabled async globals directly. Await dependent calls in order; independent calls may use Promise.all. Unknown output (`-> ?`) cannot feed guessed dependent logic in the same program: return it raw, observe it, then use a later `exec`. Use callable results from `catalog.search(query)` when a tool is omitted from the index.",
       }),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
         description:

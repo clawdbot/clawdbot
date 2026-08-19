@@ -3,7 +3,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareSource, resolveCodeModeConfig } from "./code-mode-runtime.js";
-import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import {
+  addClientToolsToCodeModeCatalog,
+  applyCodeModeCatalog,
+  createCodeModeTools,
+} from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginTool,
@@ -263,8 +267,8 @@ describe("Code Mode guest execution", () => {
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
-        const hits = await tools.search("ticket", { limit: 1 });
-        const called = await tools.callValue(hits[0].id, { value: "ship" });
+        const [ticket] = await catalog.search("ticket", { limit: 1 });
+        const called = await ticket({ value: "ship" });
         text("created");
         return called;
       `,
@@ -280,7 +284,147 @@ describe("Code Mode guest execution", () => {
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
-  it("returns structured values from named tools while preserving the raw call envelope", async () => {
+  it("exposes catalog tools as bare globals and removes the legacy guest surface", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const search = pluginTool("web_search", "Search the web");
+    const llmTask = pluginTool("llm-task", "Run an LLM task");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, search, llmTask],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const result = await web_search({ query: "OpenClaw" });
+        const normalized = await llm_task({ prompt: "summarize" });
+        return {
+          result,
+          normalized,
+          tools: typeof globalThis.tools,
+          allTools: typeof globalThis.ALL_TOOLS,
+          catalog: typeof globalThis.catalog?.search,
+        };
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: {
+        result: { name: "web_search", input: { query: "OpenClaw" } },
+        normalized: { name: "llm-task", input: { prompt: "summarize" } },
+        tools: "undefined",
+        allTools: "undefined",
+        catalog: "function",
+      },
+    });
+    expect(search.execute).toHaveBeenCalledTimes(1);
+    expect(llmTask.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps normalized, reserved, and colliding prompt names aligned with runtime", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const targets = [
+      pluginTool("llm-task", "Run an LLM task"),
+      pluginTool("llm_task", "Run the exact-name task"),
+      pluginTool("catalog", "Collide with discovery"),
+      pluginTool("class", "Use a reserved word"),
+      pluginTool("9patch", "Start with a digit"),
+    ];
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, ...targets],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const handles = catalog.all();
+        const results = {};
+        for (const handle of handles) results[handle.toolName] = await handle({ ok: true });
+        return {
+          names: handles.map((handle) => handle.callableName),
+          results,
+          catalogSearch: typeof catalog.search,
+        };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    const value = details.value as { names: string[]; results: Record<string, unknown> };
+    expect(value.names).toContain("llm_task");
+    expect(value.names).toContain("tool_9patch");
+    expect(value.names).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^llm_task_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^catalog_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^class_[a-f0-9]{8}$/u),
+      ]),
+    );
+    for (const name of value.names) {
+      expect(compacted.tools[0]?.description).toContain(`- ${name} `);
+    }
+    expect(value.results).toMatchObject({
+      "llm-task": { name: "llm-task", input: { ok: true } },
+      llm_task: { name: "llm_task", input: { ok: true } },
+      catalog: { name: "catalog", input: { ok: true } },
+      class: { name: "class", input: { ok: true } },
+      "9patch": { name: "9patch", input: { ok: true } },
+    });
+  });
+
+  it("uses the client tool as the single winner for a shadowed exact name", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const plugin = pluginTool("shared_action", "Plugin action");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, plugin],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const client = pluginTool("shared_action", "Client action");
+    addClientToolsToCodeModeCatalog({
+      tools: [client as never],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const matches = await catalog.search("shared_action");
+        return { count: matches.length, value: await shared_action({ source: "guest" }) };
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: {
+        count: 1,
+        value: { name: "shared_action", input: { source: "guest" } },
+      },
+    });
+    expect(plugin.execute).not.toHaveBeenCalled();
+    expect(client.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns structured values from globals and callable catalog handles", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
     applyCodeModeCatalog({
@@ -296,12 +440,13 @@ describe("Code Mode guest execution", () => {
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
-        const id = "openclaw:fake-code-mode:fake_create_ticket";
         const input = { value: "ship" };
+        const [ticket] = await catalog.search("fake_create_ticket");
+        const description = await ticket.describe();
         return {
-          named: await tools.fake_create_ticket(input),
-          value: await tools.callValue(id, input),
-          envelope: await tools.call(id, input),
+          named: await fake_create_ticket(input),
+          searched: await ticket(input),
+          description,
         };
       `,
     });
@@ -313,25 +458,23 @@ describe("Code Mode guest execution", () => {
     expect(details.status).toBe("completed");
     expect(details.value).toEqual({
       named: expectedValue,
-      value: expectedValue,
-      envelope: {
-        tool: expect.objectContaining({
-          id: "openclaw:fake-code-mode:fake_create_ticket",
-          name: "fake_create_ticket",
-        }),
-        result: expect.objectContaining({ details: expectedValue }),
-      },
+      searched: expectedValue,
+      description: expect.objectContaining({
+        callableName: "fake_create_ticket",
+        name: "fake_create_ticket",
+        parameters: expect.any(Object),
+      }),
     });
-    expect(details.telemetry).toMatchObject({ callCount: 3 });
-    expect(ticket.execute).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(details.value)).not.toContain("openclaw:fake-code-mode");
+    expect(details.telemetry).toMatchObject({ callCount: 2, describeCount: 1 });
+    expect(ticket.execute).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    { surface: "callValue", code: 'return await tools.callValue("fake_network_page", {});' },
-    { surface: "named tool", code: "return await tools.fake_network_page({});" },
+    { surface: "bare global", code: "return await fake_network_page({});" },
     {
-      surface: "raw call envelope",
-      code: 'return (await tools.call("fake_network_page", {})).result.details;',
+      surface: "catalog handle",
+      code: 'const [page] = await catalog.search("fake_network_page"); return await page({});',
     },
   ])(
     "wraps network-controlled $surface output without changing structured values",
@@ -397,7 +540,7 @@ describe("Code Mode guest execution", () => {
     });
 
     let result = await expectDefined(tools[0], "exec tool").execute("code-call-network-error", {
-      code: `try { await tools.fake_network_error({}); } catch (error) { return error.message; }`,
+      code: `try { await fake_network_error({}); } catch (error) { return error.message; }`,
     });
     for (let index = 0; index < 8 && resultDetails(result).status === "waiting"; index += 1) {
       result = await expectDefined(tools[1], "wait tool").execute(`code-wait-error-${index}`, {
@@ -434,7 +577,7 @@ describe("Code Mode guest execution", () => {
 
     let result = await expectDefined(tools[0], "exec tool").execute(
       "code-call-uncaught-network-error",
-      { code: "return await tools.fake_network_error({});" },
+      { code: "return await fake_network_error({});" },
     );
     for (let index = 0; index < 8 && resultDetails(result).status === "waiting"; index += 1) {
       result = await expectDefined(tools[1], "wait tool").execute(
@@ -455,7 +598,7 @@ describe("Code Mode guest execution", () => {
     });
   });
 
-  it("uses tools recovery guidance for guessed tool ids", async () => {
+  it("returns no catalog handles for a missing tool without exposing ids", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const writeTool = pluginTool("write", "Write a file to the workspace");
     applyCodeModeCatalog({
@@ -470,54 +613,12 @@ describe("Code Mode guest execution", () => {
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: `
-        try {
-          await tools.call("file_write", {
-            path: "memory/2026-05-22.md",
-            content: "remember this",
-          });
-          return "unexpected success";
-        } catch (error) {
-          return error.message;
-        }
-      `,
+      code: 'return (await catalog.search("zzzz_missing_tool")).map((handle) => handle.callableName);',
     });
 
     expect(details.status).toBe("completed");
-    expect(details.value).toBe(
-      "Unknown tool id: file_write. Did you mean: write? Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
-    );
+    expect(details.value).toEqual([]);
     expect(writeTool.execute).not.toHaveBeenCalled();
-  });
-
-  it("uses tools recovery guidance when no generic Code Mode suggestion matches", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: codeModeTools,
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const details = await runUntilCompleted({
-      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
-      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: `
-        try {
-          await tools.call("missing_tool", {});
-          return "unexpected success";
-        } catch (error) {
-          return error.message;
-        }
-      `,
-    });
-
-    expect(details.status).toBe("completed");
-    expect(details.value).toBe(
-      "Unknown tool id: missing_tool. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
-    );
   });
 
   it("allows identifiers and strings that contain import without module access", async () => {
@@ -823,7 +924,7 @@ describe("Code Mode guest execution", () => {
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: 'const hits = await tools.search("ticket"); return hits.length;',
+      code: 'const hits = await catalog.search("ticket"); return hits.length;',
     });
 
     expect(details.status).toBe("completed");

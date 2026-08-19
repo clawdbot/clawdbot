@@ -82,7 +82,6 @@ function createHostRequestHandler(params: {
     if (
       method !== "search" &&
       method !== "describe" &&
-      method !== "call" &&
       method !== "callValue" &&
       method !== "nodes" &&
       method !== "yield" &&

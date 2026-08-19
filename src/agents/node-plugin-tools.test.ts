@@ -361,11 +361,11 @@ describe("createNodePluginTools", () => {
       `
         const api = await API.read("mcp/docs.d.ts");
         const called = await MCP.docs.search({ query: "needle" });
-        const direct = await tools.search("docs_search");
+        const direct = await catalog.search("docs_search");
         return {
           api: api.content,
           called: called.details,
-          allHasNodeMcp: ALL_TOOLS.some((entry) => entry.id === "mcp:docs:docs_search"),
+          allHasNodeMcp: catalog.all().some((entry) => entry.source === "mcp"),
           direct,
         };
       `,

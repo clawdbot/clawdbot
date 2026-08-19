@@ -146,7 +146,7 @@ describe("Code Mode skills and read tools", () => {
     });
   });
 
-  it("returns ordinary read content through tools.callValue", async () => {
+  it("returns ordinary read content through the bare tool global", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const read = createOpenClawReadTool(
       createReadTool("/workspace", {
@@ -169,7 +169,7 @@ describe("Code Mode skills and read tools", () => {
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: `return await tools.callValue("openclaw:core:read", { path: "notes.txt" });`,
+      code: `return await read({ path: "notes.txt" });`,
     });
 
     expect(details.status).toBe("completed");

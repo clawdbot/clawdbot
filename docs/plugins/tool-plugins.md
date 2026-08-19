@@ -235,7 +235,8 @@ or sensitive values in schema descriptions because trusted output metadata can
 become model-visible.
 Use `{ additionalProperties: false }` on object layers when you want a complete
 compact output hint; open or truncated schemas remain available through
-`tools.describe(...)` but are not advertised as complete quick-index contracts.
+the callable catalog handle's `describe()` but are not advertised as complete
+quick-index contracts.
 
 Factory tools declare `outputSchema` on the concrete `AnyAgentTool` they
 return. The static `tool({ factory })` declaration does not accept a separate

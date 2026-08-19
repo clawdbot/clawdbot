@@ -65,22 +65,7 @@ describe("Code Mode MCP namespace", () => {
           title: "Ship it",
         });
         const createdPayload = JSON.parse(created.content[0].text);
-        const searchHits = await tools.search("github create issue", { limit: 5 });
-        const allHasMcp = ALL_TOOLS.some((tool) => tool.source === "mcp");
-        let directCall;
-        let directDescribe;
-        try {
-          await tools.describe("github__create_issue");
-          directDescribe = "unexpected";
-        } catch (error) {
-          directDescribe = error.message;
-        }
-        try {
-          await tools.call("github__create_issue", { owner: "x", repo: "y", title: "blocked" });
-          directCall = "unexpected";
-        } catch (error) {
-          directCall = error.message;
-        }
+        const searchHits = await catalog.search("github create issue", { limit: 5 });
         return {
           apiHeader: api.header,
           apiFilePaths: apiFiles.files.map((file) => file.path),
@@ -96,9 +81,7 @@ describe("Code Mode MCP namespace", () => {
           createdPayload,
           createdDetails: created.details,
           searchHits,
-          allHasMcp,
-          directDescribe,
-          directCall,
+          catalogSize: catalog.all().length,
           hasMcp: "MCP" in namespaces,
         };
       `,
@@ -127,11 +110,7 @@ describe("Code Mode MCP namespace", () => {
         },
       },
       searchHits: [],
-      allHasMcp: false,
-      directDescribe:
-        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
-      directCall:
-        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+      catalogSize: 0,
       hasMcp: true,
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),
