@@ -28,6 +28,7 @@ import {
   applyResponsesServiceTierPricing,
   convertResponsesMessages,
   createResponsesAssistantOutput,
+  hasNullThinkingLevelOptOut,
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
@@ -59,6 +60,7 @@ export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+  disableReasoningSerialization?: boolean;
 }
 
 type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
@@ -111,11 +113,14 @@ export const streamSimpleOpenAIResponses: StreamFunction<
 
   const base = buildBaseOptions(model, options, apiKey);
   const replayOptions = options as OpenAIResponsesReplayOptions | undefined;
+  const disableReasoningSerialization =
+    options?.reasoning !== undefined && hasNullThinkingLevelOptOut(model, options.reasoning);
 
   return streamOpenAIResponses(model, context, {
     ...base,
     authProfileId: replayOptions?.authProfileId,
     reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
+    disableReasoningSerialization,
     replayResponsesItemIds: replayOptions?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);
 };

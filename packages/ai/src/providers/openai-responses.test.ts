@@ -24,7 +24,7 @@ vi.mock("openai", () => ({
   },
 }));
 
-import { streamOpenAIResponses } from "./openai-responses.js";
+import { streamOpenAIResponses, streamSimpleOpenAIResponses } from "./openai-responses.js";
 
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -101,5 +101,43 @@ describe("OpenAI Responses provider", () => {
     expect(result.stopReason).toBe("error");
     expect(openAiMockState.params[0]).toMatchObject({ max_output_tokens: 16, store: false });
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
+  });
+
+  it("omits reasoning serialization for a null thinking-level opt-out", async () => {
+    const result = await streamSimpleOpenAIResponses(
+      model({
+        provider: "proof-provider",
+        baseUrl: "https://proof.invalid/v1",
+        compat: { supportsReasoningEffort: true },
+        thinkingLevelMap: { high: null },
+      }),
+      context,
+      { apiKey: "proof-key", reasoning: "high" },
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(openAiMockState.params[0]).not.toHaveProperty("reasoning");
+    expect(openAiMockState.params[0]).not.toHaveProperty("include");
+  });
+
+  it("preserves ordinary high reasoning serialization through simple completions", async () => {
+    const result = await streamSimpleOpenAIResponses(
+      model({
+        provider: "proof-provider",
+        baseUrl: "https://proof.invalid/v1",
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      }),
+      context,
+      { apiKey: "proof-key", reasoning: "high" },
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(openAiMockState.params[0]).toMatchObject({
+      reasoning: { effort: "high", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
   });
 });

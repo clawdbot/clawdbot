@@ -359,6 +359,15 @@ describe("Responses reasoning effort", () => {
     expect(resolveResponsesReasoningEffort(gpt55WithXHigh, "max")).toBe("xhigh");
   });
 
+  it("returns undefined for a null thinking-level opt-out", () => {
+    const optOutModel = {
+      ...nativeOpenAIModel,
+      thinkingLevelMap: { high: null },
+    } satisfies Model<"openai-responses">;
+
+    expect(resolveResponsesReasoningEffort(optOutModel, "high")).toBeUndefined();
+  });
+
   it("maps compat reasoning effort before serializing Responses payload", () => {
     const params = {} as ResponseCreateParamsStreaming;
     const compatModel = {

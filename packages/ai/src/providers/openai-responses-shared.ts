@@ -121,6 +121,7 @@ type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
   reasoningEffort?: OpenAIApiReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
+  disableReasoningSerialization?: boolean;
 };
 
 type ResponsesLifecycleRequest = OpenAIResponsesRequestParams;
@@ -176,6 +177,18 @@ function isResponsesReasoningEffortDisabled<TApi extends Api>(model: Model<TApi>
   );
 }
 
+export function hasNullThinkingLevelOptOut<TApi extends Api>(
+  model: Model<TApi>,
+  reasoning: string | undefined,
+): boolean {
+  if (reasoning === undefined || model.thinkingLevelMap === undefined) {
+    return false;
+  }
+  return Object.entries(model.thinkingLevelMap).some(
+    ([level, value]) => level === reasoning && value === null,
+  );
+}
+
 function isModelThinkingLevel(value: string): value is ModelThinkingLevel {
   return value === "off" || isResponsesReasoningEffort(value);
 }
@@ -189,7 +202,7 @@ function resolveResponsesApiReasoningEffort<TApi extends Api>(
     return undefined;
   }
   const isCanonicalReasoning = isModelThinkingLevel(reasoning);
-  if (isCanonicalReasoning && model.thinkingLevelMap?.[reasoning] === null) {
+  if (isCanonicalReasoning && hasNullThinkingLevelOptOut(model, reasoning)) {
     return undefined;
   }
   const compat =
@@ -221,6 +234,9 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: SimpleStreamOptions["reasoning"] | undefined,
 ): OpenAIApiReasoningEffort | undefined {
+  if (hasNullThinkingLevelOptOut(model, reasoning)) {
+    return undefined;
+  }
   const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;
   if (!clampedReasoning || clampedReasoning === "off") {
     return undefined;
@@ -266,7 +282,11 @@ export function applyCommonResponsesParams<TApi extends Api>(
     }
   }
 
-  if (!model.reasoning || isResponsesReasoningEffortDisabled(model)) {
+  if (
+    !model.reasoning ||
+    isResponsesReasoningEffortDisabled(model) ||
+    options?.disableReasoningSerialization
+  ) {
     return;
   }
 
