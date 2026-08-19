@@ -276,10 +276,16 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   }
   const agentId =
     requestedAgentId ?? agentIds.values().next().value ?? rt.resolveDefaultAgentId(cfg);
+  const resultMode = params.resultMode === "sessions" ? "sessions" : "messages";
+  const limit = readPositiveIntegerParam(params, "limit");
+  if (resultMode === "messages" && (limit ?? 10) > 25) {
+    throw new Error("message search limit must not exceed 25");
+  }
   const result = rt.searchSessionTranscripts({
     agentId,
     query,
-    limit: readPositiveIntegerParam(params, "limit"),
+    limit,
+    resultMode,
     ...(sessionKeys ? { sessionKeys } : {}),
   });
   return {

@@ -199,6 +199,31 @@ function projectSessionParticipants(
   return participants?.length ? participants.slice(0, 4) : undefined;
 }
 
+export function resolveSessionListEntryStatus(params: {
+  entry?: SessionEntry;
+  key: string;
+  rowContext?: SessionListRowContext;
+}): GatewaySessionRow["status"] {
+  const subagentRun = params.rowContext
+    ? params.rowContext.subagentRuns.getDisplaySubagentRun(params.key)
+    : getSessionDisplaySubagentRunByChildSessionKey(params.key);
+  if (!subagentRun) {
+    return params.entry?.status;
+  }
+  if (isSubagentRunLive(subagentRun)) {
+    return resolveSubagentSessionStatus(subagentRun);
+  }
+  if (params.entry?.status === "running") {
+    return undefined;
+  }
+  return (
+    params.entry?.status ??
+    (typeof subagentRun.execution.endedAt === "number"
+      ? resolveSubagentSessionStatus(subagentRun)
+      : undefined)
+  );
+}
+
 export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;
@@ -305,16 +330,11 @@ export function buildGatewaySessionRow(params: {
         ? "historical"
         : "interrupted"
     : undefined;
-  const subagentStatus = subagentRun
-    ? liveSubagentRunActive
-      ? resolveSubagentSessionStatus(subagentRun)
-      : persistedSessionStatus === "running"
-        ? undefined
-        : (persistedSessionStatus ??
-          (typeof subagentRun.execution.endedAt === "number"
-            ? resolveSubagentSessionStatus(subagentRun)
-            : undefined))
-    : undefined;
+  const subagentStatus = resolveSessionListEntryStatus({
+    entry,
+    key,
+    rowContext,
+  });
   const subagentStartedAt = subagentRun
     ? liveSubagentRunActive
       ? getSubagentSessionStartedAt(subagentRun)

@@ -12,6 +12,11 @@ read_when:
 includes a `sessionKey`, timestamp, role, and a short matching excerpt. Pass the returned
 `sessionKey` to `sessions_history` when you need the surrounding conversation.
 
+By default, results are individual matching messages, capped at 25. Set
+`resultMode: "sessions"` to return one best matching excerpt per session, capped at 100. The
+SQLite full-text query groups by durable `sessionId` before it applies the limit, so many strong
+matches from one conversation cannot hide other matching sessions.
+
 ## Visibility and output
 
 Search uses the same session visibility rules as `sessions_history`. Results outside the caller's
@@ -19,7 +24,8 @@ visible session tree are removed before result limits are applied. Sandboxed age
 to sessions they spawned when spawned-session visibility is enabled.
 
 Excerpts are redacted before they return to the model. Results are also bounded by count, excerpt
-length, and total response size.
+length, and total response size. Session mode reads the existing FTS index only; it does not hydrate
+complete transcripts.
 
 ## Index lifecycle
 

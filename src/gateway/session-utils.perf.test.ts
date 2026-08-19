@@ -294,6 +294,20 @@ describe("listSessionsFromStore resolver cache", () => {
         });
 
         titleBatchSpy.mockClear();
+        store["agent:main:title-batch-0"]!.category = "Research";
+        const filtered = await listSessionsFromStoreAsync({
+          cfg,
+          storePath,
+          store,
+          lightweightListRows: true,
+          opts: { category: "Research", includeDerivedTitles: true, limit: 30 },
+        });
+        expect(filtered.sessions.map((session) => session.key)).toEqual([
+          "agent:main:title-batch-0",
+        ]);
+        expect(titleBatchSpy.mock.calls[0]?.[0]).toHaveLength(1);
+
+        titleBatchSpy.mockClear();
         await listSessionsFromStoreAsync({
           cfg,
           storePath,

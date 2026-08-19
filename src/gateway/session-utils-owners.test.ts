@@ -387,13 +387,19 @@ it("preserves list output across visibility, scope, owner, and search filters", 
     },
     "agent:main:shared": {
       boardFace: "chat",
+      category: "Research",
       createdActor: { type: "human", id: "profile-ada" },
+      agentStatus: { note: "Review", attention: "flag", expiresAt: now + 60_000 },
       label: "focus",
+      lastReadAt: now - 20,
       lastInteractionAt: now - 5,
+      projectId: "openclaw",
       sessionId: "session-main-shared",
+      status: "done",
       subject: "needle main",
       updatedAt: now - 3,
       visibility: "shared",
+      worktree: { id: "worktree-1", branch: "work", repoRoot: "/repo" },
     },
     "agent:main:draft": {
       createdActor: { type: "human", id: "profile-ada" },
@@ -506,6 +512,20 @@ it("preserves list output across visibility, scope, owner, and search filters", 
       nextOffset: null,
       totalCount: 2,
     }),
+  );
+  const organizationFilters = [
+    { category: "Research" },
+    { unread: true },
+    { status: "done" as const },
+    { projectId: "openclaw" },
+    { hasWorktree: true },
+    { needsAttention: true },
+  ];
+  for (const filter of organizationFilters) {
+    expect((await project({ archived: "all", ...filter })).keys).toEqual(["agent:main:shared"]);
+  }
+  expect((await project({ archived: "all", category: null })).keys).not.toContain(
+    "agent:main:shared",
   );
 });
 

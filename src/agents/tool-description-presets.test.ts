@@ -15,7 +15,7 @@ const SESSION_DESCRIPTIONS = [
     tool: "sessions_list",
     describe: describeSessionsListTool,
     original:
-      "List visible sessions with category, unread, icon, owner, project/worktree, and active attention/status; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
+      "List visible sessions with category, unread, icon, owner, project/worktree, and active attention/status; filter those fields before title/preview hydration. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
   },
   {
     tool: "sessions_history",

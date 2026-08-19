@@ -1096,7 +1096,7 @@
       },
       {
         "deferLoading": true,
-        "description": "List visible sessions with category, unread, icon, owner, project/worktree, and active attention/status; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
+        "description": "List visible sessions with category, unread, icon, owner, project/worktree, and active attention/status; filter those fields before title/preview hydration. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
         "inputSchema": {
           "properties": {
             "activeMinutes": {

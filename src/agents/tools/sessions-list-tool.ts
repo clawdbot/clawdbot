@@ -61,7 +61,16 @@ const SessionsListToolSchema = Type.Object({
   activeMinutes: optionalPositiveIntegerSchema(),
   messageLimit: optionalNonNegativeIntegerSchema(),
   label: Type.Optional(Type.String({ minLength: 1 })),
+  category: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  ownerId: Type.Optional(Type.String({ minLength: 1 })),
+  unread: Type.Optional(Type.Boolean()),
+  status: Type.Optional(
+    Type.String({ enum: ["queued", "running", "done", "failed", "killed", "timeout"] }),
+  ),
+  projectId: Type.Optional(Type.String({ minLength: 1 })),
+  hasWorktree: Type.Optional(Type.Boolean()),
+  needsAttention: Type.Optional(Type.Boolean()),
   search: Type.Optional(Type.String({ minLength: 1 })),
   archived: Type.Optional(Type.Boolean()),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
@@ -122,6 +131,7 @@ const SessionListRowOutputSchema = Type.Object(
     status: Type.Optional(
       Type.Union([
         Type.Literal("running"),
+        Type.Literal("queued"),
         Type.Literal("done"),
         Type.Literal("failed"),
         Type.Literal("killed"),
@@ -164,6 +174,7 @@ const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
 function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
   return value === "running" ||
+    value === "queued" ||
     value === "done" ||
     value === "failed" ||
     value === "killed" ||
@@ -222,7 +233,11 @@ export function createSessionsListTool(opts?: {
       const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
       const label = readToolStringParam(params, "label");
+      const category = params.category === null ? null : readToolStringParam(params, "category");
       const agentId = readToolStringParam(params, "agentId");
+      const ownerId = readToolStringParam(params, "ownerId");
+      const status = readToolStringParam(params, "status");
+      const projectId = readToolStringParam(params, "projectId");
       const search = readToolStringParam(params, "search");
       const archived = params.archived === true;
       const includeDerivedTitles = params.includeDerivedTitles === true;
@@ -258,7 +273,18 @@ export function createSessionsListTool(opts?: {
             offset,
             activeMinutes,
             label,
+            ...(Object.hasOwn(params, "category") ? { category } : {}),
             agentId,
+            ownerId,
+            ...(params.unread !== undefined ? { unread: params.unread === true } : {}),
+            status,
+            projectId,
+            ...(params.hasWorktree !== undefined
+              ? { hasWorktree: params.hasWorktree === true }
+              : {}),
+            ...(params.needsAttention !== undefined
+              ? { needsAttention: params.needsAttention === true }
+              : {}),
             search,
             archived,
             includeDerivedTitles: false,

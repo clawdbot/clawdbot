@@ -90,6 +90,21 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
+  it("allows 100 grouped sessions while retaining the 25-message limit", async () => {
+    const grouped = await callSearch({ query: "needle", resultMode: "sessions", limit: 100 });
+    expect(grouped).toHaveBeenCalledWith(true, expect.any(Object));
+    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ resultMode: "sessions", limit: 100 }),
+    );
+
+    const messages = await callSearch({ query: "needle", resultMode: "messages", limit: 26 });
+    expect(messages).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "message search limit must not exceed 25" }),
+    );
+  });
+
   it("derives one agent and canonical filters from sessionKeys", async () => {
     searchSessionTranscriptsMock.mockReturnValue({
       hits: [
@@ -111,12 +126,14 @@ describe("sessions.search gateway method", () => {
       query: " needle ",
       sessionKeys: ["agent:work:main", "agent:work:other"],
       limit: 5,
+      resultMode: "messages",
     });
 
     expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
       agentId: "work",
       query: "needle",
       limit: 5,
+      resultMode: "messages",
       sessionKeys: ["agent:work:main", "agent:work:other"],
     });
     expect(respond).toHaveBeenCalledWith(
@@ -172,6 +189,7 @@ describe("sessions.search gateway method", () => {
       agentId: "ops",
       query: "needle",
       limit: undefined,
+      resultMode: "messages",
       sessionKeys: ["global"],
     });
   });
@@ -224,6 +242,7 @@ describe("sessions.search gateway method", () => {
       agentId: "main",
       query: "needle",
       limit: 1,
+      resultMode: "messages",
       sessionKeys: [durableKey],
     });
     expect(respond).toHaveBeenCalledWith(
@@ -258,6 +277,7 @@ describe("sessions.search gateway method", () => {
       agentId: "work",
       query: "needle",
       limit: undefined,
+      resultMode: "messages",
       sessionKeys: ["agent:work:main", "global"],
     });
   });
@@ -268,6 +288,7 @@ describe("sessions.search gateway method", () => {
       agentId: "main",
       query: "needle",
       limit: undefined,
+      resultMode: "messages",
     });
   });
 
@@ -318,6 +339,7 @@ describe("sessions.search gateway method", () => {
       agentId: "retired",
       query: "needle",
       limit: 25,
+      resultMode: "messages",
       sessionKeys: ["agent:retired:main"],
       storePath: "/stores/retired-a/sessions.json",
     });
@@ -352,6 +374,7 @@ describe("sessions.search gateway method", () => {
       agentId: "retired",
       query: "needle",
       limit: 25,
+      resultMode: "messages",
       sessionKeys: ["agent:retired:mine"],
       storePath: "/stores/shared/sessions.json",
     });

@@ -20,6 +20,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
@@ -35,6 +36,7 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   deriveSessionTitle,
+  deriveSessionUnread,
   isFinitePositiveTimestamp,
   isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
@@ -45,7 +47,11 @@ import {
   buildSessionListRowMetadataContext,
   buildSingleRowStoreChildSessionsByKey,
 } from "./session-utils-projection.js";
-import { buildGatewaySessionRow, projectAssignableSessionOwner } from "./session-utils-row.js";
+import {
+  buildGatewaySessionRow,
+  projectAssignableSessionOwner,
+  resolveSessionListEntryStatus,
+} from "./session-utils-row.js";
 import {
   appendStoredSessionModelSearchFields,
   matchesSessionListSearch,
@@ -77,6 +83,7 @@ type ListSessionsFromStoreParams = {
   lightweightListRows?: boolean;
   opts: SessionsListParams;
   involvingActorId?: string;
+  statusFilter?: (key: string, entry: SessionEntry, status: GatewaySessionRow["status"]) => boolean;
 };
 
 type SessionEntrySelection = {
@@ -180,6 +187,8 @@ function filterSessionEntries(params: {
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
+  const category = opts.category === null ? null : normalizeOptionalString(opts.category);
+  const categorySpecified = Object.hasOwn(opts, "category");
   const boardFace = opts.boardFace;
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
@@ -189,6 +198,7 @@ function filterSessionEntries(params: {
       : undefined;
   const creatorId = normalizeOptionalString(opts.creatorId);
   const ownerId = normalizeOptionalString(opts.ownerId);
+  const projectId = normalizeOptionalString(opts.projectId);
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
   const entries: SessionEntryPair[] = [];
@@ -206,6 +216,38 @@ function filterSessionEntries(params: {
       (!includeUnknown && key === "unknown")
     ) {
       continue;
+    }
+    if (categorySpecified) {
+      const entryCategory = normalizeOptionalString(entry.category);
+      if (category === null ? entryCategory !== undefined : entryCategory !== category) {
+        continue;
+      }
+    }
+    if (opts.unread !== undefined && deriveSessionUnread(entry) !== opts.unread) {
+      continue;
+    }
+    if (projectId && normalizeOptionalString(entry.projectId) !== projectId) {
+      continue;
+    }
+    if (opts.hasWorktree !== undefined && Boolean(entry.worktree) !== opts.hasWorktree) {
+      continue;
+    }
+    if (
+      opts.needsAttention !== undefined &&
+      Boolean(resolveActiveSessionAgentStatus(entry.agentStatus, now)?.attention) !==
+        opts.needsAttention
+    ) {
+      continue;
+    }
+    if (opts.status !== undefined) {
+      const status = resolveSessionListEntryStatus({
+        entry,
+        key,
+        rowContext: resolveSessionListRowContext(params),
+      });
+      if (params.statusFilter ? !params.statusFilter(key, entry, status) : status !== opts.status) {
+        continue;
+      }
     }
     if (agentId) {
       if (key === "global") {
@@ -366,6 +408,7 @@ function selectSessionEntries(params: {
   configuredAgentIds?: ReadonlySet<string>;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   involvingActorId?: string;
+  statusFilter?: ListSessionsFromStoreParams["statusFilter"];
 }): SessionEntrySelection {
   const { ownerFacet, entries: filtered } = filterSessionEntries(params);
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
@@ -422,6 +465,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     userProfileIdentityById,
     configuredAgentIds,
     involvingActorId: params.involvingActorId,
+    statusFilter: params.statusFilter,
   });
   const fullRowContext =
     rowContext ||
@@ -494,6 +538,7 @@ export function filterAndSortSessionEntries(params: {
   opts: SessionsListParams;
   now: number;
   involvingActorId?: string;
+  statusFilter?: ListSessionsFromStoreParams["statusFilter"];
 }): [string, SessionEntry][] {
   return selectSessionEntries(params).entries;
 }

@@ -12,7 +12,8 @@ import {
 } from "./session-transcript-reconcile.js";
 
 const SEARCH_SNIPPET_MAX_CHARS = 500;
-const SEARCH_LIMIT_MAX = 25;
+const SEARCH_MESSAGE_LIMIT_MAX = 25;
+const SEARCH_SESSION_LIMIT_MAX = 100;
 const SEARCH_QUERY_MAX_CHARS = 4096;
 
 type SessionTranscriptSearchHit = {
@@ -45,6 +46,7 @@ export function searchSessionTranscripts(params: {
   env?: NodeJS.ProcessEnv;
   limit?: number;
   query: string;
+  resultMode?: "messages" | "sessions";
   sessionKeys?: string[];
   storePath?: string;
 }): SessionTranscriptSearchResult {
@@ -72,7 +74,9 @@ export function searchSessionTranscripts(params: {
   }
   const indexing =
     dirtySessions.length > 0 || isSessionTranscriptIndexReconcileRunning(databaseOptions);
-  const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
+  const limitMax =
+    params.resultMode === "sessions" ? SEARCH_SESSION_LIMIT_MAX : SEARCH_MESSAGE_LIMIT_MAX;
+  const limit = Math.min(Math.max(1, params.limit ?? 10), limitMax);
   const sessionKeys = params.sessionKeys ?? [];
   const whereSession =
     sessionKeys.length > 0
@@ -84,7 +88,7 @@ export function searchSessionTranscripts(params: {
   // are excluded: their rows may still hold rewound-away branch text that
   // sessions_history no longer exposes, so they stay hidden until reconcile
   // rebuilds them (indexing=true tells the caller to retry).
-  const statement = database.db.prepare(/* sqlite-allow-raw: FTS5 MATCH/snippet/bm25 */ `
+  const messageQuery = /* sqlite-allow-raw: FTS5 MATCH/snippet/bm25 */ `
     SELECT session_windows.session_key AS session_key, session_transcript_fts.session_id AS session_id,
       message_id, role, timestamp,
       snippet(session_transcript_fts, 0, '', '', ' … ', 48) AS snippet,
@@ -97,7 +101,40 @@ export function searchSessionTranscripts(params: {
       )
     ORDER BY rank ASC, timestamp DESC, message_id ASC
     LIMIT ?
-  `);
+  `;
+  // Materialization keeps FTS5 auxiliary functions on the MATCH cursor while
+  // the window ranks all messages before the outer session limit.
+  const sessionQuery = /* sqlite-allow-raw: FTS5 MATCH/snippet/bm25 */ `
+    WITH matched AS MATERIALIZED (
+      SELECT session_windows.session_key AS session_key,
+        session_transcript_fts.rowid AS fts_rowid,
+        session_transcript_fts.session_id AS session_id,
+        message_id, role, timestamp,
+        snippet(session_transcript_fts, 0, '', '', ' … ', 48) AS snippet,
+        bm25(session_transcript_fts) AS rank
+      FROM session_transcript_fts
+      JOIN session_windows ON session_windows.session_id = session_transcript_fts.session_id
+      WHERE session_transcript_fts MATCH ?${whereSession}
+        AND session_transcript_fts.session_id NOT IN (
+          SELECT session_id FROM session_transcript_index_state WHERE needs_rebuild != 0
+        )
+    ), ranked AS (
+      SELECT matched.*,
+        row_number() OVER (
+          PARTITION BY session_id
+          ORDER BY rank ASC, timestamp DESC, message_id ASC, fts_rowid ASC
+        ) AS session_rank
+      FROM matched
+    )
+    SELECT session_key, session_id, message_id, role, timestamp, snippet, rank
+    FROM ranked
+    WHERE session_rank = 1
+    ORDER BY rank ASC, timestamp DESC, message_id ASC, fts_rowid ASC
+    LIMIT ?
+  `;
+  const statement = database.db.prepare(
+    params.resultMode === "sessions" ? sessionQuery : messageQuery,
+  );
   const values = [toFtsQuery(query), ...sessionKeys, limit + 1];
   const rows = statement.all(...values) as Array<{
     message_id: unknown;

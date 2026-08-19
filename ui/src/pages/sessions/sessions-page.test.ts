@@ -187,6 +187,7 @@ describe("sessions page lifecycle", () => {
       sessionKeys: ["agent:main:launch"],
       query: "launch code",
       limit: 25,
+      resultMode: "messages",
     });
     expect(page.transcriptSearch).toEqual({ status: "loading" });
 

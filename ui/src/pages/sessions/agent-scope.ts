@@ -65,6 +65,7 @@ export async function searchVisibleSessionTranscripts(params: {
           sessionKeys: sessionKeys.slice(index, index + protocolKeyLimit),
           query: params.query,
           limit: 25,
+          resultMode: "messages",
         }),
       );
     }

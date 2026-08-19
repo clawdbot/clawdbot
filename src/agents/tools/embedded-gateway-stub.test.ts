@@ -176,6 +176,7 @@ describe("embedded gateway stub", () => {
       agentId: "main",
       query: "needle",
       limit: 3,
+      resultMode: "messages",
       sessionKeys: ["agent:main:main", "agent:main:other"],
     });
   });

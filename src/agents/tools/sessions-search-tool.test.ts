@@ -172,11 +172,43 @@ describe("sessions_search tool", () => {
       "query must not be empty",
     );
     await expect(tool.execute("call-2", { query: "ok", limit: 26 })).rejects.toThrow(
-      "limit must be a positive integer",
+      "limit must not exceed 25 for message results",
     );
     await expect(tool.execute("call-3", { query: "x".repeat(4097) })).rejects.toThrow(
       "query must not exceed 4096 characters",
     );
+  });
+
+  it("groups session results before applying the caller limit", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createTool({
+      config: { tools: { sessions: { visibility: "all" } } },
+      requests,
+      results: [
+        hit({ messageId: "main-best", score: 10 }),
+        hit({ messageId: "main-second", score: 9 }),
+        hit({
+          sessionKey: "agent:main:other",
+          sessionId: "session-other",
+          messageId: "other-best",
+          score: 8,
+        }),
+      ],
+    });
+
+    const result = await tool.execute("session-results", {
+      query: "text",
+      resultMode: "sessions",
+      limit: 2,
+    });
+
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "sessions.search",
+        params: expect.objectContaining({ limit: 100, resultMode: "sessions" }),
+      }),
+    );
+    expect((result.details as { results: Array<{ sessionId?: string }> }).results).toHaveLength(2);
   });
 
   it("filters invisible hits before applying the limit", async () => {
@@ -302,6 +334,7 @@ describe("sessions_search tool", () => {
         agentId: "work",
         query: "text",
         limit: 25,
+        resultMode: "messages",
         sessionKeys: ["agent:work:other", "global"],
       },
     });
@@ -328,6 +361,7 @@ describe("sessions_search tool", () => {
         agentId: "work",
         query: "text",
         limit: 25,
+        resultMode: "messages",
         sessionKeys: ["agent:work:other"],
       },
     });
@@ -452,7 +486,13 @@ describe("sessions_search tool", () => {
 
     expect(requests).toContainEqual({
       method: "sessions.search",
-      params: { agentId: "main", query: "text", sessionKeys: ["main"], limit: 25 },
+      params: {
+        agentId: "main",
+        query: "text",
+        sessionKeys: ["main"],
+        limit: 25,
+        resultMode: "messages",
+      },
     });
   });
 

@@ -64,6 +64,7 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
@@ -90,6 +91,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const query = params.query.trim();
     if (!query) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "query must not be empty"));
+      return;
+    }
+    const resultMode = params.resultMode ?? "messages";
+    if (resultMode === "messages" && (params.limit ?? 10) > 25) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "message search limit must not exceed 25"),
+      );
       return;
     }
     const cfg = context.getRuntimeConfig();
@@ -168,7 +178,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             query,
             // Over-fetch retired multi-store searches so deduplication can still fill the caller's
             // requested page when the same transcript was copied during a store migration.
-            limit: configured ? params.limit : 25,
+            limit: configured ? params.limit : resultMode === "sessions" ? 100 : 25,
+            resultMode,
             ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
             ...(target ? { storePath: target.storePath } : {}),
           }),
@@ -185,7 +196,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         );
       const seenHits = new Set<string>();
       const hits = sortedHits.filter((hit) => {
-        const identity = `${hit.sessionKey}\u0000${hit.sessionId}\u0000${hit.messageId}`;
+        const identity =
+          resultMode === "sessions"
+            ? hit.sessionId
+            : `${hit.sessionKey}\u0000${hit.sessionId}\u0000${hit.messageId}`;
         if (seenHits.has(identity)) {
           return false;
         }
@@ -261,6 +275,29 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             throw new Error("sessions.list store input was not loaded");
           }
           const { durableStorePath, durableTargets, modelCatalog, storePath } = loaded;
+          const filterTrackedActiveRuns = p.status
+            ? collectTrackedActiveSessionRuns(context)
+            : undefined;
+          const filterProjectedAgentRunIndex = p.status ? buildProjectedAgentRunIndex() : undefined;
+          const statusFilter = p.status
+            ? (key: string, entry: SessionEntry, storedStatus: GatewaySessionRow["status"]) => {
+                const parsedAgentId = parseAgentSessionKey(key)?.agentId;
+                const activeRunState = resolveVisibleActiveSessionRunState({
+                  context,
+                  requestedKey: key,
+                  canonicalKey: key,
+                  sessionId: entry.sessionId,
+                  agentId: parsedAgentId,
+                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, key),
+                  trackedActiveRuns: filterTrackedActiveRuns,
+                  projectedAgentRunIndex: filterProjectedAgentRunIndex,
+                });
+                const status = activeRunState.active
+                  ? (activeRunState.status ?? "running")
+                  : storedStatus;
+                return status === p.status;
+              }
+            : undefined;
           const visibilityFilter = createSessionListEntryFilter({ client });
           const entryFilter =
             visibilityFilter || options.excludedKeys?.size
@@ -279,6 +316,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 modelCatalog,
                 opts: p,
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
+                ...(statusFilter ? { statusFilter } : {}),
               }),
             {
               config: cfg,

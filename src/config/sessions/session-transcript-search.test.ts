@@ -61,12 +61,20 @@ async function appendAssistantMessage(sessionId: string, sessionKey: string, tex
   });
 }
 
-function search(query: string, options: { limit?: number; sessionKeys?: string[] } = {}) {
+function search(
+  query: string,
+  options: {
+    limit?: number;
+    resultMode?: "messages" | "sessions";
+    sessionKeys?: string[];
+  } = {},
+) {
   return searchSessionTranscripts({
     agentId: "main",
     env: env(),
     query,
     ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    ...(options.resultMode ? { resultMode: options.resultMode } : {}),
     ...(options.sessionKeys ? { sessionKeys: options.sessionKeys } : {}),
   });
 }
@@ -149,6 +157,38 @@ describe("searchSessionTranscripts", () => {
     }
     const result = search("needle", { limit: 3 });
     expect(result.hits).toHaveLength(3);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("groups by session before applying the result limit", async () => {
+    await appendUserMessage("session-other", "agent:main:other", "shared topic other");
+    for (let index = 0; index < 4; index += 1) {
+      await appendUserMessage("session-hot", "agent:main:hot", `shared topic ${index}`);
+    }
+
+    const messages = search("shared", { limit: 2 });
+    expect(new Set(messages.hits.map((hit) => hit.sessionId))).toEqual(new Set(["session-hot"]));
+
+    const sessions = search("shared", { limit: 2, resultMode: "sessions" });
+    expect(sessions.hits.map((hit) => hit.sessionId).toSorted()).toEqual([
+      "session-hot",
+      "session-other",
+    ]);
+    expect(sessions.truncated).toBe(false);
+  });
+
+  it("caps grouped session results at 100", async () => {
+    for (let index = 0; index < 101; index += 1) {
+      await appendUserMessage(
+        `session-${index}`,
+        `agent:main:session-${index}`,
+        `group-limit shared ${index}`,
+      );
+    }
+
+    const result = search("group-limit", { limit: 100, resultMode: "sessions" });
+    expect(result.hits).toHaveLength(100);
+    expect(new Set(result.hits.map((hit) => hit.sessionId))).toHaveLength(100);
     expect(result.truncated).toBe(true);
   });
 

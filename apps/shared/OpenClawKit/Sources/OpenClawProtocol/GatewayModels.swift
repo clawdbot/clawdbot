@@ -5263,9 +5263,15 @@ public struct SessionsListParams: Codable, Sendable {
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
     public let label: String?
+    public let category: AnyCodable?
     public let boardface: AnyCodable?
     public let creatorid: String?
     public let ownerid: String?
+    public let unread: Bool?
+    public let status: AnyCodable?
+    public let projectid: String?
+    public let hasworktree: Bool?
+    public let needsattention: Bool?
     public let involvingme: Bool?
     public let spawnedby: String?
     public let agentid: String?
@@ -5284,9 +5290,15 @@ public struct SessionsListParams: Codable, Sendable {
         includederivedtitles: Bool? = nil,
         includelastmessage: Bool? = nil,
         label: String? = nil,
+        category: AnyCodable? = nil,
         boardface: AnyCodable? = nil,
         creatorid: String? = nil,
         ownerid: String? = nil,
+        unread: Bool? = nil,
+        status: AnyCodable? = nil,
+        projectid: String? = nil,
+        hasworktree: Bool? = nil,
+        needsattention: Bool? = nil,
         involvingme: Bool? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
@@ -5304,9 +5316,15 @@ public struct SessionsListParams: Codable, Sendable {
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
         self.label = label
+        self.category = category
         self.boardface = boardface
         self.creatorid = creatorid
         self.ownerid = ownerid
+        self.unread = unread
+        self.status = status
+        self.projectid = projectid
+        self.hasworktree = hasworktree
+        self.needsattention = needsattention
         self.involvingme = involvingme
         self.spawnedby = spawnedby
         self.agentid = agentid
@@ -5326,9 +5344,15 @@ public struct SessionsListParams: Codable, Sendable {
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
         case label
+        case category
         case boardface = "boardFace"
         case creatorid = "creatorId"
         case ownerid = "ownerId"
+        case unread
+        case status
+        case projectid = "projectId"
+        case hasworktree = "hasWorktree"
+        case needsattention = "needsAttention"
         case involvingme = "involvingMe"
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
@@ -6049,17 +6073,20 @@ public struct SessionsSearchParams: Codable, Sendable {
     public let agentid: String?
     public let sessionkeys: [String]?
     public let query: String
+    public let resultmode: AnyCodable?
     public let limit: Int?
 
     public init(
         agentid: String? = nil,
         sessionkeys: [String]? = nil,
         query: String,
+        resultmode: AnyCodable? = nil,
         limit: Int? = nil)
     {
         self.agentid = agentid
         self.sessionkeys = sessionkeys
         self.query = query
+        self.resultmode = resultmode
         self.limit = limit
     }
 
@@ -6067,6 +6094,7 @@ public struct SessionsSearchParams: Codable, Sendable {
         case agentid = "agentId"
         case sessionkeys = "sessionKeys"
         case query
+        case resultmode = "resultMode"
         case limit
     }
 }

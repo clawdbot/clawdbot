@@ -14,7 +14,7 @@ OpenClaw gives agents tools to work across sessions, inspect status, and orchest
 | Tool                 | What it does                                                                            |
 | -------------------- | --------------------------------------------------------------------------------------- |
 | `sessions`           | Patch, reset, delete, or assign ownership of visible sessions and manage session groups |
-| `sessions_list`      | List sessions with optional filters (kind, label, agent, archive, preview)              |
+| `sessions_list`      | List and filter visible session organization, status, ownership, and previews            |
 | `sessions_search`    | Search visible session transcripts and return matching excerpts                         |
 | `sessions_history`   | Read the transcript of a specific session                                               |
 | `sessions_send`      | Run another session on the same Gateway and optionally wait                             |
@@ -32,7 +32,7 @@ Group, provider, sandbox, and per-agent policies can still remove those tools af
 
 ## Listing and reading sessions
 
-`sessions_list` returns focused discovery rows, including category, unread/icon/owner/project/worktree-presence fields, and active status/attention. Paths and full worktree objects remain omitted. Use the returned `sessionId` as `expectedSessionId` for lifecycle mutations.
+`sessions_list` returns focused discovery rows: session key, durable session ID, agent, kind, channel, category, unread/icon/owner/project/worktree-presence fields, active status/attention, label/title/preview fields, relationships, archive/pin state, model, and bounded usage fields. Filter by those organizational fields, `kinds`, exact `label`, exact `agentId`, `search` text, or recency (`activeMinutes`). `category: null` selects sessions without a custom category (the Other bucket). Filters run before sorting, pagination, title derivation, or transcript preview reads. Active sessions are returned by default; pass `archived: true` to inspect archived sessions instead. Set `includeDerivedTitles`, `includeLastMessage`, or `messageLimit` (capped at 20) only when you need transcript-backed triage. Use the returned `sessionId` as `expectedSessionId` for lifecycle mutations. Paths and full worktree objects remain omitted.
 
 `sessions_history` fetches the conversation transcript for a specific session. By default, tool results are excluded; pass `includeTools: true` to see them. Use `limit` for the newest bounded tail. Pass `offset: 0` when you need pagination metadata, then pass returned `nextOffset` values to page backward through older OpenClaw transcript windows without reading raw transcript files. Explicit offset pages do not merge external CLI fallback imports; use the default newest-tail view (no `offset`) when you need that merged display history.
 

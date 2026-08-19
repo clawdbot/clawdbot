@@ -167,6 +167,15 @@ describe("lazy protocol validators", () => {
       { archived: true },
       { archived: "all" },
       { involvingMe: true },
+      {
+        category: null,
+        ownerId: "agent-owner",
+        unread: false,
+        status: "queued",
+        projectId: "openclaw",
+        hasWorktree: false,
+        needsAttention: false,
+      },
     ]);
     expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
   });
@@ -438,6 +447,7 @@ describe("lazy protocol validators", () => {
         sessionKeys: ["agent:work:main", "agent:work:other"],
         limit: 25,
       }),
+      search({ resultMode: "sessions", limit: 100 }),
     ]);
     expectRejected(validateSessionsSearchParams, [
       search({ agentId: "" }),
@@ -446,7 +456,8 @@ describe("lazy protocol validators", () => {
       search({
         sessionKeys: Array.from({ length: 201 }, (_, index) => `session-${index}`),
       }),
-      search({ limit: 26 }),
+      search({ limit: 101 }),
+      search({ resultMode: "other" }),
       { query: "" },
       { query: "x".repeat(4097) },
     ]);

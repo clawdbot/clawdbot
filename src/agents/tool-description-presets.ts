@@ -65,7 +65,7 @@ export function describeSessionLinkRule(base: string): string {
 /** Describes the sessions_list tool for model-facing instructions. */
 export function describeSessionsListTool(options?: SessionLinkDescriptionOptions): string {
   return [
-    "List visible sessions with category, unread, icon, owner, project/worktree, and active attention/status; filter kind/label/agentId/search/activity/archive.",
+    "List visible sessions with category, unread, icon, owner, project/worktree, and active attention/status; filter those fields before title/preview hydration.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles.",
     "Use before history/send target selection.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),

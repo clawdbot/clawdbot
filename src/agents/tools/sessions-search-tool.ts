@@ -44,7 +44,8 @@ import {
 } from "./sessions-helpers.js";
 
 const SESSIONS_SEARCH_DEFAULT_LIMIT = 10;
-const SESSIONS_SEARCH_MAX_LIMIT = 25;
+const SESSIONS_SEARCH_MESSAGE_MAX_LIMIT = 25;
+const SESSIONS_SEARCH_SESSION_MAX_LIMIT = 100;
 const SESSIONS_SEARCH_MAX_SESSION_KEYS = 200;
 // Bounds FTS token expansion on the synchronous gateway path while leaving ample query context.
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
@@ -56,7 +57,10 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
 const SessionsSearchToolSchema = Type.Object({
   query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
   sessionKey: Type.Optional(Type.String()),
-  limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_MAX_LIMIT }),
+  resultMode: Type.Optional(
+    Type.String({ enum: ["messages", "sessions"], description: "One hit per message or session." }),
+  ),
+  limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_SESSION_MAX_LIMIT }),
 });
 
 const SessionsSearchHitSchema = Type.Object(
@@ -116,6 +120,11 @@ type SanitizedSearchHit = {
   score: number;
   sessionId?: string;
   messageId?: string;
+};
+
+type AgentSearchHit = {
+  agentId: string;
+  hit: SanitizedSearchHit;
 };
 
 type SearchSessionCandidate = {
@@ -368,8 +377,17 @@ export function createSessionsSearchTool(opts?: {
       }
       const limit =
         readPositiveIntegerParam(params, "limit", {
-          max: SESSIONS_SEARCH_MAX_LIMIT,
+          max: SESSIONS_SEARCH_SESSION_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
+      const resultMode = readToolStringParam(params, "resultMode") ?? "messages";
+      if (resultMode !== "messages" && resultMode !== "sessions") {
+        throw new ToolInputError('resultMode must be "messages" or "sessions"');
+      }
+      if (resultMode === "messages" && limit > SESSIONS_SEARCH_MESSAGE_MAX_LIMIT) {
+        throw new ToolInputError(
+          `limit must not exceed ${SESSIONS_SEARCH_MESSAGE_MAX_LIMIT} for message results`,
+        );
+      }
       const requestedSessionKey = readToolStringParam(params, "sessionKey");
       const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
@@ -514,7 +532,7 @@ export function createSessionsSearchTool(opts?: {
         // Search excerpts are re-persisted in the caller transcript; incognito
         // sessions therefore stay absent even when the caller could otherwise see them.
         .filter((candidate) => !isIncognitoSessionKey(candidate.key));
-      const visibleHits: SanitizedSearchHit[] = [];
+      const visibleHits: AgentSearchHit[] = [];
       let indexing = false;
       let backendTruncated = false;
       const sessionsByAgent = new Map<string, SearchSessionCandidate[]>();
@@ -548,7 +566,11 @@ export function createSessionsSearchTool(opts?: {
               params: {
                 agentId,
                 query,
-                limit: SESSIONS_SEARCH_MAX_LIMIT,
+                limit:
+                  resultMode === "sessions"
+                    ? SESSIONS_SEARCH_SESSION_MAX_LIMIT
+                    : SESSIONS_SEARCH_MESSAGE_MAX_LIMIT,
+                resultMode,
                 sessionKeys: chunk.map((candidate) => candidate.key),
               },
             });
@@ -590,13 +612,26 @@ export function createSessionsSearchTool(opts?: {
               mainKey,
             });
             if (sanitized) {
-              visibleHits.push(sanitized);
+              visibleHits.push({ agentId, hit: sanitized });
             }
           }
         }
       }
-      visibleHits.sort(compareSearchHits);
-      const limited = visibleHits.slice(0, limit);
+      visibleHits.sort((left, right) => compareSearchHits(left.hit, right.hit));
+      const seenSessions = new Set<string>();
+      const groupedHits =
+        resultMode === "sessions"
+          ? visibleHits.filter(({ agentId, hit }) => {
+              const sessionId = hit.sessionId;
+              const identity = sessionId ? `${agentId}\0${sessionId}` : undefined;
+              if (!identity || seenSessions.has(identity)) {
+                return false;
+              }
+              seenSessions.add(identity);
+              return true;
+            })
+          : visibleHits;
+      const limited = groupedHits.slice(0, limit).map(({ hit }) => hit);
       const capped = capSearchHits(limited);
       return jsonResult({
         results: capped.items,
@@ -604,7 +639,7 @@ export function createSessionsSearchTool(opts?: {
           ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
           : {}),
         ...(indexing ? { indexing: true, warning: SESSIONS_SEARCH_INDEXING_WARNING } : {}),
-        ...(backendTruncated || visibleHits.length > limit || capped.truncated
+        ...(backendTruncated || groupedHits.length > limit || capped.truncated
           ? { truncated: true }
           : {}),
       });

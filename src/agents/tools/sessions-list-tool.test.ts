@@ -689,6 +689,36 @@ describe("sessions-list-tool", () => {
     expect(getSessionsListDetails(result).sessions?.[0]).not.toHaveProperty("archivedAt");
   });
 
+  it("forwards organization filters before projection", async () => {
+    mocks.gatewayCall.mockResolvedValue({ sessions: [] });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
+
+    await tool.execute("organization-filters", {
+      category: null,
+      ownerId: "agent-owner",
+      unread: false,
+      status: "queued",
+      projectId: "openclaw",
+      hasWorktree: false,
+      needsAttention: false,
+    });
+
+    expect(mocks.gatewayCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.list",
+        params: expect.objectContaining({
+          category: null,
+          ownerId: "agent-owner",
+          unread: false,
+          status: "queued",
+          projectId: "openclaw",
+          hasWorktree: false,
+          needsAttention: false,
+        }),
+      }),
+    );
+  });
+
   it("keeps a bare row's gateway owner during transcript hydration", async () => {
     mocks.resolveSandboxedSessionToolContext.mockReturnValue({
       mainKey: "main",
