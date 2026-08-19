@@ -239,14 +239,12 @@ image once, then run `start` without coordinator access:
 bash scripts/mantis/build-telegram-desktop-image.sh
 ```
 
-Use `--provider aws` for CI after the catalog-only Telegram variant is
-promoted. That path selects `--image-sdk telegram-desktop=7.0.9`; the generic
-desktop image never carries the client. OpenClaw bakes and publishes it with
-`scripts/mantis/bake-telegram-desktop-image.sh --run`, run by a Crabbox
-coordinator admin from their own `crabbox` login (image creation and promotion
-are admin-only) on a clean checkout of a reviewed `main` commit — never from a
-working tree with local edits. Rebake after Crabbox promotes a new generic desktop base or after
-updating the pinned Telegram Desktop version. The image must provide an
+`--provider aws` targets a Crabbox catalog-only Telegram variant image
+(`--image-sdk telegram-desktop=7.0.9`) so the generic desktop image never
+carries the client. Publishing that variant needs Crabbox coordinator admin
+(`crabbox image create` / `image promote`) and is not part of this repository
+yet; until it is published, use the local Docker image above. Either image must
+provide an
 executable Telegram Desktop at `/opt/Telegram/Telegram`, a readable desktop
 version marker, `wmctrl`, `xdotool`, `scrot`, `ffmpeg`, `zbarimg`, and
 `xdpyinfo`, plus a reachable `DISPLAY=:99`. Crabbox refuses the lease when no
