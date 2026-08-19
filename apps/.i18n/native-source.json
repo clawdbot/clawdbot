@@ -25897,6 +25897,10 @@
         {
           "kind": "conditional-branch",
           "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift"
         }
       ]
     },
@@ -26009,6 +26013,17 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.ffefad3c8b30c36d",
+      "source": "Copy code",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift"
         }
       ]
     },
