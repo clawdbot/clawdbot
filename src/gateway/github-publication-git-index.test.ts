@@ -49,15 +49,25 @@ async function createFixture() {
   return { cwd, previousHead, sourceIndexTree, workspaceTree: sourceIndexTree, headCommit };
 }
 
+function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  return {
+    ...fixture,
+    requestId: "11111111-1111-4111-8111-111111111111",
+    branch: "main",
+    env: process.env,
+    assertCurrent: () => undefined,
+    run: async (
+      argv: string[],
+      options?: { cwd?: string; input?: string; env?: NodeJS.ProcessEnv },
+    ) => await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
+  };
+}
+
 describe("GitHub publication index update", () => {
   it("moves the branch and index together without changing accepted worktree content", async () => {
     const fixture = await createFixture();
     await updateGitHubPublicationBranchAndIndex({
-      ...fixture,
-      env: process.env,
-      assertCurrent: () => undefined,
-      run: async (argv, options) =>
-        await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
+      ...publicationIndexParams(fixture),
       updateRef: async () => {
         await git(fixture.cwd, [
           "update-ref",
@@ -81,11 +91,7 @@ describe("GitHub publication index update", () => {
 
     await expect(
       updateGitHubPublicationBranchAndIndex({
-        ...fixture,
-        env: process.env,
-        assertCurrent: () => undefined,
-        run: async (argv, options) =>
-          await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
+        ...publicationIndexParams(fixture),
         updateRef: async () => {
           throw new Error("update-ref must not run");
         },
@@ -96,28 +102,88 @@ describe("GitHub publication index update", () => {
     expect(await git(fixture.cwd, ["diff", "--cached", "--name-only"])).toContain("concurrent.txt");
   });
 
-  it("retains a complete recovery lock when the ref CAS outcome is ambiguous", async () => {
+  it("retries a complete recovery lock when an ambiguous ref CAS did not move", async () => {
     const fixture = await createFixture();
     const indexPath = path.join(fixture.cwd, ".git", "index");
     const indexBefore = await fs.readFile(indexPath);
 
     await expect(
       updateGitHubPublicationBranchAndIndex({
-        ...fixture,
-        env: process.env,
-        assertCurrent: () => undefined,
-        run: async (argv, options) =>
-          await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
+        ...publicationIndexParams(fixture),
         updateRef: async () => {
           throw new Error("ref changed");
         },
       }),
-    ).rejects.toThrow("ref changed");
+    ).rejects.toThrow("workspace recovery is pending");
 
     expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.previousHead);
     expect(await fs.readFile(indexPath)).toEqual(indexBefore);
     const recoveryLock = await fs.stat(path.join(fixture.cwd, ".git", "index.lock"));
     expect(recoveryLock.size).toBeGreaterThan(0);
+
+    await updateGitHubPublicationBranchAndIndex({
+      ...publicationIndexParams(fixture),
+      updateRef: async () => {
+        await git(fixture.cwd, [
+          "update-ref",
+          "refs/heads/main",
+          fixture.headCommit,
+          fixture.previousHead,
+        ]);
+      },
+    });
+    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
+    expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
+  });
+
+  it("installs a retained recovery index when an ambiguous ref CAS moved", async () => {
+    const fixture = await createFixture();
+
+    await expect(
+      updateGitHubPublicationBranchAndIndex({
+        ...publicationIndexParams(fixture),
+        updateRef: async () => {
+          await git(fixture.cwd, [
+            "update-ref",
+            "refs/heads/main",
+            fixture.headCommit,
+            fixture.previousHead,
+          ]);
+          throw new Error("response lost");
+        },
+      }),
+    ).rejects.toThrow("workspace recovery is pending");
+
+    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
+    await updateGitHubPublicationBranchAndIndex({
+      ...publicationIndexParams(fixture),
+      previousHead: fixture.headCommit,
+    });
+    expect(await git(fixture.cwd, ["write-tree"])).toBe(fixture.workspaceTree);
+    expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
+    await expect(fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).rejects.toThrow();
+  });
+
+  it("does not claim another Git operation's byte-identical index lock", async () => {
+    const fixture = await createFixture();
+    const foreignIndex = path.join(fixture.cwd, "foreign-index");
+    await git(fixture.cwd, ["read-tree", fixture.headCommit], undefined, {
+      ...process.env,
+      GIT_INDEX_FILE: foreignIndex,
+    });
+    await fs.rename(foreignIndex, path.join(fixture.cwd, ".git", "index.lock"));
+
+    await expect(
+      updateGitHubPublicationBranchAndIndex({
+        ...publicationIndexParams(fixture),
+        updateRef: async () => {
+          throw new Error("update-ref must not run");
+        },
+      }),
+    ).rejects.toThrow("locked by another operation");
+
+    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.previousHead);
+    expect((await fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).size).toBeGreaterThan(0);
   });
 
   it("removes its owned lock after a definite ref CAS rejection", async () => {
@@ -125,11 +191,7 @@ describe("GitHub publication index update", () => {
 
     await expect(
       updateGitHubPublicationBranchAndIndex({
-        ...fixture,
-        env: process.env,
-        assertCurrent: () => undefined,
-        run: async (argv, options) =>
-          await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
+        ...publicationIndexParams(fixture),
         updateRef: async () => {
           const result = await runCommandBuffered(
             ["git", "update-ref", "refs/heads/main", fixture.headCommit, "f".repeat(40)],

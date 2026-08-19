@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
@@ -6,6 +7,7 @@ import path from "node:path";
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
 
 class GitHubPublicationRefCasRejectedError extends Error {}
+export class GitHubPublicationRecoveryPendingError extends Error {}
 
 export function assertGitHubPublicationRefCasCompleted(result: {
   code: number | null;
@@ -39,9 +41,55 @@ async function syncDirectory(directory: string): Promise<void> {
   }
 }
 
+function errorCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+}
+
+async function sameFile(left: string, right: string): Promise<boolean> {
+  try {
+    const [leftStat, rightStat] = await Promise.all([fs.stat(left), fs.stat(right)]);
+    return (
+      leftStat.nlink >= 2 &&
+      rightStat.nlink >= 2 &&
+      leftStat.dev === rightStat.dev &&
+      leftStat.ino === rightStat.ino
+    );
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function pathExists(file: string): Promise<boolean> {
+  try {
+    await fs.stat(file);
+    return true;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function writeDurableFile(file: string, contents: Buffer): Promise<void> {
+  await fs.writeFile(file, contents, { flag: "w", mode: 0o600 });
+  const handle = await fs.open(file, "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
 /** Moves the branch and accepted index together while honoring Git's standard index lock. */
 export async function updateGitHubPublicationBranchAndIndex(params: {
   cwd: string;
+  requestId: string;
+  branch: string;
+  previousHead: string;
   sourceIndexTree: string;
   workspaceTree: string;
   headCommit: string;
@@ -53,8 +101,8 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-index-"));
   const replacementIndex = path.join(tempDir, "replacement-index");
   const observedIndex = path.join(tempDir, "observed-index");
-  let lock: FileHandle | undefined;
   let lockPath: string | undefined;
+  let recoveryPath: string | undefined;
   let ownsLock = false;
   let refMayHaveMoved = false;
   let installed = false;
@@ -64,6 +112,8 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     });
     const indexPath = path.resolve(params.cwd, rawIndexPath);
     lockPath = `${indexPath}.lock`;
+    const recoveryId = createHash("sha256").update(params.requestId).digest("hex");
+    recoveryPath = `${indexPath}.openclaw-${recoveryId}`;
     const gitEnv = {
       ...params.env,
       GIT_CONFIG_GLOBAL: os.devNull,
@@ -75,9 +125,62 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
       env: { ...gitEnv, GIT_INDEX_FILE: replacementIndex },
     });
     const replacement = await fs.readFile(replacementIndex);
+    let recoveryIndex: Buffer | undefined;
+    try {
+      recoveryIndex = await fs.readFile(recoveryPath);
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") {
+        throw error;
+      }
+    }
+    if (recoveryIndex && !recoveryIndex.equals(replacement)) {
+      const branchHead = await params.run(
+        ["git", "rev-parse", "--verify", `refs/heads/${params.branch}`],
+        { cwd: params.cwd },
+      );
+      if ((await sameFile(recoveryPath, lockPath)) || branchHead !== params.previousHead) {
+        throw new GitHubPublicationRecoveryPendingError(
+          "GitHub publication workspace recovery data changed.",
+        );
+      }
+      recoveryIndex = undefined;
+    }
+    if (!recoveryIndex) {
+      await writeDurableFile(recoveryPath, replacement);
+      await syncDirectory(path.dirname(indexPath));
+    }
+    if (await sameFile(recoveryPath, lockPath)) {
+      const branchHead = await params.run(
+        ["git", "rev-parse", "--verify", `refs/heads/${params.branch}`],
+        { cwd: params.cwd },
+      );
+      if (branchHead === params.headCommit) {
+        try {
+          await fs.rename(lockPath, indexPath);
+          installed = true;
+          await syncDirectory(path.dirname(indexPath));
+          await fs.rm(recoveryPath, { force: true });
+          return;
+        } catch (error) {
+          throw new GitHubPublicationRecoveryPendingError(
+            "GitHub publication workspace index recovery is pending.",
+            { cause: error },
+          );
+        }
+      }
+      if (branchHead !== params.previousHead) {
+        throw new GitHubPublicationRecoveryPendingError(
+          "GitHub publication workspace branch recovery is pending.",
+        );
+      }
+      await fs.rm(lockPath);
+      await syncDirectory(path.dirname(indexPath));
+    } else if (await pathExists(lockPath)) {
+      throw new Error("GitHub publication workspace index is locked by another operation.");
+    }
     params.assertCurrent();
     try {
-      lock = await fs.open(lockPath, "wx", 0o600);
+      await fs.link(recoveryPath, lockPath);
       ownsLock = true;
     } catch (error) {
       throw new Error("GitHub publication workspace index changed before commit.", {
@@ -93,10 +196,8 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
       throw new Error("GitHub publication workspace index changed after its accepted snapshot.");
     }
     params.assertCurrent();
-    // Prepare durable recovery bytes before the ref CAS. A crash afterward leaves
-    // a complete Git lock that can be inspected/recovered, never an empty blocker.
-    await lock.writeFile(replacement);
-    await lock.sync();
+    // The request-owned recovery inode proves whether a retained standard Git
+    // lock belongs to this transaction; matching bytes alone never claim it.
     await syncDirectory(path.dirname(indexPath));
     params.assertCurrent();
     if (params.updateRef) {
@@ -111,16 +212,25 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
       }
     }
     params.assertCurrent();
-    await lock.close();
-    lock = undefined;
     await fs.rename(lockPath, indexPath);
     ownsLock = false;
     installed = true;
     await syncDirectory(path.dirname(indexPath));
+    await fs.rm(recoveryPath, { force: true });
+  } catch (error) {
+    if (!installed && refMayHaveMoved && ownsLock) {
+      throw new GitHubPublicationRecoveryPendingError(
+        "GitHub publication workspace recovery is pending.",
+        { cause: error },
+      );
+    }
+    throw error;
   } finally {
-    await lock?.close().catch(() => undefined);
     if (!installed && !refMayHaveMoved && ownsLock && lockPath) {
       await fs.rm(lockPath, { force: true });
+    }
+    if ((installed || !refMayHaveMoved) && recoveryPath) {
+      await fs.rm(recoveryPath, { force: true });
     }
     await fs.rm(tempDir, { recursive: true, force: true });
   }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -281,6 +281,36 @@ describe("Gateway GitHub publication boundaries", () => {
       }),
     ).resolves.toMatchObject({ status: "published", branch: BRANCH });
     expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
+  });
+
+  it("keeps an incomplete Git transaction retryable until index recovery completes", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const coordinator = createTestGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({ database }),
+    });
+    mocks.updateIndex.mockImplementationOnce(async () => {
+      const { GitHubPublicationRecoveryPendingError } = await vi.importActual<
+        typeof import("./github-publication-git-index.js")
+      >("./github-publication-git-index.js");
+      throw new GitHubPublicationRecoveryPendingError("workspace recovery is pending");
+    });
+    const request = {
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      idempotencyKey: "recover-index-transaction",
+    };
+
+    await expect(coordinator.requestForSession(request)).rejects.toThrow(
+      "workspace recovery is pending",
+    );
+    expect(
+      database.db
+        .prepare("SELECT status FROM github_publication_requests WHERE idempotency_key = ?")
+        .get(request.idempotencyKey),
+    ).toEqual({ status: "publishing" });
+    await expect(coordinator.requestForSession(request)).resolves.toMatchObject({
+      status: "published",
+    });
   });
 
   it("terminalizes local recovery when the managed worktree fingerprint changed", async () => {

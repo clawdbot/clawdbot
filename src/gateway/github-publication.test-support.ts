@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   loadSession: vi.fn(),
   getConfigSnapshot: vi.fn(),
   attribution: vi.fn(),
+  updateIndex: vi.fn(),
 }));
 
 export function githubPublicationTestMocks() {
@@ -61,22 +62,7 @@ vi.mock("../secrets/runtime-state.js", () => ({
 
 vi.mock("./github-publication-git-index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./github-publication-git-index.js")>()),
-  updateGitHubPublicationBranchAndIndex: async (params: {
-    cwd: string;
-    sourceIndexTree: string;
-    workspaceTree: string;
-    run: (argv: string[], options?: { cwd?: string }) => Promise<string>;
-    updateRef?: () => Promise<void>;
-  }) => {
-    const currentIndexTree = await params.run(
-      ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
-      { cwd: params.cwd },
-    );
-    if (currentIndexTree !== params.sourceIndexTree && currentIndexTree !== params.workspaceTree) {
-      throw new Error("GitHub publication workspace index changed after its accepted snapshot.");
-    }
-    await params.updateRef?.();
-  },
+  updateGitHubPublicationBranchAndIndex: mocks.updateIndex,
 }));
 
 export function createTestGitHubPublicationRuntime(...args: Parameters<typeof createRuntime>) {
@@ -180,6 +166,38 @@ export function installGitHubPublicationTestHarness(): void {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     commands = [];
     commandCalls = [];
+    mocks.updateIndex
+      .mockReset()
+      .mockImplementation(
+        async (params: {
+          cwd: string;
+          sourceIndexTree: string;
+          workspaceTree: string;
+          run: (argv: string[], options?: { cwd?: string }) => Promise<string>;
+          updateRef?: () => Promise<void>;
+        }) => {
+          const currentIndexTree = await params.run(
+            [
+              "git",
+              "-c",
+              `core.hooksPath=${os.devNull}`,
+              "-c",
+              "core.fsmonitor=false",
+              "write-tree",
+            ],
+            { cwd: params.cwd },
+          );
+          if (
+            currentIndexTree !== params.sourceIndexTree &&
+            currentIndexTree !== params.workspaceTree
+          ) {
+            throw new Error(
+              "GitHub publication workspace index changed after its accepted snapshot.",
+            );
+          }
+          await params.updateRef?.();
+        },
+      );
     mocks.attribution.mockReset().mockReturnValue({
       trailers: ["Co-authored-by: alice <7+alice@users.noreply.github.com>"],
       logins: ["alice"],

@@ -23,6 +23,7 @@ import {
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
 import {
+  GitHubPublicationRecoveryPendingError,
   assertGitHubPublicationRefCasCompleted,
   updateGitHubPublicationBranchAndIndex,
 } from "./github-publication-git-index.js";
@@ -47,7 +48,6 @@ const COMMAND_OUTPUT_LIMIT = 256 * 1024;
 const PUBLICATION_MARKER = "OpenClaw-Publication";
 
 type PublicationRow = StateDatabase["github_publication_requests"];
-type PublicationFailureCode = Extract<SessionGitHubPublicationResult, { status: "failed" }>["code"];
 
 export function matchesGitHubPublicationIdentityRow(
   row: PublicationRow,
@@ -182,7 +182,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
 }
 
 export function resolveGitHubPublicationFailure(error: unknown): {
-  code: PublicationFailureCode;
+  code: Extract<SessionGitHubPublicationResult, { status: "failed" }>["code"];
   nextAction: string;
 } {
   const message = error instanceof Error ? error.message : "";
@@ -507,6 +507,7 @@ export async function executeGitHubPublication(params: {
     const currentTree = await step(
       async () => await requireCommand(["git", "rev-parse", "HEAD^{tree}"], { cwd: worktree.path }),
     );
+    const previousBranchHead = headCommit;
     let updateBranchRef: (() => Promise<void>) | undefined;
     if (markerPresent) {
       const markerParent = await step(
@@ -570,6 +571,9 @@ export async function executeGitHubPublication(params: {
     }
     await updateGitHubPublicationBranchAndIndex({
       cwd: worktree.path,
+      requestId: row.request_id,
+      branch,
+      previousHead: previousBranchHead,
       sourceIndexTree,
       workspaceTree,
       headCommit,
@@ -688,6 +692,9 @@ export async function executeGitHubPublication(params: {
       }),
     );
   } catch (error) {
+    if (error instanceof GitHubPublicationRecoveryPendingError) {
+      throw error;
+    }
     const failure = resolveGitHubPublicationFailure(error);
     const result = params.projectResult(
       params.complete(initial, {
