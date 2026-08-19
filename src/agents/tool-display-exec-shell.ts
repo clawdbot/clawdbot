@@ -323,37 +323,56 @@ export function scanTopLevelChars(
   visit: (char: string, index: number) => boolean | void,
   visitHeredocBody?: (operatorIndex: number, start: number, end: number) => void,
 ): void {
-  let quote: '"' | "'" | undefined;
+  let quote: '"' | "'" | "ansi-c" | undefined;
   let escaped = false;
   let atWordStart = true;
   let arithmeticDepth = 0;
   let plainSubshellDepth = 0;
   let pendingHeredocs: HeredocMarker[] = [];
+  let previousUnquotedDollar = false;
 
   for (let i = 0; i < command.length; i += 1) {
     const char = command.charAt(i);
+    const previousWasUnquotedDollar = previousUnquotedDollar;
+    previousUnquotedDollar = false;
 
     if (escaped) {
       escaped = false;
-      if (char !== "\n") {
+      if (char === "\n") {
+        // A line continuation disappears before tokenization; keep both code units absent.
+        previousUnquotedDollar = previousWasUnquotedDollar;
+        if (visit("", i - 1) === false || visit("", i) === false) {
+          return;
+        }
+      } else {
         atWordStart = false;
       }
       continue;
     }
+
+    if (quote === "'") {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
     if (char === "\\") {
+      // Defer adjacency until the escaped character reveals whether this is a continuation.
+      previousUnquotedDollar = previousWasUnquotedDollar;
       escaped = true;
       continue;
     }
 
     if (quote) {
-      if (char === quote) {
+      const terminator = quote === "ansi-c" ? "'" : quote;
+      if (char === terminator) {
         quote = undefined;
       }
       continue;
     }
 
     if (char === '"' || char === "'") {
-      quote = char;
+      quote = char === "'" && previousWasUnquotedDollar ? "ansi-c" : char;
       atWordStart = false;
       continue;
     }
@@ -403,7 +422,12 @@ export function scanTopLevelChars(
       }
     }
 
-    if (!inArithmetic && visit(char, i) === false) {
+    if (startsArithmetic) {
+      // Expose only the `((` opener; separators inside the arithmetic body stay protected.
+      if (visit(char, i) === false || visit(command.charAt(i + 1), i + 1) === false) {
+        return;
+      }
+    } else if (!inArithmetic && visit(char, i) === false) {
       return;
     }
 
@@ -444,6 +468,7 @@ export function scanTopLevelChars(
     } else {
       atWordStart = false;
     }
+    previousUnquotedDollar = char === "$";
   }
 }
 
@@ -481,18 +506,41 @@ function splitTopLevel(
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
+// `&` and `|` start commands unless they belong to redirects such as `>&`, `&>`, or `>|`.
+// Bash pipeline prefixes remain part of the command start that follows them.
+const SHELL_COMMAND_START_PATTERN =
+  String.raw`(?:^|;|\n|(?<!>)\||(?<![<>])&(?![>&]))\s*(?:(?:time(?:\s+-p(?:\s+--)?)?|!)(?:\s+|(?=\()))*`;
+const SHELL_TOKEN_END_PATTERN = String.raw`(?=$|[\s;&|()<>])`;
+const SHELL_NAMED_COMPOUND_START_PATTERN =
+  `(?:(?:for|while|until|if|case|select)${SHELL_TOKEN_END_PATTERN}|` +
+  `(?:\\[\\[|\\{)${SHELL_TOKEN_END_PATTERN}|\\(\\()`;
+const SHELL_COMPOUND_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\()`;
+const SHELL_COMPOUND_AT_COMMAND_START_RE = new RegExp(
+  `${SHELL_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
+  "u",
+);
+const SHELL_FUNCTION_AT_COMMAND_START_RE = new RegExp(
+  `${SHELL_COMMAND_START_PATTERN}function\\s+[^\\s;&|()<>]+(?:\\s+${SHELL_NAMED_COMPOUND_START_PATTERN}|\\(\\()`,
+  "u",
+);
+const SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE = new RegExp(
+  `${SHELL_COMMAND_START_PATTERN}(?:function\\s+[^\\s;&|()<>]+|[A-Za-z_][A-Za-z0-9_]*)\\s*\\(\\s*\\)\\s*${SHELL_COMPOUND_START_PATTERN}`,
+  "u",
+);
+
 /** Returns whether unquoted shell syntax contains a compound-command introducer. */
 export function hasShellCompoundCommand(command: string): boolean {
-  const unquoted = Array.from(command, () => " ");
+  // Keep quoted and escaped fragments token-occupying so `"x"select` cannot become `select`.
+  const syntaxChars = new Array<string>(command.length).fill("\0");
   scanTopLevelChars(command, (char, index) => {
-    unquoted[index] = char;
+    syntaxChars[index] = char;
     return true;
   });
-  const syntax = unquoted.join("");
+  const syntax = syntaxChars.join("");
   return (
-    /(?:^|;|&&|\|\||\n)\s*(?:(?:for|while|until|if|case)\b|\{)/u.test(syntax) ||
-    /(?:^|;|&&|\|\||\n)\s*\(/u.test(syntax) ||
-    /\b[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{/u.test(syntax)
+    SHELL_COMPOUND_AT_COMMAND_START_RE.test(syntax) ||
+    SHELL_FUNCTION_AT_COMMAND_START_RE.test(syntax) ||
+    SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE.test(syntax)
   );
 }
 

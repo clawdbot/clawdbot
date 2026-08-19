@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import {
+  hasShellCompoundCommand,
   scanTopLevelChars,
   splitTopLevelPipes,
   splitTopLevelStages,
@@ -268,9 +269,63 @@ describe("tool display details", () => {
     const conditional = "echo start && if test -f package.json; then pnpm test; fi";
     const subshell = "(echo one; echo two)";
     const functionBody = "f() { echo one; echo two; }";
-    const quoted = "printf '%s' '; if ' && pnpm test";
+    const functionKeyword = "function f { echo one; echo two; }";
+    const hyphenatedFunction = "function deploy-prod { echo one; echo two; }";
+    const namespacedFunction = "function log::info { echo one; echo two; }";
+    const selectLoop = 'select d in a b; do echo "$d"; break; done';
+    const doubleBracket = "[[ -f package.json && -f pnpm-lock.yaml ]] && pnpm test";
+    const pipedSelect = "printf x | select d in a b; do break; done";
+    const pipedDoubleBracket = "printf x | [[ -n x ]]";
+    const backgroundSelect = "true & select d in a b; do break; done";
+    const stderrPipedSelect = "printf x |& select d in a b; do break; done";
+    const pipedFunction = "printf x | function deploy-prod { echo one; echo two; }";
+    const conditionalFunction = "function deploy-prod if true; then echo ok; fi";
+    const doubleBracketFunction = "function check [[ -n x ]]";
+    const arithmeticFunction = "function bump (( n++ )) && pnpm test";
+    const subshellFunction = "function sub() (echo one; echo two)";
+    const posixConditionalFunction = "plain() if true; then echo ok; fi";
+    const negatedDoubleBracket = "! [[ -f a && -f b ]] && pnpm test";
+    const timedArithmetic = "time (( n++ )) && pnpm test";
+    const timedNegatedDoubleBracket = "time -p ! [[ -n x ]]";
+    const negatedTimedDoubleBracket = "! time [[ -n x ]]";
+    const operatorTimedArithmetic = "time(( n++ )) && pnpm test";
+    const operatorPortableTimedArithmetic = "time -p(( n++ )) && pnpm test";
+    const operatorNegatedArithmetic = "!(( n++ )) && pnpm test";
+    const operatorTimedSubshell = "time(echo one; echo two)";
+    const operatorArithmeticFunction = "function bump(( n++ )) && pnpm test";
+    const portableTimedDoubleDashArithmetic = "time -p -- (( n++ )) && pnpm test";
 
-    for (const command of [loop, conditional, subshell, functionBody]) {
+    for (const command of [
+      loop,
+      conditional,
+      subshell,
+      functionBody,
+      functionKeyword,
+      hyphenatedFunction,
+      namespacedFunction,
+      selectLoop,
+      doubleBracket,
+      pipedSelect,
+      pipedDoubleBracket,
+      backgroundSelect,
+      stderrPipedSelect,
+      pipedFunction,
+      conditionalFunction,
+      doubleBracketFunction,
+      arithmeticFunction,
+      subshellFunction,
+      posixConditionalFunction,
+      negatedDoubleBracket,
+      timedArithmetic,
+      timedNegatedDoubleBracket,
+      negatedTimedDoubleBracket,
+      operatorTimedArithmetic,
+      operatorPortableTimedArithmetic,
+      operatorNegatedArithmetic,
+      operatorTimedSubshell,
+      operatorArithmeticFunction,
+      portableTimedDoubleDashArithmetic,
+    ]) {
       expect(splitTopLevelStages(command)).toEqual([command]);
       expect(
         formatToolDetail(
@@ -279,12 +334,55 @@ describe("tool display details", () => {
       ).toBe(command);
     }
 
-    expect(splitTopLevelStages(quoted)).toEqual(["printf '%s' '; if '", "pnpm test"]);
-    expect(
-      formatToolDetail(
-        resolveToolDisplay({ name: "exec", args: { command: quoted }, detailMode: "explain" }),
-      ),
-    ).toBe("print text → run tests");
+    for (const command of [
+      ["true && \\", "if true; then echo ok; fi"].join("\n"),
+      ["printf x | \\", "select d in a b; do break; done"].join("\n"),
+      ["true && \\\\", "if true; then echo ok; fi"].join("\n"),
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([command]);
+    }
+
+    for (const quoted of [
+      "printf '%s' '; if ' && pnpm test",
+      "printf '%s' 'function f { echo; }' && pnpm test",
+      "printf '%s' 'select d; do echo; done' && pnpm test",
+      "printf '%s' '[[ a && b ]]' && pnpm test",
+      "printf '%s' $'can\\'t; if literal' && pnpm test",
+      ["printf '%s' $\\", "'can\\'t; if literal' && pnpm test"].join("\n"),
+    ]) {
+      expect(splitTopLevelStages(quoted)).toEqual([
+        quoted.slice(0, quoted.lastIndexOf(" && ")),
+        "pnpm test",
+      ]);
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command: quoted }, detailMode: "explain" }),
+        ),
+      ).toBe("print text → run tests");
+    }
+
+    for (const command of [
+      "select-editor --version && pnpm test",
+      "[[helper arg && pnpm test",
+      '"x"select --version && pnpm test',
+      "select'' --version && pnpm test",
+      'selec"t" --version && pnpm test',
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([
+        command.slice(0, command.lastIndexOf(" && ")),
+        "pnpm test",
+      ]);
+    }
+
+    for (const command of [
+      "function f{ echo one; echo two; }",
+      "function f {not-a-body; echo two; }",
+      "printf x >& select",
+      "printf x &> select",
+      "printf x >| select",
+    ]) {
+      expect(hasShellCompoundCommand(command)).toBe(false);
+    }
   });
 
   it("keeps normal search patterns concise", () => {
