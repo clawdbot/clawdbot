@@ -274,6 +274,23 @@ export function installGitHubPublicationTestHarness(): void {
         if (argv.includes("--includes") && argv.includes("--get-regexp")) {
           return commandResult("", 1);
         }
+        if (command.startsWith("git ls-tree -r -z --full-tree ")) {
+          return commandResult();
+        }
+        if (command === "git rev-parse --git-path info/attributes") {
+          return commandResult(path.join(root, "missing-info-attributes"));
+        }
+        if (command === "git var GIT_ATTR_GLOBAL" || command === "git var GIT_ATTR_SYSTEM") {
+          return commandResult(path.join(root, "missing-global-attributes"));
+        }
+        if (
+          argv[0] === "git" &&
+          argv[1] === "config" &&
+          (argv.includes("--global") || argv.includes("--system")) &&
+          argv.includes("core.attributesFile")
+        ) {
+          return commandResult("", 1);
+        }
         if (command.endsWith("write-tree")) {
           return commandResult(`${WORKSPACE_TREE}\n`);
         }

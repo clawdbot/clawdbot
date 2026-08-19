@@ -415,6 +415,33 @@ describe("Gateway GitHub publication", () => {
     expect(commands.some((argv) => argv.includes("push"))).toBe(false);
   });
 
+  it("rejects an effective clean filter before snapshotting workspace content", async () => {
+    const fallback = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      if (argv.includes("ls-tree")) {
+        return commandResult(`100644 blob ${"f".repeat(40)}\t.GITATTRIBUTES\0`);
+      }
+      if (argv.includes("cat-file") && argv.includes("blob")) {
+        return commandResult("*.bin filter=lfs\n");
+      }
+      return await fallback(argv, options);
+    });
+    const coordinator = createGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+      }),
+    });
+
+    await expect(
+      coordinator.requestForSession({
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        idempotencyKey: "active-clean-filter",
+      }),
+    ).rejects.toThrow("unsupported Git clean filter");
+    expect(commands.some((argv) => argv.includes("commit-tree"))).toBe(false);
+  });
+
   it("rejects a repository checkout redirected outside the managed worktree", async () => {
     mocks.resolveRepository.mockResolvedValue({
       checkoutRoot: "/tmp/other-checkout",

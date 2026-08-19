@@ -19,7 +19,6 @@ import {
   githubPublicationBaseFetchArgs,
   githubPublicationBaseLineageArgs,
   githubPublicationBaseLookupArgs,
-  githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseBranch,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
@@ -30,6 +29,8 @@ import {
 } from "./github-publication-git-index.js";
 import {
   appendGitHubPublicationMessage,
+  assertGitHubPublicationTreeHasNoFilters,
+  assertSafeGitPublicationWorkspace,
   assertGitHubPublicationBranchRef,
   githubPublicationPushArgs,
   githubPublicationRemoteHeadArgs,
@@ -99,22 +100,6 @@ function parseJsonObject(value: string, label: string): Record<string, unknown> 
   return parsed;
 }
 
-async function assertSafeGitPublicationConfig(cwd: string): Promise<void> {
-  const scopes: Array<"--local" | "--worktree"> = ["--local", "--worktree"];
-  const unsafe = await Promise.all(
-    scopes.map(
-      async (scope) =>
-        await runCommand(githubPublicationUnsafeConfigArgs(scope), {
-          cwd,
-          env: { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
-        }),
-    ),
-  );
-  if (unsafe.some((result) => result.code !== 1 || result.stdout.length > 0)) {
-    throw new Error("GitHub publication workspace has unsupported Git transport configuration.");
-  }
-}
-
 export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   cwd: string;
   assertCurrent?: () => void;
@@ -125,7 +110,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
     params.assertCurrent?.();
     return result;
   };
-  await step(async () => await assertSafeGitPublicationConfig(params.cwd));
+  await step(async () => await assertSafeGitPublicationWorkspace(params.cwd, runCommand));
   const sourceHeadCommit = await step(
     async () =>
       await requireCommand(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
@@ -142,6 +127,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-snapshot-"));
   try {
     const env: NodeJS.ProcessEnv = {
+      GIT_ATTR_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_CONFIG_SYSTEM: os.devNull,
       GIT_INDEX_FILE: path.join(tempDir, "index"),
@@ -162,7 +148,17 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
     });
     await step(async () => {
       await requireCommand(
-        ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "add", "-A"],
+        [
+          "git",
+          "-c",
+          `core.attributesFile=${os.devNull}`,
+          "-c",
+          `core.hooksPath=${os.devNull}`,
+          "-c",
+          "core.fsmonitor=false",
+          "add",
+          "-A",
+        ],
         { cwd: params.cwd, env },
       );
     });
@@ -172,6 +168,10 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
           ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
           { cwd: params.cwd, env },
         ),
+    );
+    await step(
+      async () =>
+        await assertGitHubPublicationTreeHasNoFilters(params.cwd, workspaceTree, runCommand),
     );
     return { sourceHeadCommit, sourceIndexTree, workspaceTree };
   } finally {
@@ -397,7 +397,7 @@ export async function executeGitHubPublication(params: {
       remoteBaseResult.stdout.toString("utf8"),
       baseBranch,
     );
-    await step(async () => await assertSafeGitPublicationConfig(worktree.path));
+    await step(async () => await assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     identity = await refreshIdentity();
     const baseTransportEnv = {
       ...identity.env,
@@ -590,7 +590,7 @@ export async function executeGitHubPublication(params: {
       headCommit,
     });
 
-    await step(async () => await assertSafeGitPublicationConfig(worktree.path));
+    await step(async () => await assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     const httpsRemote = `https://github.com/${pushRepository}.git`;
     identity = await refreshIdentity();
     let transportEnv = {
