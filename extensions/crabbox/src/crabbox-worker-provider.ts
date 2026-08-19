@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
   WorkerProviderError,
@@ -8,7 +7,6 @@ import {
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   crabboxCommandError,
@@ -27,11 +25,14 @@ import {
 } from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
+import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
+import {
+  createCrabboxNodeEnrollmentSetup,
+  type CrabboxWorkerNodeEnrollment,
+} from "./crabbox-worker-node-enrollment.js";
 import {
   buildCrabboxWarmupArgs,
-  type CrabboxMachineShape,
   CRABBOX_WORKER_PROVIDER_ID,
-  listCrabboxMachineOptions,
   nonEmptyString,
   operationLeaseId,
   operationSlug,
@@ -42,22 +43,18 @@ import {
   countCrabboxProvisionSetupPhases,
   CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
-  CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
   CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
   resolveCrabboxProvisionBaseTimeoutMs,
   resolveCrabboxProvisionCallTimeoutMs,
 } from "./crabbox-worker-timeouts.js";
+import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
 const READY_POLL_INTERVAL_MS = 2_000;
 const MAX_ERROR_DETAIL_CHARS = 512;
-const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
-const WORKER_WALLPAPER_WIDTH = 1920;
-const WORKER_WALLPAPER_HEIGHT = 1080;
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // Only states that prove the resource is gone or stopped map to `destroyed`. Crabbox also
 // treats `deleting` and `failed` as unable to become ready, but those can retain resources
 // that still need an explicit stop during teardown.
@@ -76,11 +73,6 @@ const LEASE_ID_PATTERN = /^(?:cbx_|tbx_)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const LEGACY_PROVISION_OPERATION_ID_PATTERN = /^provision:[a-f0-9]{64}$/u;
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
-type WorkerNodeEnrollment = Awaited<
-  ReturnType<
-    NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["beginNodeEnrollment"]>
-  >
->;
 
 type LeaseCommandContext = { binary: string; id: string; provider: string };
 type LeaseHeartbeatContext = LeaseCommandContext &
@@ -93,7 +85,6 @@ type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
 };
 
 type InspectCommandResult = { status: "found"; inspect: ParsedInspect } | { status: "unknown" };
-type CrabboxMachineShapes = ReadonlyMap<string, readonly CrabboxMachineShape[]>;
 
 type CrabboxWorkerProviderDependencies = {
   isExecutable?: (candidate: string) => boolean;
@@ -105,62 +96,6 @@ type CrabboxWorkerProviderDependencies = {
   wallpaperPath: string;
   warn?: (message: string) => void;
 };
-
-function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
-  const parsed: unknown = JSON.parse(stdout);
-  if (!Array.isArray(parsed)) {
-    throw new Error("Crabbox providers returned invalid JSON");
-  }
-  return new Map(
-    parsed.flatMap<[string, readonly CrabboxMachineShape[]]>((entry) => {
-      if (!isRecord(entry)) {
-        return [];
-      }
-      const rawClasses = Array.isArray(entry.classes) ? entry.classes : [];
-      const classes = rawClasses.flatMap<CrabboxMachineShape>((raw) => {
-        if (!isRecord(raw)) {
-          return [];
-        }
-        const machineClass = nonEmptyString(raw.class);
-        if (!machineClass) {
-          return [];
-        }
-        const cpu = asPositiveSafeInteger(raw.vcpu);
-        const memoryGb = asPositiveSafeInteger(raw.memoryGb);
-        return [
-          { class: machineClass, ...(cpu ? { cpu } : {}), ...(memoryGb ? { memoryGb } : {}) },
-        ];
-      });
-      const provider = nonEmptyString(entry.provider)?.toLowerCase();
-      return provider && classes.length > 0 ? [[provider, classes]] : [];
-    }),
-  );
-}
-
-function loadWorkerWallpaperBase64(wallpaperPath: string): string {
-  let wallpaper: Buffer;
-  try {
-    wallpaper = fs.readFileSync(wallpaperPath);
-  } catch (cause) {
-    throw new Error(`Crabbox worker wallpaper could not be read: ${wallpaperPath}`, { cause });
-  }
-  if (
-    wallpaper.length < 33 ||
-    !wallpaper.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE) ||
-    wallpaper.readUInt32BE(8) !== 13 ||
-    wallpaper.toString("ascii", 12, 16) !== "IHDR"
-  ) {
-    throw new Error(`Crabbox worker wallpaper is not a PNG: ${wallpaperPath}`);
-  }
-  const width = wallpaper.readUInt32BE(16);
-  const height = wallpaper.readUInt32BE(20);
-  if (width !== WORKER_WALLPAPER_WIDTH || height !== WORKER_WALLPAPER_HEIGHT) {
-    throw new Error(
-      `Crabbox worker wallpaper must be ${WORKER_WALLPAPER_WIDTH}x${WORKER_WALLPAPER_HEIGHT}; got ${width}x${height}: ${wallpaperPath}`,
-    );
-  }
-  return wallpaper.toString("base64");
-}
 
 async function assertAwsWorkerHasNoInstanceProfile(params: {
   binary: string;
@@ -308,74 +243,6 @@ async function waitForProvisionReady(
   }
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-function nodeEnrollmentSetupCommand(params: {
-  enrollment: WorkerNodeEnrollment;
-  leaseId: string;
-}): string {
-  const { enrollment, leaseId } = params;
-  const stateDir = `.openclaw/cloud-workers/${leaseId}`;
-  const packageCandidates = enrollment.packageSpecs.map(shellQuote).join(" ");
-  if (!packageCandidates) {
-    throw new Error("Worker node enrollment has no OpenClaw package source");
-  }
-  const versionLabel = shellQuote(`OpenClaw ${enrollment.openclawVersion}`);
-  const versionMetadataPrefix = shellQuote(`OpenClaw ${enrollment.openclawVersion} `);
-  const setupCodeLines =
-    enrollment.mode === "connect"
-      ? [
-          'setup_code_file="$state_dir/setup-code"',
-          "umask 077",
-          `printf "%s\\n" "$${CLOUD_SETUP_CODE_ENV}" >"$setup_code_file"`,
-        ]
-      : [];
-  const launch =
-    enrollment.mode === "connect"
-      ? `connect --target-file "$setup_code_file" --ephemeral --display-name ${shellQuote(enrollment.displayName)}`
-      : `node run --ephemeral --display-name ${shellQuote(enrollment.displayName)}`;
-  return [
-    "set -eu",
-    `state_dir="$HOME/${stateDir}"`,
-    'mkdir -p "$state_dir"',
-    'chmod 700 "$state_dir"',
-    'pid_file="$state_dir/node.pid"',
-    'package_spec_file="$state_dir/package-spec"',
-    'if [ -s "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then exit 0; fi',
-    ...setupCodeLines,
-    "if command -v openclaw >/dev/null 2>&1; then",
-    '  case "$(openclaw --version 2>/dev/null || true)" in',
-    `    ${versionLabel}|${versionMetadataPrefix}*) printf "%s\\n" "@global" >"$package_spec_file" ;;`,
-    "  esac",
-    "fi",
-    'if [ ! -s "$package_spec_file" ]; then',
-    '  rm -f "$package_spec_file"',
-    `  for package_candidate in ${packageCandidates}; do`,
-    '    if OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_candidate" -- openclaw --version >/dev/null 2>&1; then',
-    '      printf "%s\\n" "$package_candidate" >"$package_spec_file"',
-    "      break",
-    "    fi",
-    "  done",
-    "fi",
-    'if [ ! -s "$package_spec_file" ]; then',
-    `  printf "%s\\n" ${shellQuote(
-      `OpenClaw worker bootstrap could not install Gateway version ${enrollment.openclawVersion}; for an unreleased Gateway build, cloudWorkers profile setup must install that exact version globally before enrollment.`,
-    )} >&2`,
-    "  exit 1",
-    "fi",
-    'package_spec="$(cat "$package_spec_file")"',
-    'if [ "$package_spec" = "@global" ]; then',
-    `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
-    "else",
-    `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_spec" -- openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
-    "fi",
-    'for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$pid_file" ] && break; sleep 0.1; done',
-    'test -s "$pid_file"',
-  ].join("\n");
-}
-
 // Setup runs on every provision attempt (including replay adoption), so commands
 // must be idempotent. A failed setup stops the lease before surfacing the error;
 // otherwise the caller cannot release a box it never learned about.
@@ -511,7 +378,7 @@ async function rejectAwsProfileAfterLeaseReconciliation(
 export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies,
 ): WorkerProvider {
-  const wallpaperBase64 = loadWorkerWallpaperBase64(dependencies.wallpaperPath);
+  const wallpaperBase64 = loadCrabboxWorkerWallpaperBase64(dependencies.wallpaperPath);
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const warn = dependencies.warn ?? (() => {});
   const sleep =
@@ -543,7 +410,6 @@ export function createCrabboxWorkerProvider(
     warn,
   });
   let defaultBinary: string | undefined;
-  const machineShapesByBinary = new Map<string, Promise<CrabboxMachineShapes>>();
   const resolveBinary = (explicit?: string) => {
     if (explicit) {
       return explicit;
@@ -557,26 +423,11 @@ export function createCrabboxWorkerProvider(
     });
     return defaultBinary;
   };
-  const loadMachineShapes = async (binary: string): Promise<CrabboxMachineShapes> => {
-    try {
-      const result = await runCrabboxCommand({
-        action: "providers",
-        args: ["providers", "--json"],
-        binary,
-        runCommand,
-        timeoutMs: CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
-      });
-      if (result.termination !== "exit" || result.code !== 0) {
-        throw new Error("Crabbox providers command failed");
-      }
-      return parseCrabboxMachineShapes(result.stdout);
-    } catch (error) {
-      warn(
-        `Crabbox machine shapes unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return new Map();
-    }
-  };
+  const listMachineOptions = createCrabboxMachineOptionsResolver({
+    resolveBinary,
+    runCommand,
+    warn,
+  });
   const resolveLeaseContext = (
     lease: Parameters<WorkerProvider["inspect"]>[0],
   ): LeaseHeartbeatContext => {
@@ -595,20 +446,7 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
-    async listMachineOptions(profile) {
-      const parsed = parseCrabboxProfile(profile);
-      const binary = resolveBinary(parsed.binary);
-      // Provider metadata is process-stable, so one catalog read per binary serves the whole
-      // lifecycle. Keyed by resolved binary because `settings.binary` is profile-owned and
-      // environments.list loads every profile concurrently: a shared slot would hand one
-      // profile's Crabbox build the sizes reported by another's.
-      let shapes = machineShapesByBinary.get(binary);
-      if (!shapes) {
-        shapes = loadMachineShapes(binary);
-        machineShapesByBinary.set(binary, shapes);
-      }
-      return listCrabboxMachineOptions(parsed.class, (await shapes).get(parsed.provider));
-    },
+    listMachineOptions,
     supportedExecutionModes: ["worker-turn"],
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
@@ -729,19 +567,20 @@ export function createCrabboxWorkerProvider(
         await stopProvisionInspect(inspectedParams);
         throw new Error("Crabbox worker node enrollment is unavailable");
       }
-      let enrollment: WorkerNodeEnrollment;
+      let enrollment: CrabboxWorkerNodeEnrollment;
       try {
         enrollment = await beginNodeEnrollment();
       } catch (error) {
         await stopProvisionInspect(inspectedParams);
         throw error;
       }
+      const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({ enrollment, leaseId });
       inspectedParams.inspect = await runProvisionSetupAndWaitReady({
         ...inspectedParams,
-        setup: nodeEnrollmentSetupCommand({ enrollment, leaseId }),
+        setup: nodeEnrollmentSetup.command,
         timeoutMs: CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
-        ...(enrollment.mode === "connect"
-          ? { forwardedEnv: { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } }
+        ...(nodeEnrollmentSetup.forwardedEnv
+          ? { forwardedEnv: nodeEnrollmentSetup.forwardedEnv }
           : {}),
         sleep,
       });
