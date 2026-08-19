@@ -27,7 +27,6 @@ import {
   type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
-import { runAgentHarnessGatewayQuestion as runHarnessGatewayQuestion } from "../agents/harness/gateway-question.js";
 import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
 import {
   compileStructuredInputForm,
@@ -261,17 +260,16 @@ export {
 export {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
+  runAgentHarnessGatewayQuestion,
 } from "../agents/harness/gateway-question.js";
-/** Gateway question runner with the shared structured-input compiler/executor attached. */
-export const runAgentHarnessGatewayQuestion = Object.assign(runHarnessGatewayQuestion, {
-  structuredInput: Object.freeze({
-    compileForm: compileStructuredInputForm,
-    compileQuestions: compileStructuredInputQuestions,
-    compileUrl: compileStructuredInputUrl,
-    isRecord: isStructuredInputRecord,
-    run: runStructuredInput,
-    snapshot: snapshotStructuredInput,
-  }),
+/** Bounded structured-input compilation and execution for native agent harnesses. */
+export const agentHarnessStructuredInput = Object.freeze({
+  compileForm: compileStructuredInputForm,
+  compileQuestions: compileStructuredInputQuestions,
+  compileUrl: compileStructuredInputUrl,
+  isRecord: isStructuredInputRecord,
+  run: runStructuredInput,
+  snapshot: snapshotStructuredInput,
 });
 export {
   buildSkillWorkshopPromptSection,

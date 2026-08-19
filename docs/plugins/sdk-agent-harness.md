@@ -374,6 +374,15 @@ choice/free-form answers back into the runtime's native response shape. The
 helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
 
+For schema-backed forms and literal URL confirmation, use the
+`agentHarnessStructuredInput` runtime surface from the same subpath. It
+snapshots bounded own data without invoking accessors, compiles supported
+primitive fields into Gateway questions, and executes them with batching,
+secret-input, timeout, and cancellation fencing. Harnesses keep ownership of
+their protocol envelope and must pass the exact turn signal and active-owner
+check; `run(...)` returns an answered, declined, cancelled, or unsupported
+outcome for the adapter to translate.
+
 Each prepared attempt also receives a versioned `params.hostCapabilities`
 object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,
 and use its policy and approval operations for native actions. A native action

@@ -1,9 +1,9 @@
 /** Owns per-turn Codex request_user_input and ordinary MCP elicitation lifecycles. */
 import {
   callGatewayTool,
+  agentHarnessStructuredInput as structuredInput,
   embeddedAgentLog,
   emptyAgentHarnessUserInputAnswers,
-  runAgentHarnessGatewayQuestion,
   type AgentHarnessQuestionGatewayCall,
   type AgentHarnessUserInputOption,
   type AgentHarnessUserInputQuestion,
@@ -26,7 +26,6 @@ const MAX_USER_INPUT_OPTIONS = 4;
 const MAX_USER_INPUT_ID = 256;
 const MAX_USER_INPUT_HEADER = 64;
 const MAX_USER_INPUT_TEXT = 4_096;
-const structuredInput = runAgentHarnessGatewayQuestion.structuredInput;
 type StructuredInputCompileResult = ReturnType<typeof structuredInput.compileForm>;
 
 type InteractiveJob = {
