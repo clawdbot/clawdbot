@@ -3,7 +3,6 @@ import type { SubagentCompletionToolHandoffRegistration } from "../agents/subage
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
-import type { GatewayContextResolver } from "./server-methods/types.js";
 
 export type GatewayInstanceAgentDispatchOptions = {
   allowModelOverride?: boolean;
@@ -20,11 +19,6 @@ export type GatewayInstanceAgentDispatchOptions = {
   scopes?: string[];
   signal?: AbortSignal;
   syntheticScopes?: string[];
-};
-
-export type GatewayLifecycleAgentDispatchOptions = GatewayInstanceAgentDispatchOptions & {
-  resolveGatewayContext?: GatewayContextResolver;
-  timeoutMs?: number;
 };
 
 export type GatewayApprovalEventPublisher = {

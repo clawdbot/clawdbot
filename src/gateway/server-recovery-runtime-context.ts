@@ -1,8 +1,14 @@
 import type {
-  GatewayLifecycleAgentDispatchOptions,
+  GatewayInstanceAgentDispatchOptions,
   GatewayRecoveryRuntime,
 } from "./server-instance-runtime.types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
+import type { GatewayContextResolver } from "./server-methods/shared-types.js";
+
+type GatewayLifecycleAgentDispatchOptions = GatewayInstanceAgentDispatchOptions & {
+  resolveGatewayContext?: GatewayContextResolver;
+  timeoutMs?: number;
+};
 
 type ActiveGatewayRecoveryRuntime = {
   owner: symbol;
