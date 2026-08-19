@@ -1894,8 +1894,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       getRuntimeConfig: () => ({}) as never,
     });
 
-    const ownerContext = { owner: "gateway-a" } as never;
-    const resolveGatewayContext = () => ownerContext;
     const result = await deliverSubagentAnnouncement({
       requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
       targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
@@ -1914,7 +1912,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-dispatch",
-      resolveGatewayContext,
     });
 
     expectDeliveryPath(result, "direct");
