@@ -9123,9 +9123,6 @@ surfaces:
           - name: Persisted Matrix thread routing managers
             coverageIds: [matrix.persisted-matrix-thread-routing-managers]
             description: Persisted Matrix thread binding managers, child session binding, and activity tracking.
-          - name: ACP/subagent spawn hooks
-            coverageIds: [matrix.acp-subagent-spawn-hooks]
-            description: ACP/subagent spawn hooks and Matrix delivery targets for child sessions
         docs:
           - docs/channels/matrix.md
           - docs/channels/groups.md
@@ -9133,8 +9130,6 @@ surfaces:
         search_anchors:
           - matrix dm room routing and access policy
           - dm room routing and access policy
-          - matrix threads, acp, and subagent bindings
-          - threads, acp, and subagent bindings
         category_note: dm-room-routing-and-access-policy.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
@@ -9148,7 +9143,7 @@ surfaces:
         search_anchors:
           - matrix conversation routing and delivery
           - conversation routing and delivery
-        category_note: threads-acp-and-subagent-bindings.md
+        category_note: conversation-routing-and-delivery.md
         human_lts_override: false
       - name: Media and Rich Content
         id: media-and-rich-content
