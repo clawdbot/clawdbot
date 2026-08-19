@@ -303,13 +303,19 @@ async function finalizeCronCompletionAnnouncement(params: {
   }
 }
 
-// Heartbeat wakes may only force an execution session the caller actually asked for.
-// The main-session fallback used by cron targeting would otherwise pin every monitor
-// tick to `main` and shadow `agents.*.heartbeat.session`.
+// Only an interval monitor tick may decline the session cron targeting resolved for it.
+// An untargeted tick resolves to `main`, which would otherwise shadow
+// `agents.*.heartbeat.session` on every tick. Event wakes keep the resolved key: a
+// main-session cron job enqueues its system event there, so the run has to read that
+// same transcript to consume it.
 function resolveHeartbeatWakeSessionKey(
+  source: string | undefined,
   requestedSessionKey: string | null | undefined,
   resolvedSessionKey: string | undefined,
 ): string | undefined {
+  if (source !== "interval") {
+    return resolvedSessionKey;
+  }
   const requested = typeof requestedSessionKey === "string" ? requestedSessionKey.trim() : "";
   return requested ? resolvedSessionKey : undefined;
 }
@@ -781,7 +787,7 @@ export function buildGatewayCronService(params: {
         intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
-        sessionKey: resolveHeartbeatWakeSessionKey(opts?.sessionKey, sessionKey),
+        sessionKey: resolveHeartbeatWakeSessionKey(opts?.source, opts?.sessionKey, sessionKey),
         heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
         ...(opts?.scheduledEveryMs !== undefined
           ? { scheduledEveryMs: opts.scheduledEveryMs }
@@ -803,7 +809,7 @@ export function buildGatewayCronService(params: {
         intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
-        sessionKey: resolveHeartbeatWakeSessionKey(opts?.sessionKey, sessionKey),
+        sessionKey: resolveHeartbeatWakeSessionKey(opts?.source, opts?.sessionKey, sessionKey),
         // Preserve ownership across this adapter so the wake does not self-block on
         // the cron run that is awaiting it.
         owningCronJobMarker: opts?.owningCronJobMarker,
