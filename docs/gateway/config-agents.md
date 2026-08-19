@@ -1056,6 +1056,7 @@ for provider examples and precedence.
 ```json5
 {
   agents: {
+    entries: { main: { default: true } },
     executionBackends: {
       local: {
         type: "process",

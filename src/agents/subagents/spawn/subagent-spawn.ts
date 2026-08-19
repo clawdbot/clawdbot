@@ -146,9 +146,13 @@ export async function spawnSubagentDirect(
   } = requestResolution.resolved;
   const executionResult = resolveAgentExecutionPlacement({ cfg, request: params.execution });
   if (!executionResult.ok) {
+    admissionReservation?.release();
+    if (reservationPending) {
+      removeQueuedSwarmRun(childIdem);
+    }
     return { status: "error", error: executionResult.error };
   }
-  const executionPlacement = executionResult.execution;
+  const executionPlacement = executionResult.value;
   let modelApplied = false;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;

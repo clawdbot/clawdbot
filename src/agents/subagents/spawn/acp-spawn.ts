@@ -268,7 +268,7 @@ export async function spawnAcpDirect(
       error: executionResult.error,
     });
   }
-  const executionPlacement = executionResult.execution;
+  const executionPlacement = executionResult.value;
   const acpUnsupportedInheritedTool = findAcpUnsupportedInheritedToolDeny(
     ctx.inheritedToolDenylist,
   );

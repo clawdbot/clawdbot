@@ -11,7 +11,7 @@ const ExecutionBackendProfileSchema = z
 const ExecutionBackendSchema = z
   .object({
     type: z.enum(["process", "container", "kubernetes"]),
-    profiles: z.record(z.string().min(1), ExecutionBackendProfileSchema).optional(),
+    profiles: z.record(z.string().min(1).max(128), ExecutionBackendProfileSchema).optional(),
   })
   .strict();
 
@@ -39,7 +39,7 @@ export const AgentsSchema = z
   .object({
     ownership: z.literal("explicit").optional(),
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
-    executionBackends: z.record(z.string().min(1), ExecutionBackendSchema).optional(),
+    executionBackends: z.record(z.string().min(1).max(128), ExecutionBackendSchema).optional(),
     entries: z
       .record(
         z.string().regex(/^[a-z0-9_][a-z0-9_-]{0,63}$/i, "Invalid agent id"),

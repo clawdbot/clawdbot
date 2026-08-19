@@ -173,8 +173,8 @@ function createSessionsSpawnToolSchema(params: {
     execution: Type.Optional(
       Type.Object(
         {
-          backend: Type.Optional(Type.String({ description: "Execution placement backend id." })),
-          profile: Type.Optional(Type.String({ description: "Optional execution profile id." })),
+          backend: Type.Optional(Type.String({ maxLength: 128, description: "Execution placement backend id." })),
+          profile: Type.Optional(Type.String({ maxLength: 128, description: "Optional execution profile id." })),
         },
         { description: "Execution placement; only local process is supported in this release." },
       ),
@@ -424,6 +424,9 @@ export function createSessionsSpawnTool(
               profile: readStringParam(params.execution as Record<string, unknown>, "profile"),
             }
           : undefined;
+      if (params.visible === true && execution) {
+        throw new ToolInputError('sessions_spawn "execution" is unavailable with visible=true.');
+      }
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
       const deliveryPressure = getSubagentDeliveryBacklogPressure();
       if (deliveryPressure.blocked) {

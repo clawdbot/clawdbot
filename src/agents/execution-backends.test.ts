@@ -5,7 +5,7 @@ describe("agent execution placement", () => {
   it("defaults to the built-in local process backend", () => {
     expect(resolveAgentExecutionPlacement({ cfg: {} })).toEqual({
       ok: true,
-      execution: {
+      value: {
         backend: "local",
         type: "process",
       },
@@ -31,7 +31,7 @@ describe("agent execution placement", () => {
       }),
     ).toEqual({
       ok: true,
-      execution: {
+      value: {
         backend: "local",
         type: "process",
         profile: "small",
@@ -47,7 +47,7 @@ describe("agent execution placement", () => {
       }),
     ).toEqual({
       ok: false,
-      error: 'unknown execution backend "missing"',
+      error: 'execution backend "missing" is not supported until it has a dispatcher',
     });
 
     expect(
@@ -72,7 +72,7 @@ describe("agent execution placement", () => {
     });
   });
 
-  it("accepts future backend config but rejects non-process execution at spawn time", () => {
+  it("rejects configured non-local backends until dispatch exists", () => {
     expect(
       resolveAgentExecutionPlacement({
         cfg: {
@@ -91,8 +91,26 @@ describe("agent execution placement", () => {
       }),
     ).toEqual({
       ok: false,
-      error:
-        'execution backend "k8s" has type "kubernetes", but only local process execution is supported in this release',
+      error: 'execution backend "k8s" is not supported until it has a dispatcher',
+    });
+  });
+
+  it("keeps local process-backed when config overrides its type", () => {
+    expect(
+      resolveAgentExecutionPlacement({
+        cfg: { agents: { executionBackends: { local: { type: "container" } } } },
+      }),
+    ).toEqual({ ok: true, value: { backend: "local", type: "process" } });
+  });
+
+  it("bounds backend identifiers before returning errors", () => {
+    const result = resolveAgentExecutionPlacement({
+      cfg: {},
+      request: { backend: "x".repeat(1024) },
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: `execution backend "${"x".repeat(128)}" is not supported until it has a dispatcher`,
     });
   });
 });

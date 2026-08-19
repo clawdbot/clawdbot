@@ -1,3 +1,4 @@
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -16,9 +17,7 @@ export type AgentExecutionPlacement = {
   profile?: string;
 };
 
-export type AgentExecutionPlacementResult =
-  | { ok: true; execution: AgentExecutionPlacement }
-  | { ok: false; error: string };
+export type AgentExecutionPlacementResult = Result<AgentExecutionPlacement, string>;
 
 type RawExecutionBackendConfig = {
   type?: unknown;
@@ -49,53 +48,40 @@ export function resolveAgentExecutionPlacement(params: {
   cfg: OpenClawConfig;
   request?: AgentExecutionPlacementRequest;
 }): AgentExecutionPlacementResult {
-  const requestedBackend = normalizeOptionalString(params.request?.backend) ?? "local";
-  const requestedProfile = normalizeOptionalString(params.request?.profile);
+  const requestedBackend = (normalizeOptionalString(params.request?.backend) ?? "local").slice(0, 128);
+  const requestedProfile = normalizeOptionalString(params.request?.profile)?.slice(0, 128);
   const configuredBackends = readExecutionBackends(params.cfg);
   const configuredBackend = configuredBackends[requestedBackend];
-  const backendTypeRaw =
-    configuredBackend?.type ?? (requestedBackend === "local" ? "process" : undefined);
+  const backendTypeRaw = requestedBackend === "local" ? "process" : configuredBackend?.type;
 
+  if (requestedBackend !== "local") {
+    return err(`execution backend "${requestedBackend}" is not supported until it has a dispatcher`);
+  }
   if (
     typeof backendTypeRaw !== "string" ||
     !AGENT_EXECUTION_BACKEND_TYPES.includes(backendTypeRaw as AgentExecutionBackendType)
   ) {
-    return {
-      ok: false,
-      error: `unknown execution backend "${requestedBackend}"`,
-    };
+    return err(`unknown execution backend "${requestedBackend}"`);
   }
   const backendType = backendTypeRaw as AgentExecutionBackendType;
 
   if (backendType !== "process") {
-    return {
-      ok: false,
-      error: `execution backend "${requestedBackend}" has type "${backendType}", but only local process execution is supported in this release`,
-    };
+    return err(`execution backend "${requestedBackend}" has type "${backendType}", but only local process execution is supported in this release`);
   }
 
   if (requestedProfile) {
     const profileNames = readProfileNames(configuredBackend ?? {});
     if (profileNames.size === 0) {
-      return {
-        ok: false,
-        error: `execution backend "${requestedBackend}" does not define profile "${requestedProfile}"`,
-      };
+      return err(`execution backend "${requestedBackend}" does not define profile "${requestedProfile}"`);
     }
     if (!profileNames.has(requestedProfile)) {
-      return {
-        ok: false,
-        error: `unknown execution profile "${requestedProfile}" for backend "${requestedBackend}"`,
-      };
+      return err(`unknown execution profile "${requestedProfile}" for backend "${requestedBackend}"`);
     }
   }
 
-  return {
-    ok: true,
-    execution: {
-      backend: requestedBackend,
-      type: backendType,
-      ...(requestedProfile ? { profile: requestedProfile } : {}),
-    },
-  };
+  return ok({
+    backend: requestedBackend,
+    type: backendType,
+    ...(requestedProfile ? { profile: requestedProfile } : {}),
+  });
 }

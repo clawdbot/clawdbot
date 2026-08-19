@@ -595,6 +595,7 @@ describe("config schema", () => {
     expect(() =>
       OpenClawSchema.parse({
         agents: {
+          entries: { main: { default: true } },
           executionBackends: {
             local: {
               type: "process",
@@ -626,6 +627,7 @@ describe("config schema", () => {
     expect(() =>
       OpenClawSchema.parse({
         agents: {
+          entries: { main: { default: true } },
           executionBackends: {
             nope: {
               type: "vmware",
