@@ -12,8 +12,7 @@ Never print or persist secret values; channel tokens enter config only as Secret
 ```
 openclaw channels list --all
 openclaw channels status
-openclaw channels capabilities --channel telegram
-openclaw config get channels --json
+openclaw config get channels --json        # "Config path not found" is normal before first setup
 ```
 
 Confirm the exact config path before writing — key names differ per channel (`channels.telegram.botToken`, `channels.discord.token`, ...):
@@ -55,8 +54,8 @@ Apply `openclaw doctor --fix --non-interactive` only after approval, then re-che
 Send one real, clearly labeled test message and confirm delivery from the command result (use `--dry-run` first to inspect the payload):
 
 ```
-openclaw message send --channel telegram --target @yourtestchat --message "OpenClaw channel test — please ignore" --dry-run
-openclaw message send --channel telegram --target @yourtestchat --message "OpenClaw channel test — please ignore"
+openclaw message send --channel telegram --target <chatId> --message "OpenClaw channel test — please ignore" --dry-run
+openclaw message send --channel telegram --target <chatId> --message "OpenClaw channel test — please ignore"
 ```
 
 If sending fails, report the exact account, permission, destination, or network blocker without exposing credentials.

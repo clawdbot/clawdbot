@@ -12,9 +12,9 @@ In-session `config_set`/`config_set_ref` tool actions are policy-blocked for `mo
 ## Gather
 
 ```
-openclaw config get models --json
-openclaw models list
-openclaw models auth list
+openclaw config get models --json          # "Config path not found" is normal before first setup
+openclaw models list --agent <agentId>     # --agent is required in multi-agent rosters
+openclaw models auth list --agent <agentId>
 openclaw config schema --json | jq '.properties.models'   # confirm exact provider paths before writing
 ```
 
@@ -47,6 +47,14 @@ openclaw doctor --non-interactive
 If it reports a config repair, get approval, run `openclaw doctor --fix --non-interactive`, then re-run the Gather reads.
 
 ## Prove
+
+Roster-safe probe (works in every setup; use your own agent id or any configured agent):
+
+```
+openclaw agent --agent <agentId> --model openai/gpt-5.4 -m "Reply with exactly: PROVIDER-PROOF-OK"
+```
+
+Single-agent installs can use the lighter completion probe instead — it has no `--agent` flag and fails with "no explicit owner" on multi-agent rosters, so do not retry it there:
 
 ```
 openclaw infer model run --gateway --model openai/gpt-5.4 --prompt "Reply with exactly: PROVIDER-PROOF-OK"
