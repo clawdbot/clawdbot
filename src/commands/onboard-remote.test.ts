@@ -1,11 +1,11 @@
 // Onboard remote tests cover remote gateway prompts, Bonjour discovery, and remote config mutation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/auth-wizard.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
-import { createWizardPrompter } from "./test-wizard-helpers.js";
 
 const discoverGatewayBeacons = vi.hoisted(() => vi.fn<() => Promise<GatewayBonjourBeacon[]>>());
 const resolveWideAreaDiscoveryDomain = vi.hoisted(() => vi.fn(() => undefined));
@@ -88,6 +88,32 @@ describe("promptRemoteGatewayConfig", () => {
   afterEach(() => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+  });
+
+  it.each([
+    ["preserves", "wss://gateway.example/rpc", { "X-Edge-Auth": "test-secret" }],
+    ["clears", "wss://other.example/rpc", undefined],
+  ])("%s edge auth based on the remote Gateway scope", async (_label, nextUrl, expected) => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example/rpc/",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    const prompter = createPrompter({
+      confirm: vi.fn(async () => false),
+      select: createSelectPrompter({ "Gateway auth": "off" }),
+      text: vi.fn(async (params) =>
+        params.message === "Gateway WebSocket URL" ? nextUrl : "",
+      ) as WizardPrompter["text"],
+    });
+
+    const next = await promptRemoteGatewayConfig(cfg, prompter);
+
+    expect(next.gateway?.remote?.edgeAuth).toEqual(expected);
   });
 
   it("defaults discovered direct remote URLs to wss://", async () => {

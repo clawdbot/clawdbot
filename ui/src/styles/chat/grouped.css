@@ -110,8 +110,8 @@
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
-  margin-inline-start: 0;
-  padding-inline-start: 0;
+  margin-inline-start: 4px;
+  padding-inline-start: 46px;
 }
 
 .chat-group.tool.chat-group--with-footer {
@@ -120,6 +120,7 @@
 
 .chat-group.tool.chat-group--with-footer > .chat-group-messages {
   max-width: var(--chat-message-column-max);
+  margin-inline-start: 1px;
 }
 
 .chat-group.user .chat-group-footer {
@@ -676,6 +677,11 @@ img.chat-avatar.chat-avatar--logo {
 .chat-thread--direct .chat-group.assistant,
 .chat-thread--direct .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
+}
+
+.chat-thread--direct .chat-group.tool {
+  margin-inline-start: 0;
+  padding-inline-start: 0;
 }
 
 .chat-duplicate-count {

@@ -112,27 +112,40 @@ function createContext(
   } as unknown as ApplicationContext;
 }
 
+function createProposal(overrides: Partial<SkillWorkshopProposal>): SkillWorkshopProposal {
+  return {
+    key: "proposal",
+    kind: "update",
+    slug: "proposal",
+    name: "Proposal",
+    oneLine: "",
+    body: "",
+    status: "pending",
+    version: 1,
+    revisionHash: null,
+    createdAt: 0,
+    recencyGroup: "today",
+    ageLabel: "now",
+    supportFiles: [],
+    bodyLoaded: true,
+    isNew: false,
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   document.body.replaceChildren();
 });
 
 describe("SkillWorkshopPage lifecycle", () => {
   it("renders revisions in the shared modal and handles modal cancellation", async () => {
-    const proposal = {
+    const proposal = createProposal({
       key: "proposal-modal",
       slug: "proposal-modal",
       name: "Modal proposal",
       oneLine: "Shared modal coverage",
       body: "## Workflow\n- test",
-      status: "pending",
-      version: 1,
-      revisionHash: null,
-      createdAt: 0,
-      recencyGroup: "today",
-      ageLabel: "now",
-      supportFiles: [],
-      isNew: false,
-    } satisfies SkillWorkshopProposal;
+    });
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopLoaded = true;
     loadedState.skillWorkshopProposals = [proposal];
@@ -159,26 +172,18 @@ describe("SkillWorkshopPage lifecycle", () => {
 
   it("renders truncated Today previews without dangling surrogates", async () => {
     const previewText = `${"a".repeat(118)}😀trailing`;
-    const proposal = {
+    const proposal = createProposal({
       key: "proposal-utf16-preview",
       slug: "proposal-utf16-preview",
       name: "UTF-16 preview",
       oneLine: "Preview boundary coverage",
       body: `## Workflow\n- ${previewText}`,
-      status: "pending",
-      version: 1,
-      revisionHash: null,
-      createdAt: 0,
       updatedAt: 0,
-      recencyGroup: "today",
-      ageLabel: "now",
-      supportFiles: [],
-      isNew: false,
       origin: {
         agentId: "research",
         sessionKey: "agent:research:proposal-utf16-preview",
       },
-    } satisfies SkillWorkshopProposal;
+    });
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
@@ -421,26 +426,15 @@ describe("SkillWorkshopPage lifecycle", () => {
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
-    const proposal = {
+    const proposal = createProposal({
       key: "proposal-1",
       slug: "proposal-1",
-      name: "Proposal",
-      oneLine: "",
-      body: "",
-      status: "pending",
-      version: 1,
-      revisionHash: null,
-      createdAt: 0,
       updatedAt: 0,
-      recencyGroup: "today",
-      ageLabel: "now",
-      supportFiles: [],
-      isNew: false,
       origin: {
         agentId: "research",
         sessionKey: "agent:research:revision",
       },
-    } satisfies SkillWorkshopProposal;
+    });
     loadedState.skillWorkshopProposals = [proposal];
     loadedState.skillWorkshopSelectedKey = proposal.key;
     const page = document.createElement(
@@ -507,26 +501,15 @@ describe("SkillWorkshopPage lifecycle", () => {
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
-    const proposal = {
+    const proposal = createProposal({
       key: "proposal-owner",
       slug: "proposal-owner",
-      name: "Proposal",
-      oneLine: "",
-      body: "",
-      status: "pending",
-      version: 1,
-      revisionHash: null,
-      createdAt: 0,
       updatedAt: 0,
-      recencyGroup: "today",
-      ageLabel: "now",
-      supportFiles: [],
-      isNew: false,
       origin: {
         agentId: "research",
         sessionKey: "agent:research:revision",
       },
-    } satisfies SkillWorkshopProposal;
+    });
     loadedState.skillWorkshopProposals = [proposal];
     const page = document.createElement(
       "openclaw-skill-workshop-page",
@@ -571,22 +554,11 @@ describe("SkillWorkshopPage lifecycle", () => {
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
-    const proposal = {
+    const proposal = createProposal({
       key: "proposal-reconnect",
       slug: "proposal-reconnect",
-      name: "Proposal",
-      oneLine: "",
-      body: "",
-      status: "pending",
-      version: 1,
-      revisionHash: null,
-      createdAt: 0,
       updatedAt: 0,
-      recencyGroup: "today",
-      ageLabel: "now",
-      supportFiles: [],
-      isNew: false,
-    } satisfies SkillWorkshopProposal;
+    });
     loadedState.skillWorkshopProposals = [proposal];
     loadedState.skillWorkshopSelectedKey = proposal.key;
     const page = document.createElement(
@@ -643,22 +615,11 @@ describe("SkillWorkshopPage lifecycle", () => {
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
-    const proposal = {
+    const proposal = createProposal({
       key: "proposal-read-only",
       slug: "proposal-read-only",
-      name: "Proposal",
-      oneLine: "",
-      body: "",
-      status: "pending",
-      version: 1,
-      revisionHash: null,
-      createdAt: 0,
       updatedAt: 0,
-      recencyGroup: "today",
-      ageLabel: "now",
-      supportFiles: [],
-      isNew: false,
-    } satisfies SkillWorkshopProposal;
+    });
     loadedState.skillWorkshopProposals = [proposal];
     loadedState.skillWorkshopSelectedKey = proposal.key;
     const page = document.createElement(

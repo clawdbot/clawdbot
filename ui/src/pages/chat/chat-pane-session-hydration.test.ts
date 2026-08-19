@@ -21,7 +21,7 @@ describe("chat pane session hydration", () => {
     const request = vi.fn((_method: string, _params?: unknown) => secondaryResponse);
     const listBranches = vi.fn(() => secondaryResponse);
     const sessions = {
-      capturePullRequestEpoch: vi.fn(() => Symbol("pull-requests")),
+      capturePullRequestEpoch: vi.fn(() => ({})),
       listBranches,
       setPullRequestSummary: vi.fn(),
     } as unknown as SessionCapability;

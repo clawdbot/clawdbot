@@ -2,7 +2,6 @@
 // Control UI tests cover navigation behavior.
 import { describe, expect, it } from "vitest";
 import {
-  SETTINGS_NAVIGATION_GROUPS,
   SIDEBAR_NAV_ROUTES,
   formatDocumentTitle,
   isPluginsHubRoute,
@@ -10,6 +9,7 @@ import {
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
+  visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import {
   inferBasePathFromPathname,
@@ -41,7 +41,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
     "ai-agents",
     "model-setup",
     "lobsterdex",
-    ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
+    ...visibleSettingsNavigationGroups(true).flatMap((group) => group.routes),
   ]),
 );
 
@@ -536,7 +536,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
   });
 
   it("keeps the canonical settings navigation order", () => {
-    const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+    const settingsRoutes = visibleSettingsNavigationGroups(true).flatMap((group) => group.routes);
     expect(settingsRoutes).toEqual([
       "custodian",
       "profile",
@@ -567,10 +567,11 @@ describe("SIDEBAR_NAV_ROUTES", () => {
   });
 
   it("keeps personal settings first and labels remaining groups", () => {
-    const [firstGroup] = SETTINGS_NAVIGATION_GROUPS;
+    const settingsGroups = visibleSettingsNavigationGroups(true);
+    const [firstGroup] = settingsGroups;
     expect(firstGroup?.labelKey).toBeNull();
     expect(firstGroup?.routes).toEqual(["custodian", "profile", "appearance", "notifications"]);
-    for (const group of SETTINGS_NAVIGATION_GROUPS.slice(1)) {
+    for (const group of settingsGroups.slice(1)) {
       expect(group.labelKey).toBeTruthy();
     }
   });

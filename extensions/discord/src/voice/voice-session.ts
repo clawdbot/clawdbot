@@ -451,6 +451,7 @@ export class DiscordVoiceSessions {
       player,
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
+      ttsStreamFallbackWarned: false,
       capture: createVoiceCaptureState(),
       transcripts: options?.transcripts,
       receiveRecovery: createVoiceReceiveRecoveryState(),

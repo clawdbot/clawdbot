@@ -396,8 +396,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       } as never,
     });
 
-    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[3];
-    expect(mocks.realtimeHandlerCtorArgs[0]?.[5]).toBe(
+    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
+    expect(mocks.realtimeHandlerCtorArgs[0]?.[4]).toBe(
       mocks.webhookGetStreamDisconnectLifecycle.mock.results[0]?.value,
     );
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
@@ -467,7 +467,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     ).resolves.toMatchObject({ config: { agentId: "main" } });
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
 
-    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[3];
+    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
     if (typeof resolveCallRegistration !== "function") {
       throw new Error("expected per-call realtime registration resolver");
     }

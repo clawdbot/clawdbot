@@ -282,17 +282,12 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   ) {
     return;
   }
-  const { resolveGatewayService } = await import("../daemon/service.js");
+  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
   const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
   const { note } = await loadNoteModule();
   const service = resolveGatewayService();
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  if (!loaded) {
+  const state = await readGatewayServiceState(service, { env: process.env });
+  if (state.loadState.status !== "loaded") {
     return;
   }
   await ensureSystemdUserLingerInteractive({
@@ -313,15 +308,10 @@ async function detectSystemdLingerFindings(
   if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
     return [];
   }
-  const { resolveGatewayService } = await import("../daemon/service.js");
+  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
   const service = resolveGatewayService();
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  if (!loaded) {
+  const state = await readGatewayServiceState(service, { env: process.env });
+  if (state.loadState.status !== "loaded") {
     return [];
   }
   const {

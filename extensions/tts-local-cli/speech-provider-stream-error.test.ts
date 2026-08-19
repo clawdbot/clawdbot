@@ -17,6 +17,7 @@ import { buildCliSpeechProvider } from "./speech-provider.js";
 
 const TEST_CFG = {} as OpenClawConfig;
 const MIB = 1024 * 1024;
+const WAV_AUDIO = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVEaudio")]);
 
 function commandResult(overrides: Record<string, unknown> = {}) {
   return {
@@ -24,7 +25,7 @@ function commandResult(overrides: Record<string, unknown> = {}) {
     signal: null,
     killed: false,
     termination: "exit",
-    stdout: Buffer.from("audio"),
+    stdout: WAV_AUDIO,
     stderr: Buffer.alloc(0),
     ...overrides,
   };
@@ -53,7 +54,7 @@ describe("CLI TTS process wrapper", () => {
   });
 
   it("uses Execa input, timeout, escalation, and asymmetric byte caps", async () => {
-    await expect(synthesize()).resolves.toMatchObject({ audioBuffer: Buffer.from("audio") });
+    await expect(synthesize()).resolves.toMatchObject({ audioBuffer: WAV_AUDIO });
 
     expect(runCommandBufferedMock).toHaveBeenCalledWith(
       ["/fake/tts", "--voice", "test"],
@@ -103,7 +104,7 @@ describe("CLI TTS process wrapper", () => {
     await expect(synthesize()).rejects.toThrow("CLI TTS failed: stdout stream failed");
 
     runCommandBufferedMock.mockImplementationOnce(async (argv: string[]) => {
-      writeFileSync(argv[1]!, Buffer.from("file-audio"));
+      writeFileSync(argv[1]!, WAV_AUDIO);
       return commandResult({
         code: 0,
         error: streamError,
@@ -112,7 +113,7 @@ describe("CLI TTS process wrapper", () => {
       });
     });
     await expect(synthesize(["{{OutputPath}}"])).resolves.toMatchObject({
-      audioBuffer: Buffer.from("file-audio"),
+      audioBuffer: WAV_AUDIO,
     });
 
     runCommandBufferedMock.mockResolvedValueOnce(
@@ -120,12 +121,12 @@ describe("CLI TTS process wrapper", () => {
         code: 0,
         error: new Error("stderr stream failed"),
         errorStream: "stderr",
-        stdout: Buffer.from("stdout-audio"),
+        stdout: WAV_AUDIO,
         termination: "error",
       }),
     );
     await expect(synthesize()).resolves.toMatchObject({
-      audioBuffer: Buffer.from("stdout-audio"),
+      audioBuffer: WAV_AUDIO,
     });
   });
 });

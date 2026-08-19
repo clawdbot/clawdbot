@@ -15,7 +15,6 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
-import { DEBUG_OVERLAY_TOGGLE_EVENT } from "../pages/debug/debug-overlay-contract.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import {
@@ -25,12 +24,13 @@ import {
   type TestOptionalCustomElement,
 } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
-import "./app-host.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
+import "./app-host.ts";
+import { DEBUG_OVERLAY_ELEMENT } from "./lazy-custom-element.ts";
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -80,10 +80,6 @@ type ShellServerPreferencesState = {
 
 type ShellLazySurfaceState = ShellKeyboardState & {
   commandPaletteElement: TestOptionalCustomElement;
-};
-
-type ShellDebugOverlayState = ShellKeyboardState & {
-  debugOverlayElement: TestOptionalCustomElement;
 };
 
 type ShellApprovalLazyState = {
@@ -862,44 +858,43 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   });
 
   it("loads the debug overlay shortcut and ignores editable targets", async () => {
-    const element = createLazyElementSpec("debug overlay");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellDebugOverlayState;
-    shell.debugOverlayElement = element;
+    const toggled = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState &
+      HTMLElement;
+    const overlay = document.createElement(DEBUG_OVERLAY_ELEMENT.tagName) as HTMLElement & {
+      toggle: () => void;
+    };
+    overlay.toggle = toggled;
+    shell.append(overlay);
     Object.defineProperty(shell, "updateComplete", {
       get: () => Promise.resolve(true),
     });
-    const toggled = vi.fn();
-    window.addEventListener(DEBUG_OVERLAY_TOGGLE_EVENT, toggled);
-    try {
-      const shortcut = new KeyboardEvent("keydown", {
-        key: "d",
-        code: "KeyD",
-        ctrlKey: true,
-        shiftKey: true,
-        cancelable: true,
-      });
-      shell.handleDocumentKeydown(shortcut);
+    const shortcut = new KeyboardEvent("keydown", {
+      key: "d",
+      code: "KeyD",
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+    shell.handleDocumentKeydown(shortcut);
 
-      expect(shortcut.defaultPrevented).toBe(true);
-      await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
+    expect(shortcut.defaultPrevented).toBe(true);
+    await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
 
-      const input = document.body.appendChild(document.createElement("input"));
-      input.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
-      const editableShortcut = new KeyboardEvent("keydown", {
-        key: "d",
-        code: "KeyD",
-        ctrlKey: true,
-        shiftKey: true,
-        bubbles: true,
-        cancelable: true,
-      });
-      input.dispatchEvent(editableShortcut);
+    const input = document.body.appendChild(document.createElement("input"));
+    input.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+    const editableShortcut = new KeyboardEvent("keydown", {
+      key: "d",
+      code: "KeyD",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(editableShortcut);
 
-      expect(editableShortcut.defaultPrevented).toBe(false);
-      expect(toggled).toHaveBeenCalledOnce();
-    } finally {
-      window.removeEventListener(DEBUG_OVERLAY_TOGGLE_EVENT, toggled);
-    }
+    expect(editableShortcut.defaultPrevented).toBe(false);
+    expect(toggled).toHaveBeenCalledOnce();
   });
 
   it("opens approvals after the modal module loads on demand", async () => {

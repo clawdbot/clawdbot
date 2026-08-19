@@ -27,7 +27,6 @@ import {
   hasRestartRecoveryTerminalRun,
   isRetryableUnadoptedChatClaim,
   resolveRestartSafeChatAdmission,
-  terminalizeRestartSafeChatAdmission,
 } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
@@ -72,7 +71,6 @@ export async function admitChatSend(params: {
     now,
     restartSafeRequest,
     expectedLeafEntryId,
-    expectedRunId,
   } = session;
   const chatSendTraceAttributes = {
     runId: clientRunId,
@@ -131,7 +129,9 @@ export async function admitChatSend(params: {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
-  let messageInjectionTarget: ReturnType<typeof replyRunRegistry.resolveMessageInjectionTarget>;
+  let messageInjectionTarget: ReturnType<
+    typeof replyRunRegistry.resolveCurrentMessageInjectionTarget
+  >;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
   const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
@@ -195,30 +195,16 @@ export async function admitChatSend(params: {
     if (entry && !latestEntry) {
       throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
     }
-    // An active owner can advance this branch while a steer is being composed.
-    // The lifecycle admission keeps branch identity fixed after this check; if
-    // the owner clears, acceptance-aware dispatch preserves this turn as follow-up.
-    const hasSteerIdentity = expectedRunId !== undefined || expectedLeafEntryId !== undefined;
+    // Capture the exact direct owner under the writer barrier. If it clears
+    // later, the opaque target rejects instead of resolving a successor.
     const resolvedInjectionTarget =
-      p.queueMode === "steer" && hasSteerIdentity
-        ? replyRunRegistry.resolveMessageInjectionTarget({
-            sessionKey: activeRunScopeKey,
-            originatingLeafEntryId: expectedLeafEntryId,
-            expectedRunId,
-          })
+      p.queueMode === "steer"
+        ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeRunScopeKey)
         : undefined;
     if (commitOutcome && resolvedInjectionTarget) {
       messageInjectionTarget = resolvedInjectionTarget;
     }
-    if (
-      commitOutcome &&
-      p.queueMode === "steer" &&
-      expectedRunId === undefined &&
-      !resolvedInjectionTarget
-    ) {
-      throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
-    }
-    if (commitOutcome && expectedLeafEntryId !== undefined && !resolvedInjectionTarget) {
+    if (commitOutcome && p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
       // Runtime session identity resolves through the canonical SQLite accessor;
       // legacy/reset-archive files are read-only history fallbacks, never send targets.
       const activePathRelation = latestEntry?.sessionId
@@ -474,25 +460,6 @@ export async function admitChatSend(params: {
     discardAbandonedPreparedMedia?.();
     discardAbandonedPreparedMedia = undefined;
   };
-  const rejectActiveLeafChanged = async () => {
-    if (
-      restartSafeAdmission &&
-      !(await terminalizeRestartSafeChatAdmission({
-        admittedSessionId,
-        clientRunId,
-        sessionKey,
-        startedAt: now,
-        status: "failed",
-        storePath,
-        retryable: true,
-      }))
-    ) {
-      throw new Error("chat admission ownership changed before terminalization");
-    }
-    cleanupAdmittedRun({ force: true });
-    clearAgentRunContext(clientRunId, lifecycleGeneration);
-    respondChatActiveLeafChanged(respond);
-  };
   const rejectSessionRoutingChanged = () => {
     cleanupAdmittedRun({ force: true });
     clearAgentRunContext(clientRunId, lifecycleGeneration);
@@ -529,7 +496,6 @@ export async function admitChatSend(params: {
       lifecycleGeneration,
       messageInjectionTarget,
       originatingRoute,
-      rejectActiveLeafChanged,
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission,
       restartSafeAdmission,

@@ -86,12 +86,16 @@ export type DevicePairingList = {
   paired: PairedDevice[];
 };
 
+export type ExecSecurity = "deny" | "allowlist" | "full";
+export type ExecAsk = "off" | "on-miss" | "always";
 type ExecApprovalsDefaults = {
-  security?: string;
-  ask?: string;
-  askFallback?: string;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+  askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
 };
+
+export type ExecApprovalsResolvedDefaults = Required<ExecApprovalsDefaults>;
 
 export type ExecApprovalsAllowlistEntry = {
   id?: string;
@@ -120,6 +124,7 @@ type FileExecApprovalsSnapshot = {
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
+  resolvedDefaults?: ExecApprovalsResolvedDefaults;
 };
 
 type NativeExecApprovalRule = {

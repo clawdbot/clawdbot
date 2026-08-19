@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -5,6 +6,7 @@ import type {
   SessionOwner,
 } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -26,6 +28,7 @@ import {
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
+  resolveProjectedSessionContextTokens,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
@@ -40,7 +43,11 @@ import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { buildControlUiAvatarUrl, normalizeControlUiBasePath } from "./control-ui-shared.js";
+import {
+  buildControlUiAvatarUrl,
+  buildControlUiChannelAvatarUrl,
+  normalizeControlUiBasePath,
+} from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
@@ -77,6 +84,11 @@ import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-s
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 /** Adds current actor display data without persisting rename-prone metadata. */
+/** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
+function channelAvatarRevision(reference: string): string {
+  return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
+}
+
 export function projectSessionActor(
   actor: SessionEntry["createdActor"],
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
@@ -227,8 +239,16 @@ export function buildGatewaySessionRow(params: {
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
   const id = parsed?.id;
-  const origin = deliveryFields.origin;
+  const storedOrigin = deliveryFields.origin;
+  const avatar = normalizeOptionalString(storedOrigin?.avatar);
+  const origin = storedOrigin
+    ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
+    : undefined;
   const originLabel = origin?.label;
+  const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
+  const channelAvatarUrl = avatar
+    ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
+    : undefined;
   const parsedAgent = parseAgentSessionKey(key);
   const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
@@ -328,7 +348,6 @@ export function buildGatewaySessionRow(params: {
   );
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
-  const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
     !skipTranscriptUsage &&
     resolveEstimatedSessionCostUsd({
@@ -339,8 +358,7 @@ export function buildGatewaySessionRow(params: {
       rowContext,
     }) === undefined;
   const transcriptUsage =
-    !skipTranscriptUsage &&
-    (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
+    !skipTranscriptUsage && (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
@@ -414,27 +432,6 @@ export function buildGatewaySessionRow(params: {
         entry,
         rowContext: params.rowContext,
       }) ?? asNonNegativeFiniteNumber(transcriptUsage?.estimatedCostUsd));
-  const contextTokens = lightweight
-    ? (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ))
-    : (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(transcriptUsage?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ));
-
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
@@ -469,6 +466,29 @@ export function buildGatewaySessionRow(params: {
     modelCatalog: thinkingModelCatalog,
     rowContext,
     providerPolicySource: lightweight ? "active" : undefined,
+  });
+  const resolvedCurrentContextTokens = resolvePositiveNumber(
+    resolveContextTokensForModel({
+      cfg,
+      provider: rowModelProvider,
+      model: rowModel,
+      allowAsyncLoad: false,
+    }),
+  );
+  const authoredContextTokens = resolvePositiveNumber(
+    resolveAuthoredModelContextTokens({
+      cfg,
+      provider: rowModelProvider,
+      model: rowModel,
+    }),
+  );
+  const contextTokens = resolveProjectedSessionContextTokens({
+    entry,
+    provider: rowModelProvider,
+    model: rowModel,
+    agentHarnessId: thinkingProjection.agentRuntime.id,
+    resolvedContextTokens: resolvedCurrentContextTokens,
+    authoredContextTokens,
   });
   const fastModeState = resolveFastModeState({
     cfg,
@@ -526,6 +546,7 @@ export function buildGatewaySessionRow(params: {
     kind: gatewayKind,
     label: entry?.label,
     icon: entry?.icon,
+    channelAvatarUrl,
     category: entry?.category,
     boardFace: entry?.boardFace,
     ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),

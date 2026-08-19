@@ -200,6 +200,7 @@ it("renders identity before a Usage statistics link without requesting usage dat
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const request = vi.fn(async (method: string) => {
@@ -233,6 +234,30 @@ it("renders identity before a Usage statistics link without requesting usage dat
 
   usageRow?.click();
   expect(harness.context.navigate).toHaveBeenCalledWith("usage");
+});
+
+it("renders a write-access note without calling users.self for read-only viewers", async () => {
+  const request = vi.fn();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: "profile-1",
+    email: "ada@example.test",
+    name: "Ada",
+  });
+  harness.context.gateway.snapshot.hello = {
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: ["operator.read"] },
+    features: { methods: ["users.self"] },
+  } as ApplicationGatewaySnapshot["hello"];
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  expect(request).not.toHaveBeenCalled();
+  expect(page.textContent).toContain("Profile editing requires operator.write access.");
+  expect(page.querySelector(".identity-name-control")).toBeNull();
 });
 
 it("keeps identity UI and profile RPCs absent for unidentified connections", async () => {
@@ -378,6 +403,7 @@ it("retries the identity bootstrap when users.self returns no profile", async ()
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   let identityRequests = 0;
@@ -424,6 +450,7 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   let rejectIdentity: ((reason: Error) => void) | undefined;
@@ -485,6 +512,7 @@ it("replaces an in-flight identity request after a same-client reconnect", async
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const freshProfile = { ...staleProfile, displayName: "Fresh identity", updatedAt: 3 };
@@ -546,6 +574,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test", "ada@work.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   let omitNextProfile = false;

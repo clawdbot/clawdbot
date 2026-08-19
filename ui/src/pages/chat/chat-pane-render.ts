@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
@@ -23,6 +22,7 @@ import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
+import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
@@ -44,24 +44,14 @@ import {
   selectedChatSessionRow,
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { detailSlotOpen } from "./components/chat-detail-slot.ts";
 import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
 import {
-  createSessionWorkspaceProps,
   openSessionWorkspaceFile,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import {
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  closeSlot,
-  isSidebarSlotVisible,
-  openSlot,
-  type SidebarSlotId,
-} from "./sidebar-layout.ts";
 import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
@@ -111,25 +101,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    const hasPanelSlot = (slot: SidebarSlotId) =>
-      sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
-    const progressCardInRail =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
-      isSidebarSlotVisible(sidebarLayout, "companion");
-    const openPanelSlot = (slot: SidebarSlotId) => {
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
-      if (slot === "companion") {
-        this.setSessionObserverVisibility(true);
-      }
-    };
-    const closePanelSlot = (slot: SidebarSlotId) => {
-      if (slot === "companion") {
-        this.setSessionObserverVisibility(false);
-      }
-      state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
-    };
-    const togglePanelSlot = (slot: SidebarSlotId) =>
-      hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
     state.chatFollowUpMode = resolveControlUiFollowUpMode(
       state.settings.chatFollowUpMode,
       resolveControlUiServerQueueMode(
@@ -223,36 +194,15 @@ export class ChatPane extends ChatPaneLayoutRender {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
-      draftScope: this.presentationId,
-      expanded: hasPanelSlot("workspace"),
-      narrowLayout: false,
-    });
-    const sessionWorkspace = {
-      ...sessionWorkspaceBase,
-      collapsed: !hasPanelSlot("workspace"),
-      narrowLayout: false,
-      onToggleCollapsed: () => togglePanelSlot("workspace"),
-      onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
-      onToggleBrowser: state.browserPanelAvailable ? () => togglePanelSlot("browser") : undefined,
-      onToggleDesktop: isDesktopPanelAvailable(gatewaySnapshot)
-        ? () => togglePanelSlot("desktop")
-        : undefined,
-    };
-    const backgroundTasksBase = createBackgroundTasksProps(state, {
-      narrowLayout: false,
-      openTaskId:
-        state.sidebarContent?.kind === "task" && detailSlotOpen(sidebarLayout)
-          ? state.sidebarContent.taskId
-          : undefined,
-      onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
-    });
-    const backgroundTasks = {
-      ...backgroundTasksBase,
-      collapsed: !hasPanelSlot("tasks"),
-      narrowLayout: false,
-      onToggleCollapsed: () => togglePanelSlot("tasks"),
-    };
+    const { backgroundTasks, closePanelSlot, openPanelSlot, progressCardInRail, sessionWorkspace } =
+      createChatPaneRails({
+        state,
+        sidebarLayout,
+        paneWidth: this.paneWidth,
+        presentationId: this.presentationId,
+        gatewaySnapshot,
+        setObserverVisibility: this.setSessionObserverVisibility,
+      });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
@@ -399,6 +349,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
       approvalBusy: overlays?.snapshot?.approvalBusy,
+      approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
       approvalErrors: overlays?.snapshot?.approvalErrors,
       approvalNowMs: overlays?.snapshot?.approvalNowMs,
       onApprovalDecision:

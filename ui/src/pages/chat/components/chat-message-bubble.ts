@@ -65,10 +65,10 @@ import {
   renderToolCard,
   renderToolOutcome,
   renderToolPreview,
-  isRunningToolCard,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
+  toggleToolDisclosureKeepingScroll,
 } from "./chat-tool-cards.ts";
 
 function renderChatIcon(name: string) {
@@ -84,7 +84,7 @@ function renderInlineToolCards(
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
-    onToggleToolExpanded?: (toolCardId: string) => void;
+    onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     runActive?: boolean;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
@@ -93,12 +93,14 @@ function renderInlineToolCards(
 ) {
   return html`
     <div class="chat-tools-inline">
-      ${toolCards.map((card, index) =>
-        renderToolCard(card, {
-          expanded: opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ?? false,
+      ${toolCards.map((card, index) => {
+        const disclosureId = `${opts.messageKey}:toolcard:${index}`;
+        const expanded = opts.isToolExpanded?.(disclosureId) ?? false;
+        return renderToolCard(card, {
+          expanded,
           runActive: opts.runActive,
           onToggleExpanded: opts.onToggleToolExpanded
-            ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
+            ? () => opts.onToggleToolExpanded?.(disclosureId, expanded)
             : () => undefined,
           sessionKey: opts.sessionKey,
           agentId: opts.agentId,
@@ -107,8 +109,8 @@ function renderInlineToolCards(
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-        }),
-      )}
+        });
+      })}
     </div>
   `;
 }
@@ -228,7 +230,7 @@ export function renderGroupedMessage(
     assistantMessageDisclosure?: AssistantMessageDisclosure;
     actionMarkdown?: string;
     isToolExpanded?: (toolCardId: string) => boolean;
-    onToggleToolExpanded?: (toolCardId: string) => void;
+    onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     onRequestUpdate?: () => void;
     canvasPluginSurfaceUrl?: string | null;
     basePath?: string;
@@ -295,7 +297,8 @@ export function renderGroupedMessage(
   const markdown = extractedText?.trim() ? extractedText : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
-    codeBlockChrome: "copy",
+    codeBlockChrome: role === "user" ? "none" : "copy",
+    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
     fileLinks: true,
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
@@ -329,9 +332,7 @@ export function renderGroupedMessage(
   }
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded =
-    toolCards.some((card) => isRunningToolCard(card, opts.runActive)) ||
-    (opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false);
+  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   // One expanded card already closes with its own outcome line; every other
@@ -487,7 +488,12 @@ export function renderGroupedMessage(
                 @focus=${syncToolDisclosureOverflow}
                 @click=${(event: MouseEvent) => {
                   if (shouldToggleSelectableDisclosure(event)) {
-                    opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId);
+                    toggleToolDisclosureKeepingScroll(event, () =>
+                      opts.onToggleToolMessageExpanded?.(
+                        toolMessageDisclosureId,
+                        toolMessageExpanded,
+                      ),
+                    );
                   }
                 }}
               >
@@ -521,7 +527,11 @@ export function renderGroupedMessage(
                       ${assistantViewContent}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                            ${unsafeHTML(
+                              toSanitizedMarkdownHtml(reasoningMarkdown, {
+                                codeBlockInteraction: "interactive",
+                              }),
+                            )}
                           </div>`
                         : nothing}
                       ${jsonResult
@@ -595,7 +605,11 @@ export function renderGroupedMessage(
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                  ${unsafeHTML(
+                    toSanitizedMarkdownHtml(reasoningMarkdown, {
+                      codeBlockInteraction: "interactive",
+                    }),
+                  )}
                 </div>`
               : nothing}
             ${assistantViewContent}

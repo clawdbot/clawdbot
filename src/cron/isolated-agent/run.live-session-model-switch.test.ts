@@ -329,6 +329,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         model: "gpt-5.6-luna",
         modelProvider: "openai",
         agentRuntimeOverride: "openclaw",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        contextBudgetStatus: {} as NonNullable<
+          ReturnType<typeof makeCronSessionEntry>["contextBudgetStatus"]
+        >,
       }),
       isNewSession: false,
     });
@@ -374,6 +379,9 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(requireEmbeddedAgentCall(0).agentHarnessRuntimeOverride).toBe("openclaw");
     expect(requireEmbeddedAgentCall(1).agentHarnessRuntimeOverride).toBe("codex");
     expect(cronSession.sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(cronSession.sessionEntry.contextTokens).toBe(128_000);
+    expect(cronSession.sessionEntry.contextTokensSource).toBe("resolved");
+    expect(cronSession.sessionEntry.contextBudgetStatus).toBeUndefined();
   });
 
   it("returns error (not infinite loop) when LiveSessionModelSwitchError is thrown repeatedly", async () => {

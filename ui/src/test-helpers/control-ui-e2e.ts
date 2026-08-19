@@ -203,6 +203,7 @@ export const defaultControlUiFeatureMethods = [
   "chat.startup",
   "config.apply",
   "config.patch",
+  "config.schema",
   "config.set",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
@@ -318,6 +319,8 @@ export type ControlUiMockGatewayScenario = {
   /** Partition sessions.list fixtures by archived state after applying patches. */
   sessionArchiveFiltering?: boolean;
   models?: ModelCatalogEntry[];
+  /** Simulate a legacy Gateway whose connect hello predates the auth projection. */
+  omitConnectHelloAuth?: boolean;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   sessionKey?: string;
@@ -879,6 +882,7 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
     operatorScopes: scenario.operatorScopes ?? [
       "operator.admin",
       "operator.read",
@@ -1653,13 +1657,17 @@ function installControlUiMockGateway(
         const connectedDeviceToken =
           auth && typeof auth.deviceToken === "string" ? auth.deviceToken : scenario.deviceToken;
         return {
-          auth: {
-            deviceToken: connectedDeviceToken,
-            recoveryMigrationAllowed: true as const,
-            recoveryScope: "e2e-recovery-scope",
-            role: "operator",
-            scopes: scenario.operatorScopes,
-          },
+          ...(scenario.omitConnectHelloAuth
+            ? {}
+            : {
+                auth: {
+                  deviceToken: connectedDeviceToken,
+                  recoveryMigrationAllowed: true as const,
+                  recoveryScope: "e2e-recovery-scope",
+                  role: "operator",
+                  scopes: scenario.operatorScopes,
+                },
+              }),
           features: {
             capabilities: scenario.featureCapabilities,
             events: [],

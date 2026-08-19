@@ -6,7 +6,6 @@ import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import "../../styles/debug.css";
-import { DEBUG_OVERLAY_TOGGLE_EVENT } from "./debug-overlay-contract.ts";
 import {
   DEBUG_OVERLAY_SECTIONS,
   type DebugOverlaySectionDescriptor,
@@ -38,13 +37,7 @@ export class DebugOverlay extends OpenClawLightDomElement {
     false,
   );
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    window.addEventListener(DEBUG_OVERLAY_TOGGLE_EVENT, this.handleToggle);
-  }
-
   override disconnectedCallback(): void {
-    window.removeEventListener(DEBUG_OVERLAY_TOGGLE_EVENT, this.handleToggle);
     this.close();
     super.disconnectedCallback();
   }
@@ -55,7 +48,7 @@ export class DebugOverlay extends OpenClawLightDomElement {
     }
   }
 
-  private readonly handleToggle = (): void => {
+  toggle(): void {
     if (this.open) {
       this.close();
       return;
@@ -68,7 +61,7 @@ export class DebugOverlay extends OpenClawLightDomElement {
     );
     void this.refreshSections();
     this.polling.start();
-  };
+  }
 
   private readonly handleKeydown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape" || event.defaultPrevented) {

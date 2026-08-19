@@ -26,7 +26,7 @@ import {
   readQueuedMessageById,
 } from "./chat-queue.ts";
 import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
-import { sendChatMessageWithGeneratedRunId, steerSendDependencies } from "./chat-send-actions.ts";
+import { sendChatMessageWithGeneratedRunId } from "./chat-send-actions.ts";
 import {
   captureChatCommandComposerRecovery,
   cancelChatDelivery,
@@ -48,6 +48,10 @@ import {
   waitForPendingChatSettings,
 } from "./chat-send-queue-state.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
+import {
+  formatTerminalChatSendAckError,
+  OFFLINE_QUEUE_STORAGE_ERROR,
+} from "./chat-send-support.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { withChatSubmitGuard } from "./chat-submit-guard.ts";
@@ -65,11 +69,6 @@ import {
   isChatBusy,
   isChatStopCommand,
 } from "./run-lifecycle.ts";
-import {
-  formatTerminalChatSendAckError,
-  OFFLINE_QUEUE_STORAGE_ERROR,
-  sendQueuedChatMessageWithQueueMode as sendQueuedChatMessageWithQueueModeLifecycle,
-} from "./steer-lifecycle.ts";
 
 type ChatSendSubmitOptions = {
   attachmentsOverride?: readonly ChatAttachment[];
@@ -520,6 +519,16 @@ export async function handleSendChat(
 
     const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
     const waitingForSettings = Boolean(pendingSettings);
+    const directRunActive = hasDirectSessionRun(host);
+    // Only an explicit browser override replaces inherited Gateway policy.
+    const followUpMode =
+      opts?.followUpMode ??
+      host.chatFollowUpMode ??
+      normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
+    const activeRunQueueMode =
+      !skillWorkshopRevision && directRunActive && followUpMode !== "queue"
+        ? followUpMode
+        : undefined;
     // The edited row hands its place to the replacement and is retired by the same
     // store write, so a rejected write leaves the original queued and editable.
     const resumedEdit =
@@ -534,6 +543,7 @@ export async function handleSendChat(
       skillWorkshopRevision,
       replyToId,
       resumedEdit?.orderKey,
+      activeRunQueueMode,
     );
     if (!queued) {
       return;
@@ -572,6 +582,9 @@ export async function handleSendChat(
     const sendResult = await deliverChatQueueItem(host, queued, {
       previousDraft: cleared.previousDraft,
       previousAttachments: cleared.previousAttachments,
+      ...(!skillWorkshopRevision && directRunActive && followUpMode !== "queue"
+        ? { allowActiveRunSend: true }
+        : {}),
       ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
       ...(pendingSettings ? { pendingSettings } : {}),
       restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
@@ -588,24 +601,6 @@ export async function handleSendChat(
       (isChatBusy(host) || hasDirectSessionRun(host));
     if (pendingBusySend) {
       recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
-      // Only an explicit browser override replaces inherited Gateway policy.
-      const followUpMode =
-        opts?.followUpMode ??
-        host.chatFollowUpMode ??
-        normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
-      if (
-        !skillWorkshopRevision &&
-        followUpMode !== "queue" &&
-        host.connected &&
-        hasDirectSessionRun(host)
-      ) {
-        void sendQueuedChatMessageWithQueueModeLifecycle(
-          host,
-          pending.id,
-          followUpMode,
-          steerSendDependencies,
-        );
-      }
     }
     if (
       sendResult !== "failed" &&

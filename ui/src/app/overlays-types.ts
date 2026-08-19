@@ -15,6 +15,7 @@ export type ApplicationOverlaySnapshot = {
   controlUiRefreshRequired: boolean;
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
+  approvalCanGrant: boolean;
   approvalErrors: ReadonlyMap<string, string>;
   approvalNowMs: number;
   devicePairSetupOpen: boolean;

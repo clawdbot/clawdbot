@@ -19,7 +19,7 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
+import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -370,7 +370,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const deliveryRunId = options?.runId ?? executionIdentityToken?.runId;
       const trustedTurnContext =
         resolvedAgentId && options?.agentSessionKey
-          ? resolveMessageActionTurnCapability({
+          ? messageActionTurnCapability.resolveMessageActionTurnCapability({
               token: options.messageActionTurnCapability,
               agentId: resolvedAgentId,
               runId: options.runId,
@@ -652,8 +652,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           params: actionParams,
           actionOrigin: "message-tool",
           defaultAccountId: accountId ?? undefined,
-          requesterAccountId: trustedTurnContext?.requesterAccountId,
-          requesterSenderId: trustedTurnContext?.requesterSenderId,
+          ...messageActionTurnCapability.selectMessageActionRequesterIdentity(trustedTurnContext),
           messageActionAuthorization: {
             requesterAccountId: trustedTurnContext?.requesterAccountId,
             requesterSenderId: trustedTurnContext?.requesterSenderId,

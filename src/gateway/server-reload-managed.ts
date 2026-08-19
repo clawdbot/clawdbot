@@ -135,6 +135,7 @@ export function startManagedGatewayConfigReloader(
     broadcast: params.broadcast,
     getState: params.getState,
     setState: params.setState,
+    getPluginMetadataSnapshot: params.getPluginMetadataSnapshot,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,

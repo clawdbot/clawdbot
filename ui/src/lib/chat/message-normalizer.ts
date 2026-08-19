@@ -502,7 +502,14 @@ function expandTextContent(
     }
   }
   for (const preview of extracted.previews) {
-    parts.push({ type: "canvas", preview, rawText: null });
+    if (preview.surface !== "assistant_message") {
+      continue;
+    }
+    parts.push({
+      type: "canvas",
+      preview: { ...preview, surface: "assistant_message" },
+      rawText: null,
+    });
   }
 
   const content = mergeAdjacentTextItems(

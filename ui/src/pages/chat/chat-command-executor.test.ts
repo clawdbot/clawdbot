@@ -1570,13 +1570,10 @@ describe("executeSlashCommand directives", () => {
 });
 
 describe("executeSlashCommand /steer (soft inject)", () => {
-  it("injects into the current session via chat.send with deliver: false", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main", { status: "running" })] };
-      }
+  it("sends the selected session without resolving a run or leaf", async () => {
+    const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
-        return { status: "started", runId: "run-1", messageSeq: 2 };
+        return { status: "started", runId: "run-1" };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1591,78 +1588,16 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     expect(result.pendingCurrentRun).toBe(true);
     const chatSend = requireRequestCall(request, "chat.send");
-    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
-    expect(chatSend.payload.message).toBe("try a different approach");
-    expect(chatSend.payload.deliver).toBe(false);
-    expect(chatSend.payload.queueMode).toBe("steer");
-  });
-
-  it("uses a unique run id when a real session row omits active leaf context", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              hasActiveRun: true,
-              activeRunIds: ["active-run"],
-              activeLeafEntryId: undefined,
-            }),
-          ],
-        };
-      }
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-active-flag", messageSeq: 2 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "steer",
-      "continue with the smaller fix",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    expect(result.pendingCurrentRun).toBe(true);
-    const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload).toMatchObject({
       sessionKey: "agent:main:main",
-      message: "continue with the smaller fix",
+      message: "try a different approach",
       deliver: false,
-      expectedRunId: "active-run",
+      queueMode: "steer",
+      idempotencyKey: expect.any(String),
     });
+    expect(chatSend.payload).not.toHaveProperty("expectedRunId");
     expect(chatSend.payload).not.toHaveProperty("expectedLeafEntryId");
-  });
-
-  it.each([
-    ["zero", []],
-    ["multiple", ["run-a", "run-b"]],
-  ] as const)("refuses %s authoritative active run ids", async (_label, activeRunIds) => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              hasActiveRun: true,
-              activeRunIds: [...activeRunIds],
-              activeLeafEntryId: undefined,
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "steer",
-      "continue safely",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.steer.noActiveRun"));
-    expectNoRequestCall(request, "chat.send");
+    expectNoRequestCall(request, "sessions.list");
   });
 
   it("does not mark the current run pending when chat.send returns terminal ok", async () => {
@@ -1696,9 +1631,6 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     "reports terminal %s ACK without marking the current run pending",
     async (status, expectedKey) => {
       const request = vi.fn(async (method: string, _payload?: unknown) => {
-        if (method === "sessions.list") {
-          return { sessions: [row("agent:main:main", { status: "running" })] };
-        }
         if (method === "chat.send") {
           return { status, runId: `run-${status}`, summary: "aborted" };
         }
@@ -1722,9 +1654,6 @@ describe("executeSlashCommand /steer (soft inject)", () => {
 
   it("passes selected-agent scope when steering the selected global session", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return { sessions: [row("global", { status: "running" })] };
-      }
       if (method === "chat.send") {
         return { status: "started", runId: "run-global", messageSeq: 2 };
       }
@@ -1740,7 +1669,6 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload).toMatchObject({
       sessionKey: "global",
@@ -1748,177 +1676,6 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       message: "try a different approach",
       deliver: false,
     });
-  });
-
-  it("passes selected-agent scope when steering a selected-global alias", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return { sessions: [row("global", { status: "running" })] };
-      }
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-global", messageSeq: 2 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:work:main",
-      "steer",
-      "try the alias",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
-    const chatSend = requireRequestCall(request, "chat.send");
-    expect(chatSend.payload).toMatchObject({
-      sessionKey: "agent:work:main",
-      agentId: "work",
-      message: "try the alias",
-      deliver: false,
-    });
-  });
-
-  it("uses cached sessions to avoid an extra sessions.list round trip", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-2", messageSeq: 1 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "steer",
-      "researcher try a different approach",
-      {
-        sessionsResult: {
-          sessions: [
-            row("agent:main:main", { status: "running" }),
-            row("agent:main:subagent:researcher", {
-              spawnedBy: "agent:main:main",
-              status: "running",
-            }),
-          ],
-        } as SessionsListResult,
-      },
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    expect(request).toHaveBeenCalledTimes(1);
-    const chatSend = requireRequestCall(request, "chat.send");
-    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
-    expect(chatSend.payload.message).toBe("researcher try a different approach");
-    expect(chatSend.payload.deliver).toBe(false);
-  });
-
-  it("does not treat 'all' as a subagent wildcard", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main", { status: "running" })] };
-      }
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-3", messageSeq: 1 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "steer",
-      "all good now",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    const chatSend = requireRequestCall(request, "chat.send");
-    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
-    expect(chatSend.payload.message).toBe("all good now");
-    expect(chatSend.payload.deliver).toBe(false);
-  });
-
-  it("does not match agent id as target — treats 'main' as message text", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", { status: "running" }),
-            row("agent:main:subagent:researcher", { spawnedBy: "agent:main:main" }),
-          ],
-        };
-      }
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-4", messageSeq: 1 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "steer",
-      "main refine the plan",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    const chatSend = requireRequestCall(request, "chat.send");
-    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
-    expect(chatSend.payload.message).toBe("main refine the plan");
-    expect(chatSend.payload.deliver).toBe(false);
-  });
-
-  it("treats subagent-looking prefixes as current-session message text", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", { status: "running" }),
-            row("agent:main:subagent:researcher", {
-              spawnedBy: "agent:main:main",
-              endedAt: Date.now() - 60_000,
-            }),
-          ],
-        };
-      }
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-5", messageSeq: 1 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "steer",
-      "researcher try again",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    const chatSend = requireRequestCall(request, "chat.send");
-    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
-    expect(chatSend.payload.message).toBe("researcher try again");
-    expect(chatSend.payload.deliver).toBe(false);
-  });
-
-  it("returns a no-op summary when the current session has no active run", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main", { status: "done", endedAt: Date.now() })] };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "steer",
-      "try again",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.steer.noActiveRun"));
-    expect(request).toHaveBeenCalledWith("sessions.list", {});
-    expectNoRequestCall(request, "chat.send");
   });
 
   it("returns steer usage when no message is provided", async () => {
@@ -1936,10 +1693,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
   });
 
   it("returns steer error message on RPC failure", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main", { status: "running" })] };
-      }
+    const request = vi.fn(async () => {
       throw new Error("connection lost");
     });
 

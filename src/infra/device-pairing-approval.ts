@@ -20,7 +20,11 @@ import {
 } from "./device-pairing-state.js";
 import { persistDevicePairingStoreState as persistState } from "./device-pairing-store.js";
 import { createDeviceAuthToken, resolveRoleTokenScopes } from "./device-pairing-tokens.js";
-import { clearNodePairingGenerationBins, resolveNodePairingGeneration } from "./device-pairing.js";
+import {
+  clearNodePairingGenerationBins,
+  invalidatePairedCardRendererCache,
+  resolveNodePairingGeneration,
+} from "./device-pairing.js";
 import type {
   DeviceAuthToken,
   DevicePairingPendingRequest,
@@ -370,6 +374,7 @@ async function approveDevicePairingWithOptions(
       "both",
       installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
     );
+    invalidatePairedCardRendererCache();
     return {
       status: "approved",
       requestId,
@@ -493,6 +498,7 @@ export async function approveBootstrapDevicePairing(
       "both",
       installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
     );
+    invalidatePairedCardRendererCache();
     return {
       status: "approved",
       requestId,

@@ -572,17 +572,13 @@ suite.define(() => {
         .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
 
-      await page.locator("#new-session-detail-trigger").click();
-      const detail = page.locator("wa-popover.new-session-page__detail-popover");
-      expect(await detail.getByRole("button", { name: "Worktree" }).count()).toBe(0);
-      await detail.getByText("Runs directly in the selected folder.", { exact: true }).waitFor();
-      await page.keyboard.press("Escape");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
       await where.getByText("Cloud", { exact: true }).waitFor();
       const cloud = where.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe("Cloud workers require a managed worktree");
+      expect(await cloud.getAttribute("title")).toBe("Cloud needs a Git checkout");
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("clone and inspect this project");
@@ -706,18 +702,13 @@ suite.define(() => {
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
       const projectLabel = projectTrigger.locator(".new-session-page__trigger-label");
-      const detailSelect = page.locator("wa-popover.new-session-page__detail-popover");
-      const detailTrigger = page.locator("#new-session-detail-trigger");
       const browserEntries = page.locator(".new-session-page__browser-list");
 
       await whereTrigger.click();
       await whereSelect.getByText("Your devices", { exact: true }).waitFor();
       await whereSelect.getByRole("button", { name: "MacBook" }).click();
       await pollLocatorText(whereLabel).toBe("MacBook");
-      await detailTrigger.click();
-      expect(await detailSelect.getByRole("button", { name: "Worktree" }).count()).toBe(0);
-      await detailSelect.getByLabel("Working directory").waitFor();
-      await page.keyboard.press("Escape");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
 
       // Manual path entry in the browser head preserves UNC paths; these
       // cannot be rediscovered by starting at the node home directory.
@@ -786,8 +777,9 @@ suite.define(() => {
 
       await whereTrigger.click();
       await whereSelect.getByRole("button", { name: "Old node" }).click();
-      await detailTrigger.click();
-      const nodeCwd = detailSelect.getByLabel("Working directory");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await projectTrigger.click();
+      const nodeCwd = projectSelect.getByLabel("Working directory");
       await expect.poll(() => nodeCwd.inputValue()).toBe("");
       await nodeCwd.fill(EXEC_ONLY_PICKED);
       await nodeCwd.press("Enter");

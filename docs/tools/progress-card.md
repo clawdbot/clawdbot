@@ -11,6 +11,16 @@ read_when:
 
 The card is durable session state. A reconnect or page reload reads the latest card from the Gateway instead of reconstructing it from tool events or transcript history. The transcript keeps only a short update receipt, not another full copy of the card.
 
+## Adoption
+
+OpenClaw adds a short progress-card reminder only for non-main sessions when a web, iOS, Android, or macOS card renderer is paired with the Gateway and the run is not using the agent's utility model. Channel-only deployments such as a WhatsApp-only Gateway do not receive the reminder.
+
+The reminder says:
+
+> During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.
+
+The reminder does not override tool policy. `tools.updatePlan: false` or a matching `tools.deny` entry still removes `progress_card` from the run entirely.
+
 ## Update a card
 
 Both input fields are optional:
@@ -78,7 +88,7 @@ The current chat shows exactly one live card:
 - When the session rail is visible, the card appears in the rail.
 - At narrow widths where the rail is hidden, the card appears in the collapsible surface beside the composer.
 
-The two placements are mutually exclusive. Other sessions can show their latest card in the sidebar hovercard. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+The two placements are mutually exclusive. In chat content, hover a session-reference link to see that referenced session's latest card. Sidebar rows intentionally have no hover surface. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
 
 ## Pin the card to the dashboard
 

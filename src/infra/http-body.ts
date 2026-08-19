@@ -155,6 +155,22 @@ function stopRequestBodyAfterLimit(req: IncomingMessage, destroyOnLimit: boolean
   req.pause();
 }
 
+/** Close a limited request only after its response transport has closed. */
+export function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
+  if (!res.headersSent) {
+    res.setHeader("Connection", "close");
+  }
+  const once = Reflect.get(res, "once");
+  if (typeof once !== "function") {
+    return;
+  }
+  once.call(res, "close", () => {
+    if (!req.destroyed) {
+      req.destroy();
+    }
+  });
+}
+
 type ReadResponsePrefixResult = {
   buffer: Buffer;
   size: number;
@@ -529,6 +545,7 @@ export function installRequestBodyLimitGuard(
   };
 
   const respond = (error: RequestBodyLimitError) => {
+    closeRequestAfterResponse(req, res);
     const text = customText[error.code] ?? requestBodyErrorToText(error.code);
     if (!res.headersSent) {
       res.statusCode = error.statusCode;
@@ -550,11 +567,6 @@ export function installRequestBodyLimitGuard(
     reason = error.code;
     finish();
     respond(error);
-    if (!req.destroyed) {
-      // Limit violations are expected user input; destroying with an Error causes
-      // an async 'error' event which can crash the process if no listener remains.
-      req.destroy();
-    }
   };
 
   const onData = (chunk: Buffer | string) => {

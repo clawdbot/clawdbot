@@ -322,6 +322,49 @@ describe("cron tool flat-params", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
+  it("rejects conflicting flat schedule fields on add", () => {
+    const tool = createCronTool();
+
+    for (const args of [
+      { action: "add", name: "S1", at: "2026-09-01T09:00:00Z", everyMs: 300_000, message: "x" },
+      {
+        action: "add",
+        name: "S2",
+        at: "2026-09-01T09:00:00Z",
+        atMs: 1_800_000_000_000,
+        message: "x",
+      },
+      { action: "add", name: "S3", everyMs: 300_000, expr: "0 * * * *", message: "x" },
+    ] as const) {
+      expect(() => tool.prepareArguments?.(args)).toThrow("takes exactly one schedule field");
+    }
+  });
+
+  it("rejects flat tz without a cron expression on add", () => {
+    const tool = createCronTool();
+
+    expect(() =>
+      tool.prepareArguments?.({ action: "add", name: "TZ1", tz: "Europe/London", message: "x" }),
+    ).toThrow('"tz" is only valid alongside "expr"');
+  });
+
+  it("resolves a flat message/text payload conflict by precedence, not rejection", () => {
+    const tool = createCronTool();
+
+    // Payload conflicts stay recoverable (weak-model tolerance): message wins,
+    // no throw. Only schedule conflicts reject.
+    const prepared = tool.prepareArguments?.({
+      action: "add",
+      name: "P1",
+      everyMs: 300_000,
+      message: "do the thing",
+      text: "stray",
+    }) as { job?: { payload?: { kind?: string; message?: string } } };
+
+    expect(prepared.job?.payload?.kind).toBe("agentTurn");
+    expect(prepared.job?.payload?.message).toBe("do the thing");
+  });
+
   it("recovers flat script payload fields before agent-turn hints", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 

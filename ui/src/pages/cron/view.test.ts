@@ -243,7 +243,7 @@ describe("cron view list pane", () => {
     expect(onSubmitRunNow).toHaveBeenCalledTimes(1);
 
     const job = createJob("job-1");
-    const editing = renderView({ jobs: [job], editingJobId: "job-1" });
+    const editing = renderView({ jobs: [job], editingJob: job });
     expect(editing.querySelector('[data-test-id="cron-submit-run"]')).toBeNull();
   });
 
@@ -339,13 +339,6 @@ describe("cron view list pane", () => {
 });
 
 describe("cron view editor", () => {
-  it("does not expose a tab panel when the selected job is unavailable", () => {
-    const container = renderView({ editingJobId: "missing-job" });
-
-    expect(container.querySelector('[role="tablist"]')).toBeNull();
-    expect(container.querySelector('[role="tabpanel"]')).toBeNull();
-  });
-
   it("renders the create view with prompt, general, and schedule cards", () => {
     const onSubmit = vi.fn();
     const onClosePanel = vi.fn();
@@ -677,7 +670,7 @@ describe("cron view editor", () => {
     });
     const container = renderView({
       jobs: [job],
-      editingJobId: job.id,
+      editingJob: job,
       form: {
         ...DEFAULT_CRON_FORM,
         name: job.name,
@@ -707,7 +700,7 @@ describe("cron view editor", () => {
     });
     const command = renderView({
       jobs: [job],
-      editingJobId: job.id,
+      editingJob: job,
       form: {
         ...DEFAULT_CRON_FORM,
         name: job.name,
@@ -722,7 +715,7 @@ describe("cron view editor", () => {
 
     const heartbeat = renderView({
       jobs: [job],
-      editingJobId: job.id,
+      editingJob: job,
       form: {
         ...DEFAULT_CRON_FORM,
         name: job.name,
@@ -748,7 +741,7 @@ describe("cron view editor", () => {
     expect(container.textContent).toContain("Fix 1 field to continue.");
   });
 
-  it("renders job mode with header actions and detail tabs", () => {
+  it("renders job detail authority independently from the filtered table", () => {
     const onRun = vi.fn();
     const onToggle = vi.fn();
     const onClone = vi.fn();
@@ -756,8 +749,9 @@ describe("cron view editor", () => {
     const onDetailTabChange = vi.fn();
     const job = createJob("job-1", { name: "Nightly digest" });
     const container = renderView({
-      jobs: [job],
-      editingJobId: "job-1",
+      jobs: [],
+      jobsTotal: 0,
+      editingJob: job,
       onRun,
       onToggle,
       onClone,
@@ -847,7 +841,11 @@ describe("cron view editor", () => {
     getElement(list, '[data-test-id="cron-row-job-1"]', HTMLDivElement).click();
     expect(onSelectJob).toHaveBeenCalledWith(job);
 
-    const detail = renderView({ canManage: false, jobs: [job], editingJobId: job.id });
+    const detail = renderView({
+      canManage: false,
+      jobs: [],
+      editingJob: job,
+    });
     expect(detail.textContent).toContain("Browsing only");
     expect(detail.querySelector('[data-test-id="cron-run-now"]')).toBeNull();
     expect(detail.querySelector('[data-test-id="cron-toggle-enabled"]')).toBeNull();
@@ -863,7 +861,7 @@ describe("cron view editor", () => {
 
   it("locks the editor and back navigation while a save is pending", () => {
     const job = createJob("job-1", { name: "Nightly digest" });
-    const container = renderView({ jobs: [job], editingJobId: "job-1", busy: true });
+    const container = renderView({ jobs: [job], editingJob: job, busy: true });
 
     const editor = getElement(container, ".cron-editor", HTMLFieldSetElement);
     const name = getElement(container, "#cron-name", HTMLInputElement);
@@ -885,7 +883,7 @@ describe("cron view editor", () => {
     });
     const container = renderView({
       jobs: [job],
-      editingJobId: "job-1",
+      editingJob: job,
       detailTab: "history",
       runs: [
         {
@@ -907,7 +905,11 @@ describe("cron view editor", () => {
   it("shows the paused switch state for disabled jobs", () => {
     const onToggle = vi.fn();
     const job = createJob("job-1", { enabled: false });
-    const container = renderView({ jobs: [job], editingJobId: "job-1", onToggle });
+    const container = renderView({
+      jobs: [],
+      editingJob: job,
+      onToggle,
+    });
     const toggle = getElement(container, '[data-test-id="cron-toggle-enabled"]', HTMLSpanElement);
     const toggleInput = getElement(toggle, "wa-switch", HTMLElement) as HTMLElement & {
       checked: boolean;

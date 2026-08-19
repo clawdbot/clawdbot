@@ -291,6 +291,8 @@ describe("createNodePluginTools", () => {
     expect(result.content).toEqual([
       { type: "text", text: 'structuredContent:\n{\n  "hits": 2\n}' },
       { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
+      { type: "text", text: "first" },
+      { type: "text", text: "second" },
       { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
       { type: "text", text: '{"type":"image","data":42,"mimeType":"image/png"}' },
     ]);

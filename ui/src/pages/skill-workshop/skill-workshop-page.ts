@@ -3,15 +3,17 @@ import { initialState, Task } from "@lit/task";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import "../../components/tooltip.ts";
-import { t } from "../../i18n/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
+import {
+  filterSkillWorkshopProposals,
+  type SkillWorkshopAppliedDiffMode,
+} from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs } from "../plugins/plugins-hub.ts";
+import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
+import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { canCallWorkshopAdminMethod, resolveWorkshopAccess } from "./access.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
 import {
@@ -64,25 +66,10 @@ function renderSkillWorkshopPage(
 
   return html`
     <section class=${pageClass}>
-      <section class="content-header content-header--page plugins-content-header">
-        <div>
-          <h1 class="page-title">${t("tabs.skillWorkshop")}</h1>
-        </div>
-        <div class="page-meta">
-          ${renderSkillWorkshopHeaderControls(state, renderContext, requestUpdate)}
-        </div>
-      </section>
-      <div class="plugins-hub-tabs-row">
-        ${renderHubTabs({
-          id: "plugins",
-          active: "workshop",
-          tabs: pluginsHubTabs(),
-          ariaLabel: t("pluginsPage.hubTablistLabel"),
-          panelId: PLUGINS_HUB_PANEL_ID,
-          className: "plugins-tabs",
-          onSelect: (tab) => selectPluginsHubTab(context, tab),
-        })}
-      </div>
+      ${renderPluginsHubHeader({
+        active: "workshop",
+        onSelect: (tab) => selectPluginsHubTab(context, tab),
+      })}
       <wa-tab-panel
         id=${PLUGINS_HUB_PANEL_ID}
         class="sw-hub-panel"
@@ -90,15 +77,24 @@ function renderSkillWorkshopPage(
         active
         aria-labelledby="plugins-tab-workshop"
       >
+        <div class="sw-workshop-toolbar">
+          ${renderSkillWorkshopHeaderControls(state, renderContext, requestUpdate)}
+        </div>
         ${(() => {
           const visibleProposals = filterSkillWorkshopProposals(
             state.skillWorkshopProposals,
             state.skillWorkshopStatusFilter,
             state.skillWorkshopQuery,
           );
-          const selectedIndex = visibleProposals.findIndex(
+          const selectedProposal = state.skillWorkshopProposals.find(
             (proposal) => proposal.key === state.skillWorkshopSelectedKey,
           );
+          const isSelectedProposal = (proposal: (typeof visibleProposals)[number]) =>
+            proposal.key === state.skillWorkshopSelectedKey ||
+            (state.skillWorkshopStatusFilter === "applied" &&
+              selectedProposal?.status === "applied" &&
+              proposal.slug === selectedProposal?.slug);
+          const selectedIndex = visibleProposals.findIndex(isSelectedProposal);
           const selectProposal = (key: string) => {
             state.skillWorkshopFilePreviewKey = null;
             void selectSkillWorkshopProposal(state, context, key).finally(requestUpdate);
@@ -118,10 +114,7 @@ function renderSkillWorkshopPage(
             }
           };
           const selectVisibleFallback = (proposals: typeof visibleProposals) => {
-            if (
-              proposals.length === 0 ||
-              proposals.some((proposal) => proposal.key === state.skillWorkshopSelectedKey)
-            ) {
+            if (proposals.length === 0 || proposals.some(isSelectedProposal)) {
               return;
             }
             const firstProposal = proposals[0];
@@ -142,6 +135,7 @@ function renderSkillWorkshopPage(
               inspectingKey: state.skillWorkshopInspectingKey,
               proposals: state.skillWorkshopProposals,
               selectedKey: state.skillWorkshopSelectedKey,
+              appliedDiffMode: state.skillWorkshopAppliedDiffMode,
               statusFilter: state.skillWorkshopStatusFilter,
               query: state.skillWorkshopQuery,
               filePreviewKey: state.skillWorkshopFilePreviewKey,
@@ -192,6 +186,10 @@ function renderSkillWorkshopPage(
               },
               onModeChange: (mode) => setSkillWorkshopMode(state, mode, requestUpdate),
               onSelect: selectProposal,
+              onAppliedDiffModeChange: (mode: SkillWorkshopAppliedDiffMode) => {
+                state.skillWorkshopAppliedDiffMode = mode;
+                requestUpdate();
+              },
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
               onApply: (key) => {

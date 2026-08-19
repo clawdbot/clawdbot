@@ -430,6 +430,29 @@ describe("sessions-list-tool", () => {
     });
   });
 
+  it("preserves the context window already projected by the Gateway", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:main",
+          agentId: "main",
+          kind: "direct",
+          classification: "main",
+          model: "gpt-5.6-sol",
+          contextTokens: 1_000_000,
+        },
+      ],
+    });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute(
+      "gateway-context-window",
+      {},
+    );
+
+    expect(getSessionsListDetails(result).sessions?.[0]?.contextTokens).toBe(1_000_000);
+  });
+
   it("keeps channel discovery but omits delivery routing metadata", async () => {
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };

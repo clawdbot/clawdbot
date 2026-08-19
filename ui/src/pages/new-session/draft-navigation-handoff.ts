@@ -42,11 +42,14 @@ export function restoreDraft(
           scopeKey: routeKey,
         })
       : null;
-  if (ownedMessage || draft) {
-    submission.restoreMessage(ownedMessage || draft?.message || "");
-  }
   if (draft) {
-    submission.attachmentDraft.restore(draft.attachments);
+    submission.restoreDraftState({
+      message: ownedMessage || draft.message || "",
+      attachments: draft.attachments,
+      visibility: submission.visibility,
+    });
+  } else if (ownedMessage) {
+    submission.restoreMessage(ownedMessage);
   }
   activateDraft(submission, routeKey);
   return routeKey;

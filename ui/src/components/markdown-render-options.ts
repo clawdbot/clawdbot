@@ -1,10 +1,12 @@
 type MarkdownCodeBlockChrome = "copy" | "none";
+type MarkdownCodeBlockInteraction = "interactive" | "static";
 type MarkdownTableInteractions = "enabled" | "none";
 type MarkdownRenderMode = "document" | "message";
 
 export type MarkdownRenderOptions = {
   assistantTranscriptRoleHeaders?: boolean;
   codeBlockChrome?: MarkdownCodeBlockChrome;
+  codeBlockInteraction?: MarkdownCodeBlockInteraction;
   fileLinks?: boolean;
   interactiveImages?: boolean;
   progressBars?: boolean;
@@ -21,6 +23,7 @@ export function normalizeMarkdownRenderOptions(
   return {
     assistantTranscriptRoleHeaders: options.assistantTranscriptRoleHeaders ?? false,
     codeBlockChrome: options.codeBlockChrome ?? "copy",
+    codeBlockInteraction: options.codeBlockInteraction ?? "static",
     fileLinks: options.fileLinks ?? false,
     interactiveImages: options.interactiveImages ?? false,
     progressBars: options.progressBars ?? false,

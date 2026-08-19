@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 343289,
-  "reason": "Typed update recovery state, failure projection, and sidebar review routing",
+  "startupJsGzipBytes": 344429,
+  "reason": "Channel conversation avatars (PR #125668): lead-slot render branch + row plumbing on top of the 344395 B main baseline; avatar element itself is code-split out of startup",
   "updatedAt": "2026-08-18"
 }

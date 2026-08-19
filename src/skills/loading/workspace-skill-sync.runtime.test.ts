@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
@@ -209,6 +210,51 @@ describe("syncWorkspaceSkills", () => {
     expect(copyCount).toBe(0);
     expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(true);
     expect(await pathExists(path.join(targetWorkspace, "skills", "hidden", "SKILL.md"))).toBe(true);
+  });
+
+  it("replaces same-name execution skills when the execution root changes", async () => {
+    const agentWorkspace = await createCaseDir("agent-workspace");
+    const firstExecutionWorkspace = await createCaseDir("execution-a");
+    const secondExecutionWorkspace = await createCaseDir("execution-b");
+    const targetWorkspace = await createCaseDir("target");
+    const skillName = "shared-execution-skill";
+    await writeSkill({
+      dir: path.join(firstExecutionWorkspace, "skills", skillName),
+      name: skillName,
+      description: "Execution root A",
+    });
+    await writeSkill({
+      dir: path.join(secondExecutionWorkspace, "skills", skillName),
+      name: skillName,
+      description: "Execution root B",
+    });
+    const resolveSnapshot = (executionWorkspace: string) =>
+      resolveReusableWorkspaceSkillSnapshot({
+        workspaceDir: agentWorkspace,
+        executionSkillsDir: path.join(executionWorkspace, "skills"),
+        config: {},
+        skillFilter: [skillName],
+        snapshotVersion: getSkillsSnapshotVersion(agentWorkspace),
+        watch: false,
+      }).snapshot;
+    const syncSnapshot = async (executionWorkspace: string) =>
+      await syncWorkspaceSkills({
+        sourceWorkspaceDir: agentWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir: path.join(agentWorkspace, ".bundled"),
+        managedSkillsDir: path.join(agentWorkspace, ".managed"),
+        skillsSnapshot: resolveSnapshot(executionWorkspace),
+      });
+
+    await syncSnapshot(firstExecutionWorkspace);
+    await syncSnapshot(secondExecutionWorkspace);
+
+    const materializedSkill = await fs.readFile(
+      path.join(targetWorkspace, "skills", skillName, "SKILL.md"),
+      "utf8",
+    );
+    expect(materializedSkill).toContain("Execution root B");
+    expect(materializedSkill).not.toContain("Execution root A");
   });
 
   it("rejects path-like tampering without deriving read paths from the manifest", async () => {

@@ -31,8 +31,7 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
-    expect(prompt).toContain("## Sub-Agent Delegation");
-    expect(prompt).toContain("Mode: prefer");
+    expect(prompt).toContain("## Delegation");
     expect(prompt).not.toContain("For long waits, avoid rapid poll loops");
     expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");

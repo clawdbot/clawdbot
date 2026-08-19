@@ -576,9 +576,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
+      const pluginMetadataSnapshot = params.getPluginMetadataSnapshot?.();
       await refreshPreparedModelRuntimeSnapshots(nextConfig, {
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
       });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);

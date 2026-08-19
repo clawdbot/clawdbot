@@ -38,13 +38,19 @@ export type SessionState = {
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
   error: string | null;
-  deletedSessions: readonly SessionDeleteTarget[];
+  deletedSessions: readonly SessionDeletionFact[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
   /** New Session defaults associated with each gateway-owned group. */
   groupSettings: readonly SessionGroupSettings[];
   /** Gateway-owned sidebar section order; pinned is intentionally absent. */
   sectionOrder: readonly string[];
+};
+
+type SessionDeletionFact = {
+  key: string;
+  agentId?: string;
+  retireBeforeRevision: number;
 };
 
 export type SessionGroupMutationResult = "completed" | "stale";
@@ -56,7 +62,6 @@ export type SessionListOptions = {
   boardFace?: "chat" | "dashboard";
   activeMinutes?: number;
   search?: string;
-  creatorId?: string;
   ownerId?: string;
   involvingMe?: boolean;
   offset?: number;
@@ -167,7 +172,7 @@ export type SessionCapability = {
     listener: (snapshot: SessionListSnapshot) => void,
   ) => () => void;
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
-  setCreatorFilter: (creatorId: string | null) => Promise<void>;
+  setOwnerFilter: (ownerId: string | null) => Promise<void>;
   setInvolvingMeFilter: (enabled: boolean) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,
@@ -197,11 +202,11 @@ export type SessionCapability = {
   /** True while a just-created work session awaits its canonical placement row. */
   isPreparedWorkSession: (key: string) => boolean;
   pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
-  capturePullRequestEpoch: (key: string) => symbol;
+  capturePullRequestEpoch: (key: string) => object;
   setPullRequestSummary: (
     key: string,
     summary: SessionCatalogPullRequestSummary | undefined,
-    epoch?: symbol,
+    epoch?: object,
   ) => void;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;

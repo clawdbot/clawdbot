@@ -175,6 +175,7 @@ export async function prepareWorkspaceBuildGroup(
   options: { providerDiscoveryProviderIds?: readonly string[] } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
+  preparedPluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
 ): Promise<{
   agentFacts: PreparedModelRuntimeAgentFacts[];
   pluginGeneration: PreparedModelRuntimePluginGeneration;
@@ -193,23 +194,24 @@ export async function prepareWorkspaceBuildGroup(
     throw new Error("prepared model runtime workspace group is empty");
   }
   const env = input.env ?? process.env;
+  const pluginMetadataStartedAt = performance.now();
+  const pluginMetadataSnapshot =
+    preparedPluginMetadataSnapshot ??
+    reusablePluginGeneration?.pluginMetadataSnapshot ??
+    prepareOwnedPluginLoadContext(input, env, undefined);
+  const pluginMetadataMs = reusablePluginGeneration
+    ? 0
+    : performance.now() - pluginMetadataStartedAt;
   const runtimePluginStartedAt = performance.now();
   const { inboundPluginRegistry, runtimePluginRegistry } = reusablePluginGeneration
     ? {
         inboundPluginRegistry: reusablePluginGeneration.inboundPluginRegistry,
         runtimePluginRegistry: reusablePluginGeneration.pluginRegistry,
       }
-    : prepareWorkspacePluginRegistries(input, loadInboundPluginRegistry);
+    : prepareWorkspacePluginRegistries(input, pluginMetadataSnapshot, loadInboundPluginRegistry);
   const runtimePluginMs = reusablePluginGeneration ? 0 : performance.now() - runtimePluginStartedAt;
-  const prepare = async (
-    preparedMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
-  ) => {
-    const pluginMetadataStartedAt = performance.now();
-    const pluginMetadataSnapshot =
-      preparedMetadataSnapshot ?? prepareOwnedPluginLoadContext(input, env, runtimePluginRegistry);
-    const pluginMetadataMs = reusablePluginGeneration
-      ? 0
-      : performance.now() - pluginMetadataStartedAt;
+  prepareOwnedPluginLoadContext(input, env, runtimePluginRegistry, pluginMetadataSnapshot);
+  const prepare = async () => {
     const matchesStaticModelId = createStaticModelIdMatcher({
       manifestPlugins: pluginMetadataSnapshot.plugins,
     });
@@ -421,7 +423,7 @@ export async function prepareWorkspaceBuildGroup(
   return reusablePluginGeneration
     ? await withPreparedPluginGenerationScope(
         { input, pluginGeneration: reusablePluginGeneration },
-        prepare,
+        () => prepare(),
       )
     : await withPluginRuntimeRegistryScope(runtimePluginRegistry, prepare);
 }
@@ -489,18 +491,14 @@ export async function prepareFullCatalogFacts(
     inlineProviderModels: pluginGeneration.inlineProviderModels,
   };
 }
-
 /** Reports whether a catalog came from the complete prepared-catalog build path. */
-export function isPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): boolean {
-  return fullModelCatalogSnapshots.has(snapshot);
-}
-
+export const isPreparedModelCatalogFull = (snapshot: ModelCatalogSnapshot): boolean =>
+  fullModelCatalogSnapshots.has(snapshot);
 /** Restores process-local provenance after a complete catalog crosses a worker boundary. */
 export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): ModelCatalogSnapshot {
   fullModelCatalogSnapshots.add(snapshot);
   return snapshot;
 }
-
 function captureModelsJsonContents(agentDir: string): string | null {
   try {
     return fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
@@ -511,17 +509,13 @@ function captureModelsJsonContents(agentDir: string): string | null {
     throw error;
   }
 }
-
-export function fingerprintPreparedRuntimeFacts(value: unknown): string {
-  return sha256Base64Url(stableStringify(value));
-}
-
+export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
+  sha256Base64Url(stableStringify(value));
 function hasSameOAuthProviderGeneration(
   left: ReturnType<AuthStorage["getOAuthProviders"]>,
   right: ReturnType<AuthStorage["getOAuthProviders"]>,
 ): boolean {
-  // OAuth descriptors carry executable hooks. Match those hooks by identity so equivalent
-  // AuthStorage instances share built-ins without merging distinct closure generations.
+  // Match executable hooks by identity so distinct AuthStorage closure generations never merge.
   return (
     left.length === right.length &&
     left.every((provider, index) => {
@@ -547,8 +541,7 @@ function groupConfiguredRegistrySources(
   for (const facts of agentFacts) {
     const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
-    // Generated catalogs are agent-owned. Capture only plugins needed by unresolved configured
-    // refs, then group exact bytes and OAuth behavior so publication never mixes generations.
+    // Capture only unresolved configured catalogs, then group exact bytes and OAuth behavior.
     const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(
       facts.input.agentDir,
       facts.configuredGeneratedCatalogPluginIds,

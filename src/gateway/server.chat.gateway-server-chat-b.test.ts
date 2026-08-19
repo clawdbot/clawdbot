@@ -1123,7 +1123,9 @@ describe("gateway server chat", () => {
         modelOverride: "gpt-5",
         modelProvider: "openai",
         model: "gpt-5",
+        agentHarnessId: "openclaw",
         contextTokens: 128_000,
+        contextTokensSource: "runtime",
       });
       await writeMainSessionTranscript([
         createTextTranscriptEvent("user", "persisted metadata", { timestamp: updatedAt }),

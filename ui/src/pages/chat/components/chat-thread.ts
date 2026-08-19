@@ -2,7 +2,10 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
-import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import {
+  handleMarkdownCodeBlockClick,
+  initializeMarkdownCodeBlocks,
+} from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
@@ -144,6 +147,11 @@ function renderTranscriptShell(
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
+      ${ref((element) => {
+        if (element instanceof HTMLElement) {
+          initializeMarkdownCodeBlocks(element);
+        }
+      })}
       role="log"
       aria-live="off"
       aria-relevant="additions"
@@ -180,7 +188,7 @@ function renderTranscriptShell(
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
       @click=${(event: MouseEvent) => {
-        handleMarkdownCodeBlockCopy(event);
+        handleMarkdownCodeBlockClick(event);
         handleMarkdownTableInteraction(event);
         const target = markdownFileLinkFromEvent(event);
         if (target) {

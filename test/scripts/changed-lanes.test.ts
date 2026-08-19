@@ -43,7 +43,7 @@ import {
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
-import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();

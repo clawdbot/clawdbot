@@ -238,8 +238,12 @@ export function projectChatTranscript(
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
-  const toggleToolCardExpanded = (toolCardId: string) => {
-    setExpansionState(expandedToolCards, toolCardId, !expandedToolCards.get(toolCardId));
+  const toggleToolCardExpanded = (toolCardId: string, expanded?: boolean) => {
+    setExpansionState(
+      expandedToolCards,
+      toolCardId,
+      !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
+    );
     requestUpdate();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {

@@ -2,6 +2,7 @@
 // body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
+import { closeRequestAfterResponse } from "../infra/http-body.js";
 import {
   logRejectedLargePayload,
   parseContentLengthHeader,
@@ -150,12 +151,14 @@ export async function readJsonBodyOrError(
         reason: "json_body_limit",
         ...(contentLength !== undefined ? { bytes: contentLength } : {}),
       });
+      closeRequestAfterResponse(req, res);
       sendJson(res, 413, {
         error: { message: "Payload too large", type: "invalid_request_error" },
       });
       return undefined;
     }
     if (body.error === "request body timeout") {
+      closeRequestAfterResponse(req, res);
       sendJson(res, 408, {
         error: { message: "Request body timeout", type: "invalid_request_error" },
       });

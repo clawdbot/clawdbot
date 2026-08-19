@@ -195,6 +195,44 @@ describe("mcp.tools.call.v1", () => {
     expect(payload.structuredContent).toBeUndefined();
   });
 
+  it("preserves structured content and recovery guidance when an exact JSON mirror is oversized", async () => {
+    const structuredContent = {
+      oversized: "S".repeat(Math.floor(testing.MCP_INVOKE_PAYLOAD_MAX_BYTES / 2)),
+    };
+    const recovery = "authentication expired; run login";
+    const result = await invokeMcp(
+      managerWith(async () => ({
+        content: [
+          { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+          {
+            type: "image",
+            data: "I".repeat(Math.floor(testing.MCP_INVOKE_PAYLOAD_MAX_BYTES / 2)),
+            mimeType: "image/png",
+          },
+          { type: "text", text: recovery },
+        ],
+        structuredContent,
+        isError: true,
+      })),
+      { server: "docs", tool: "recover" },
+    );
+    const payload = result.payload as {
+      content: Array<{ type: string; text?: string }>;
+      structuredContent?: Record<string, unknown>;
+      isError?: boolean;
+    };
+    expect(payload.isError).toBe(true);
+    expect(payload.structuredContent).toBeDefined();
+    expect(payload.structuredContent?.oversized).toHaveLength(structuredContent.oversized.length);
+    expect(payload.content).toEqual([
+      { type: "text", text: recovery },
+      { type: "text", text: "[truncated: MCP result exceeded 20 MB]" },
+    ]);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(
+      testing.MCP_INVOKE_PAYLOAD_MAX_BYTES,
+    );
+  });
+
   it("sends MCP payloads as structured invoke data without double JSON escaping", async () => {
     const escaped = "\\".repeat(8 * 1024 * 1024);
     const result = await invokeMcp(

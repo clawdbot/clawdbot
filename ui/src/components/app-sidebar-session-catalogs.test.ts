@@ -64,7 +64,7 @@ describe("visibleCatalogHosts", () => {
     expect(visibleCatalogHosts(hosts)).toEqual([hosts[0]]);
   });
 
-  it("filters sessions by creator without inferring host identity", () => {
+  it("filters sessions by effective owner without inferring host identity", () => {
     const hosts: SessionCatalogHost[] = [
       {
         hostId: "node:remote",

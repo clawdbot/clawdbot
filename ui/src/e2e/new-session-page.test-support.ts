@@ -12,6 +12,7 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 export { controlUiSessionPath, controlUiSessionUrl, waitForConfirmModal };
 
@@ -194,15 +195,20 @@ export async function pastePng(target: Locator, count = 1) {
   );
 }
 
-export async function waitForPersistedNewSessionDraft(
+export async function waitForCommittedNewSessionDraft(
   page: Page,
   expectedText: string | null,
   expectedAttachmentCount: number,
 ): Promise<void> {
   // Filling only proves DOM state. The durable read waits for the IndexedDB
   // transaction so reload or navigation cannot beat the snapshot write.
-  await page.waitForFunction(
-    async ({ text, attachmentCount }) => {
+  await waitForCommittedState(
+    page,
+    async (expected) => {
+      const { text, attachmentCount } = expected;
+      if ((typeof text !== "string" && text !== null) || typeof attachmentCount !== "number") {
+        return false;
+      }
       try {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime?: {

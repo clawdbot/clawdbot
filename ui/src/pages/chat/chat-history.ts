@@ -67,7 +67,6 @@ import {
   readChatSessionSnapshot,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-import { retirePersistedSteeredChips } from "./steer-lifecycle.ts";
 import {
   latestPersistedSteerBoundary,
   markChatStreamAfterBoundary,
@@ -1559,7 +1558,6 @@ async function loadChatHistoryUncached(
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
-      retirePersistedSteeredChips(state);
       replaceCachedChatMessages(state, sessionKey, requestAgentId, response.deltaCursor);
       recordChatHistoryTiming(state, "applied", startedAtMs, {
         requestSessionKey: sessionKey,
@@ -1650,7 +1648,6 @@ async function loadChatHistoryUncached(
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
-    retirePersistedSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
     replaceCachedChatMessages(state, sessionKey, requestAgentId, res.deltaCursor);

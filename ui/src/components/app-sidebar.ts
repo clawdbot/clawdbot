@@ -499,7 +499,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
         toSidebarSession: navigationState.toSidebarSession,
-        ownerId: this.activeSessionCreatorId,
+        ownerId: this.activeSessionOwnerId,
         catalogOpenTarget: this.catalogOpenTarget,
         terminalAvailable: this.terminalAvailable,
       },

@@ -397,6 +397,8 @@ export function createSessionsListTool(opts?: {
           : undefined;
         const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : undefined;
         const model = readStringValue(entry.model);
+        // sessions.list owns runtime/context provenance; this tool only filters and
+        // narrows its GatewaySessionListRow without reinterpreting raw session state.
         const contextTokens =
           typeof entry.contextTokens === "number" ? entry.contextTokens : undefined;
         const totalTokens = typeof entry.totalTokens === "number" ? entry.totalTokens : undefined;

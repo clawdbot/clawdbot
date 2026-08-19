@@ -334,14 +334,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const selfId = sharingSnapshot.selfUser?.id;
     const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
-    const showOwnerChip = (result?.creators?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
+    const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
     const renderedOwnerId = showOwnerChip ? row?.owner?.actor.id : undefined;
     const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
     const ownerViewing = presence.users.some(
       (user) => user.id === renderedOwnerId && user.watchedSessions.includes(key),
     );
     const ownerOptions = listAssignableSessionOwners({
-      facet: result?.creators,
+      facet: result?.owners,
       agents: this.context.agents.state.agentsList?.agents,
       self: sharingSnapshot.selfUser ?? null,
     });
@@ -398,7 +398,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         face: board.face,
         dock: board.dock,
         canChangeDock: canChangeBoardDock,
+        fullscreenControl: board.hasBoard ? this.boardFullscreen.renderButton() : undefined,
         onSelectMode: (mode) => {
+          if (mode === "chat") {
+            void this.boardFullscreen.exit();
+          }
           if (!canChangeBoardDock) {
             const face = mode === "chat" ? "chat" : "dashboard";
             this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");

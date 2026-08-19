@@ -90,6 +90,9 @@ function sessionTitle(session: GatewaySessionRow, recentUserText: string | null)
 }
 
 function sessionCaptureStatus(session: GatewaySessionRow): WorkboardStatus {
+  if (session.status === "queued") {
+    return "todo";
+  }
   if (session.hasActiveRun === true || session.status === "running") {
     return "running";
   }
@@ -206,7 +209,7 @@ export async function captureSessionToWorkboard(params: {
     const recentUserText = extractChatHistoryText(messages, "user", "last");
     const lastAssistantText = extractChatHistoryText(messages, "assistant", "last");
     invalidateWorkboardLoads(params.host);
-    const payload = await params.client.request("workboard.cards.create", {
+    const payload = await params.client.request("workboard.cards.captureSession", {
       title: sessionTitle(params.session, recentUserText),
       notes: buildSessionCaptureNotes({
         session: params.session,

@@ -1,6 +1,7 @@
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -12,7 +13,6 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
-import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
 import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
@@ -67,10 +67,11 @@ export class DraftSubmissionFlow {
         incognito: this.visibilityValue === "incognito",
       }),
       (message, attachments, resetVisibility) => {
-        releaseChatAttachmentPayloads(this.attachmentDraft.attachments);
-        this.messageValue = message;
-        this.attachmentDraft.restore(attachments);
-        this.visibilityValue = resetVisibility ? "normal" : this.visibilityValue;
+        this.restoreDraftState({
+          message,
+          attachments,
+          visibility: resetVisibility ? "normal" : this.visibilityValue,
+        });
       },
       () => {
         this.error = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
@@ -105,8 +106,20 @@ export class DraftSubmissionFlow {
   }
 
   restoreMessage(message: string) {
+    this.draftPersistence.noteDraftReplaced();
     this.messageValue = message;
     this.callbacks.requestUpdate();
+  }
+
+  restoreDraftState(state: {
+    message: string;
+    attachments: ChatAttachment[];
+    visibility: NewSessionVisibility;
+  }) {
+    this.draftPersistence.noteDraftReplaced();
+    this.messageValue = state.message;
+    this.visibilityValue = state.visibility;
+    this.attachmentDraft.restore(state.attachments);
   }
 
   setVisibility(visibility: NewSessionVisibility) {
@@ -132,8 +145,7 @@ export class DraftSubmissionFlow {
 
   clearErrorIf(error: string) {
     if (this.error === error) {
-      this.error = null;
-      this.callbacks.requestUpdate();
+      this.clearError();
     }
   }
 
@@ -237,7 +249,7 @@ export class DraftSubmissionFlow {
     }
     return readSessionMethodAccess(gateway, {
       method: "sessions.dispatch",
-      requiredScope: "operator.admin",
+      requiredScope: "operator.write",
     });
   }
 
@@ -346,6 +358,7 @@ export class DraftSubmissionFlow {
       this.pendingCloud.restored = false;
     } else {
       this.clearPendingCloudRecovery();
+      this.draftPersistence.noteDraftReplaced();
       this.messageValue = "";
     }
     this.error = null;
@@ -370,7 +383,6 @@ export class DraftSubmissionFlow {
       return;
     }
     this.applyRecoveryDraft(recovery);
-    this.callbacks.requestUpdate();
   }
 
   async submit() {
@@ -730,8 +742,10 @@ export class DraftSubmissionFlow {
       machineClass: recovery.machineClass,
       cwd: recovery.createParams?.cwd,
     });
-    this.visibilityValue = recovery.createParams?.incognito === true ? "incognito" : "normal";
-    this.messageValue = recovery.message;
-    this.attachmentDraft.restore(restoreChatApiAttachments(recovery.attachments));
+    this.restoreDraftState({
+      message: recovery.message,
+      attachments: restoreChatApiAttachments(recovery.attachments),
+      visibility: recovery.createParams?.incognito === true ? "incognito" : "normal",
+    });
   }
 }

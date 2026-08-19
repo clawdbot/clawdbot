@@ -202,7 +202,7 @@ function activityAlignmentHtml() {
   return `
     <div class="chat-thread" role="log">
       <div class="chat-thread-inner">
-        <div class="chat-group tool chat-group--activity">
+        <div class="chat-group tool chat-group--activity chat-group--with-footer">
           <div class="chat-group-messages">
             <div class="chat-activity-group is-open">
               <button class="chat-inline-disclosure chat-activity-group__summary" type="button" aria-expanded="true">
@@ -1197,8 +1197,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const activityGroup = await getRect(page, ".chat-activity-group");
       const activitySummary = await getRect(page, ".chat-activity-group__summary");
       const failedSummary = await getRect(page, "[data-failed-call-row]");
+      const thread = await getRect(page, ".chat-thread-inner");
       expect(activitySummary.width).toBeLessThan(activityGroup.width);
       expect(failedSummary.width).toBeLessThan(activityGroup.width);
+      expect(activityGroup.left - thread.left).toBeCloseTo(51, 0);
       const styles = await page.evaluate(() => {
         const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
         const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;
@@ -1599,6 +1601,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(layout.commandContentRight).toBeLessThanOrEqual(layout.actionLeft + 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps tool-card header actions visible without hover", async () => {
+    const page = await openBrowserPage(430, 720);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-tool-card">
+            <div class="chat-tool-card__header">
+              <span>ui/src/styles/chat/tool-cards.css</span>
+              <div class="chat-tool-card__actions">
+                <button class="chat-tool-card__action-btn" type="button">${iconSvg()}</button>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      expect(
+        await page
+          .locator(".chat-tool-card__header > .chat-tool-card__actions")
+          .evaluate((node) => getComputedStyle(node).opacity),
+      ).toBe("1");
     } finally {
       await closeBrowserPage(page);
     }

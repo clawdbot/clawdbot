@@ -1,6 +1,7 @@
 // Cleanup utility tests cover filesystem cleanup helpers, temp paths, and command runtime behavior.
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -65,6 +66,23 @@ const workspaceStateMocks = vi.hoisted(() => ({
   prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
 }));
 
+const fsSafeMocks = vi.hoisted(() => ({
+  movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
+}));
+
+const processMocks = vi.hoisted(() => ({
+  runCommandWithTimeout: vi.fn(),
+}));
+
+vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
+  movePathToTrash: fsSafeMocks.movePathToTrash,
+}));
+
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: processMocks.runCommandWithTimeout,
+}));
+
 vi.mock("../agents/workspace-state-store.js", async () => ({
   ...(await vi.importActual<typeof import("../agents/workspace-state-store.js")>(
     "../agents/workspace-state-store.js",
@@ -76,10 +94,114 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
 import {
   buildCleanupPlan,
   listAgentSessionDirs,
+  moveToTrash,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
+
+afterEach(() => {
+  fsSafeMocks.movePathToTrash.mockReset();
+  fsSafeMocks.movePathToTrash.mockImplementation(
+    async (targetPath: string) => `${targetPath}.trashed`,
+  );
+  vi.restoreAllMocks();
+});
+
+function expectedTrashSourcePath(targetPath: string): string {
+  return path.join(fsSync.realpathSync(path.dirname(targetPath)), path.basename(targetPath));
+}
+
+describe("moveToTrash", () => {
+  it("uses fs-safe trash instead of resolving a PATH trash command", async () => {
+    const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-helper-"));
+    const targetPath = path.join(testRoot, "target");
+    fsSync.mkdirSync(targetPath, { recursive: true });
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+    const sourcePath = expectedTrashSourcePath(targetPath);
+
+    try {
+      await moveToTrash(targetPath, runtime);
+    } finally {
+      fsSync.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
+      allowedRoots: [path.dirname(sourcePath)],
+    });
+    expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(`Moved to Trash: ${targetPath}`);
+  });
+
+  it("allows fs-safe trash to move a symlink whose target resolves outside the parent", async () => {
+    const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-symlink-"));
+    const targetPath = path.join(testRoot, "target-link");
+    const outsideTarget = path.join(os.tmpdir(), "openclaw-trash-symlink-target");
+    fsSync.writeFileSync(targetPath, "link placeholder");
+    vi.spyOn(fs, "lstat").mockResolvedValue({
+      isSymbolicLink: () => true,
+    } as fsSync.Stats);
+    vi.spyOn(fs, "realpath").mockImplementation(async (candidate) =>
+      String(candidate) === path.dirname(targetPath) ? path.dirname(targetPath) : outsideTarget,
+    );
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    try {
+      await moveToTrash(targetPath, runtime);
+    } finally {
+      fsSync.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(targetPath, {
+      allowedRoots: [path.dirname(targetPath), path.dirname(outsideTarget)],
+    });
+  });
+
+  it("moves a dangling symlink instead of treating it as already removed", async () => {
+    const testRoot = tempDirs.make("openclaw-trash-dangling-link-");
+    const targetPath = path.join(testRoot, "workspace-link");
+    fsSync.symlinkSync(path.join(testRoot, "missing-target"), targetPath, "dir");
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+    const sourcePath = expectedTrashSourcePath(targetPath);
+
+    try {
+      await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
+    } finally {
+      fsSync.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
+      allowedRoots: [path.dirname(sourcePath)],
+    });
+  });
+
+  it("canonicalizes a symlinked parent before calling fs-safe trash", async () => {
+    const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-parent-link-"));
+    const lexicalParent = path.join(testRoot, "state-link");
+    const realParent = path.join(testRoot, "state-real");
+    const targetPath = path.join(lexicalParent, "openclaw.json");
+    const sourcePath = path.join(realParent, "openclaw.json");
+    fsSync.mkdirSync(lexicalParent, { recursive: true });
+    fsSync.writeFileSync(targetPath, "{}\n");
+    vi.spyOn(fs, "realpath").mockImplementation(async (candidate) =>
+      String(candidate) === lexicalParent ? realParent : String(candidate),
+    );
+    vi.spyOn(fs, "lstat").mockResolvedValue({
+      isSymbolicLink: () => false,
+    } as fsSync.Stats);
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    try {
+      await moveToTrash(targetPath, runtime);
+    } finally {
+      fsSync.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
+      allowedRoots: [realParent],
+    });
+  });
+});
 
 describe("buildCleanupPlan", () => {
   test("resolves inside-state flags and workspace dirs", () => {

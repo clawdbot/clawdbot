@@ -3,11 +3,7 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import {
-  formatGitHubItemReference,
-  isGitHubItemRootPath,
-  parseGitHubItemPath,
-} from "./github-link-target.ts";
+import { decodeGitHubPathSegment, parseGitHubItemPath } from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -110,6 +106,26 @@ function parseWebLinkHref(href: string): URL | null {
     return null;
   }
   return url.protocol === "https:" || url.protocol === "http:" ? url : null;
+}
+
+function formatGitHubLinkLabel(url: URL): string {
+  const segments = url.pathname.split("/").filter(Boolean);
+  const item = parseGitHubItemPath(url);
+  if (item) {
+    return segments.length === 4 && !url.search && !url.hash ? `#${item.number}` : url.href;
+  }
+  if (segments.length === 2) {
+    return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
+  }
+  if (segments[2] === "blob" && segments.length > 4) {
+    const filename = decodeGitHubPathSegment(segments.at(-1) ?? "");
+    if (filename) {
+      return filename;
+    }
+  }
+  const fallbackSegments = segments.length > 2 ? segments.slice(2) : segments;
+  const path = fallbackSegments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
+  return ["github.com", ...path].join("/");
 }
 
 function isFileLinkBoundaryBefore(value: string, index: number): boolean {
@@ -520,7 +536,6 @@ export function createMarkdownParser(): MarkdownIt {
         const generatedUrlLabel = open.markup === "linkify" || open.markup === "autolink";
         const host = url.hostname.toLowerCase();
         const githubLink = host === "github.com" || host === "www.github.com";
-        const itemTarget = githubLink ? parseGitHubItemPath(url) : null;
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
@@ -542,8 +557,9 @@ export function createMarkdownParser(): MarkdownIt {
             break;
           }
         }
-        if (generatedUrlLabel && itemTarget && labelToken && isGitHubItemRootPath(url)) {
-          labelToken.content = formatGitHubItemReference(itemTarget);
+        if (generatedUrlLabel && labelToken) {
+          labelToken.content = formatGitHubLinkLabel(url);
+          open.attrSet("title", href ?? url.href);
         }
       }
     }
@@ -628,7 +644,7 @@ export function createMarkdownParser(): MarkdownIt {
       (env as Partial<MarkdownRenderEnv> | undefined)?.mode === "document",
   });
 
-  // Override fenced code blocks with copy button + JSON collapse
+  // Fenced and indented blocks share one interaction and overflow surface.
   markdownParser.renderer.rules.fence = (tokens, index, _options, env) => {
     const token = tokens[index];
     if (!token) {

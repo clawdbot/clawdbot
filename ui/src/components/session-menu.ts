@@ -20,6 +20,7 @@ import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SessionMenuData = {
   label: string;
+  sessionId: string | null;
   isChild?: boolean;
   pinned: boolean;
   unread: boolean;
@@ -43,6 +44,7 @@ export type SessionMenuWork = {
 export type SessionMenuAction =
   | { kind: "open-pr"; url: string }
   | { kind: "open-in"; editor: EditorId; path: string }
+  | { kind: "copy-session-id" }
   | { kind: "toggle-pin" }
   | { kind: "toggle-unread" }
   | { kind: "rename" }
@@ -60,6 +62,7 @@ export type SessionMenuActionKind = SessionMenuAction["kind"];
 
 const EMPTY_SESSION: SessionMenuData = {
   label: "",
+  sessionId: null,
   isChild: false,
   pinned: false,
   unread: false,
@@ -137,6 +140,7 @@ class SessionMenu extends OpenClawLightDomElement {
       return;
     }
     const simpleActions: Partial<Record<string, SessionMenuAction>> = {
+      "copy-session-id": { kind: "copy-session-id" },
       "toggle-pin": { kind: "toggle-pin" },
       "toggle-unread": { kind: "toggle-unread" },
       rename: { kind: "rename" },
@@ -179,7 +183,7 @@ class SessionMenu extends OpenClawLightDomElement {
       });
       return;
     }
-    const owner = sessionOwnerAssignmentFromMenuValue(value, this.selfOwner);
+    const owner = sessionOwnerAssignmentFromMenuValue(value);
     if (owner) {
       this.runAction({ kind: "assign-owner", owner });
     }
@@ -564,6 +568,17 @@ class SessionMenu extends OpenClawLightDomElement {
                   )}</span
                 >
                 ${menuShortcutHint("f")}
+              </wa-dropdown-item>
+              <wa-dropdown-item
+                class="session-menu__item"
+                value="copy-session-id"
+                data-shortcut="c"
+                aria-keyshortcuts="C"
+                ?disabled=${!session.sessionId}
+              >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
+                <span class="session-menu__text">${t("sessionsView.copySessionId")}</span>
+                ${menuShortcutHint("c")}
               </wa-dropdown-item>
             `}
         ${!batch && this.workboard

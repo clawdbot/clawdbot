@@ -39,9 +39,16 @@ describe("dashboards index", () => {
       container,
     );
 
-    const row = container.querySelector<HTMLAnchorElement>("[data-dashboard-session]");
+    const row = container.querySelector<HTMLElement>("[data-dashboard-session]");
     expect(row?.textContent).toContain("Deploy monitor");
-    expect(row?.getAttribute("href")).toBe("/dashboard/main/deploy-monitor-12345678");
+    expect(row?.querySelector<HTMLAnchorElement>(".list-main")?.getAttribute("href")).toBe(
+      "/dashboard/main/deploy-monitor-12345678",
+    );
+    const fullscreen = row?.querySelector<HTMLAnchorElement>("[data-dashboard-fullscreen]");
+    expect(fullscreen?.getAttribute("href")).toBe(
+      "/?view=dashboard&session=agent%3Amain%3Adashboard%3A12345678-90ab-cdef-1234-567890abcdef",
+    );
+    expect(fullscreen?.getAttribute("aria-label")).toBe("Open full-screen dashboard");
   });
 
   it("explains how to create a dashboard when the list is empty", () => {

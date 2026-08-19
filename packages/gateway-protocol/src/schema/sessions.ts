@@ -404,7 +404,7 @@ export const SessionsListParamsSchema = closedObject({
   label: Type.Optional(SessionLabelString),
   /** Limit rows to sessions with an explicitly stored Control UI face preference. */
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
-  /** Filter rows by their permanent creator identity. */
+  /** Filter rows by their immutable creator provenance. */
   creatorId: Type.Optional(NonEmptyString),
   /** Filter rows by their current assignable owner identity. */
   ownerId: Type.Optional(NonEmptyString),

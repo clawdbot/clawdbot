@@ -1,5 +1,6 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { isGatewayRestartDraining } from "../../process/gateway-work-admission.js";
 import { sleep } from "../../utils/sleep.js";
 import {
   createChannelIngressDrain,
@@ -544,7 +545,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   };
 
   const requestDrain = (): void => {
-    if (!running || isAborted()) {
+    if (!running || isAborted() || isGatewayRestartDraining()) {
       publishActivity();
       return;
     }

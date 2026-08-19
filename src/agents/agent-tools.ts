@@ -91,7 +91,6 @@ import { resolveToolFsConfig } from "./tool-fs-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
-import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
 import {
   expandToolGroups,
@@ -353,6 +352,8 @@ type OpenClawCodingToolsOptions = {
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  /** Side-effect-free runtime completion claimant composed with the durable subagent claim. */
+  claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
   /** Live observer called after wrapped tool outcomes are recorded. */
@@ -490,19 +491,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sessionId: options?.sessionId,
     agentId,
   });
-  const allowBackground = isToolAllowedByPolicies("process", [
-    conversationToolPolicies.profilePolicy,
-    conversationToolPolicies.providerProfilePolicy,
-    conversationToolPolicies.globalPolicy,
-    conversationToolPolicies.globalProviderPolicy,
-    conversationToolPolicies.agentPolicy,
-    conversationToolPolicies.agentProviderPolicy,
-    conversationToolPolicies.groupPolicy,
-    conversationToolPolicies.senderPolicy,
-    conversationToolPolicies.sandboxPolicy,
-    conversationToolPolicies.subagentPolicy,
-    conversationToolPolicies.inheritedToolPolicy,
-  ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const execRuntimeConfig = options?.exec?.config ?? options?.config;
@@ -578,6 +566,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   options?.recordToolPrepStage?.("workspace-policy");
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec);
+  const processToolAvailabilityRef: NonNullable<ExecToolDefaults["processToolAvailabilityRef"]> =
+    {};
   const coreTools = createCoreCodingTools({
     codingRoot,
     containmentRoot,
@@ -618,7 +608,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
       safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
       agentId,
-      allowBackground,
+      processToolAvailabilityRef,
       scopeKey,
       sessionKey: options?.sessionKey,
       runId: options?.runId,
@@ -818,6 +808,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             toolBindings: options?.toolBindings,
             pluginToolAllowlist,
             pluginToolDenylist,
+            runtimeToolAllowlist: options?.runtimeToolAllowlist,
             cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
@@ -859,6 +850,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             inheritedToolAllowlist,
             inheritedToolDenylist,
             onYield: options?.onYield,
+            claimYieldCompletion: options?.claimYieldCompletion,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             recordToolPrepStage: options?.recordToolPrepStage,
           }),
@@ -960,6 +952,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     // Collector output is a run contract, not an operator-configurable capability.
     authorizedTools.push(swarmStructuredOutputTool);
   }
+  processToolAvailabilityRef.value = authorizedTools.some((tool) => tool.name === "process");
   if (shouldInheritEffectiveToolAllowlist) {
     // Snapshot exporter only: this copies authorizedTools for descendants and
     // never filters the mandatory structured_output tool from this turn.

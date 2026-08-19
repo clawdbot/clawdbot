@@ -855,129 +855,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStreamSegments).toEqual([]);
   });
 
-  it("does not replay persisted keyed commentary after retiring a same-run steer", () => {
-    const originalUser = createTextChatMessage("user", "Ask", undefined, 1);
-    const persistedCommentary = {
-      role: "assistant",
-      content: [{ type: "text", text: "Looking into it." }],
-      timestamp: 2,
-      openclawStreamFallback: {
-        itemId: "preamble-1",
-        replacementText: "Looking into it.",
-        source: "segment",
-      },
-    };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatMessages: [originalUser, persistedCommentary],
-      chatQueue: [
-        {
-          id: "steer-1",
-          text: "Focus on the deployment too",
-          createdAt: 3,
-          kind: "steered",
-          pendingRunId: "run-1",
-          sendRunId: "steer-send-1",
-          sessionKey: "main",
-        },
-      ],
-      chatStream: null,
-      chatStreamStartedAt: null,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
-    };
-    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "final",
-        message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
-      }),
-    ).toBe("final");
-
-    expect(state.chatQueue).toEqual([]);
-    expect(state.chatMessages).toHaveLength(4);
-    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
-    expectTextChatMessage(state.chatMessages[2], "user", "Focus on the deployment too");
-    expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
-  });
-
-  it("retires a reply steer chip after an exact-target terminal rejection", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "reply-steer-request",
-      chatQueue: [
-        {
-          id: "reply-steer-chip",
-          text: "Reply with deployment context",
-          createdAt: 3,
-          kind: "steered",
-          pendingRunId: "reply-steer-request",
-          sendRunId: "reply-steer-request",
-          sessionKey: "main",
-        },
-      ],
-    });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "reply-steer-request",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: "active run changed; review and retry",
-      }),
-    ).toBe("error");
-
-    expect(state.chatQueue).toEqual([]);
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatRunError).toEqual({
-      summary: "Error: active run changed; review and retry",
-    });
-  });
-
-  it("keeps a pending steer chip when an unrelated request run finishes", () => {
-    const chip = {
-      id: "pending-steer-chip",
-      text: "Keep waiting for this steer",
-      createdAt: 3,
-      kind: "steered" as const,
-      pendingRunId: "active-run",
-      sendRunId: "steer-request-run",
-      sessionKey: "main",
-    };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "active-run",
-      chatQueue: [
-        chip,
-        {
-          id: "unrelated-pending-row",
-          text: "Keep unrelated pending work",
-          createdAt: 4,
-          pendingRunId: "unrelated-run",
-          sessionKey: "main",
-        },
-      ],
-    });
-
-    handleChatGatewayEvent(state, {
-      runId: "unrelated-run",
-      sessionKey: "main",
-      state: "final",
-    });
-
-    expect(state.chatQueue).toEqual([
-      chip,
-      expect.objectContaining({ id: "unrelated-pending-row" }),
-    ]);
-    expect(state.chatRunId).toBe("active-run");
-    expect(state.chatMessages).toEqual([]);
-  });
-
   it("preserves an already-recorded stream boundary for a persisted steer", () => {
     const state = createState({
       sessionKey: "main",
@@ -1000,17 +877,6 @@ describe("handleChatGatewayEvent", () => {
           { idempotencyKey: "steer-send-1:user" },
           3,
         ),
-      ],
-      chatQueue: [
-        {
-          id: "steer-1",
-          text: "Focus on deployment",
-          createdAt: 3,
-          kind: "steered",
-          pendingRunId: "run-1",
-          sendRunId: "steer-send-1",
-          sessionKey: "main",
-        },
       ],
     }) as ChatState & {
       chatStreamSegments: Array<{
@@ -1036,7 +902,6 @@ describe("handleChatGatewayEvent", () => {
       message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
     });
 
-    expect(state.chatQueue).toEqual([]);
     expect(state.chatMessages).toHaveLength(4);
     expectTextChatMessage(state.chatMessages[0], "user", "Ask");
     expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");

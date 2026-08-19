@@ -201,6 +201,7 @@ export async function startOrResumeThread(
           // Supervised threads stay on the native user-home connection. Never
           // persist an outer OpenClaw auth profile onto that private ownership.
           authProfileId: undefined,
+          agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
           preserveNativeModel: true,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,

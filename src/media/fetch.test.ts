@@ -1,7 +1,9 @@
 // Media fetch tests cover remote media download limits and validation.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { hasErrnoCode } from "../infra/errors.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -1396,15 +1398,34 @@ describe("readRemoteMediaBuffer", () => {
     },
   );
 
-  it("saves bodyless successful responses without unbounded buffering", async () => {
-    const saved = await saveResponseMedia(new Response(null, { status: 204 }), {
-      sourceUrl: "https://example.com/empty",
-      fallbackContentType: "application/octet-stream",
-      maxBytes: 8,
-    });
+  it("rejects bodyless successful responses without saving an empty file", async () => {
+    const inboundDir = path.join(tempHome.home, ".openclaw", "media", "inbound");
+    const listInboundFiles = async () => {
+      try {
+        return (await fs.readdir(inboundDir)).toSorted();
+      } catch (error) {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return [];
+        }
+        throw error;
+      }
+    };
+    const before = await listInboundFiles();
 
-    expect(saved.size).toBe(0);
-    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.alloc(0));
+    await expect(
+      saveResponseMedia(new Response(null, { status: 204 }), {
+        sourceUrl: "https://example.com/empty",
+        fallbackContentType: "application/octet-stream",
+        maxBytes: 8,
+      }),
+    ).rejects.toMatchObject({
+      name: "MediaFetchError",
+      code: "http_error",
+      status: 204,
+      message:
+        "Failed to fetch media from https://example.com/empty: HTTP 204; empty response body",
+    });
+    await expect(listInboundFiles()).resolves.toEqual(before);
   });
 
   it("uses caller filename hints for MIME detection without preserving storage basenames", async () => {

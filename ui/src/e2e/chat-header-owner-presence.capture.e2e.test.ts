@@ -45,7 +45,7 @@ suite.define(() => {
           methodResponses: {
             "sessions.list": {
               count: 1,
-              creators: [
+              owners: [
                 { type: "human", id: "profile-ada", label: "Ada" },
                 { type: "human", id: "profile-zoe", label: "Zoe" },
               ],

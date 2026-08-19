@@ -808,13 +808,22 @@ describe("application cloud startup", () => {
     startup.dispose();
   });
 
-  it("still destroys the worker and session when incognito startup is interrupted", async () => {
+  it("reclaims the worker and deletes the session when incognito startup is interrupted", async () => {
     const dispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
     const request = vi.fn((method: string) => {
       if (method === "sessions.dispatch") {
         return dispatch.promise;
       }
-      if (method === "environments.destroy" || method === "sessions.delete") {
+      if (method === "sessions.describe") {
+        return Promise.resolve({
+          session: { sessionId: "session-cloud-startup", placement: placement("active", 2) },
+        });
+      }
+      if (
+        method === "sessions.reclaim" ||
+        method === "sessions.patch" ||
+        method === "sessions.delete"
+      ) {
         return Promise.resolve({ ok: true });
       }
       throw new Error(`unexpected method ${method}`);
@@ -839,16 +848,26 @@ describe("application cloud startup", () => {
     dispatch.resolve({ placement: placement("active", 2) });
 
     await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("environments.destroy", {
-        environmentId: "environment-1",
+      expect(request).toHaveBeenCalledWith("sessions.reclaim", {
+        key: input.recovery.sessionKey,
+        agentId: input.recovery.agentId,
+      });
+      expect(request).toHaveBeenCalledWith("sessions.patch", {
+        key: input.recovery.sessionKey,
+        agentId: input.recovery.agentId,
+        archived: true,
+        expectedSessionId: "session-cloud-startup",
       });
       expect(request).toHaveBeenCalledWith("sessions.delete", {
         key: input.recovery.sessionKey,
         agentId: input.recovery.agentId,
         deleteTranscript: true,
+        expectedSessionId: "session-cloud-startup",
+        archivedOnly: true,
       });
     });
     expect(request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
+    expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
     expect(sessionStorage.length).toBe(0);
     startup.dispose();
   });

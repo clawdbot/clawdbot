@@ -46,7 +46,6 @@ import {
   durableComposerScopeIdentity,
   type DurableChatComposerSnapshot,
 } from "./durable-composer-persistence.ts";
-import { isInflightSteer } from "./steered-chip.ts";
 
 const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
 export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
@@ -54,15 +53,12 @@ export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
 
 export { INTERRUPTED_SETTINGS_WAIT_ERROR } from "../../lib/chat/outbox-store-codec.ts";
 export {
-  listStoredChatOutboxes,
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
 } from "../../lib/chat/outbox-store.ts";
-export type {
-  ChatComposerScope,
-  StoredChatOutbox,
-  StoredChatOutboxScope,
-} from "../../lib/chat/outbox-store.ts";
+export { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+export type { ChatComposerScope, StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+export type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
 
 type ChatComposerPersistenceState = {
   settings?: { gatewayUrl?: string | null };
@@ -143,7 +139,7 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   const sendState =
     item.sendState === "sending"
       ? "waiting-reconnect"
-      : item.sendState === "executing-command" || isInflightSteer(item)
+      : item.sendState === "executing-command"
         ? "unconfirmed"
         : item.sendState === "waiting-model"
           ? "failed"

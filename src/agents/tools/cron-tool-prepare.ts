@@ -31,6 +31,28 @@ function hasNestedJob(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && Object.keys(value).length > 0;
 }
 
+// Schedule ambiguity is rejected here; a wrong schedule fails invisibly.
+// Payload conflicts (message/text, toolsAllow) are deliberately NOT
+// rejected because their result is visible on the created job and
+// harmless to recover by documented precedence, and rejecting them would cost
+// the less capable LLM tolerance this flat contract exists to provide.
+const FLAT_SCHEDULE_KEYS = ["at", "atMs", "everyMs", "every", "expr", "cron"] as const;
+
+function assertFlatContractInvariants(next: Record<string, unknown>): void {
+  if (next.action !== "add") {
+    return;
+  }
+  const schedules = FLAT_SCHEDULE_KEYS.filter((key) => next[key] !== undefined);
+  if (schedules.length > 1) {
+    throw new Error(
+      `A cron add takes exactly one schedule field; received ${schedules.join(", ")}. Use "at" (one-shot ISO-8601), "everyMs" (interval), or "expr" (cron expression).`,
+    );
+  }
+  if (next.tz !== undefined && next.expr === undefined && next.cron === undefined) {
+    throw new Error('"tz" is only valid alongside "expr"; add a cron expression or drop "tz".');
+  }
+}
+
 /** Normalizes recoverable cron add/update arguments before provider schema validation. */
 export function prepareCronToolArguments(args: unknown): Record<string, unknown> {
   const next = isRecord(args) ? { ...args } : {};
@@ -56,6 +78,8 @@ export function prepareCronToolArguments(args: unknown): Record<string, unknown>
     next.job = job;
     return next;
   }
+
+  assertFlatContractInvariants(next);
 
   const recovered = recoverCronObjectFromFlatParams(next);
   if (!recovered.found) {

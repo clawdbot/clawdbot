@@ -14,11 +14,11 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type {
   GatewayAgentRunTaskOwner,
+  GatewayContextResolver,
   GatewayRequestContext,
   GatewayRequestOptions,
   TrustedAgentToolCaller,
 } from "./server-methods/types.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import {
   createSyntheticPluginRuntimeClient,
   mergePluginRuntimeClientInternal,
@@ -53,6 +53,7 @@ type DispatchGatewayMethodInProcessOptions = {
   syntheticScopes?: string[];
   timeoutMs?: number;
   signal?: AbortSignal;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 type ResolvedInProcessGatewayDispatch = {
@@ -67,11 +68,11 @@ function resolveInProcessGatewayDispatch(
   options?: DispatchGatewayMethodInProcessOptions,
 ): ResolvedInProcessGatewayDispatch {
   const scope = getPluginRuntimeGatewayRequestScope();
-  const context = scope?.context ?? getFallbackGatewayContext();
+  const context = scope?.context ?? options?.resolveGatewayContext?.();
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
-      `In-process gateway dispatch requires a gateway request scope (method: ${method}). No scope set and no fallback context available.`,
+      `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
   if (options?.requireScopedClient === true && !scope?.client) {
@@ -173,6 +174,7 @@ export async function dispatchGatewayMethodInProcessRaw(
         context: resolved.context,
         expectFinal: options?.expectFinal,
         isWebchatConnect: resolved.isWebchatConnect,
+        methodRegistry: resolved.context.getGatewayMethodRegistry?.(),
         onAccepted: options?.onAccepted,
         onSignalAbort: options?.onSignalAbort,
         requestIdPrefix: "plugin-subagent",
@@ -183,8 +185,10 @@ export async function dispatchGatewayMethodInProcessRaw(
 }
 
 /** Live request context for trusted built-in tools that need direct runtime state. */
-export function getInProcessGatewayRequestContext(): GatewayRequestContext | undefined {
-  return getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
+export function getInProcessGatewayRequestContext(
+  resolveGatewayContext?: GatewayContextResolver,
+): GatewayRequestContext | undefined {
+  return getPluginRuntimeGatewayRequestScope()?.context ?? resolveGatewayContext?.();
 }
 
 export async function dispatchGatewayMethodInProcess<T>(
@@ -198,6 +202,9 @@ export async function dispatchGatewayMethodInProcess<T>(
       const facade = createInternalAgentTurnFacade({
         client: resolved.client,
         getContext: () => resolved.context,
+        ...(resolved.context.getGatewayMethodRegistry
+          ? { getMethodRegistry: resolved.context.getGatewayMethodRegistry }
+          : {}),
         isWebchatConnect: resolved.isWebchatConnect,
       });
       return method === "agent"

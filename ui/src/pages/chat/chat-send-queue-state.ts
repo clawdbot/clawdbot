@@ -15,13 +15,13 @@ import {
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR, surfaceChatDeliveryFailure } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
 import { controlUiNowMs } from "./performance.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR, surfaceChatDeliveryFailure } from "./steer-lifecycle.ts";
 
 const SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR =
   "Skill Workshop revision request cancelled because the Gateway connection changed.";
@@ -45,6 +45,7 @@ export function enqueuePendingSendMessage(
   skillWorkshopRevision?: ChatQueueItem["skillWorkshopRevision"],
   replyToId?: string,
   resumedOrderKey?: number,
+  queueMode?: ChatQueueItem["queueMode"],
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -64,6 +65,7 @@ export function enqueuePendingSendMessage(
     sendAttempts: 0,
     sendRunId: generateUUID(),
     sendState,
+    ...(queueMode ? { queueMode } : {}),
     sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
@@ -192,7 +194,12 @@ export function finishChatDeliveryAdmission(
     }
     return "pending";
   }
-  if (routeVisible(current.agentId) && (isChatBusy(host) || hasDirectSessionRun(host))) {
+  const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
+  if (
+    !sendsDuringActiveRun &&
+    routeVisible(current.agentId) &&
+    (isChatBusy(host) || hasDirectSessionRun(host))
+  ) {
     const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
     if (!parked) {
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);

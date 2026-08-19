@@ -44,6 +44,7 @@ import {
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
+  toggleToolDisclosureKeepingScroll,
 } from "./chat-tool-cards.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -72,7 +73,7 @@ type RenderMessageGroupOptions = {
   getAssistantMessageExpansion?: (messageId: string) => AssistantMessageExpansionState | undefined;
   onToggleAssistantMessageExpanded?: (messageId: string) => void;
   isToolExpanded?: (toolCardId: string) => boolean;
-  onToggleToolExpanded?: (toolCardId: string) => void;
+  onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   onRequestUpdate?: () => void;
   onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
@@ -247,8 +248,7 @@ export function renderActivityGroup(
     : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
-  const activityExpanded =
-    Boolean(runningCard) || (opts.isToolMessageExpanded?.(activityDisclosureId) ?? false);
+  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   return html`
     <div
       class="chat-group tool chat-group--activity chat-group--with-footer"
@@ -265,11 +265,13 @@ export function renderActivityGroup(
             @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
+                toggleToolDisclosureKeepingScroll(event, () =>
+                  opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded),
+                );
               }
             }}
           >
-            <span class="chat-activity-group__icon">${icons.activity}</span>
+            <span class="chat-activity-group__icon">${icons.listTree}</span>
             <span class="chat-tool-disclosure__content">
               <span class="chat-activity-group__label" title=${groupSummaryLabel}
                 >${groupSummaryLabel}</span

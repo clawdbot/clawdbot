@@ -676,19 +676,16 @@ suite.define(() => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      const sortThreads = page.getByRole("button", { name: "Sort sessions" });
-      await sortThreads.locator("..").hover();
-      await sortThreads.click();
+      const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+      await filterAndSort.click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
-      await sortThreads.locator("..").hover();
-      await sortThreads.click();
+      await filterAndSort.click();
       await page.getByRole("menuitemradio", { name: "Created" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
-      await sortThreads.locator("..").hover();
-      await sortThreads.click();
+      await filterAndSort.click();
       await page.getByRole("main").click();
       await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
     } finally {

@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  loadStoredCollapsedSessionSections,
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
@@ -76,6 +77,12 @@ describe("sidebar session sort preference", () => {
   it("stores created instead of a people sort the gateway denied", () => {
     expect(storeSidebarSessionSortMode("people", false)).toBe("created");
     expect(loadStoredSidebarSessionSortMode()).toBe("created");
+  });
+});
+
+describe("collapsed sidebar sections preference", () => {
+  it("defaults Coding to compact while Online remains expanded", () => {
+    expect([...loadStoredCollapsedSessionSections()]).toEqual(["work"]);
   });
 });
 

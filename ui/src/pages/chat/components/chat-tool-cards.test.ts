@@ -134,6 +134,27 @@ describe("tool-cards", () => {
     container.remove();
   });
 
+  it("keeps a running card closed by default", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:running",
+          name: "bash",
+          args: { command: "pnpm test" },
+          live: true,
+        },
+        { expanded: false, runActive: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+    expect(container.querySelector(".chat-tool-msg-summary")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+  });
+
   it("renders expanded cards with key-value args and an output section", () => {
     const container = document.createElement("div");
     const toggle = vi.fn();

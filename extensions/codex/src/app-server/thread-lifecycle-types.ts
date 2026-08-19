@@ -56,6 +56,7 @@ export type CodexStartOrResumeThreadParams = {
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  agentWorkspaceDeveloperInstructions?: string;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;
   disableLoginShell?: boolean;

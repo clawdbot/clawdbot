@@ -3,6 +3,7 @@ import type { SessionMoveTarget } from "../../../../packages/gateway-protocol/sr
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   requestCloudWorkerStop,
   resolveCloudWorkerStopAction,
@@ -47,11 +48,11 @@ export function resolveChatPanePlacement(params: {
   const action = resolveCloudWorkerStopAction(params.row?.placement);
   const moveAccess = readSessionMethodAccess(params.gatewaySnapshot, {
     method: "sessions.move",
-    requiredScope: "operator.admin",
+    requiredScope: "operator.write",
   });
   const reclaimAccess = readSessionMethodAccess(params.gatewaySnapshot, {
     method: "sessions.reclaim",
-    requiredScope: "operator.admin",
+    requiredScope: "operator.write",
   });
   const placementState = params.row?.placement?.state;
   const moveDisabledReason = moving
@@ -65,7 +66,7 @@ export function resolveChatPanePlacement(params: {
           : moveAccess.reason;
   const reclaimDisabledReason = reclaiming
     ? t("common.loading")
-    : params.row?.hasActiveRun === true
+    : action?.blocksActiveRun && params.row?.hasActiveRun === true
       ? t("sessionsView.activeRun")
       : action?.method !== "sessions.reclaim"
         ? t("sessionsView.actionUnavailable")
@@ -79,10 +80,12 @@ export function resolveChatPanePlacement(params: {
   };
 }
 
-async function loadPlacementMoveCatalog(client: GatewayBrowserClient) {
+async function loadPlacementMoveCatalog(client: GatewayBrowserClient, includeNodes: boolean) {
   const [catalog, nodesResult] = await Promise.all([
     requestPlaceCatalog(client),
-    client.request<{ nodes?: unknown }>("node.list", {}),
+    includeNodes
+      ? client.request<{ nodes?: unknown }>("node.list", {})
+      : Promise.resolve({ nodes: [] }),
   ]);
   return { profiles: catalog.profiles, nodes: readDraftNodes(nodesResult?.nodes) };
 }
@@ -111,7 +114,7 @@ export async function moveChatPanePlacement(params: {
   }
   const access = readSessionMethodAccess(params.gatewaySnapshot, {
     method: "sessions.move",
-    requiredScope: "operator.admin",
+    requiredScope: "operator.write",
   });
   if (!access.allowed) {
     params.publishError(access.reason);
@@ -122,7 +125,11 @@ export async function moveChatPanePlacement(params: {
   const target: SessionMoveTarget | null = await showSessionPlacementMoveDialog({
     sessionLabel: params.row.label || params.row.key,
     activeRun: params.row.hasActiveRun === true,
-    loadCatalog: async () => await loadPlacementMoveCatalog(client),
+    loadCatalog: async () =>
+      await loadPlacementMoveCatalog(
+        client,
+        hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null),
+      ),
   });
   if (!target) {
     return;
@@ -177,14 +184,14 @@ export async function reclaimChatPanePlacement(params: {
   if (
     !client ||
     reclaiming ||
-    params.row.hasActiveRun === true ||
+    (action?.blocksActiveRun && params.row.hasActiveRun === true) ||
     action?.method !== "sessions.reclaim"
   ) {
     return;
   }
   const access = readSessionMethodAccess(params.gatewaySnapshot, {
     method: "sessions.reclaim",
-    requiredScope: "operator.admin",
+    requiredScope: "operator.write",
   });
   if (!access.allowed) {
     params.publishError(access.reason);
@@ -208,7 +215,7 @@ export async function reclaimChatPanePlacement(params: {
   const agentId = parseAgentSessionKey(params.row.key)?.agentId;
   params.onReclaimingChange(params.row.key);
   try {
-    await requestCloudWorkerStop(client, action, {
+    await requestCloudWorkerStop(client, {
       key: params.row.key,
       ...(agentId ? { agentId } : {}),
     });

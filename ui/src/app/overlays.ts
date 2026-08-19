@@ -88,6 +88,7 @@ export function createApplicationOverlays(
     controlUiRefreshRequired: false,
     approvalQueue: [],
     approvalBusy: false,
+    approvalCanGrant: false,
     approvalErrors: new Map(),
     approvalNowMs: Date.now(),
     devicePairSetupOpen: false,
@@ -135,6 +136,7 @@ export function createApplicationOverlays(
       updateReconciliationPending: pendingUpdate !== null,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
+      approvalCanGrant: readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals,
       approvalErrors: new Map(promptState.execApprovalErrors),
       approvalNowMs: promptState.execApprovalNowMs ?? Date.now(),
       ...readDevicePairSetupSnapshot(devicePairSetupState),
@@ -261,6 +263,13 @@ export function createApplicationOverlays(
     if (accessTransition.grantRevoked) {
       // Review can remain available without a decision grant. Retire the
       // in-flight owner without discarding the still-readable approval queue.
+      const revokedDecision = approvalDecision;
+      if (
+        revokedDecision &&
+        promptState.execApprovalQueue.some((entry) => entry.id === revokedDecision.id)
+      ) {
+        promptState.execApprovalErrors.set(revokedDecision.id, t("execApproval.reviewOnly"));
+      }
       approvalDecision = null;
       promptState.execApprovalBusy = false;
     }
@@ -609,6 +618,8 @@ export function createApplicationOverlays(
         return;
       }
       if (!readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals) {
+        promptState.execApprovalErrors.set(active.id, t("execApproval.reviewOnly"));
+        publish();
         return;
       }
       promptState.execApprovalBusy = true;

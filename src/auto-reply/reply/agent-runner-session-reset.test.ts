@@ -133,6 +133,7 @@ describe("resetReplyRunSession", () => {
       modelProvider: "qwencode",
       model: "qwen",
       contextTokens: 123,
+      contextTokensSource: "runtime",
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -207,6 +208,7 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.claudeCliSessionId).toBeUndefined();
     expect(activeSessionEntry?.model).toBeUndefined();
     expect(activeSessionEntry?.contextTokens).toBeUndefined();
+    expect(activeSessionEntry?.contextTokensSource).toBeUndefined();
     expect(activeSessionEntry?.contextBudgetStatus).toBeUndefined();
     expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
@@ -231,6 +233,7 @@ describe("resetReplyRunSession", () => {
 
     const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
+    expect(persisted?.contextTokensSource).toBeUndefined();
     expect(persisted?.contextBudgetStatus).toBeUndefined();
     expect(persisted?.fallbackNotice).toBeUndefined();
     expect(persisted?.compactionCount).toBe(0);
