@@ -470,7 +470,7 @@ describe("worker turn launcher failure recovery", () => {
   ])("keeps the placement active after $name", async ({ error, dispatched, expectedMessage }) => {
     seedActivePlacement();
     const teardownStates: string[] = [];
-    const startReconcile = placements.startReconcile;
+    const startReconcile = placements.startReconcile.bind(placements);
     vi.spyOn(placements, "startReconcile").mockImplementation((input) => {
       teardownStates.push(`reconcile-before:${placements.get(SESSION_ID)?.state ?? "missing"}`);
       const reconciling = startReconcile(input);
