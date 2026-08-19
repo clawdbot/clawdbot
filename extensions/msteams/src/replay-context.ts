@@ -59,14 +59,17 @@ export function createMSTeamsReplayContext(
       }
       return results;
     },
-    updateActivity: async (outbound) =>
-      (await updateMSTeamsActivityWithReference(
+    updateActivity: async (outbound) => {
+      const result = await updateMSTeamsActivityWithReference(
         app,
         reference,
         typeof outbound.id === "string" ? outbound.id : "",
         outbound,
         proactiveOptions,
-      )) as { id?: string } | void,
+      );
+      // SAFETY: the SDK update result exposes only the optional activity id used by this adapter.
+      return result as { id?: string } | void;
+    },
     deleteActivity: async (activityId) => {
       await deleteMSTeamsActivityWithReference(app, reference, activityId, proactiveOptions);
     },
