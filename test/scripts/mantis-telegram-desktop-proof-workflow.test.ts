@@ -366,6 +366,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("--after-message-id");
     expect(prompt).toContain("--crop telegram-window");
     expect(prompt).toContain("MCP App Funnel proof is not supported");
+    // This lane is the only thing that exercises the recorder, so a PR that changes
+    // the capture path may not skip straight to a no-visual-proof manifest.
+    expect(prompt).toContain("before running the recorder self-check below");
+    expect(prompt).toContain("recorder-self-check.png");
     expect(prompt).not.toContain("--sut-container");
     expect(prompt).not.toContain("OPENCLAW_TELEGRAM_USER_PROOF_CMD");
   });

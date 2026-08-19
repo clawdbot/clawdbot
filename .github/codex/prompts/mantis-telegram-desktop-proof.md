@@ -18,6 +18,10 @@ Hard limits:
 - Do not force GIFs for internal-only, workflow-only, test-only, docs-only, or
   otherwise non-visual PRs. A no-visual-proof manifest is a successful workflow
   outcome when GIFs would be misleading, but it is not proof that the PR passed.
+- Do not write a no-visual-proof manifest for a PR that changes Mantis capture
+  infrastructure before running the recorder self-check below. This lane is the
+  only thing that exercises that code, so skipping it lands a broken recorder
+  green.
 - Do not skip Telegram-visible PRs just because the proof needs a specific
   message, mock response, media attachment, command, button, reaction, stop
   timing, approval prompt, or progress/final delivery sequence. First write a
@@ -58,8 +62,8 @@ Required workflow:
    artifacts, and a summary that starts with
    `Mantis did not generate before/after GIFs because`. Include a short
    public reason, such as `the PR changes internal session bookkeeping rather
-than Telegram-visible behavior`. Use this manifest shape and do not create
-   worktrees or start capture services for this case:
+than Telegram-visible behavior`. Use this manifest shape, and start capture
+   services only when the self-check below applies:
 
    ```json
    {
@@ -87,6 +91,18 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
      "artifacts": []
    }
    ```
+
+   When the PR itself changes Mantis capture infrastructure - the desktop
+   recorder, the SUT container wrapper, the desktop image build, this workflow,
+   or this prompt - GIFs of chat behavior would still be misleading, but the
+   changed capture path is not exempt. Before writing the manifest above, start
+   one candidate SUT, run `"$OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD" start`,
+   then `screenshot` to `${MANTIS_OUTPUT_DIR}/candidate/recorder-self-check.png`,
+   then `stop`, and stop the SUT. Open the screenshot and confirm it shows the
+   Telegram Desktop window. Say in the summary that the recorder was exercised.
+   If any of those commands fails, or the screenshot is blank or not Telegram,
+   write the capture-infrastructure failure manifest instead - that failure is
+   this PR's result, not a reason to skip.
 
    If the PR appears visual but proof is blocked by Telegram Desktop session
    state, authorization, credentials, local Docker, missing Telegram client support,
