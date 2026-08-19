@@ -459,18 +459,18 @@ function tombstoneCorruptRow(params: {
   if (params.expectedStatus === "pending") {
     return affectedRows(executeSqliteQuerySync(params.db, baseUpdate)) > 0;
   }
+  // The exact-token guard fences concurrent re-claims: claiming always writes a
+  // fresh random token, so a matching (or still-NULL) token proves the row is
+  // unchanged since it was read. Malformed-claim tombstones rely on this guard
+  // alone and pass no staleCutoff — their claimed_at can be NULL or corrupt.
   const claimGuardedUpdate =
     params.row.claim_token === null
       ? baseUpdate.where("claim_token", "is", null)
       : baseUpdate.where("claim_token", "=", params.row.claim_token);
-  // Guard on the claimed_at value as read: a NULL timestamp cannot satisfy a
-  // numeric cutoff comparison, and no live owner can exist for such a row.
   const staleGuardedUpdate =
     params.staleCutoff === undefined
       ? claimGuardedUpdate
-      : params.row.claimed_at === null
-        ? claimGuardedUpdate.where("claimed_at", "is", null)
-        : claimGuardedUpdate.where("claimed_at", "<=", params.staleCutoff);
+      : claimGuardedUpdate.where("claimed_at", "<=", params.staleCutoff);
   return affectedRows(executeSqliteQuerySync(params.db, staleGuardedUpdate)) > 0;
 }
 
@@ -1026,9 +1026,19 @@ export function createChannelIngressQueue<
         .selectAll()
         .where("queue_name", "=", queueName)
         .where("status", "=", "claimed")
-        // A claimed row with no claimed_at has no live owner (see
-        // decodeClaimColumns) and would otherwise dodge every cutoff scan.
-        .where((eb) => eb.or([eb("claimed_at", "<=", cutoff), eb("claimed_at", "is", null)])),
+        // A claimed row missing any claim column has no live owner (see
+        // decodeClaimColumns); scan it regardless of claimed_at, since a NULL
+        // or corrupt future timestamp would dodge every cutoff comparison.
+        .where((eb) =>
+          eb.or([
+            eb("claimed_at", "<=", cutoff),
+            eb("claimed_at", "is", null),
+            eb("claim_token", "is", null),
+            eb("claim_owner", "is", null),
+            eb("claim_token", "=", ""),
+            eb("claim_owner", "=", ""),
+          ]),
+        ),
     ).rows;
     let recovered = 0;
     for (const row of claimedRows) {
@@ -1057,7 +1067,9 @@ export function createChannelIngressQueue<
               row,
               expectedStatus: "claimed",
               failedAt: current,
-              staleCutoff: cutoff,
+              // Malformed claims skip the stale guard: their claimed_at may be
+              // NULL or a corrupt future value; the exact-token guard fences.
+              ...(claimColumns === null ? {} : { staleCutoff: cutoff }),
               reason: claimColumns === null ? "corrupt_claim" : "corrupt_payload",
             }),
           { path: database.path },
