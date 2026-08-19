@@ -290,6 +290,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       const command = new ConverseStreamCommand(commandInput);
 
       const response = await client.send(command, { abortSignal: options.signal });
+      const responseIterator = response.stream![Symbol.asyncIterator]();
       if (response.$metadata.httpStatusCode !== undefined) {
         const responseHeaders: Record<string, string> = {};
         if (response.$metadata.requestId) {
@@ -299,11 +300,14 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
           options,
           response: { status: response.$metadata.httpStatusCode, headers: responseHeaders },
           model,
+          cancelStream: async () => {
+            await responseIterator.return?.();
+          },
         });
       }
 
       let sawMessageStop = false;
-      for await (const item of response.stream!) {
+      for await (const item of { [Symbol.asyncIterator]: () => responseIterator }) {
         if (item.messageStart) {
           if (item.messageStart.role !== ConversationRole.ASSISTANT) {
             throw new Error(

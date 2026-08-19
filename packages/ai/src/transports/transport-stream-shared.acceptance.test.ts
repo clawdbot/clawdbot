@@ -1,6 +1,7 @@
 import type { Model, StreamOptions } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  notifyProviderHttpMetadata,
   notifyProviderHttpResponse,
   notifyProviderStreamOpened,
 } from "./transport-stream-shared.js";
@@ -117,12 +118,29 @@ describe("notifyProviderHttpResponse", () => {
   });
 });
 
-describe("notifyProviderStreamOpened", () => {
-  it("uses the option signal to abort a pending SDK acceptance callback", async () => {
+describe("opaque provider stream acceptance", () => {
+  it("cancels an SDK stream without waiting when acceptance fails", async () => {
+    const hookError = new Error("acceptance callback failed");
+    const cancelStream = vi.fn(() => new Promise<void>(() => {}));
+
+    await expect(
+      notifyProviderStreamOpened({
+        options: { onProviderAccepted: () => Promise.reject(hookError) },
+        model,
+        cancelStream,
+      }),
+    ).rejects.toBe(hookError);
+
+    expect(cancelStream).toHaveBeenCalledOnce();
+    expect(cancelStream).toHaveBeenCalledWith(hookError);
+  });
+
+  it("cancels an SDK stream when the acceptance callback is aborted", async () => {
     const controller = new AbortController();
     const abortReason = Object.assign(new Error("operator canceled"), {
       code: "OPERATOR_CANCELLED",
     });
+    const cancelStream = vi.fn();
     let markHookStarted!: () => void;
     const hookStarted = new Promise<void>((resolve) => {
       markHookStarted = resolve;
@@ -135,10 +153,61 @@ describe("notifyProviderStreamOpened", () => {
       },
     };
 
-    const notification = notifyProviderStreamOpened({ options, model });
+    const notification = notifyProviderStreamOpened({ options, model, cancelStream });
     await hookStarted;
     controller.abort(abortReason);
 
     await expect(notification).rejects.toBe(abortReason);
+    expect(cancelStream).toHaveBeenCalledOnce();
+    expect(cancelStream).toHaveBeenCalledWith(abortReason);
+  });
+
+  it.each([
+    [
+      "throws",
+      () => {
+        throw new Error("synchronous cleanup failure");
+      },
+    ],
+    ["rejects", () => Promise.reject(new Error("asynchronous cleanup failure"))],
+  ])("preserves the lifecycle failure when SDK cleanup %s", async (_label, cancelStream) => {
+    const hookError = new Error("acceptance callback failed");
+
+    await expect(
+      notifyProviderStreamOpened({
+        options: { onProviderAccepted: () => Promise.reject(hookError) },
+        model,
+        cancelStream,
+      }),
+    ).rejects.toBe(hookError);
+  });
+
+  it("does not cancel an accepted SDK stream", async () => {
+    const cancelStream = vi.fn();
+
+    await notifyProviderStreamOpened({
+      options: { onProviderAccepted: vi.fn() },
+      model,
+      cancelStream,
+    });
+
+    expect(cancelStream).not.toHaveBeenCalled();
+  });
+
+  it("cancels a metadata-only SDK stream when its compatibility callback fails", async () => {
+    const hookError = new Error("response callback failed");
+    const cancelStream = vi.fn();
+
+    await expect(
+      notifyProviderHttpMetadata({
+        options: { onResponse: () => Promise.reject(hookError) },
+        response: { status: 200, headers: {} },
+        model,
+        cancelStream,
+      }),
+    ).rejects.toBe(hookError);
+
+    expect(cancelStream).toHaveBeenCalledOnce();
+    expect(cancelStream).toHaveBeenCalledWith(hookError);
   });
 });

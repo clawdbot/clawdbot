@@ -357,6 +357,22 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(onProviderAccepted).toHaveBeenCalledWith({ kind: "provider_stream_opened" }, model);
   });
 
+  it("closes the WebSocket when provider acceptance fails", async () => {
+    transportState.responseBatches.push([message(completedEvent("resp_rejected", "ignored"))]);
+    const hookError = new Error("acceptance callback failed");
+
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      { onProviderAccepted: () => Promise.reject(hookError) },
+    );
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance callback failed",
+    });
+    expect(transportState.websocketCloseCount).toBe(1);
+  });
+
   it("continues past provider-only output metadata with one socket and only new input", async () => {
     transportState.responseBatches.push(
       [message(completedEvent("resp_1", "first answer"))],

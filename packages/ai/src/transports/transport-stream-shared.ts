@@ -164,6 +164,8 @@ type ProviderAcceptanceOptions = Pick<
   "onProviderAccepted" | "onResponse" | "signal"
 >;
 
+type ProviderStreamCancel = (reason: Error) => void | Promise<void>;
+
 async function awaitProviderLifecycleCallback(
   callback: (() => void | Promise<void>) | undefined,
   signal?: AbortSignal,
@@ -198,11 +200,34 @@ async function awaitProviderLifecycleCallback(
   }
 }
 
+function startProviderStreamCancellation(cancelStream: ProviderStreamCancel, error: unknown): void {
+  const reason = error instanceof Error ? error : new Error(String(error));
+  try {
+    // The lifecycle failure remains authoritative. Cleanup must not delay or replace it.
+    void Promise.resolve(cancelStream(reason)).catch(() => undefined);
+  } catch {
+    // A synchronous cleanup failure cannot replace the lifecycle failure either.
+  }
+}
+
+async function awaitProviderLifecycleWithCleanup(params: {
+  run: () => Promise<void>;
+  cancelStream: ProviderStreamCancel;
+}): Promise<void> {
+  try {
+    await params.run();
+  } catch (error) {
+    startProviderStreamCancellation(params.cancelStream, error);
+    throw error;
+  }
+}
+
 /** Report observed HTTP metadata; rejected responses use only onResponse. */
 export async function notifyProviderHttpMetadata(params: {
   options?: ProviderAcceptanceOptions;
   response: ProviderResponse;
   model: Model;
+  cancelStream: ProviderStreamCancel;
   signal?: AbortSignal;
 }): Promise<void> {
   if (!params.options?.onProviderAccepted && !params.options?.onResponse) {
@@ -211,22 +236,27 @@ export async function notifyProviderHttpMetadata(params: {
   const { status, headers } = params.response;
   const signal = params.signal ?? params.options?.signal;
   const accepted = status >= 200 && status < 300;
-  await awaitProviderLifecycleCallback(
-    accepted && params.options.onProviderAccepted
-      ? () =>
-          params.options?.onProviderAccepted?.(
-            { kind: "http_response", status, headers },
-            params.model,
-          )
-      : undefined,
-    signal,
-  );
-  await awaitProviderLifecycleCallback(
-    params.options.onResponse
-      ? () => params.options?.onResponse?.({ status, headers }, params.model)
-      : undefined,
-    signal,
-  );
+  await awaitProviderLifecycleWithCleanup({
+    cancelStream: params.cancelStream,
+    run: async () => {
+      await awaitProviderLifecycleCallback(
+        accepted && params.options?.onProviderAccepted
+          ? () =>
+              params.options?.onProviderAccepted?.(
+                { kind: "http_response", status, headers },
+                params.model,
+              )
+          : undefined,
+        signal,
+      );
+      await awaitProviderLifecycleCallback(
+        params.options?.onResponse
+          ? () => params.options?.onResponse?.({ status, headers }, params.model)
+          : undefined,
+        signal,
+      );
+    },
+  });
 }
 
 /** Report a real HTTP response before body consumption. */
@@ -234,38 +264,44 @@ export async function notifyProviderHttpResponse(params: {
   options?: ProviderAcceptanceOptions;
   response: Response;
   model: Model;
+  cancelStream?: ProviderStreamCancel;
   signal?: AbortSignal;
 }): Promise<void> {
-  try {
-    await notifyProviderHttpMetadata({
-      options: params.options,
-      response: {
-        status: params.response.status,
-        headers: headersToRecord(params.response.headers),
-      },
-      model: params.model,
-      signal: params.signal,
-    });
-  } catch (error) {
-    // Cancellation is best-effort cleanup; a stalled body must not retain the request owner
-    // or delay the callback failure that made the body unreadable.
-    void params.response.body?.cancel(error).catch(() => undefined);
-    throw error;
-  }
+  await notifyProviderHttpMetadata({
+    options: params.options,
+    response: {
+      status: params.response.status,
+      headers: headersToRecord(params.response.headers),
+    },
+    model: params.model,
+    signal: params.signal,
+    cancelStream: (reason) => {
+      if (params.cancelStream) {
+        startProviderStreamCancellation(params.cancelStream, reason);
+      }
+      return params.response.body?.cancel(reason);
+    },
+  });
 }
 
 /** Report an accepted SDK stream when the SDK does not expose HTTP metadata. */
 export async function notifyProviderStreamOpened(params: {
   options?: Pick<StreamOptions, "onProviderAccepted" | "signal">;
   model: Model;
+  cancelStream: ProviderStreamCancel;
   signal?: AbortSignal;
 }): Promise<void> {
-  await awaitProviderLifecycleCallback(
-    params.options?.onProviderAccepted
-      ? () => params.options?.onProviderAccepted?.({ kind: "provider_stream_opened" }, params.model)
-      : undefined,
-    params.signal ?? params.options?.signal,
-  );
+  await awaitProviderLifecycleWithCleanup({
+    cancelStream: params.cancelStream,
+    run: () =>
+      awaitProviderLifecycleCallback(
+        params.options?.onProviderAccepted
+          ? () =>
+              params.options?.onProviderAccepted?.({ kind: "provider_stream_opened" }, params.model)
+          : undefined,
+        params.signal ?? params.options?.signal,
+      ),
+  });
 }
 
 /** Run a provider-response hook before start/body consumption inside the first-event deadline. */

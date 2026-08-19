@@ -152,6 +152,34 @@ describe("Bedrock stream client lifecycle", () => {
     expectDestroyedClient(send, destroy);
   });
 
+  it("cancels an unread stream when provider acceptance fails", async () => {
+    const close = vi.fn(async () => ({ done: true as const, value: undefined }));
+    const responseIterator = {
+      next: vi.fn(() => new Promise<IteratorResult<never>>(() => {})),
+      return: close,
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: responseIterator,
+    } as never);
+    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
+    const hookError = new Error("acceptance callback failed");
+
+    const result = await streamBedrockForTest(bedrockModel({}), context, {
+      onProviderAccepted: () => Promise.reject(hookError),
+    }).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance callback failed",
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expectDestroyedClient(send, destroy);
+  });
+
   it("destroys the client after a provider error", async () => {
     const send = vi
       .spyOn(BedrockRuntimeClient.prototype, "send")

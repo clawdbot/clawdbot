@@ -1521,7 +1521,15 @@ async function processWebSocketStream(
         output,
         stream,
         onFirstProviderEvent,
-        () => notifyProviderStreamOpened({ options, model }),
+        () =>
+          notifyProviderStreamOpened({
+            options,
+            model,
+            cancelStream: () => {
+              keepConnection = false;
+              closeWebSocketSilently(socket);
+            },
+          }),
         onStart,
       ),
       output,

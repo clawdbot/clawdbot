@@ -438,13 +438,13 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
     }
     const googleStream = await client.models.generateContentStream(requestParams);
     const googleIterator = googleStream[Symbol.asyncIterator]();
-    try {
-      await notifyProviderStreamOpened({ options, model });
-    } catch (error) {
-      // Cleanup is best effort; callback failure must not wait on an unread SDK stream.
-      void Promise.resolve(googleIterator.return?.()).catch(() => undefined);
-      throw error;
-    }
+    await notifyProviderStreamOpened({
+      options,
+      model,
+      cancelStream: async () => {
+        await googleIterator.return?.();
+      },
+    });
     await consumeGoogleGenerateContentStream({
       chunks: { [Symbol.asyncIterator]: () => googleIterator },
       model,

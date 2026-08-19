@@ -583,6 +583,7 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       "compaction-stripped",
     ]);
     expect(onCompactionRejected).toHaveBeenCalledOnce();
+    expect(scripted.sockets[1]?.closed).toBe(true);
   });
 
   it("WebSocket preserves compaction when reasoning-stripped recovery succeeds", async () => {
