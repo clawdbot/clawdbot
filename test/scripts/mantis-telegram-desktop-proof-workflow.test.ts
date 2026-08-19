@@ -297,11 +297,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
   it("prepares the recorder, pinned TDLib, and runner QA session", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
-    expect(workflowText).not.toContain("actions/setup-go");
-    expect(workflowText).not.toContain("go build");
-    expect(workflowText).not.toContain("github.com/openclaw/crabbox.git");
+    // The CLI still drives the local-container desktop; only the brokered
+    // coordinator path is gone, so none of its credentials may be wired.
+    const crabbox = workflowStep("Install Crabbox CLI");
+    expect(crabbox.run).toContain("github.com/openclaw/crabbox.git");
+    expect(crabbox.run).toContain('grep -q -- "-desktop"');
     expect(workflowText).not.toContain("CRABBOX_ACCESS_CLIENT_ID");
     expect(workflowText).not.toContain("CRABBOX_ACCESS_CLIENT_SECRET");
+    expect(workflowText).not.toContain("CRABBOX_COORDINATOR");
     const install = workflowStep("Install local proof tools");
     expect(install.run).toContain("test -f scripts/e2e/telegram-user-driver.py");
     expect(install.run).toContain('node_bin="$(command -v node)"');
@@ -319,7 +322,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     const image = workflowStep("Build local Telegram Desktop image");
     expect(image.run).toContain("bash scripts/mantis/build-telegram-desktop-image.sh");
-    expect(image.run).toContain("crabbox --version");
 
     const credential = workflowStep("Install TDLib and restore Telegram QA user");
     expect(credential.run).toContain("http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz");
