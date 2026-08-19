@@ -903,6 +903,91 @@ describe("SessionManager.open", () => {
     expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);
   });
 
+  it("replays a persisted double compaction after reopening the SQLite session", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-double-compaction-replay";
+    const sessionKey = "agent:main:dashboard:sqlite-double-compaction-replay";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 1 });
+
+    const firstUser = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "first-user",
+      message: { role: "user", content: "question before first compaction" },
+      parentId: null,
+    });
+    const firstAssistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "first-assistant",
+      message: buildAssistantMessage("answer before first compaction"),
+      parentId: firstUser.messageId,
+    });
+
+    const firstPass = openMarker(marker, sessionKey, dir);
+    const firstCompactionId = firstPass.appendCompaction(
+      "first persisted summary",
+      firstAssistant.messageId,
+      1_000,
+    );
+    firstPass.appendMessage({
+      role: "user",
+      content: "prefix before second compaction",
+      timestamp: 2,
+    });
+
+    const secondPass = openMarker(marker, sessionKey, dir);
+    const secondCompactionId = secondPass.appendCompaction(
+      "first persisted summary\n\nsecond prefix summary",
+      firstCompactionId,
+      1_500,
+    );
+    secondPass.appendMessage(buildAssistantMessage("answer after second compaction"));
+
+    const reopened = openMarker(marker, sessionKey, dir);
+    const context = reopened.buildSessionContext().messages;
+    expect(context).toEqual([
+      expect.objectContaining({
+        role: "compactionSummary",
+        summary: "first persisted summary\n\nsecond prefix summary",
+        tokensBefore: 1_500,
+      }),
+      expect.objectContaining({
+        content: "prefix before second compaction",
+        role: "user",
+      }),
+      expect.objectContaining({
+        content: [{ type: "text", text: "answer after second compaction" }],
+        role: "assistant",
+      }),
+    ]);
+    expect(context).not.toContainEqual(
+      expect.objectContaining({ summary: "first persisted summary", role: "compactionSummary" }),
+    );
+
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          firstKeptEntryId: firstAssistant.messageId,
+          id: firstCompactionId,
+          summary: "first persisted summary",
+          type: "compaction",
+        }),
+        expect.objectContaining({
+          firstKeptEntryId: firstCompactionId,
+          id: secondCompactionId,
+          summary: "first persisted summary\n\nsecond prefix summary",
+          type: "compaction",
+        }),
+      ]),
+    );
+  });
+
   it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");
