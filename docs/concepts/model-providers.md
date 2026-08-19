@@ -534,6 +534,22 @@ Plugin-owned capability split:
 - Image understanding is plugin-owned `MiniMax-VL-01` on both MiniMax auth paths
 - Web search stays on provider id `minimax`
 
+### llama.cpp
+
+The bundled `llama-cpp` plugin provides two local text providers:
+
+- `llama-cpp` installs and manages a verified llama-server and local GGUF files.
+- `llama-server` connects to a server that you already run and discovers its models.
+
+Install the plugin once for either path:
+
+```bash
+openclaw plugins install @openclaw/llama-cpp-provider
+```
+
+See [llama.cpp](/plugins/llama-cpp) for the managed path and
+[llama-server](/providers/llama-server) for the external path.
+
 ### LM Studio
 
 LM Studio ships as a bundled provider plugin which uses the native API:
