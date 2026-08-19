@@ -16,8 +16,9 @@ chat requests through its OpenAI-compatible API.
 
 The same [`llama-cpp` plugin](/plugins/llama-cpp) also provides the managed
 `llama-cpp` provider. The managed provider installs and runs a verified server.
-The external provider described here never installs, starts, stops, downloads,
-or reconfigures anything.
+New external setups never install, start, stop, download, or reconfigure
+anything. Existing configurations with an explicit `localService` block retain
+their previous supervisor behavior for compatibility.
 
 | Property         | Value                             |
 | ---------------- | --------------------------------- |
@@ -150,8 +151,10 @@ openclaw onboard \
 ```
 
 Pass `--llama-server-api-key` or set `LLAMA_SERVER_API_KEY` for an authenticated
-endpoint. Non-interactive setup verifies the endpoint and selected model before
-it writes configuration.
+endpoint. When you replace an existing endpoint, pass `--llama-server-api-key`
+explicitly. OpenClaw does not reuse the previous endpoint's environment,
+profile, header, or configured credentials. Non-interactive setup verifies the
+endpoint and selected model before it writes configuration.
 
 ## Manual configuration
 
