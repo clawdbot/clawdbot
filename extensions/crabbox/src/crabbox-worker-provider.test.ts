@@ -124,7 +124,7 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("Crabbox worker provider", () => {
-  it("attaches provider machine shapes once and preserves a configured literal default", async () => {
+  it("derives ordered machine classes and shapes while preserving configured defaults", async () => {
     const calls: string[][] = [];
     const provider = providerWithRunner(async (argv) => {
       calls.push(argv);
@@ -133,6 +133,8 @@ describe("Crabbox worker provider", () => {
           {
             provider: "aws",
             classes: [
+              { class: "tiny", type: "c7a.2xlarge", vcpu: 8, memoryGb: 16 },
+              { class: "small", type: "c7a.4xlarge", vcpu: 16, memoryGb: 32 },
               { class: "standard", type: "c7a.8xlarge", vcpu: 32, memoryGb: 64 },
               { class: "fast", type: "c7a.16xlarge", vcpu: 64, memoryGb: 128 },
               { class: "large", type: "c7a.24xlarge", vcpu: 96, memoryGb: 192 },
@@ -145,6 +147,8 @@ describe("Crabbox worker provider", () => {
 
     expect(provider.supportedExecutionModes).toEqual(["worker-turn"]);
     expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
+      { id: "tiny", label: "Tiny", cpu: 8, memoryGb: 16 },
+      { id: "small", label: "Small", cpu: 16, memoryGb: 32 },
       {
         id: "standard",
         label: "Standard",
@@ -157,6 +161,8 @@ describe("Crabbox worker provider", () => {
       { id: "beast", label: "Beast", cpu: 192, memoryGb: 384 },
     ]);
     expect(await provider.listMachineOptions?.({ ...PROFILE, class: "c7a.24xlarge" })).toEqual([
+      { id: "tiny", label: "Tiny", cpu: 8, memoryGb: 16 },
+      { id: "small", label: "Small", cpu: 16, memoryGb: 32 },
       { id: "standard", label: "Standard", cpu: 32, memoryGb: 64 },
       { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
       { id: "large", label: "Large", cpu: 96, memoryGb: 192 },
@@ -169,6 +175,33 @@ describe("Crabbox worker provider", () => {
     ]);
     await provider.listMachineOptions?.(PROFILE);
     expect(calls.filter((argv) => argv[1] === "providers")).toHaveLength(1);
+  });
+
+  it("bounds and filters malformed catalogs before gateway normalization", async () => {
+    const invalidClass = "x".repeat(129);
+    const classes = [
+      { class: invalidClass, vcpu: 1, memoryGb: 2 },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        class: `class-${String(index).padStart(2, "0")}`,
+        vcpu: index === 0 ? 0 : index + 1,
+        memoryGb: index === 0 ? 1.5 : (index + 1) * 2,
+      })),
+    ];
+    const provider = providerWithRunner(async () =>
+      commandResult({ stdout: JSON.stringify([{ provider: "aws", classes }]) }),
+    );
+
+    const options = await provider.listMachineOptions?.({ ...PROFILE, class: "class-00" });
+
+    expect(options).toHaveLength(32);
+    expect(options?.[0]).toEqual({ id: "class-00", label: "Class-00", default: true });
+    expect(options?.at(-1)).toEqual({
+      id: "class-31",
+      label: "Class-31",
+      cpu: 32,
+      memoryGb: 64,
+    });
+    expect(options?.some((option) => option.id === invalidClass)).toBe(false);
   });
 
   it("keeps machine-shape catalogs separate per resolved binary", async () => {
@@ -244,6 +277,11 @@ describe("Crabbox worker provider", () => {
       warns: true,
     },
     {
+      name: "returns an empty catalog",
+      result: () => Promise.resolve(commandResult({ stdout: "[]" })),
+      warns: false,
+    },
+    {
       name: "omits classes",
       result: () =>
         Promise.resolve(commandResult({ stdout: JSON.stringify([{ provider: "aws" }]) })),
@@ -258,21 +296,6 @@ describe("Crabbox worker provider", () => {
               {
                 provider: "gcp",
                 classes: [{ class: "standard", vcpu: 32, memoryGb: 64 }],
-              },
-            ]),
-          }),
-        ),
-      warns: false,
-    },
-    {
-      name: "reports invalid shape values",
-      result: () =>
-        Promise.resolve(
-          commandResult({
-            stdout: JSON.stringify([
-              {
-                provider: "aws",
-                classes: [{ class: "standard", vcpu: 0, memoryGb: 63.5 }],
               },
             ]),
           }),
