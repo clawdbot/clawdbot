@@ -24,6 +24,15 @@ import {
 } from "./placement-store.js";
 import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
 import { createWorkerSessionToolExecutor } from "./worker-session-tool-executor.js";
+import {
+  activateWorkerSession,
+  CHILD,
+  GRANDCHILD,
+  PARENT,
+  PARENT_EXECUTION_IDENTITY_TOKEN,
+  SOURCE,
+  TARGET,
+} from "./worker-session-tool-executor.test-support.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
 const delivered = vi.hoisted(() => vi.fn());
@@ -106,44 +115,6 @@ vi.mock("../../agents/tools/in-process-gateway.js", () => ({
   },
 }));
 
-const SOURCE = {
-  agentId: "main",
-  sessionId: "source-session",
-  sessionKey: "agent:main:dashboard:source",
-  environmentId: "source-environment",
-  ownerEpoch: 3,
-};
-const TARGET = {
-  agentId: "main",
-  sessionId: "target-session",
-  sessionKey: "agent:main:dashboard:target",
-  environmentId: "target-environment",
-  ownerEpoch: 4,
-};
-const PARENT = {
-  sessionId: "parent-session",
-  sessionKey: "agent:main:dashboard:parent",
-};
-const CHILD = {
-  agentId: "main",
-  sessionId: "spawned-child-session",
-  environmentId: "spawned-child-environment",
-  ownerEpoch: 5,
-};
-const GRANDCHILD = {
-  agentId: "main",
-  sessionId: "spawned-grandchild-session",
-  environmentId: "spawned-grandchild-environment",
-  ownerEpoch: 6,
-};
-const PARENT_EXECUTION_IDENTITY_TOKEN = {
-  tokenVersion: 1,
-  contextId: "parent-context",
-  executionId: "parent-execution",
-  runId: "source-run",
-  createdAt: 1,
-} satisfies ExecutionIdentityAdmissionToken;
-
 describe("worker session tool topology", () => {
   let root: string;
   let database: OpenClawStateDatabase;
@@ -159,8 +130,8 @@ describe("worker session tool topology", () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-tools-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database });
-    activate(SOURCE);
-    activate(TARGET);
+    activateWorkerSession(placements, SOURCE);
+    activateWorkerSession(placements, TARGET);
     sourceClaim = placements.claimTurn({
       sessionId: SOURCE.sessionId,
       agentId: SOURCE.agentId,
@@ -236,7 +207,7 @@ describe("worker session tool topology", () => {
     dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
       spawnOrder.push("dispatch");
       expect(placements.get(CHILD.sessionId)).toBeUndefined();
-      activate({
+      activateWorkerSession(placements, {
         ...CHILD,
         sessionKey: request.sessionKey,
       });
@@ -362,47 +333,6 @@ describe("worker session tool topology", () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
-
-  function activate(session: {
-    agentId: string;
-    environmentId: string;
-    ownerEpoch: number;
-    sessionId: string;
-    sessionKey: string;
-  }): void {
-    let placement = placements.startDispatch(session);
-    placement = placements.transition({
-      sessionId: session.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: session.environmentId },
-    });
-    placement = placements.transition({
-      sessionId: session.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = placements.transition({
-      sessionId: session.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `manifest-${session.sessionId}`,
-        remoteWorkspaceDir: `/workspace/${session.sessionId}`,
-      },
-    });
-    placements.transition({
-      sessionId: session.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: session.ownerEpoch },
-    });
-  }
 
   function setEntry(
     sessionKey: string,
@@ -560,9 +490,7 @@ describe("worker session tool topology", () => {
           allow: ["sessions_spawn", "sessions_send", "github_publish"],
           deny: WORKER_TOOL_NAMES.filter(
             (name) =>
-              name !== "sessions_spawn" &&
-              name !== "sessions_send" &&
-              name !== "github_publish",
+              name !== "sessions_spawn" && name !== "sessions_send" && name !== "github_publish",
           ),
         },
       },
@@ -676,7 +604,7 @@ describe("worker session tool topology", () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     dispatchChild.mockImplementationOnce(async (request: { sessionKey: string }) => {
       spawnOrder.push("dispatch");
-      activate({
+      activateWorkerSession(placements, {
         ...CHILD,
         sessionKey: request.sessionKey,
       });
@@ -800,7 +728,7 @@ describe("worker session tool topology", () => {
       },
     );
     dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
-      activate({ ...GRANDCHILD, sessionKey: request.sessionKey });
+      activateWorkerSession(placements, { ...GRANDCHILD, sessionKey: request.sessionKey });
       return placements.get(GRANDCHILD.sessionId);
     });
     gatewayRequest.mockImplementation(
@@ -950,9 +878,12 @@ describe("worker session tool topology", () => {
           handoffContext: {
             inheritedToolPolicy: {
               version: 1,
-              allow: ["sessions_spawn", "sessions_send"],
+              allow: ["sessions_spawn", "sessions_send", "github_publish"],
               deny: WORKER_TOOL_NAMES.filter(
-                (name) => name !== "sessions_spawn" && name !== "sessions_send",
+                (name) =>
+                  name !== "sessions_spawn" &&
+                  name !== "sessions_send" &&
+                  name !== "github_publish",
               ),
             },
             requester: { messageProvider: "whatsapp", senderId: "guest" },

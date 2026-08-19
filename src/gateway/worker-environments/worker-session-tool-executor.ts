@@ -19,6 +19,7 @@ import {
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
+import { jsonResult } from "../../agents/tools/tool-results.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -34,16 +35,16 @@ import {
 import type { WorkerPlacementDispatchContract } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
-  serializeWorkerSessionToolResult as serializeResult,
-  workerSessionToolErrorResult as errorResult,
-} from "./worker-session-tool-result.js";
-import {
   computeWorkerSessionToolRequestDigest as computeRequestDigest,
   throwIfWorkerSessionToolAborted as throwIfAborted,
   workerChildSessionKey as childSessionKey,
   workerSessionToolOperationKey as operationKey,
   WorkerSessionToolOutcomeUnknownError,
 } from "./worker-session-tool-operation.js";
+import {
+  serializeWorkerSessionToolResult as serializeResult,
+  workerSessionToolErrorResult as errorResult,
+} from "./worker-session-tool-result.js";
 import {
   assertWorkerSessionToolChild as assertExactChild,
   resolveWorkerSessionToolSource as exactSource,
