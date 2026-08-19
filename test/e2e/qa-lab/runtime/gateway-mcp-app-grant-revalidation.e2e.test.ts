@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { watch } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
 import type {
   BoardWidgetAppViewResult,
   BoardWidgetPutResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   TEST_TIMEOUT_MS,
   createChildEnv,
@@ -20,6 +20,7 @@ import {
   type HttpFixture,
 } from "./gateway-node-mcp.test-support.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const GATE_WAIT_TIMEOUT_MS = 30_000;
 const APP_TOOL_NAME = "streamableHttp__parity_app";
 const POST_REVOCATION_MARKER = "post-revocation";
@@ -134,9 +135,7 @@ describe("Gateway MCP App board grant revalidation", () => {
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const repoRoot = process.cwd();
-      const taskRoot = await fs.mkdtemp(
-        path.join(os.tmpdir(), "openclaw-mcp-app-grant-revalidation-"),
-      );
+      const taskRoot = tempDirs.make("openclaw-mcp-app-grant-revalidation-");
       const fixtureRoot = path.join(taskRoot, "fixture");
       const fixtureHome = path.join(fixtureRoot, "home");
       const fixtureTemp = path.join(fixtureRoot, "tmp");
@@ -298,9 +297,6 @@ describe("Gateway MCP App board grant revalidation", () => {
         cleanupErrors.push(
           ...stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
         );
-        await fs.rm(taskRoot, { recursive: true, force: true }).catch((error) => {
-          cleanupErrors.push(error);
-        });
       }
 
       const failures = proofError === undefined ? cleanupErrors : [proofError, ...cleanupErrors];
