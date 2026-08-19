@@ -105,13 +105,14 @@ export function resolveSelectedProviderFromModelRef(
 export function resolveCapabilityProviderAgentId(
   cfg: OpenClawConfig,
   rawAgentId: string | undefined,
+  surface = "inference provider inspection",
 ): string {
   const requestedAgentId = rawAgentId?.trim();
   if (rawAgentId !== undefined && !requestedAgentId) {
     throw new Error("--agent must not be blank");
   }
   const agentId = resolveSystemAgentTargetAgentId(cfg, requestedAgentId, {
-    surface: "inference provider inspection",
+    surface,
     hint: "Pass --agent <id> or set agents.defaults.systemAgent.agentId.",
   });
   if (!listAgentIds(cfg).includes(agentId)) {

@@ -1002,6 +1002,67 @@ describe("capability cli", () => {
     expect(call?.context).not.toHaveProperty("systemPrompt");
   });
 
+  it("uses the configured system agent for local model runs", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, main: {} },
+      },
+    });
+
+    await runCapability("model", "run", "--local", "--prompt", "hi", "--json");
+
+    expect(firstPreparedModelParams()?.agentId).toBe("ops");
+  });
+
+  it("requires an agent owner for model runs in explicit fleets", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, main: {} },
+      },
+    });
+
+    await expect(
+      runCapability("model", "run", "--local", "--prompt", "hi", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("infer model run");
+    expectRuntimeErrorContains("--agent");
+    expectRuntimeErrorContains("agents.defaults.systemAgent.agentId");
+  });
+
+  it("lets explicit model run agents override the system agent", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, main: {} },
+      },
+    });
+
+    await runCapability("model", "run", "--local", "--prompt", "hi", "--agent", "main", "--json");
+
+    expect(firstPreparedModelParams()?.agentId).toBe("main");
+  });
+
+  it("rejects unknown model run agents", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, main: {} },
+      },
+    });
+
+    await expect(
+      runCapability("model", "run", "--local", "--prompt", "hi", "--agent", "nope", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains('Unknown agent id "nope"');
+  });
+
   it("opts explicit local provider/model probes into bundled static catalog fallback", async () => {
     await runModelRunWithModel("mistral/mistral-medium-3-5", "local");
 
@@ -2017,6 +2078,7 @@ describe("capability cli", () => {
       "--quality",
       "--timeout-ms",
       "--output",
+      "--agent",
       "--json",
     ]);
   });
@@ -2039,6 +2101,7 @@ describe("capability cli", () => {
       "--quality",
       "--timeout-ms",
       "--output",
+      "--agent",
       "--json",
     ]);
   });
@@ -3298,6 +3361,7 @@ describe("capability cli", () => {
   });
 
   it("removes model auth profiles from the selected agent store", async () => {
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { poe: {} } } });
     mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
 
     await runCapability(
