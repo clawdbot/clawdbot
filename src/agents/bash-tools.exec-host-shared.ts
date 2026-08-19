@@ -457,11 +457,35 @@ type ExecApprovalRequestRoute<TTimeoutContext> =
 /** Registers an approval and resolves terminal no-route fallback through the shared policy owner. */
 export async function createExecApprovalRequestRoute<TTimeoutContext = undefined>(
   params: DefaultExecApprovalRequestParams &
-    Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision">,
+    Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision"> & {
+      /** When true, fail closed if no approval delivery route is available. */
+      requiresExplicitApproval?: boolean;
+      /** When true, allow execution even without approval delivery (durable exact-command trust). */
+      hasExactCommandDurableTrust?: boolean;
+    },
 ): Promise<ExecApprovalRequestRoute<TTimeoutContext>> {
   const request = await createAndRegisterDefaultExecApprovalRequest(params);
   if (request.unavailableReason !== "no-approval-route" || request.preResolvedDecision !== null) {
     return { ...request, kind: "wait" };
+  }
+  // When the approval request is registered but no delivery route is available,
+  // we must fail closed: the approval cannot be delivered to the user, so
+  // execution must be denied rather than proceeding without approval.
+  // This is critical in containerized gateway environments where approval
+  // channels may be misconfigured or unavailable.
+  // Exception: exact-command durable trust already grants permission, so allow execution.
+  if (request.unavailableReason !== null && !params.hasExactCommandDurableTrust) {
+    // Create a failed state that will deny execution
+    const state = await resolveExecApprovalDecisionState<TTimeoutContext>({
+      ...params,
+      decision: "deny",
+    });
+    return {
+      ...request,
+      kind: "inline",
+      preResolvedDecision: "deny" as const,
+      state,
+    };
   }
   const state = await resolveExecApprovalDecisionState({ ...params, decision: null });
   return { ...request, kind: "inline", preResolvedDecision: null, state };
