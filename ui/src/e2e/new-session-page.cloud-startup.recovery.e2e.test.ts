@@ -316,10 +316,10 @@ suite.define(() => {
         message: "send outcome unknown",
       });
 
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
       await pollLocatorText(page.locator(".chat-cloud-startup-error")).toContain(
         "send outcome unknown",
       );
-      expect(new URL(page.url()).pathname).toContain(controlUiSessionPath(sessionKey));
       await replaceGatewayClient(page);
       await expect.poll(async () => (await gateway.getRequests("sessions.send")).length).toBe(2);
 
