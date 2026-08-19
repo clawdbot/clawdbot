@@ -304,6 +304,34 @@ describe("Workboard prepared launch restart recovery", () => {
     await rejectInterruptedDispatch(interrupted);
   });
 
+  it("does not accept a terminal session without durable timing evidence", async () => {
+    const interrupted = await beginPreparedDispatch();
+    const canonicalSessionKey = `agent:worker:${interrupted.prepared.sessionKey}`;
+    const lifecycle = await startLifecycleSweep({
+      store: interrupted.replacementStore,
+      sessions: [
+        {
+          key: canonicalSessionKey,
+          status: "done",
+          hasActiveRun: false,
+        },
+      ],
+      complete: true,
+    });
+
+    lifecycle.service.onGatewayStart();
+    await vi.waitFor(async () => {
+      expect((await interrupted.replacementStore.get(interrupted.card.id))?.status).toBe("blocked");
+    });
+    await stopLifecycleSweep(lifecycle);
+
+    await expect(interrupted.replacementStore.get(interrupted.card.id)).resolves.toMatchObject({
+      status: "blocked",
+      metadata: { automation: { launch: { phase: "failed" } } },
+    });
+    await rejectInterruptedDispatch(interrupted);
+  });
+
   it("keeps a prepared launch running when the post-restart snapshot is incomplete", async () => {
     const interrupted = await beginPreparedDispatch();
     const lifecycle = await startLifecycleSweep({

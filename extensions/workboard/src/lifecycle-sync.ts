@@ -302,7 +302,7 @@ async function syncWorkboardLifecycleSessions(params: {
       launch?.phase === "prepared" && session && sessionProvesPreparedAcceptance(session)
         ? session.hasActiveRun === true
           ? Math.max(now, launch.preparedAt)
-          : (session.updatedAt ?? now)
+          : session.updatedAt
         : undefined;
     if (
       launch?.phase === "prepared" &&
