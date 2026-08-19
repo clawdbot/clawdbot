@@ -1,6 +1,7 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
+  GatewayContextResolver,
   GatewayRequestContext,
   GatewayRequestOptions,
 } from "../../gateway/server-methods/types.js";
@@ -37,6 +38,29 @@ const pluginRuntimeGatewayRequestScope = resolveGlobalSingleton<
   PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY,
   () => new AsyncLocalStorage<PluginRuntimeGatewayRequestScope>(),
 );
+const gatewayContextResolvers = new WeakMap<object, GatewayContextResolver>();
+
+export function bindGatewayContextResolver(
+  owner: object,
+  resolver: GatewayContextResolver | undefined,
+): void {
+  if (resolver) {
+    gatewayContextResolvers.set(owner, resolver);
+  }
+}
+
+export const getGatewayContextResolver = (owner: object) => gatewayContextResolvers.get(owner);
+
+export const clearGatewayContextResolver = (owner: object) => gatewayContextResolvers.delete(owner);
+
+export function getSharedGatewayContextResolver(
+  owners: readonly object[],
+): GatewayContextResolver | undefined {
+  const first = owners[0] ? gatewayContextResolvers.get(owners[0]) : undefined;
+  return first && owners.every((owner) => gatewayContextResolvers.get(owner) === first)
+    ? first
+    : undefined;
+}
 
 /**
  * Runs plugin gateway handlers with request-scoped context that runtime helpers can read.

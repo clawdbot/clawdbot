@@ -152,11 +152,13 @@ describe("worker environment service", () => {
   );
 
   it("delegates configured machine options to the profile provider", async () => {
-    const listMachineOptions = vi.fn(() => [{ id: "standard", label: "Standard", default: true }]);
+    const listMachineOptions = vi.fn(async () => [
+      { id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true },
+    ]);
     const workerService = support.createService(support.createProvider({ listMachineOptions }));
 
     await expect(workerService.listMachineOptions("development")).resolves.toEqual([
-      { id: "standard", label: "Standard", default: true },
+      { id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true },
     ]);
     expect(listMachineOptions).toHaveBeenCalledWith({ region: "test" });
   });
@@ -171,6 +173,9 @@ describe("worker environment service", () => {
     ],
     ["blank ids", [{ id: " ", label: "Fast" }]],
     ["malformed labels", [{ id: "fast", label: 16 }]],
+    ["non-positive CPU counts", [{ id: "fast", label: "Fast", cpu: 0 }]],
+    ["non-integer memory sizes", [{ id: "fast", label: "Fast", memoryGb: 63.5 }]],
+    ["implausible memory sizes", [{ id: "fast", label: "Fast", memoryGb: 65_537 }]],
     [
       "multiple defaults",
       [
@@ -184,7 +189,7 @@ describe("worker environment service", () => {
     ],
   ])("omits %s returned by a worker provider", async (_name, options) => {
     const provider = support.createProvider();
-    Object.defineProperty(provider, "listMachineOptions", { value: () => options });
+    Object.defineProperty(provider, "listMachineOptions", { value: async () => options });
     const workerService = support.createService(provider);
 
     await expect(workerService.listMachineOptions("development")).resolves.toBeUndefined();

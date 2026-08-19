@@ -132,7 +132,7 @@ async function convertOpenClawToolToSdkToolForTest(
     onToolCompleted: options.onToolCompleted,
     sessionId: "session-1",
   });
-  return expectDefined(bridge.sdkTools[0], "Copilot SDK tool");
+  return expectDefined(bridge.promptToolPolicy.apply().tools[0], "Copilot SDK tool");
 }
 
 afterEach(() => {
@@ -181,7 +181,7 @@ describe("createCopilotToolBridge", () => {
       sessionId: "session-1",
     });
     const source = expectDefined(bridge.sourceTools[0], "bound Copilot source tool");
-    const sdk = expectDefined(bridge.sdkTools[0], "bound Copilot SDK tool");
+    const sdk = expectDefined(bridge.promptToolPolicy.apply().tools[0], "bound Copilot SDK tool");
     const copiedSourceExecute = source.execute;
     const copiedSdkHandler = sdk.handler;
     active = false;
@@ -209,7 +209,9 @@ describe("createCopilotToolBridge", () => {
       sessionId: "session-1",
     });
 
-    expect(result).toEqual({ codeModeEngaged: false, sdkTools: [], sourceTools: [] });
+    expect(result.codeModeEngaged).toBe(false);
+    expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
+    expect(result.sourceTools).toEqual([]);
     expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
   });
 
@@ -233,7 +235,7 @@ describe("createCopilotToolBridge", () => {
       }),
     );
     expect(result.sourceTools).toEqual(sourceTools);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a"]);
+    expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual(["tool-a"]);
   });
 
   it("forwards supported fields to injected createOpenClawCodingTools", async () => {
@@ -443,7 +445,7 @@ describe("createCopilotToolBridge", () => {
     });
   });
 
-  it("returns sdkTools and sourceTools with matching lengths", async () => {
+  it("returns prompt-policy and source tools with matching direct surfaces", async () => {
     const sourceTools = [makeTool(), makeTool({ name: "tool-b" })];
 
     const result = await createCopilotToolBridge({
@@ -455,8 +457,11 @@ describe("createCopilotToolBridge", () => {
     });
 
     expect(result.sourceTools).toEqual(sourceTools);
-    expect(result.sdkTools).toHaveLength(2);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a", "tool-b"]);
+    expect(result.promptToolPolicy.apply().tools).toHaveLength(2);
+    expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual([
+      "tool-a",
+      "tool-b",
+    ]);
   });
 
   it("preserves direct-only OpenClaw through the exact Copilot allowlist", async () => {
@@ -479,7 +484,7 @@ describe("createCopilotToolBridge", () => {
     });
 
     expect(result.sourceTools).toEqual([systemAgentTool]);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["openclaw"]);
+    expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual(["openclaw"]);
   });
 
   it("compacts the Copilot tool surface behind tool_search controls when enabled", async () => {
@@ -517,7 +522,19 @@ describe("createCopilotToolBridge", () => {
       }),
     );
     expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
+    expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual([
+      "tool_search_code",
+      "read",
+    ]);
+    expect(result.promptToolPolicy.apply().callableToolNames).toEqual([
+      "tool_search_code",
+      "read",
+      "fake_hidden",
+    ]);
+    expect(result.promptToolPolicy.apply({ toolsAllow: ["fake_hidden"] })).toMatchObject({
+      callableToolNames: ["tool_search_code", "fake_hidden"],
+      tools: [expect.objectContaining({ name: "tool_search_code" })],
+    });
   });
 
   it("keeps tool_search controls visible when a narrow allowlist is active", async () => {
@@ -545,7 +562,10 @@ describe("createCopilotToolBridge", () => {
     });
 
     expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
+    expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual([
+      "tool_search_code",
+      "read",
+    ]);
   });
 
   it("filters the hidden tool_search catalog before compacting narrowed tools", async () => {
@@ -605,7 +625,16 @@ describe("createCopilotToolBridge", () => {
     );
     expect(result.codeModeEngaged).toBe(true);
     expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual([
+      "exec",
+      "wait",
+    ]);
+    expect(result.promptToolPolicy.apply().callableToolNames).toEqual([
+      "exec",
+      "wait",
+      "fake_hidden",
+      "read",
+    ]);
   });
 
   it("binds retained code-mode source and SDK controls exactly once", async () => {
@@ -645,7 +674,7 @@ describe("createCopilotToolBridge", () => {
       "bound code-mode source control",
     );
     const sdk = expectDefined(
-      bridge.sdkTools.find((tool) => tool.name === "exec"),
+      bridge.promptToolPolicy.apply().tools.find((tool) => tool.name === "exec"),
       "bound code-mode SDK control",
     );
     const copiedSourceExecute = source.execute;
@@ -711,7 +740,10 @@ describe("createCopilotToolBridge", () => {
     });
 
     expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual([
+      "exec",
+      "wait",
+    ]);
   });
 
   it("filters the hidden code-mode catalog before compacting narrowed tools", async () => {
@@ -1010,7 +1042,7 @@ describe("createCopilotToolBridge", () => {
         });
         const tool = (name: string) =>
           expectDefined(
-            bridge.sdkTools.find((candidate) => candidate.name === name),
+            bridge.promptToolPolicy.apply().tools.find((candidate) => candidate.name === name),
             `Copilot ${name} tool`,
           );
         await runSdkTool(tool("write"), {
@@ -1067,7 +1099,9 @@ describe("createCopilotToolBridge", () => {
         });
         await runSdkTool(
           expectDefined(
-            freshBridge.sdkTools.find((candidate) => candidate.name === "write"),
+            freshBridge.promptToolPolicy
+              .apply()
+              .tools.find((candidate) => candidate.name === "write"),
             "fresh Copilot write tool",
           ),
           { path: "memory/fresh.md", content: "fresh owner note\n" },
@@ -1487,7 +1521,7 @@ describe("createCopilotToolBridge", () => {
           sessionKey: "agent:agent-1:policy-session",
           workspaceDir,
         });
-        const names = result.sdkTools.map((tool) => tool.name);
+        const names = result.promptToolPolicy.apply().tools.map((tool) => tool.name);
 
         expect(names).toContain("read");
         expect(names).toContain("apply_patch");
@@ -1509,7 +1543,9 @@ describe("createCopilotToolBridge", () => {
         modelProvider: "github-copilot",
         sessionId: "session-1",
       });
-      expect(result).toEqual({ codeModeEngaged: false, sdkTools: [], sourceTools: [] });
+      expect(result.codeModeEngaged).toBe(false);
+      expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
+      expect(result.sourceTools).toEqual([]);
       expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
     });
 
@@ -1523,7 +1559,9 @@ describe("createCopilotToolBridge", () => {
         modelProvider: "github-copilot",
         sessionId: "session-1",
       });
-      expect(result).toEqual({ codeModeEngaged: false, sdkTools: [], sourceTools: [] });
+      expect(result.codeModeEngaged).toBe(false);
+      expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
+      expect(result.sourceTools).toEqual([]);
       expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
     });
 
@@ -1537,7 +1575,9 @@ describe("createCopilotToolBridge", () => {
         modelProvider: "github-copilot",
         sessionId: "session-1",
       });
-      expect(result).toEqual({ codeModeEngaged: false, sdkTools: [], sourceTools: [] });
+      expect(result.codeModeEngaged).toBe(false);
+      expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
+      expect(result.sourceTools).toEqual([]);
       expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
     });
 
@@ -1556,7 +1596,7 @@ describe("createCopilotToolBridge", () => {
         sessionId: "session-1",
       });
       expect(result.sourceTools.map((tool) => tool.name)).toEqual(["read"]);
-      expect(result.sdkTools.map((tool) => tool.name)).toEqual(["read"]);
+      expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual(["read"]);
     });
 
     it("returns no tools when toolsAllow is an empty list and nothing is forced", async () => {
@@ -1573,7 +1613,7 @@ describe("createCopilotToolBridge", () => {
         sessionId: "session-1",
       });
       expect(result.sourceTools).toEqual([]);
-      expect(result.sdkTools).toEqual([]);
+      expect(result.promptToolPolicy.apply().tools).toEqual([]);
     });
 
     it('merges "message" into an empty allowlist when forceMessageTool is true', async () => {

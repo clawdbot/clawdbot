@@ -412,7 +412,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     ```typescript
     // Start a subagent run
-    const { runId } = await api.runtime.subagent.run({
+    const { runId, sessionKey } = await api.runtime.subagent.run({
       sessionKey: "agent:main:subagent:search-helper",
       message: "Expand this query into focused follow-up searches.",
       toolsAlsoAllow: ["my_plugin_progress"],
@@ -436,6 +436,8 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       sessionKey: "agent:main:subagent:search-helper",
     });
     ```
+
+    Gateway-backed runs return the canonical accepted `sessionKey` alongside `runId`. The field is optional in the TypeScript result only so explicit custom runtimes remain compatible.
 
     <Warning>
     Model overrides (`provider`/`model`) require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Untrusted plugins can still run subagents, but override requests are rejected.

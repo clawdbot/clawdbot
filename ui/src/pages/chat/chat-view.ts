@@ -63,6 +63,7 @@ import {
 import { renderChatThread } from "./components/chat-thread.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
+import type { LinkFaviconFetcher } from "./link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
@@ -170,6 +171,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     boardProvider?: BoardProvider;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    fetchLinkFavicon?: LinkFaviconFetcher;
     chatMessageMaxWidth?: string | null;
     assistantName: string;
     sendShortcut?: ChatSendShortcut;
@@ -334,6 +336,7 @@ export function renderChat(props: ChatProps) {
       canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
       embedSandboxMode: props.embedSandboxMode,
       allowExternalEmbedUrls: props.allowExternalEmbedUrls,
+      fetchLinkFavicon: props.fetchLinkFavicon,
       autoExpandToolCalls: props.autoExpandToolCalls,
       realtimeTalkConversation: props.realtimeTalkConversation,
       typingActors: props.typingActors,

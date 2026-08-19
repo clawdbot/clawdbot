@@ -1716,13 +1716,14 @@ describe("runCodexAppServerAttempt", () => {
       data?: { prompt?: string; systemPrompt?: string };
       type: string;
     }> = [];
-    Object.assign(params, {
-      trajectoryRecorder: {
+    params.hostCapabilities = Object.freeze({
+      ...params.hostCapabilities,
+      trajectory: Object.freeze({
         recordEvent: (type: string, data?: { prompt?: string; systemPrompt?: string }) => {
           trajectoryEvents.push({ type, data });
         },
         flush: async () => undefined,
-      },
+      }),
     });
     params.skillsSnapshot = {
       prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
@@ -3878,8 +3879,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     expect(fileStats.get("AGENTS.md")).toMatchObject({
       rawChars: agentsGuidance.length,
-      injectedChars: agentsGuidance.length,
-      truncated: false,
+      injectionStatus: "native_unverified",
+      injectedChars: null,
+      truncated: null,
     });
   });
   it("adds memory recall guidance when dated memory notes exist without root MEMORY.md", async () => {
@@ -4011,7 +4013,7 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     if (!threadStart) {
@@ -4036,6 +4038,14 @@ describe("runCodexAppServerAttempt", () => {
       ).collaborationMode?.settings?.developer_instructions ?? "";
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).not.toContain(agentsGuidance);
+    const agentWorkspaceStats = result.systemPromptReport?.injectedWorkspaceFiles.find(
+      (file) => file.path === path.join(agentWorkspaceDir, "AGENTS.md"),
+    );
+    expect(agentWorkspaceStats).toMatchObject({
+      rawChars: agentsGuidance.length,
+      injectedChars: agentsGuidance.length,
+      truncated: false,
+    });
 
     const updatedGuidance = "Updated AGENTS guidance must wait for a new session.";
     await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), updatedGuidance);

@@ -40,6 +40,7 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
+      operatorScopes: ["operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [
         "chat.metadata",
@@ -86,10 +87,11 @@ suite.define(() => {
                 {
                   id: "standard",
                   label: "Standard",
-                  description: "Balanced capacity",
+                  cpu: 32,
+                  memoryGb: 64,
                   default: true,
                 },
-                { id: "fast", label: "Fast", description: "More compute" },
+                { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
               ],
             },
           ],
@@ -465,6 +467,7 @@ suite.define(() => {
       await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key: managedSessionKey, agentId: "cloud" });
+      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
     } finally {
       await context.close();
     }

@@ -4151,7 +4151,7 @@ describe("config cli", () => {
       ]);
     });
 
-    it("treats unsetting a runtime-only default shown by config get as an authored no-op", async () => {
+    it("fails when unsetting a runtime-only default shown by config get", async () => {
       const resolved = {
         agents: {
           defaults: {
@@ -4179,10 +4179,12 @@ describe("config cli", () => {
       mockLog.mockClear();
       setSnapshot(resolved, runtimeMerged);
 
-      await runConfigCommand(["config", "unset", aliasPath]);
+      await expect(runConfigCommand(["config", "unset", aliasPath])).rejects.toThrow(ExitError);
 
-      expectLogIncludes("No change");
-      expect(mockError).not.toHaveBeenCalled();
+      expectLogExcludes("No change");
+      expectErrorIncludes(
+        `Config path not found in authored config: ${aliasPath}. It only exists after runtime defaults are applied, so there is nothing for config unset to remove. Use openclaw config set <path> <value> to override the inherited value.`,
+      );
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
 
       setSnapshot(resolved, runtimeMerged);
@@ -4202,6 +4204,28 @@ describe("config cli", () => {
         ],
       });
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("reports No change when removing a normalized duplicate leaves config unchanged", async () => {
+      const retired = "google/gemini-3-pro-preview";
+      const canonical = "google/gemini-3.1-pro-preview";
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              [retired]: { alias: "gemini" },
+              [canonical]: { alias: "gemini" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", `agents.defaults.models["${retired}"]`]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expectLogIncludes("No change");
     });
 
     it("validates existing refs when unset dry-run removes all secret providers", async () => {

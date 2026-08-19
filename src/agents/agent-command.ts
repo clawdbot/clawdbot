@@ -80,6 +80,7 @@ async function agentCommandInternal(
   admissionIngress: AgentCommandAdmissionIngress,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
+  watchSkills = false,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
@@ -451,6 +452,7 @@ async function agentCommandInternal(
               sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
               "skills",
             ),
+            watchSkills,
             isNewSession,
             isSubagentLaneTurn,
             suppressVisibleSessionEffects,
@@ -672,6 +674,7 @@ async function agentCommandFromIngressInternal(
               { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
               runtime,
               deps,
+              true,
             );
           return generation
             ? await run()

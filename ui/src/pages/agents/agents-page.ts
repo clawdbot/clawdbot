@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -18,7 +17,7 @@ import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { selectableAgentsList } from "../../lib/agents/display.ts";
+import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
 import {
   loadToolsCatalog,
   loadToolsEffective,
@@ -1114,9 +1113,14 @@ class AgentsPage
             if (!target || !skillName.trim()) {
               return;
             }
-            const base = Array.isArray(target.entry.skills)
-              ? normalizeStringEntries(target.entry.skills)
-              : (this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ?? []);
+            const base =
+              resolveAgentSkillsFilter(
+                currentConfigObject(this.context.runtimeConfig.state),
+                agentId,
+              ) ??
+              this.agentSkillsReport?.agentSkillFilter ??
+              this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
+              [];
             const next = new Set(base);
             if (enabled) {
               next.add(skillName.trim());

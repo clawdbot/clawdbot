@@ -367,6 +367,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         isolation: "private-stdio",
       }),
     ).rejects.toThrow("hosted search turn returned no text");
+
+    const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    expect(startParams).toMatchObject({ config: { project_doc_max_bytes: 131_072 } });
   });
 
   it("still fails on a terminal error notification", async () => {

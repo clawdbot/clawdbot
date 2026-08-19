@@ -4,6 +4,7 @@ import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigatio
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { copyToClipboard } from "../lib/clipboard.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
@@ -15,6 +16,7 @@ import {
   normalizeAgentId,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
@@ -165,7 +167,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
   const cloudWorkerStopAllowed = Boolean(
     !batchRows &&
     cloudWorkerStopAction &&
-    (cloudWorkerStopAction.method !== "sessions.reclaim" || !session.hasActiveRun) &&
+    (!cloudWorkerStopAction.blocksActiveRun || !session.hasActiveRun) &&
     context &&
     isGatewayMethodAdvertised(context.gateway.snapshot, cloudWorkerStopAction.method) === true,
   );
@@ -202,6 +204,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
       <openclaw-session-menu
         .session=${{
           label: session.label,
+          sessionId: session.sessionId ?? null,
           isChild: session.isChild,
           pinned: session.pinned,
           unread: batchRows ? allUnread : session.unread,
@@ -245,6 +248,11 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "open-in":
               openEditor(action.editor, action.path);
+              break;
+            case "copy-session-id":
+              void copyToClipboard(session.sessionId ?? "").then((copied) => {
+                showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+              });
               break;
             case "toggle-pin":
               void host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
@@ -379,6 +387,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     owners: host.sessionOwnershipVisible ? host.sessionOwnerOptions : [],
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
+    selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -426,6 +435,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     owners: host.sessionOwnershipVisible ? host.sessionOwnerOptions : [],
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
+    selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });

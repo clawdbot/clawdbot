@@ -4356,12 +4356,6 @@ describe("update-cli", () => {
       expectedSpec: "openclaw@9999.0.0",
     },
     {
-      name: "main shorthand",
-      options: { yes: true, tag: "main" },
-      packageSpec: undefined,
-      expectedSpec: "github:openclaw/openclaw#main",
-    },
-    {
       name: "explicit git package spec",
       options: { yes: true, tag: "github:openclaw/openclaw#main" },
       packageSpec: undefined,
@@ -4428,6 +4422,33 @@ describe("update-cli", () => {
       expectPackageInstallSpec(expectedSpec);
     },
   );
+
+  it.each([
+    { name: "real run", options: { yes: true, json: true, tag: "main" } },
+    { name: "normalized alias", options: { yes: true, json: true, tag: "openclaw@main" } },
+    {
+      name: "dry-run",
+      options: { dryRun: true, json: true, tag: "main", yes: true },
+    },
+  ] as const)("refuses --tag main before package resolution: $name", async ({ options }) => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update-main-refusal"));
+
+    await updateCommand(options);
+
+    const result = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "unsupported-package-target",
+      steps: [],
+    });
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(resolveGlobalManager, replaceConfigFile, runGatewayUpdate);
+    if ("dryRun" in options && options.dryRun) {
+      expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    }
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(getErrorOutput()).toContain("openclaw update --channel dev");
+  });
 
   it("fails package updates when the installed correction version does not match the requested target", async () => {
     const tempDir = createCaseDir("openclaw-update");

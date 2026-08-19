@@ -70,8 +70,8 @@ describe("Where chip state", () => {
         id: "build-fleet",
         providerId: "crabbox",
         machines: [
-          { id: "standard", label: "Standard", description: "Balanced capacity", default: true },
-          { id: "fast", label: "Fast", description: "More compute" },
+          { id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true },
+          { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
         ],
       },
     ];

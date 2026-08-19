@@ -138,6 +138,10 @@ suite.define(() => {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
         },
+        "sessions.describe": {
+          session: { sessionId: "session-late-cloud-create" },
+        },
+        "sessions.patch": { ok: true },
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
@@ -173,11 +177,25 @@ suite.define(() => {
         dispatchEvent(new PopStateEvent("popstate"));
       });
       await gateway.resolveDeferred("sessions.create", { key: sessionKey });
+      const archive = await gateway.waitForRequest("sessions.patch");
+      expect(archive.params).toMatchObject({
+        key: sessionKey,
+        agentId: "cloud",
+        archived: true,
+        expectedSessionId: "session-late-cloud-create",
+      });
       await gateway.waitForRequest("sessions.delete");
       await gateway.rejectDeferred("sessions.delete", {
         code: "UNAVAILABLE",
         message: "cleanup unavailable",
       });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.patch")).some(
+            (request) => (request.params as { archived?: unknown }).archived === false,
+          ),
+        )
+        .toBe(true);
 
       await pollLocatorText(
         page.locator(".new-session-page__error").filter({ hasText: "cleanup unavailable" }),

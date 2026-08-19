@@ -333,8 +333,11 @@ vi.mock("../channels/turn/lifecycle.js", () => ({
   },
 }));
 
-vi.mock("./server-plugins.js", () => ({
-  dispatchGatewayMethodInProcess: mocks.dispatchGatewayMethodInProcess,
+vi.mock("./server-recovery-runtime-context.js", async () => ({
+  ...(await vi.importActual<typeof import("./server-recovery-runtime-context.js")>(
+    "./server-recovery-runtime-context.js",
+  )),
+  dispatchGatewayLifecycleMethod: mocks.dispatchGatewayMethodInProcess,
 }));
 
 vi.mock("../infra/outbound/targets.js", () => ({

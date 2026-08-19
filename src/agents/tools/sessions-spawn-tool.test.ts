@@ -187,7 +187,9 @@ describe("sessions_spawn tool", () => {
       };
     };
 
-    expect(tool.displaySummary).toBe("Spawn subagent or ACP session.");
+    expect(tool.displaySummary).toBe(
+      "Spawn hidden subagent (ephemeral) or visible work session (durable).",
+    );
     expect(tool.description).toContain('runtime="acp"');
     expect(tool.description).toContain('unless ACP `streamTo="parent"`');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);

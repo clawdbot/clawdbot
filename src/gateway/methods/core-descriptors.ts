@@ -438,14 +438,14 @@ const CORE_GATEWAY_METHOD_SPECS = [
   [
     "sessions.dispatch",
     "sessions-dispatch",
-    "operator.admin",
+    "operator.write",
     "2026.7",
     { startup: true, controlPlaneWrite: true },
   ],
   [
     "sessions.reclaim",
     "sessions-dispatch",
-    "operator.admin",
+    "operator.write",
     "2026.7",
     { startup: true, controlPlaneWrite: true },
   ],
@@ -537,7 +537,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   [
     "sessions.move",
     "sessions-dispatch",
-    "operator.admin",
+    "operator.write",
     "2026.8",
     { startup: true, controlPlaneWrite: true },
   ],

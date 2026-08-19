@@ -5,6 +5,12 @@ type CrabboxProvisionTimeoutProfile = {
 
 export const CRABBOX_WARMUP_TIMEOUT_MS = 240_000;
 export const CRABBOX_LIFECYCLE_TIMEOUT_MS = 60_000;
+
+// `providers --json` is a static compiled report: no network, no credentials,
+// measured well under a second. The picker awaits it, so cap it far below the
+// lifecycle budget — a hung binary must fall back to label-only choices
+// promptly instead of stalling the whole cloud picker.
+export const CRABBOX_MACHINE_CATALOG_TIMEOUT_MS = 5_000;
 const CRABBOX_PROVISION_TIMEOUT_MS = 290_000;
 // Crabbox starts its 45-minute desktop/browser bootstrap clock after acquisition.
 // Preserve OpenClaw's existing five-minute acquisition envelope, then leave one

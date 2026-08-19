@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayServer } from "../../../src/gateway/server.js";
-import { waitForActiveGatewayRootWork } from "../../../src/process/gateway-work-admission.js";
+import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -502,7 +502,7 @@ async function closeConnectedContext(context: BrowserContext): Promise<void> {
   await closeContext(context);
   // UI requests intentionally outlive socket teardown. Drain their admitted work
   // before another browser interaction so lazy handler imports cannot starve it.
-  await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ active: 0, drained: true });
+  await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
 }
 
 async function captureChromiumScreenshot(page: Page, fileName: string): Promise<void> {

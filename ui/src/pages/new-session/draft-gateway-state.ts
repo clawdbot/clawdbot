@@ -5,6 +5,7 @@ import type {
   UsersPrefsSetResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -118,11 +119,11 @@ export class DraftGatewayState {
         [
           this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
           this.gatewayConnectionEpochValue,
-          this.read().isAdmin,
+          hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null),
           this.gatewayRecoveryScopeValue,
         ] as const,
-      task: ([client, _connectionEpoch, admin]) =>
-        client ? discoverPlaceCatalog(client, admin) : initialState,
+      task: ([client, _connectionEpoch, canWrite]) =>
+        client ? discoverPlaceCatalog(client, canWrite) : initialState,
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
         this.environmentsValue = placeCatalog.environments;
@@ -445,7 +446,8 @@ export class DraftGatewayState {
     this.cloudProfilesValue = recovery.profiles;
     const snapshot = this.read();
     const pendingCloud = Boolean(snapshot.pendingCloud.sessionKey);
-    if ((!this.gatewayConnectedValue || !snapshot.isAdmin) && !pendingCloud) {
+    const canWrite = hasOperatorWriteAccess(snapshot.context?.gateway.snapshot.hello?.auth ?? null);
+    if ((!this.gatewayConnectedValue || !canWrite) && !pendingCloud) {
       this.callbacks.onCloudProfileCleared();
     }
     const selectionUnavailable =

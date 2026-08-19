@@ -288,10 +288,26 @@ export function createAgentHarnessHostCapabilities(params: {
     });
   });
 
+  const trajectoryRecorder = attempt.trajectoryRecorder;
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    ...(trajectoryRecorder
+      ? {
+          trajectory: Object.freeze({
+            recordEvent: (type: string, data?: Record<string, unknown>) => {
+              assertActive();
+              trajectoryRecorder.recordEvent(type, data);
+            },
+            flush: async () => {
+              assertActive();
+              await trajectoryRecorder.flush();
+              assertActive();
+            },
+          }),
+        }
+      : {}),
     preparedEnvironment: () => {
       assertActive();
       return Object.freeze({

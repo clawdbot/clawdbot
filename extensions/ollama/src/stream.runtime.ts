@@ -102,6 +102,7 @@ async function runOllamaResponseHook(params: {
       signal.removeEventListener("abort", onAbort);
     }
   }
+  throwIfOllamaStreamAborted(signal);
 }
 
 function createOllamaStreamCooperativeScheduler(

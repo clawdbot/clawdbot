@@ -41,6 +41,7 @@ type StreamMessageOptions = Pick<
   | "onOpenImage"
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
+  | "fetchLinkFavicon"
   | "onOpenWorkspaceFile"
 >;
 
@@ -102,6 +103,7 @@ export function renderStreamGroupParts(
               onOpenImage: opts.onOpenImage,
               embedSandboxMode: opts.embedSandboxMode,
               allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+              fetchLinkFavicon: opts.fetchLinkFavicon,
               onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
             },
             opts.onOpenSidebar,

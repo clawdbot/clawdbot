@@ -7,7 +7,8 @@ export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filter
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
-export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP session.";
+export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY =
+  "Spawn hidden subagent (ephemeral) or visible work session (durable).";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
 export const AGENTS_WAIT_TOOL_DISPLAY_SUMMARY = "Wait for collector subagents.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
@@ -141,7 +142,7 @@ export function describeSessionsSpawnTool(options?: {
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     'Native transcript needed: `context="fork"`; else omit/isolated.',
-    "Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers.",
+    "Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`.",
     completionGuidance,
   ].join(" ");
 }

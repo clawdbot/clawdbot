@@ -228,6 +228,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     logError: (message) => log.error(message),
   });
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
+  gatewayRequestContext.resolveGatewayContext = () =>
+    gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
   return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };

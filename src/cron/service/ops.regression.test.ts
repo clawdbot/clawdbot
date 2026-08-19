@@ -12,8 +12,8 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   clearCommandLane,
   enqueueCommandInLane,
+  getTotalQueueSize,
   setCommandLaneConcurrency,
-  waitForActiveTasks,
 } from "../../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -138,7 +138,7 @@ describe("cron service ops regressions", () => {
 
       enterRunner.resolve();
       await finished.promise;
-      await waitForActiveTasks(5_000);
+      await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
       expect(terminalEvent).toMatchObject({ status: "ok" });
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
@@ -296,7 +296,7 @@ describe("cron service ops regressions", () => {
 
     releaseBlocker.resolve();
     await blocker;
-    await waitForActiveTasks(5_000);
+    await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -706,7 +706,7 @@ describe("cron service ops regressions", () => {
 
     secondRun.resolve({ status: "ok", summary: "second queued run" });
     await bothFinished.promise;
-    await waitForActiveTasks(5_000);
+    await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
     const jobs = state.store?.jobs ?? [];
     expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
@@ -762,7 +762,7 @@ describe("cron service ops regressions", () => {
       const ack = await enqueueRun(state, job.id, "due");
       const runId = expectQueuedRunAck(ack);
       await terminal.promise;
-      await waitForActiveTasks(5_000);
+      await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
 
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(events.map((event) => event.action)).toEqual(["started", "scheduled", "finished"]);
@@ -821,7 +821,7 @@ describe("cron service ops regressions", () => {
     state.stopped = true;
     releaseBlocker.resolve();
     await blocker;
-    await waitForActiveTasks(5_000);
+    await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
 
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
     expect(
@@ -914,7 +914,7 @@ describe("cron service ops regressions", () => {
       expect(abortSignal.aborted).toBe(true);
       expect(abortSignal.reason).toBe(testCase.reason);
       await providerExited.promise;
-      await waitForActiveTasks(5_000);
+      await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
 
       const terminalEvents = events.filter(
         (evt) => evt.action === "finished" && evt.runId === runId,
@@ -958,7 +958,7 @@ describe("cron service ops regressions", () => {
       }
     } finally {
       releaseProvider.resolve();
-      await waitForActiveTasks(5_000);
+      await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
       clearCommandLane(CommandLane.Cron);
     }
   });

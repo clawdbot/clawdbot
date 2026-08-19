@@ -10,7 +10,7 @@ import {
   workboardCardMatchesLifecycleLink,
   workboardCardSessionLookupKey,
 } from "./session-link.js";
-import { cardSessionKey } from "./store-card-helpers.js";
+import { cardRunId, cardSessionKey } from "./store-card-helpers.js";
 import { DEFAULT_WORKBOARD_DISPATCH_OWNER } from "./store-constants.js";
 import type { WorkboardStore } from "./store.js";
 
@@ -99,6 +99,12 @@ async function syncWorkboardCardLifecycle(params: {
   cardId: string;
   observation: WorkboardLifecycleObservation;
   now: number;
+  association?: {
+    expectedSessionKey?: string;
+    expectedRunId?: string;
+    sessionKey: string;
+    runId?: string;
+  };
 }): Promise<boolean> {
   const target = LIFECYCLE_TARGETS[params.observation.state];
   return await params.store.syncLifecycle(params.cardId, {
@@ -107,6 +113,7 @@ async function syncWorkboardCardLifecycle(params: {
     sourceUpdatedAt: params.observation.sourceUpdatedAt,
     stale: params.observation.stale,
     now: params.now,
+    ...(params.association ? { association: params.association } : {}),
   });
 }
 
@@ -121,7 +128,23 @@ async function syncWorkboardLifecycleEvent(params: {
     (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
   );
   const updates = Promise.all(
-    cards.map(async (card) => await syncWorkboardCardLifecycle({ ...params, cardId: card.id })),
+    cards.map(
+      async (card) =>
+        await syncWorkboardCardLifecycle({
+          ...params,
+          cardId: card.id,
+          ...(params.source.sessionKey
+            ? {
+                association: {
+                  ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
+                  ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
+                  sessionKey: params.source.sessionKey,
+                  ...(params.source.runId ? { runId: params.source.runId } : {}),
+                },
+              }
+            : {}),
+        }),
+    ),
   );
   await Promise.all([
     updates,
@@ -270,7 +293,21 @@ async function syncWorkboardLifecycleSessions(params: {
         : undefined;
     if (
       observation &&
-      (await syncWorkboardCardLifecycle({ store: params.store, cardId: card.id, observation, now }))
+      (await syncWorkboardCardLifecycle({
+        store: params.store,
+        cardId: card.id,
+        observation,
+        now,
+        ...(session
+          ? {
+              association: {
+                ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
+                ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
+                sessionKey: session.key,
+              },
+            }
+          : {}),
+      }))
     ) {
       count += 1;
     }

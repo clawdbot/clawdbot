@@ -71,7 +71,6 @@ export async function admitChatSend(params: {
     now,
     restartSafeRequest,
     expectedLeafEntryId,
-    expectedRunId,
   } = session;
   const chatSendTraceAttributes = {
     runId: clientRunId,
@@ -130,7 +129,9 @@ export async function admitChatSend(params: {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
-  let messageInjectionTarget: ReturnType<typeof replyRunRegistry.resolveMessageInjectionTarget>;
+  let messageInjectionTarget: ReturnType<
+    typeof replyRunRegistry.resolveCurrentMessageInjectionTarget
+  >;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
   const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
@@ -197,15 +198,9 @@ export async function admitChatSend(params: {
     // Capture the exact direct owner under the writer barrier. If it clears
     // later, the opaque target rejects instead of resolving a successor.
     const resolvedInjectionTarget =
-      p.queueMode !== "steer"
-        ? undefined
-        : expectedRunId !== undefined
-          ? replyRunRegistry.resolveMessageInjectionTarget({
-              sessionKey: activeRunScopeKey,
-              originatingLeafEntryId: expectedLeafEntryId,
-              expectedRunId,
-            })
-          : replyRunRegistry.resolveCurrentMessageInjectionTarget(activeRunScopeKey);
+      p.queueMode === "steer"
+        ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeRunScopeKey)
+        : undefined;
     if (commitOutcome && resolvedInjectionTarget) {
       messageInjectionTarget = resolvedInjectionTarget;
     }

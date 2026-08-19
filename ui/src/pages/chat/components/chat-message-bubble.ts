@@ -31,6 +31,7 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import {
   visibleWorkspaceConflictPaths,
   workspaceConflictCount,
@@ -242,6 +243,7 @@ export function renderGroupedMessage(
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    fetchLinkFavicon?: LinkFaviconFetcher;
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
@@ -303,6 +305,7 @@ export function renderGroupedMessage(
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
     tableInteractions: "enabled",
+    linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
   };
 
   // Detect pure-JSON messages and render as collapsible block

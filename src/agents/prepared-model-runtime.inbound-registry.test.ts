@@ -172,6 +172,9 @@ describe("prepared reply dispatch runtime", () => {
     const configuredRuntimeBefore = await loadPublishedGatewayReplyDispatchRuntime({
       agentId: "default",
     });
+    if (!configuredRuntimeBefore) {
+      throw new Error("expected configured reply runtime");
+    }
     const configuredInput = {
       agentId: "default",
       agentDir: "/tmp/unused-agent",
@@ -188,7 +191,9 @@ describe("prepared reply dispatch runtime", () => {
         { provider: "openai", modelId: "gpt-5.5", runtime: "codex" as const },
       ],
     };
-    const dynamicLease = await acquireAgentRunPreparedModelRuntime(dynamicInput);
+    const dynamicLease = await acquireAgentRunPreparedModelRuntime(dynamicInput, {
+      pluginGeneration: configuredRuntimeBefore.pluginGeneration,
+    });
     const dynamicSelectedBefore = dynamicLease.snapshot.pluginRegistry;
     dynamicLease.release();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);

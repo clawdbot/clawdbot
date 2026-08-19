@@ -1762,6 +1762,58 @@ describe("createOllamaStreamFn streaming events", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("does not resume response handling after the hook resolves concurrently with abort", async () => {
+    let markHookStarted: () => void = () => undefined;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
+    });
+    let settleHook: () => void = () => undefined;
+    const hookPending = new Promise<void>((resolve) => {
+      settleHook = resolve;
+    });
+    const getReader = vi.fn(() => ({
+      read: vi.fn(async () => ({ done: true as const, value: undefined })),
+      cancel: vi.fn(async () => undefined),
+      releaseLock: vi.fn(),
+    }));
+    const cancel = vi.fn(async () => undefined);
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        status: 200,
+        ok: true,
+        headers: new Headers({ "Content-Type": "application/x-ndjson" }),
+        body: { getReader, cancel },
+      } as unknown as Response,
+      release,
+    });
+    const abortController = new AbortController();
+
+    const eventsPromise = collectStreamEvents(
+      await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        options: {
+          onResponse: () => {
+            markHookStarted();
+            return hookPending;
+          },
+          signal: abortController.signal,
+        },
+      }),
+    );
+    await hookStarted;
+    await Promise.resolve();
+    void hookPending.then(() => abortController.abort());
+    settleHook();
+    const events = await eventsPromise;
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "error", reason: "aborted" });
+    expect(getReader).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("emits start, text_start, text_delta, text_end, done for text responses", async () => {
     const events = await collectMockedOllamaEvents([
       '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Hello"},"done":false}',

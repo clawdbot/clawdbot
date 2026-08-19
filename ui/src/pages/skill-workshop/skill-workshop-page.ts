@@ -3,9 +3,7 @@ import { initialState, Task } from "@lit/task";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import "../../components/tooltip.ts";
-import { t } from "../../i18n/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import {
@@ -14,7 +12,8 @@ import {
 } from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs } from "../plugins/plugins-hub.ts";
+import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
+import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { canCallWorkshopAdminMethod, resolveWorkshopAccess } from "./access.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
 import {
@@ -67,25 +66,10 @@ function renderSkillWorkshopPage(
 
   return html`
     <section class=${pageClass}>
-      <section class="content-header content-header--page plugins-content-header">
-        <div>
-          <h1 class="page-title">${t("tabs.skillWorkshop")}</h1>
-        </div>
-        <div class="page-meta">
-          ${renderSkillWorkshopHeaderControls(state, renderContext, requestUpdate)}
-        </div>
-      </section>
-      <div class="plugins-hub-tabs-row">
-        ${renderHubTabs({
-          id: "plugins",
-          active: "workshop",
-          tabs: pluginsHubTabs(),
-          ariaLabel: t("pluginsPage.hubTablistLabel"),
-          panelId: PLUGINS_HUB_PANEL_ID,
-          className: "plugins-tabs",
-          onSelect: (tab) => selectPluginsHubTab(context, tab),
-        })}
-      </div>
+      ${renderPluginsHubHeader({
+        active: "workshop",
+        onSelect: (tab) => selectPluginsHubTab(context, tab),
+      })}
       <wa-tab-panel
         id=${PLUGINS_HUB_PANEL_ID}
         class="sw-hub-panel"
@@ -93,6 +77,9 @@ function renderSkillWorkshopPage(
         active
         aria-labelledby="plugins-tab-workshop"
       >
+        <div class="sw-workshop-toolbar">
+          ${renderSkillWorkshopHeaderControls(state, renderContext, requestUpdate)}
+        </div>
         ${(() => {
           const visibleProposals = filterSkillWorkshopProposals(
             state.skillWorkshopProposals,

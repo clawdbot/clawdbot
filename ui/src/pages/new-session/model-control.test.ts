@@ -1,78 +1,8 @@
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
-
-function contextWith(
-  models: ModelCatalogEntry[],
-  runtime = "openclaw",
-  featureMethods: string[] = [],
-  cloudPlacementSupported?: boolean,
-) {
-  const request = vi.fn().mockResolvedValue({ models });
-  const navigate = vi.fn();
-  const context = {
-    navigate,
-    gateway: {
-      snapshot: {
-        phase: "connected",
-        client: { request },
-        hello: { features: { methods: featureMethods } },
-      },
-    },
-    sessions: {
-      state: {
-        result: {
-          defaults: {
-            model: "openai/gpt-5.6-luna",
-            modelProvider: "openai",
-            agentRuntime: {
-              id: runtime,
-              ...(cloudPlacementSupported === undefined ? {} : { cloudPlacementSupported }),
-              source: "defaults",
-            },
-          },
-          sessions: [],
-        },
-      },
-    },
-  } as unknown as ApplicationContext;
-  return { context, navigate, request };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
-
-function renderControl(
-  control: NewSessionModelControl,
-  context: ApplicationContext,
-  agentId = "main",
-  agent: GatewayAgentRow | null = {
-    id: "main",
-    model: { primary: "openai/gpt-5.6-luna" },
-    thinkingDefault: "medium",
-  },
-) {
-  const container = document.createElement("div");
-  render(
-    control.render({
-      ...(agent ? { agent } : {}),
-      agentId,
-      context,
-      sending: false,
-    }),
-    container,
-  );
-  return container;
-}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -163,10 +93,19 @@ describe("new-session model runtime", () => {
     ]);
     const control = new NewSessionModelControl(() => undefined);
 
+    control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", true);
-    await Promise.resolve();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
-    expect(request).not.toHaveBeenCalled();
+    const container = renderControl(control, context);
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    picker!.open = true;
+    picker!.dispatchEvent(new Event("toggle"));
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    expect(request.mock.calls.some(([method]) => method === "sessions.catalog.list")).toBe(false);
+    expect(container.querySelector("[data-chat-model-target-group]")).toBeNull();
   });
 
   it("preserves a browser preference when an older server omits thinking profiles", async () => {

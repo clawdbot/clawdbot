@@ -8,6 +8,7 @@ import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SessionMenuData = {
   label: string;
+  sessionId: string | null;
   isChild: boolean;
   pinned: boolean;
   unread: boolean;
@@ -59,6 +60,7 @@ async function mountMenu(
   document.body.append(container);
   const session: SessionMenuData = {
     label: "Test session",
+    sessionId: "session-123",
     isChild: false,
     pinned: false,
     unread: false,
@@ -131,7 +133,7 @@ function iconChoices(menu: ParentNode): HTMLButtonElement[] {
 }
 
 describe("session menu", () => {
-  it("renders owner radio state and closes before dispatching assignment", async () => {
+  it("dispatches the same canonical owner from the self shortcut and submenu", async () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
     const onClose = vi.fn();
     const selfOwner = { type: "human", id: "profile-ada", label: "Ada" } as const;
@@ -148,15 +150,21 @@ describe("session menu", () => {
     expect(selected.disabled).toBe(true);
     expect(selected.querySelector("[slot='details']")).not.toBeNull();
 
-    menu.querySelector("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        composed: true,
-        detail: { item: { value: "assign-owner:self" } },
-      }),
-    );
-    expect(onAction).toHaveBeenCalledWith({ kind: "assign-owner", owner: selfOwner });
-    expect(onClose).toHaveBeenCalledOnce();
+    for (const label of ["Assign to me", "Ada"]) {
+      const value = menuItem(menu, label).getAttribute("value");
+      menu.querySelector("wa-dropdown")?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          composed: true,
+          detail: { item: { value } },
+        }),
+      );
+    }
+    expect(onAction.mock.calls).toEqual([
+      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
+      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
+    ]);
+    expect(onClose).toHaveBeenCalledTimes(2);
     const closeOrder = onClose.mock.invocationCallOrder[0];
     const actionOrder = onAction.mock.invocationCallOrder[0];
     if (closeOrder === undefined || actionOrder === undefined) {
@@ -212,6 +220,7 @@ describe("session menu", () => {
       "Rename…",
       "Set icon",
       "Fork",
+      "Copy session ID",
       "Add to Workboard",
       "Move to group",
       "Archive session",
@@ -230,6 +239,7 @@ describe("session menu", () => {
       "Rename…",
       "Set icon",
       "Fork",
+      "Copy session ID",
       "Archive session",
       "Delete…",
     ]);
@@ -328,6 +338,29 @@ describe("session menu", () => {
     menuItem(menu, "Pin session").click();
 
     expect(calls).toEqual(["close", "toggle-pin"]);
+  });
+
+  it("dispatches Copy session ID and exposes a keyboard shortcut", async () => {
+    const calls: string[] = [];
+    const menu = await mountMenu({
+      onClose: () => calls.push("close"),
+      onAction: (action) => calls.push(action.kind),
+    });
+    const copy = menuItem(menu, "Copy session ID");
+
+    expect(copy.disabled).toBe(false);
+    expect(copy.querySelector(".session-menu__shortcut")?.textContent).toBe("C");
+    expect(copy.getAttribute("aria-keyshortcuts")).toBe("C");
+
+    copy.click();
+
+    expect(calls).toEqual(["close", "copy-session-id"]);
+  });
+
+  it("disables Copy session ID when the gateway row has no session ID", async () => {
+    const menu = await mountMenu({ session: { sessionId: null } });
+
+    expect(menuItem(menu, "Copy session ID").disabled).toBe(true);
   });
 
   it("opens group actions and dispatches group, removal, and creation choices", async () => {

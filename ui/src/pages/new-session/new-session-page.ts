@@ -379,7 +379,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const whereState = resolveWhereChip({
       execNodes: this.place.isAdmin() ? executionNodes : [],
       environments: this.place.isAdmin() ? this.gateway.environments : [],
-      cloudProfiles: this.place.isAdmin() ? cloudProfiles : [],
+      cloudProfiles: this.place.canWrite() ? cloudProfiles : [],
       cloudProfileId: this.place.cloudProfileId,
       machineClass: this.place.machineClass,
       execNode: this.place.execNode,

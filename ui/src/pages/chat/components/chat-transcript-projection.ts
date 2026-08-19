@@ -355,6 +355,7 @@ export function projectChatTranscript(
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+    fetchLinkFavicon: props.fetchLinkFavicon,
     showAssistantAvatar: false,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
@@ -654,6 +655,7 @@ export function projectChatTranscript(
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
+    Boolean(props.fetchLinkFavicon),
     threadContextWindow,
     Boolean(props.onSetReply),
     props.replyMessageAccess?.revision ?? 0,

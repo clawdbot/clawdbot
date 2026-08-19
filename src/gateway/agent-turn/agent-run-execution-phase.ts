@@ -23,11 +23,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
@@ -104,12 +106,16 @@ export function startAgentRunExecution(params: {
   ) => Promise<boolean>;
 }): void {
   const { prepared } = params;
+  let unpersistedOffloadedRefs = prepared.unpersistedOffloadedRefs;
   let releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = (options) => {
+    const refsToDiscard = unpersistedOffloadedRefs;
+    unpersistedOffloadedRefs = [];
     prepared.activeRunAbort.cleanup(options);
     prepared.activeGatewayWorkAdmission.release();
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
+    void discardPreparedInboundMedia(refsToDiscard, params.context.logGateway);
   };
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
@@ -348,6 +354,10 @@ export function startAgentRunExecution(params: {
               ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
               operationalRunInstance: prepared.operationalRunInstance,
               onAdmittedRunContext: (admittedRunContext) => {
+                bindGatewayContextResolver(
+                  admittedRunContext,
+                  params.context.resolveGatewayContext,
+                );
                 const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
                 if (!authority) {
                   throw new Error("agent run delegated authority was not admitted");

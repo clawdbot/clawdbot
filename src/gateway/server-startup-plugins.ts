@@ -16,7 +16,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
-import type { GatewayContextResolver } from "./server-plugin-in-process-dispatch.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
