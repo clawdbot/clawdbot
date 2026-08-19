@@ -372,6 +372,37 @@ describeControlUiE2e("session pull request chips", () => {
         path: path.join(publicationProofDir, "02-publication-published.png"),
       });
     }
+
+    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [watchedKey]: {
+          pullRequests: [
+            {
+              number: 125200,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "openclaw/reconciled-publication",
+              title: "Publish reconciled work",
+              url: "https://github.com/openclaw/openclaw/pull/125200",
+              state: "merged",
+            },
+          ],
+          branch: {
+            owner: "openclaw",
+            repo: "openclaw",
+            branch: "openclaw/reconciled-publication",
+            additions: 3,
+            deletions: 0,
+            createUrl:
+              "https://github.com/openclaw/openclaw/pull/new/openclaw/reconciled-publication",
+          },
+          rateLimited: false,
+          status: "ok",
+        },
+      },
+    });
+    await expect.poll(() => page.getByRole("button", { name: "Publish PR" }).count()).toBe(1);
+    await expect.poll(() => page.getByRole("link", { name: "Open PR" }).count()).toBe(0);
   });
 
   it("drops a deferred publication result after switching to another publishing session", async () => {
