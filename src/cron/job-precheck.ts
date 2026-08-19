@@ -11,8 +11,8 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
-import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import type { SafeBinProfileFixtures } from "../infra/exec-safe-bin-policy.js";
+import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { evaluateSystemRunPolicy } from "../node-host/exec-policy.js";
 import { killProcessTree } from "../process/kill-tree.js";
