@@ -1,7 +1,12 @@
 // Mantis Telegram Desktop Proof Workflow tests cover mantis telegram desktop proof workflow script behavior.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const PROOF_SCRIPT = "scripts/e2e/telegram-user-crabbox-proof.ts";
 const MANTIS_SUT_SCRIPT = "scripts/e2e/telegram-mantis-sut.ts";
@@ -179,6 +184,119 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(sutWrapper).toContain("__stop)");
     expect(sutWrapper).toContain("__destroy)");
   });
+
+  it.each([
+    { name: "allows a lane with no evidence manifest", expectedStatus: 0 },
+    { name: "allows a manifest whose comparison failed", comparisonPass: false, expectedStatus: 0 },
+    {
+      name: "allows a passing comparison when capture infrastructure did not change",
+      comparisonPass: true,
+      changedFile: "docs/readme.md",
+      expectedStatus: 0,
+    },
+    {
+      name: "rejects a capture change with no listed artifact or self-check PNG",
+      comparisonPass: true,
+      expectedStatus: 1,
+    },
+    {
+      name: "accepts a capture change with a valid recorder self-check PNG",
+      comparisonPass: true,
+      expectedStatus: 0,
+      selfCheckBytes: 10_001,
+    },
+    {
+      name: "rejects a capture change whose listed artifact is missing",
+      artifactPath: "candidate/listed-capture.png",
+      comparisonPass: true,
+      expectedStatus: 1,
+    },
+    {
+      name: "accepts a capture change whose listed artifact exists with real bytes",
+      artifactBytes: 10_001,
+      artifactPath: "candidate/listed-capture.png",
+      comparisonPass: true,
+      expectedStatus: 0,
+    },
+    {
+      name: "rejects a capture change with an undersized recorder self-check PNG",
+      comparisonPass: true,
+      expectedStatus: 1,
+      selfCheckBytes: 900,
+    },
+  ])(
+    "$name",
+    ({
+      artifactBytes,
+      artifactPath,
+      changedFile,
+      comparisonPass,
+      expectedStatus,
+      selfCheckBytes,
+    }) => {
+      const root = tempDirs.make("openclaw-mantis-capture-gate-");
+      const outputDir = join(root, "output");
+      const binDir = join(root, "bin");
+      const changedFilesFixture = join(root, "changed-files.txt");
+      const gateScript = join(root, "capture-gate.sh");
+      mkdirSync(outputDir);
+      mkdirSync(binDir);
+      writeFileSync(
+        changedFilesFixture,
+        `${changedFile ?? "scripts/e2e/telegram-desktop-recorder.ts"}\n`,
+      );
+      const gh = join(binDir, "gh");
+      writeFileSync(
+        gh,
+        '#!/usr/bin/env bash\nset -euo pipefail\ncat "$MANTIS_CHANGED_FILES_FIXTURE"\n',
+        { mode: 0o755 },
+      );
+      const run = workflowStep("Enforce capture evidence for capture-infrastructure changes").run;
+      if (!run) {
+        throw new Error("Capture evidence enforcement step has no run script");
+      }
+      writeFileSync(gateScript, run);
+      if (comparisonPass !== undefined) {
+        writeFileSync(
+          join(outputDir, "mantis-evidence.json"),
+          JSON.stringify({
+            artifacts: artifactPath ? [{ path: artifactPath }] : [],
+            comparison: { pass: comparisonPass },
+          }),
+        );
+      }
+      if (artifactBytes !== undefined && artifactPath) {
+        const artifact = join(outputDir, artifactPath);
+        mkdirSync(join(artifact, ".."), { recursive: true });
+        writeFileSync(artifact, Buffer.alloc(artifactBytes));
+      }
+      if (selfCheckBytes !== undefined) {
+        const selfCheck = join(outputDir, "candidate/recorder-self-check.png");
+        mkdirSync(join(selfCheck, ".."), { recursive: true });
+        const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        writeFileSync(
+          selfCheck,
+          Buffer.concat([pngMagic, Buffer.alloc(selfCheckBytes - pngMagic.length)]),
+        );
+      }
+
+      const result = spawnSync("bash", [gateScript], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BASELINE_SHA: "baseline-sha",
+          CANDIDATE_SHA: "candidate-sha",
+          GH_TOKEN: "test-token",
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          MANTIS_CHANGED_FILES_FIXTURE: changedFilesFixture,
+          MANTIS_OUTPUT_DIR: outputDir,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(expectedStatus);
+    },
+  );
 
   it("cleans partially started proof daemons when local SUT startup fails", () => {
     const proofScript = readFileSync(MANTIS_SUT_SCRIPT, "utf8");

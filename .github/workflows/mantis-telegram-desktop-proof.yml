@@ -554,6 +554,64 @@ jobs:
           comparison_status="$(jq -r 'if .comparison.pass then "pass" else "fail" end' "$manifest")"
           echo "comparison_status=${comparison_status}" >> "$GITHUB_OUTPUT"
 
+      - name: Enforce capture evidence for capture-infrastructure changes
+        if: ${{ always() }}
+        env:
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$MANTIS_OUTPUT_DIR/mantis-evidence.json"
+          if [[ ! -f "$manifest" ]] || ! jq -e '.comparison.pass == true' "$manifest" >/dev/null; then
+            exit 0
+          fi
+
+          changed_files="$(
+            gh api --paginate \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/compare/${BASELINE_SHA}...${CANDIDATE_SHA}?per_page=100" \
+              --jq '.files[]?.filename'
+          )"
+          capture_path_changed=false
+          while IFS= read -r changed_file; do
+            case "$changed_file" in
+              scripts/e2e/telegram-desktop-recorder.ts | \
+                scripts/e2e/telegram-mantis-sut.ts | \
+                scripts/mantis/* | \
+                .github/workflows/mantis-telegram-desktop-proof.yml | \
+                .github/codex/prompts/mantis-telegram-desktop-proof.md)
+                capture_path_changed=true
+                break
+                ;;
+            esac
+          done <<<"$changed_files"
+          if [[ "$capture_path_changed" != "true" ]]; then
+            exit 0
+          fi
+
+          # A listed artifact is the agent's claim, not evidence, and some lane entries are
+          # optional by design - so the bar is one entry that resolves to real bytes on disk.
+          min_capture_bytes=10000
+          while IFS= read -r artifact_path; do
+            [[ -n "$artifact_path" ]] || continue
+            resolved="$MANTIS_OUTPUT_DIR/$artifact_path"
+            if [[ -f "$resolved" ]] && [[ "$(stat -c %s "$resolved")" -gt "$min_capture_bytes" ]]; then
+              exit 0
+            fi
+          done < <(jq -r '.artifacts[]?.path // empty' "$manifest")
+
+          self_check="$MANTIS_OUTPUT_DIR/candidate/recorder-self-check.png"
+          if [[ -f "$self_check" ]] \
+            && [[ "$(stat -c %s "$self_check")" -gt "$min_capture_bytes" ]] \
+            && [[ "$(od -An -tx1 -N8 "$self_check" | tr -d ' \n')" == "89504e470d0a1a0a" ]]; then
+            exit 0
+          fi
+
+          echo "Mantis lane changed the capture path but produced no capture; expected a manifest artifact present on disk, or ${self_check} (PNG, >${min_capture_bytes} bytes)." >&2
+          exit 1
+
       - name: Upload Mantis Telegram desktop artifacts
         id: upload_artifact
         if: ${{ always() && steps.inspect.outputs.output_dir != '' }}
