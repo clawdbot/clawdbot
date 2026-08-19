@@ -390,6 +390,57 @@ describe("Telegram Desktop recorder remote contract", () => {
     ).rejects.toThrow("permission denied reading the remote Docker socket");
   });
 
+  it("fetches the undecodable login screen when login attempts run out", async () => {
+    const root = makeTempDir();
+    // Without the screenshot, "Telegram never drew the QR" and "zbarimg could not read it"
+    // produce the same log line, and run 32256904298 could not be told apart from either.
+    const scpFromRemote = vi.fn(async () => undefined);
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn<RunCommand>(async () => ({ stderr: "", stdout: "" })),
+      scpFromRemote,
+      sshRun: vi.fn(async ({ command }: { command: string }) => {
+        if (command.includes("telegram-login-qr.png")) {
+          throw new Error("zbarimg: no barcode detected");
+        }
+        return { stderr: "", stdout: "" };
+      }),
+    } satisfies RecorderOperations;
+
+    const options = {
+      command: "start" as const,
+      chat: "-1001234567890",
+      crabboxClass: "standard",
+      idleTimeout: "1h",
+      json: false,
+      leaseId: "cbx_borrowed",
+      outputDir: "out",
+      provider: "docker" as const,
+      recordFps: 24,
+      ttl: "2h",
+      userDriver: ["python3", "driver.py"],
+    };
+
+    await expect(startRecorder(root, options, operations)).rejects.toThrow(
+      "telegram-login-screen.png",
+    );
+    expect(scpFromRemote).toHaveBeenCalledWith(
+      expect.objectContaining({ remote: expect.stringContaining("telegram-login-qr.png") }),
+    );
+
+    scpFromRemote.mockRejectedValueOnce(new Error("scp: connection closed"));
+    await expect(startRecorder(root, options, operations)).rejects.toThrow(
+      "Login screen could not be fetched: scp: connection closed",
+    );
+  });
+
   it("renders only golden-image desktop operations", () => {
     const scripts = [
       renderGoldenImagePreflight(),

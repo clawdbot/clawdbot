@@ -156,7 +156,7 @@ export DISPLAY=:99
 # -o is required: scrot exits 0 but silently keeps the existing file otherwise,
 # so every later capture would re-read the first screenshot.
 scrot -o ${shellQuote(`${REMOTE_ROOT}/telegram-login-qr.png`)}
-zbarimg --raw ${shellQuote(`${REMOTE_ROOT}/telegram-login-qr.png`)} 2>/dev/null | awk 'index($0, "tg://login?token=") == 1 {print; found=1; exit} END {exit !found}'`;
+zbarimg --raw ${shellQuote(`${REMOTE_ROOT}/telegram-login-qr.png`)} | awk 'index($0, "tg://login?token=") == 1 {print; found=1; exit} END {exit !found}'`;
 }
 
 export function renderWaitForMainWindow(seconds = 30): string {
@@ -166,7 +166,7 @@ for _ in $(seq 1 ${seconds}); do
   win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
   if [ -n "$win" ]; then
     scrot -o ${shellQuote(`${REMOTE_ROOT}/telegram-main-window.png`)}
-    if ! zbarimg --raw ${shellQuote(`${REMOTE_ROOT}/telegram-main-window.png`)} 2>/dev/null | grep -q '^tg://login?token='; then
+    if ! zbarimg --raw ${shellQuote(`${REMOTE_ROOT}/telegram-main-window.png`)} | grep -q '^tg://login?token='; then
       exit 0
     fi
   fi
@@ -243,6 +243,7 @@ async function authorizeDesktop(params: {
   cwd: string;
   inspect: CrabboxInspect;
   operations: RecorderOperations;
+  outputDir: string;
   userDriver: string[];
 }): Promise<string> {
   await params.operations.sshRun({
@@ -298,9 +299,28 @@ async function authorizeDesktop(params: {
     lastFailure = mainWindow.error;
   }
   const detail = lastFailure === undefined ? "" : `: ${coerceErrorMessage(lastFailure)}`;
-  throw new Error(`Telegram Desktop did not leave the login screen after 6 attempts${detail}`, {
-    cause: lastFailure,
-  });
+  // The screen the QR read could not decode is the only thing that separates "Telegram
+  // never rendered the code" from "the code was there and zbarimg missed it", so it has to
+  // leave the container. Reporting the fetch outcome keeps a failed fetch from reading as
+  // an absent screenshot.
+  const evidencePath = path.join(params.outputDir, "telegram-login-screen.png");
+  let evidence: string;
+  try {
+    await params.operations.scpFromRemote({
+      cwd: params.cwd,
+      inspect: params.inspect,
+      local: evidencePath,
+      remote: `${REMOTE_ROOT}/telegram-login-qr.png`,
+      run: params.operations.runCommand,
+    });
+    evidence = ` Login screen: ${evidencePath}`;
+  } catch (error) {
+    evidence = ` Login screen could not be fetched: ${coerceErrorMessage(error)}`;
+  }
+  throw new Error(
+    `Telegram Desktop did not leave the login screen after 6 attempts${detail}.${evidence}`,
+    { cause: lastFailure },
+  );
 }
 
 function resolveOutputDir(cwd: string, outputDir: string): string {
@@ -424,6 +444,7 @@ export async function startRecorder(
       cwd,
       inspect,
       operations,
+      outputDir,
       userDriver: opts.userDriver,
     });
     const link = opts.messageId ? telegramPrivatePostLink(opts.chat, opts.messageId) : undefined;
