@@ -110,34 +110,25 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     }
   });
 
-  it("serializes all Mantis Telegram account runs without workflow concurrency cancellation", () => {
+  it("serializes on the shared credential rather than on other runs", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
+    const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
+    const lease = workflowStep("Install TDLib and restore Telegram QA user");
 
     expect(workflow.concurrency).toBeUndefined();
     expect(liveWorkflow.concurrency).toBeUndefined();
-    expect(workflow.permissions?.actions).toBe("read");
-    expect(liveWorkflow.permissions?.actions).toBe("read");
 
-    for (const step of [
-      jobStep(WORKFLOW, "run_telegram_desktop_proof", "Wait for older Mantis Telegram account run"),
-      jobStep(LIVE_WORKFLOW, "run_telegram_live", "Wait for older Mantis Telegram account run"),
-    ]) {
-      expect(step.run).toContain("mantis-telegram-desktop-proof.yml");
-      expect(step.run).toContain("mantis-telegram-live.yml");
-      expect(step.run).toContain('gh run list --repo "$GITHUB_REPOSITORY"');
-      expect(step.run).toContain('--status "$status"');
-      expect(step.run).toContain("GITHUB_RUN_ID");
-      expect(step.run).toContain(".createdAt < $current_created");
-      expect(step.run).toContain("for status in queued in_progress waiting pending requested");
-      expect(step.run).toContain("stale_before=");
-      expect(step.run).toContain(".createdAt >= $stale_before");
-      expect(step.run).toContain("run_has_active_jobs()");
-      expect(step.run).toContain('gh run view "$run_id"');
-      expect(step.run).toContain("${run_id#\\#}");
-      expect(step.run).not.toContain('.[] | select(.status == "queued"');
-      expect(step.run).toContain("sleep 60");
-    }
+    // A run-liveness lock cannot see reality: GitHub leaves runs queued with no
+    // jobs, they cannot be cancelled, and every later run then waits on a ghost.
+    // The Convex credential is the authoritative mutex, so acquiring it is the lock.
+    expect(steps.some((step) => /Wait for older/u.test(step.name ?? ""))).toBe(false);
+    expect(workflow.permissions?.actions).toBe("read");
+    expect(lease.run).toContain("lease-restore");
+    expect(lease.run).toContain("until node --import tsx");
+    expect(lease.run).toContain("deadline=$(( SECONDS + 15 * 60 ))");
+    expect(lease.run).toContain("still leased by another run after 15 minutes");
+    expect(lease.run).toContain("sleep 60");
   });
 
   it("releases the runner Telegram QA lease after the agent", () => {

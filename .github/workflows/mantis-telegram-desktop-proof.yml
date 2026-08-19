@@ -175,51 +175,6 @@ jobs:
       comparison_status: ${{ steps.inspect.outputs.comparison_status }}
       output_dir: ${{ steps.inspect.outputs.output_dir }}
     steps:
-      - name: Wait for older Mantis Telegram account run
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          current_created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
-          stale_before="$(date -u -d '8 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
-          run_has_active_jobs() {
-            local run_id="$1"
-            local run_state="$2"
-            if [[ "$run_state" != "in_progress" ]]; then
-              return 0
-            fi
-            local active_jobs
-            active_jobs="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json jobs --jq '[.jobs[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")] | length')"
-            [[ "$active_jobs" != "0" ]]
-          }
-          while true; do
-            candidates="$(
-              for workflow in mantis-telegram-desktop-proof.yml mantis-telegram-live.yml; do
-                for status in queued in_progress waiting pending requested; do
-                  gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --status "$status" --limit 100 --json databaseId,status,createdAt,url \
-                    | jq -r \
-                      --argjson current_id "$GITHUB_RUN_ID" \
-                      --arg current_created "$current_created" \
-                      --arg stale_before "$stale_before" \
-                      '.[] | select(.databaseId != $current_id) | select(.createdAt >= $stale_before) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
-                done
-              done | sort -u
-            )"
-            blockers=""
-            while IFS=$'\t' read -r created run_id run_state url; do
-              if [[ -n "$run_id" ]] && run_has_active_jobs "${run_id#\#}" "$run_state"; then
-                blockers+="${created}"$'\t'"${run_id}"$'\t'"${run_state}"$'\t'"${url}"$'\n'
-              fi
-            done <<<"$candidates"
-            if [[ -z "$blockers" ]]; then
-              break
-            fi
-            echo "Waiting for older Mantis Telegram account run:"
-            printf '%s\n' "$blockers" | head -n 10
-            sleep 60
-          done
-
       - name: Checkout harness ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -395,12 +350,23 @@ jobs:
           (cd "$tdlib_dir" && sha256sum --strict --check tdlib-v1.8.0-linux-x64.tgz.sha256)
           tar -xzf "$tdlib_dir/tdlib-v1.8.0-linux-x64.tgz" -C "$tdlib_dir"
           sudo install -m 0755 "$tdlib_dir/tdlib-v1.8.0-linux-x64/lib/libtdjson.so" /usr/local/lib/libtdjson.so
-          node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
+          # The Convex credential is the real mutex for the shared Telegram account:
+          # a concurrent holder fails this acquire, so no separate run-level lock is
+          # needed. Retry while another run finishes, then fail with a clear reason.
+          deadline=$(( SECONDS + 15 * 60 ))
+          until node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
             --user-driver-dir "$credential_dir/user-driver" \
             --desktop-workdir "$credential_dir/desktop" \
             --lease-file "$credential_dir/lease.json" \
             --payload-output "$credential_dir/payload.json" \
-            --credential-role ci
+            --credential-role ci; do
+            if (( SECONDS >= deadline )); then
+              echo "::error::The shared QA Telegram account is still leased by another run after 15 minutes." >&2
+              exit 1
+            fi
+            echo "Shared QA Telegram account is busy; retrying in 60s." >&2
+            sleep 60
+          done
           chmod 0700 "$credential_dir" "$credential_dir/user-driver"
           {
             echo "OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE=$credential_dir/lease.json"
