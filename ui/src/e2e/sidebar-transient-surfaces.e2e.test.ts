@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiSettingsTakeover } from "../test-helpers/control-ui-e2e.ts";
@@ -12,6 +14,8 @@ import { createSidebarCustomizationSuite } from "./sidebar-customization.test-su
 const suite = createSidebarCustomizationSuite(
   "Control UI transient surface tokens mocked Gateway E2E",
 );
+const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const proofDir = path.resolve(".artifacts/control-ui-e2e/transient-surfaces");
 
 const themes = [
   { colorScheme: "light", resolvedTheme: "light", theme: "claw" },
@@ -81,6 +85,14 @@ suite.define(() => {
         });
         await menuSurface.waitFor({ state: "visible" });
         const menuTokens = await surfaceTokens(menuSurface);
+        if (captureProof && theme === "claw") {
+          await mkdir(proofDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(proofDir, `session-menu-${colorScheme}.png`),
+          });
+        }
 
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
         await waitForControlUiSettingsTakeover(page);
@@ -88,6 +100,13 @@ suite.define(() => {
         await languageSelect.click();
         const listbox = languageSelect.locator('[part="listbox"]');
         await listbox.waitFor({ state: "visible" });
+        if (captureProof && theme === "claw") {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(proofDir, `settings-listbox-${colorScheme}.png`),
+          });
+        }
 
         expect(await surfaceTokens(listbox)).toEqual(menuTokens);
       } finally {
