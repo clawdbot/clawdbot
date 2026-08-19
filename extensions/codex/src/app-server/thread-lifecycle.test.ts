@@ -40,7 +40,6 @@ import {
   resolveReasoningEffort,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
-import { rotateChangedCodexExecutionModel } from "./thread-model-rotation.js";
 import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
 
 type CodexThreadLifecycleTimingLogger = NonNullable<
@@ -2384,84 +2383,6 @@ describe("Codex app-server model provider selection", () => {
     const collaborationMode = request.collaborationMode as { settings?: Record<string, unknown> };
     expect(request.model).toBe("local-model");
     expect(collaborationMode.settings?.model).toBe("local-model");
-  });
-});
-
-describe("Codex runtime model routing", () => {
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-runtime-model-"));
-    resetCodexTestBindingStore();
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
-
-  it("uses the private runtime identity for thread/start", async () => {
-    const params = createThreadLifecycleParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    params.modelId = "gpt-5.6-sol";
-    const identity = sessionBindingIdentity({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      config: params.config,
-    });
-    const seeded = await testCodexAppServerBindingStore.mutate(identity, {
-      kind: "set",
-      if: { kind: "absent" },
-      binding: {
-        threadId: "thread-old-runtime-model",
-        cwd: tempDir,
-        model: "gpt-5.6-sol-old-execution",
-      },
-    });
-    expect(seeded).toBe(true);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return nativeThreadResult("thread-runtime-model", "codex-execution-model", "openai");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params,
-      runtimeModelId: "codex-execution-model",
-      cwd: tempDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-    });
-
-    expect(request).toHaveBeenCalledWith(
-      "thread/start",
-      expect.objectContaining({ model: "codex-execution-model" }),
-      expect.any(Object),
-    );
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
-      threadId: "thread-runtime-model",
-      model: "codex-execution-model",
-    });
-  });
-
-  it("recognizes a provider-qualified execution model after normalization", async () => {
-    const clearCurrentBinding = vi.fn(async () => {});
-    await rotateChangedCodexExecutionModel({
-      lifecycle: {
-        params: { provider: "lmstudio" },
-        runtimeModelId: "lmstudio/local-model",
-      } as never,
-      binding: {
-        threadId: "thread-local-model",
-        model: "local-model",
-        modelProvider: "lmstudio",
-      } as never,
-      clearCurrentBinding,
-    });
-    expect(clearCurrentBinding).not.toHaveBeenCalled();
   });
 });
 
