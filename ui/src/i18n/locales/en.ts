@@ -1151,6 +1151,7 @@ export const en: TranslationMap = {
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
+    showSessionPreview: "Show message preview",
     showCronSessions: "Show automation sessions",
     showSystemSessions: "Show system sessions",
     groupByChannel: "Channel",
