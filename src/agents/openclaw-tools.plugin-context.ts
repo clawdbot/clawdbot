@@ -38,6 +38,8 @@ export type OpenClawPluginToolOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
   sessionId?: string;
+  /** Host-owned run identity for the active agent run. */
+  runId?: string;
   conversationRecall?: ConversationRecallContext;
   /**
    * Explicit one-shot local CLI runs should not keep plugin-owned process
@@ -100,6 +102,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentId: sessionAgentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
+      runId: options?.runId,
       toolBindings: options?.toolBindings,
       activeProjectKeys: options?.activeProjectKeys,
       conversationRecall: options?.conversationRecall,

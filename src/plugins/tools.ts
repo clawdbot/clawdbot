@@ -33,6 +33,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
+import { createPluginRunContextInvocation } from "./run-context-invocation.js";
 import {
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
@@ -843,6 +844,12 @@ function createCachedDescriptorPluginTool(params: {
       ? { resultContentSource: params.descriptor.resultContentSource }
       : {}),
     async execute(toolCallId, executeParams, signal, onUpdate) {
+      const runId = params.ctx.runId;
+      const runContext =
+        runId && pluginId ? createPluginRunContextInvocation({ runId, pluginId }) : undefined;
+      const toolContext: OpenClawPluginToolContext = runContext
+        ? { ...params.ctx, runContext }
+        : params.ctx;
       const loadOptions = buildPluginRuntimeLoadOptions(params.loadContext, {
         activate: false,
         toolDiscovery: true,
@@ -890,7 +897,7 @@ function createCachedDescriptorPluginTool(params: {
         ) {
           return undefined;
         }
-        const resolved = resolvePluginToolFactory(candidate, registry, params.ctx);
+        const resolved = resolvePluginToolFactory(candidate, registry, toolContext);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
           const malformedReason = describeMalformedPluginTool(toolRaw);
@@ -912,7 +919,8 @@ function createCachedDescriptorPluginTool(params: {
           continue;
         }
         if (matchedTool) {
-          return matchedTool.execute(toolCallId, executeParams, signal, onUpdate);
+          const invoke = () => matchedTool.execute(toolCallId, executeParams, signal, onUpdate);
+          return runContext ? runContext.withActive(invoke) : invoke();
         }
       }
       throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);

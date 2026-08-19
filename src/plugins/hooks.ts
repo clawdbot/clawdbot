@@ -108,6 +108,7 @@ import type {
   PluginHookSkillProposalEvaluateResult,
   PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
+import { createPluginRunContextInvocation } from "./run-context-invocation.js";
 import {
   type PluginSubagentRequesterContext,
   withPluginSubagentRequesterContext,
@@ -223,6 +224,20 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
+  /**
+   * Optional per-handler invocation seam. When provided, the hook runner calls
+   * `invokeHandler` with the handler registration and base context, and expects
+   * it to build a per-handler context and invoke `invoke` within it. This is
+   * how `before_tool_call` injects an invocation-bound run-context capability
+   * scoped to each owning plugin.
+   */
+  invokeHandler?: (
+    registration: PluginHookRegistration<K>,
+    baseContext: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    invoke: (
+      handlerContext: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    ) => Promise<TResult>,
+  ) => Promise<TResult>;
 };
 
 type PluginTargetedInboundClaimOutcome =
@@ -727,7 +742,12 @@ export function createHookRunner(
         const handlerEvent = policy.isolateEventPerHandler
           ? cloneHookIsolationValue(hookName, event)
           : event;
-        const promise = Promise.resolve(handler(handlerEvent, ctx));
+        const invokeHandler = (
+          handlerContext: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+        ): Promise<TResult> => Promise.resolve(handler(handlerEvent, handlerContext));
+        const promise = policy.invokeHandler
+          ? policy.invokeHandler(hook, ctx, invokeHandler)
+          : invokeHandler(ctx);
         const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
 
@@ -1291,6 +1311,18 @@ export function createHookRunner(
         },
         shouldStop: (result) => result.block === true,
         terminalLabel: "block=true",
+        invokeHandler: (registration, baseContext, invoke) => {
+          const runId = event.runId ?? ctx.runId;
+          if (!runId) {
+            return invoke(baseContext);
+          }
+          const controller = createPluginRunContextInvocation({
+            runId,
+            pluginId: registration.pluginId,
+          });
+          const handlerContext = { ...baseContext, runContext: controller };
+          return controller.withActive(() => invoke(handlerContext));
+        },
       },
       event.toolName,
     );

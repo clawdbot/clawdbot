@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks } from "./hooks.test-fixtures.js";
 import { addTestHook } from "./hooks.test-helpers.js";
+import { clearPluginHostRuntimeState, setPluginRunContext } from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeToolCallEvent,
@@ -502,6 +503,38 @@ describe("before_tool_call hook merger — requireApproval", () => {
 
     await expect(run).rejects.toThrow("before_tool_call mutable input isolation failed");
     expect(lowerPriorityHook).not.toHaveBeenCalled();
+  });
+});
+
+describe("before_tool_call hook run-context capability", () => {
+  it("injects an invocation-bound run-context capability scoped to the owning plugin", async () => {
+    const registry = createEmptyPluginRegistry();
+    const observed: { runId?: string; consumed?: unknown } = {};
+    addTestHook({
+      registry,
+      pluginId: "hook-owner",
+      hookName: "before_tool_call",
+      handler: (_event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext) => {
+        observed.runId = ctx.runId;
+        if (ctx.runContext) {
+          observed.consumed = ctx.runContext.compareAndConsume("lease", { token: "t1" });
+        }
+        return undefined;
+      },
+    });
+    setPluginRunContext({
+      pluginId: "hook-owner",
+      patch: { runId: "run-hook", namespace: "lease", value: { token: "t1" } },
+    });
+
+    await createHookRunner(registry).runBeforeToolCall(
+      { toolName: "bash", params: {}, runId: "run-hook" },
+      { ...stubCtx, runId: "run-hook" },
+    );
+
+    expect(observed.runId).toBe("run-hook");
+    expect(observed.consumed).toEqual({ status: "OK", value: { token: "t1" } });
+    clearPluginHostRuntimeState();
   });
 });
 

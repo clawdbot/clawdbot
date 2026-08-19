@@ -42,6 +42,17 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.nativeChannelId).toBe("oc_native_chat");
   });
 
+  it("forwards the host-owned run id into the plugin tool context", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        runId: "run-1",
+      },
+    });
+
+    expect(result.context.runId).toBe("run-1");
+  });
+
   it("defaults missing and unknown conversation-read origins to delegated", () => {
     const missing = resolveOpenClawPluginToolInputs({
       options: { config: {} as never },

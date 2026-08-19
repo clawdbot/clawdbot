@@ -6,6 +6,7 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { PluginRunContextInvocation } from "./host-hooks.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -28,6 +29,14 @@ export type OpenClawPluginToolContext = {
   sessionKey?: string;
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  /** Host-owned run identity for the active tool run. */
+  runId?: string;
+  /**
+   * Invocation-bound run-context capability valid only for the duration of the
+   * current tool `execute` callback. Identity is host-owned (current run +
+   * owning plugin).
+   */
+  runContext?: PluginRunContextInvocation;
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Host-prepared repository identities for project-aware tool behavior. */
