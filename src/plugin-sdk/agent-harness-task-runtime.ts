@@ -20,7 +20,10 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
-import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewayContextResolver,
+  withPluginRuntimeGatewayContextResolver,
+} from "../plugins/runtime/gateway-request-scope.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
@@ -234,28 +237,32 @@ export async function deliverAgentHarnessTaskCompletion(params: {
     },
   ];
   const prompt = formatAgentInternalEventsForPrompt(internalEvents);
-  return await deliverSubagentAnnouncement({
-    requesterSessionKey,
-    announceId: params.announceId,
-    triggerMessage: prompt,
-    steerMessage: prompt,
-    internalEvents,
-    summaryLine: taskLabel,
-    requesterSessionOrigin: scope.requesterOrigin,
-    requesterOrigin: completionDirectOrigin ?? directOrigin,
-    completionDirectOrigin: completionDirectOrigin ?? directOrigin,
-    directOrigin,
-    sourceSessionKey: childSessionKey,
-    sourceChannel: INTERNAL_MESSAGE_CHANNEL,
-    sourceTool: AGENT_HARNESS_COMPLETION_SOURCE_TOOL,
-    targetRequesterSessionKey: requesterSessionKey,
-    requesterIsSubagent,
-    expectsCompletionMessage: true,
-    bestEffortDeliver: true,
-    directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
-    signal: params.signal,
-    resolveGatewayContext: getGatewayContextResolver(scope),
-  });
+  const deliver = () =>
+    deliverSubagentAnnouncement({
+      requesterSessionKey,
+      announceId: params.announceId,
+      triggerMessage: prompt,
+      steerMessage: prompt,
+      internalEvents,
+      summaryLine: taskLabel,
+      requesterSessionOrigin: scope.requesterOrigin,
+      requesterOrigin: completionDirectOrigin ?? directOrigin,
+      completionDirectOrigin: completionDirectOrigin ?? directOrigin,
+      directOrigin,
+      sourceSessionKey: childSessionKey,
+      sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+      sourceTool: AGENT_HARNESS_COMPLETION_SOURCE_TOOL,
+      targetRequesterSessionKey: requesterSessionKey,
+      requesterIsSubagent,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
+      signal: params.signal,
+    });
+  const resolveGatewayContext = getGatewayContextResolver(scope);
+  return resolveGatewayContext
+    ? await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
+    : await deliver();
 }
 
 function mapHarnessCompletionStatus(
