@@ -49,6 +49,7 @@ export {
   tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSoleAgentId,
+  tryResolveAmbientOwnerAgentId,
   tryResolveLegacyCompatibilityAgentId,
   tryResolveSystemAgentTargetAgentId,
   tryResolveSoleAgentId,

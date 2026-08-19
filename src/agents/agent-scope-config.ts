@@ -250,6 +250,11 @@ export function resolveSystemAgentTargetAgentId(
   );
 }
 
+/** Resolves the ambient system owner: shipped legacy default first, then the system-agent target. */
+export function tryResolveAmbientOwnerAgentId(cfg: OpenClawConfig): string | undefined {
+  return tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveSystemAgentTargetAgentId(cfg);
+}
+
 /** @deprecated Use resolveSoleAgentId; accepts raw shipped markers only for input compatibility. */
 export function resolveDefaultAgentId(
   cfg: OpenClawConfig,

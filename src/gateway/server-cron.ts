@@ -2,7 +2,11 @@
 // plugin hooks, notifications, and cron lifecycle cleanup.
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import { listAgentEntries, listAgentIds } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  tryResolveAmbientOwnerAgentId,
+} from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -24,7 +28,7 @@ import {
 } from "../config/sessions/targets.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobEffectiveAgentId, tryResolveCronDefaultAgentId } from "../cron/agent-id.js";
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import {
   buildCronCommandSummary,
   redactCronCommandSummaryForExternalDelivery,
@@ -383,7 +387,7 @@ export function buildGatewayCronService(params: {
     const runtimeConfig = getRuntimeConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const defaultAgentId = tryResolveCronDefaultAgentId(runtimeConfig);
+    const defaultAgentId = tryResolveAmbientOwnerAgentId(runtimeConfig);
     if (
       normalized !== undefined &&
       normalized !== defaultAgentId &&
@@ -504,7 +508,7 @@ export function buildGatewayCronService(params: {
     return sanitizeCronHeartbeatOverride(heartbeatOverride);
   };
 
-  const defaultAgentId = tryResolveCronDefaultAgentId(params.cfg);
+  const defaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(params.cfg);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveSessionStorePathCore(params.cfg.session?.store, {
@@ -721,7 +725,7 @@ export function buildGatewayCronService(params: {
       : {}),
     ...(defaultAgentId ? { defaultAgentId } : {}),
     ...(legacyDefaultAgentId ? { legacyDefaultAgentId } : {}),
-    resolveDefaultAgentId: () => tryResolveCronDefaultAgentId(getRuntimeConfig()),
+    resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
     resolveSessionStoreAgentIds: () => {
       const cfg = getRuntimeConfig();
       try {
