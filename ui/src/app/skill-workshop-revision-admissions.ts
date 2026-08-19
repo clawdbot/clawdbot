@@ -1,3 +1,4 @@
+import { readSkillProposalRevisionChangedError } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
@@ -27,6 +28,7 @@ export type SkillWorkshopRevisionAdmissionEntry = SkillWorkshopRevisionAdmission
 
 export type SkillWorkshopRevisionAdmissionOutcome =
   | { id: string; sessionKey: string; status: "admitted" }
+  | { id: string; status: "revision-changed" }
   | { error: string; id: string; status: "retryable-failed" };
 
 type AdmissionExecutor = (
@@ -98,6 +100,13 @@ export function createSkillWorkshopRevisionAdmissions(): ApplicationSkillWorksho
         return { id: entry.value.id, sessionKey, status: "admitted" };
       })
       .catch((error: unknown): SkillWorkshopRevisionAdmissionOutcome => {
+        if (readSkillProposalRevisionChangedError(error)) {
+          if (entries.get(entry.value.id) === entry && entry.generation === generation) {
+            entries.delete(entry.value.id);
+            publish();
+          }
+          return { id: entry.value.id, status: "revision-changed" };
+        }
         const message = error instanceof Error ? error.message : String(error);
         if (entries.get(entry.value.id) === entry && entry.generation === generation) {
           entry.value = { ...entry.value, error: message, phase: "retryable-failed" };

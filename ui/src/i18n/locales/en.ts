@@ -3570,6 +3570,7 @@ export const en: TranslationMap = {
     },
     notices: {
       applied: "Applied",
+      proposalChanged: "Proposal changed. Review the updated draft before choosing another action.",
       rejected: "Rejected",
       revisionRequested: "Revision requested",
     },

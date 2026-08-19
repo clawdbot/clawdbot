@@ -83,6 +83,7 @@ export const AgentSkillProtocolSchemas = {
   SkillsProposalReviseParams: agentsModelsSkills.SkillsProposalReviseParamsSchema,
   SkillsProposalRequestRevisionParams: agentsModelsSkills.SkillsProposalRequestRevisionParamsSchema,
   SkillsProposalRequestRevisionResult: agentsModelsSkills.SkillsProposalRequestRevisionResultSchema,
+  SkillsProposalDecisionParams: agentsModelsSkills.SkillsProposalDecisionParamsSchema,
   SkillsProposalActionParams: agentsModelsSkills.SkillsProposalActionParamsSchema,
   SkillsProposalApplyResult: agentsModelsSkills.SkillsProposalApplyResultSchema,
   SkillsProposalRecordResult: agentsModelsSkills.SkillsProposalRecordResultSchema,

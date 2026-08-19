@@ -555,6 +555,7 @@ export {
   SkillsProposalReviseParamsSchema,
   SkillsProposalRequestRevisionParamsSchema,
   SkillsProposalRequestRevisionResultSchema,
+  SkillsProposalDecisionParamsSchema,
   SkillsProposalActionParamsSchema,
   SkillProposalEvaluationSchema,
   SkillsProposalEvaluateParamsSchema,

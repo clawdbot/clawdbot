@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { requestSkillWorkshopRevisionAdmission } from "../pages/skill-workshop/revision-admission.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
@@ -75,6 +75,29 @@ describe("Skill Workshop revision admission owner", () => {
     attempts[1]!.resolve({ sessionKey: "agent:main:retry" });
     await expect(retry?.completion).resolves.toMatchObject({ status: "admitted" });
     expect(owner.get(run.entry.id)).toBeNull();
+  });
+
+  it("retires a changed proposal revision instead of making the stale decision retryable", async () => {
+    const owner = createSkillWorkshopRevisionAdmissions();
+    const run = owner.start(input("retry exactly"), async () => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Skill proposal revision changed",
+        details: {
+          code: "SKILL_PROPOSAL_REVISION_CHANGED",
+          currentRevisionHash: "b".repeat(64),
+          expectedRevisionHash: "a".repeat(64),
+        },
+      });
+    });
+
+    await expect(run.completion).resolves.toEqual({
+      id: run.entry.id,
+      status: "revision-changed",
+    });
+    expect(owner.get(run.entry.id)).toBeNull();
+    expect(owner.retry(run.entry.id)).toBeNull();
+    expect(owner.firstFailed("main")).toBeNull();
   });
 
   it("keeps overlapping failures independent and reveals them in insertion order", async () => {
