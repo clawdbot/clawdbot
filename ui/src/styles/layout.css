@@ -2734,6 +2734,11 @@ wa-dropdown.session-menu::part(menu) {
   display: inline-flex;
 }
 
+wa-dropdown.session-menu--compact::part(menu) {
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}
+
 /* Popover hosts live in the top layer so menus escape in-page stacking
    contexts (e.g. the sidebar resizer above the nav); the host itself must
    stay a zero-size shell around its fixed-position menu. */

@@ -29,7 +29,12 @@ suite.define(() => {
           }),
         ]),
       },
-      sessionGroups: ["Research", "Operations", "Planning"],
+      sessionGroups: [
+        "Research",
+        "Operations",
+        "Planning",
+        ...Array.from({ length: 24 }, (_, index) => `Team ${index + 1}`),
+      ],
       sessionKey,
     });
 
@@ -51,7 +56,8 @@ suite.define(() => {
 
       expect(await page.locator("openclaw-session-menu [slot='submenu']").count()).toBe(0);
       await page.getByRole("menuitem", { name: "Move to group" }).click();
-      await page.getByRole("menuitem", { name: "Back" }).waitFor({ state: "visible" });
+      const back = page.getByRole("menuitem", { name: "Back" });
+      await back.waitFor({ state: "visible" });
       await page.getByRole("menuitemradio", { name: "Operations" }).waitFor({ state: "visible" });
       expect(await page.locator("openclaw-session-menu [slot='submenu']").count()).toBe(0);
       const menuBox = await menu.boundingBox();
@@ -60,6 +66,24 @@ suite.define(() => {
       }
       expect(menuBox.x).toBeGreaterThanOrEqual(8);
       expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(382);
+      expect(menuBox.y).toBeGreaterThanOrEqual(8);
+      expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(642);
+      const scroll = await menu.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        return {
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          scrollTop: element.scrollTop,
+        };
+      });
+      expect(scroll.scrollHeight).toBeGreaterThan(scroll.clientHeight);
+      expect(scroll.scrollTop).toBeGreaterThan(0);
+      const backBox = await back.boundingBox();
+      if (!backBox) {
+        throw new Error("expected sticky Back action bounds");
+      }
+      expect(backBox.y).toBeGreaterThanOrEqual(menuBox.y);
+      expect(backBox.y + backBox.height).toBeLessThanOrEqual(menuBox.y + menuBox.height);
       await captureUiProof(page, "mobile-sidebar-session-menu-after-group-drilldown.png");
     } finally {
       await context.close();
