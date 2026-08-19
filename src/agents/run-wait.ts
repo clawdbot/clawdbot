@@ -428,8 +428,10 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   if (wait.status !== "ok") {
     return wait;
   }
-  if (wait.terminalReply?.disposition === "visible") {
-    return { ...wait, replyText: wait.terminalReply.text };
+  if (wait.terminalReply) {
+    return wait.terminalReply.disposition === "visible"
+      ? { ...wait, replyText: wait.terminalReply.text }
+      : wait;
   }
 
   const latestReply = await readLatestAssistantReplySnapshot({

@@ -17,8 +17,6 @@ import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lif
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
-const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing a final reply";
-
 export function createSubagentRegistryListener(config: {
   runs: Map<string, SubagentRunRecord>;
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
@@ -175,22 +173,6 @@ export function createSubagentRegistryListener(config: {
           return;
         }
         pendingLifecycle.clear(evt.runId);
-        if (entry.expectsCompletionMessage === true && !terminalReply) {
-          await completeSubagentRunWithRecovery(
-            {
-              runId: evt.runId,
-              endedAt,
-              outcome: { status: "error", error: MISSING_REQUIRED_FINAL_REPLY_ERROR },
-              reason: SUBAGENT_ENDED_REASON_ERROR,
-              sendFarewell: true,
-              accountId: entry.requesterOrigin?.accountId,
-              triggerCleanup: true,
-              startedAt,
-            },
-            "lifecycle-missing-final-reply",
-          );
-          return;
-        }
         const completionParams = {
           runId: evt.runId,
           endedAt,

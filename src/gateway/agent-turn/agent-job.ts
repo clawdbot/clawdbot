@@ -32,8 +32,6 @@ import type { DedupeEntry } from "../server-shared.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
-const MISSING_TERMINAL_REPLY_ERROR = "Agent run ended before producing a final reply.";
-const FAILED_TERMINAL_DELIVERY_ERROR = "Agent final reply delivery failed.";
 
 type AgentJobTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
@@ -322,22 +320,14 @@ function createSnapshotFromLifecycleEvent(params: {
   const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(data?.terminalReceipt);
   const terminalReceipt =
     normalizedTerminalReceipt?.runId === runId ? normalizedTerminalReceipt : undefined;
-  const baseStatus = legacyBareAbort ? "timeout" : terminalOutcome.status;
-  const successfulTerminalError =
-    baseStatus === "ok" && !terminalReply
-      ? MISSING_TERMINAL_REPLY_ERROR
-      : baseStatus === "ok" &&
-          (terminalDelivery?.status === "failed" || terminalDelivery?.status === "partial_failed")
-        ? FAILED_TERMINAL_DELIVERY_ERROR
-        : undefined;
   return {
     runId,
     source: "lifecycle",
     recordedAt: Date.now(),
-    status: successfulTerminalError ? "error" : baseStatus,
+    status: legacyBareAbort ? "timeout" : terminalOutcome.status,
     startedAt,
     endedAt,
-    error: successfulTerminalError ?? (legacyBareAbort ? undefined : terminalOutcome.error),
+    error: legacyBareAbort ? undefined : terminalOutcome.error,
     stopReason: legacyBareAbort ? undefined : terminalOutcome.stopReason,
     livenessState: terminalOutcome.livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),

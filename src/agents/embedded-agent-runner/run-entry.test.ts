@@ -775,6 +775,11 @@ describe("runEmbeddedAgentEntry", () => {
       expected: { disposition: "silent" },
     },
     {
+      name: "normalized silence without raw text",
+      meta: { finalAssistantVisibleText: "no_reply" },
+      expected: { disposition: "silent" },
+    },
+    {
       name: "clean empty reply",
       meta: {},
       expected: { disposition: "empty" },

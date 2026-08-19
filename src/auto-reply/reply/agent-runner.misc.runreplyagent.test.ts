@@ -3671,12 +3671,13 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("does not warn or enqueue retry when the message tool delivered this turn", async () => {
-    const { terminalEvent } = await runPrivateFinalCase({
+    const { terminalEvent, finalAssistantText } = await runPrivateFinalCase({
       didDeliverSourceReplyViaMessageTool: true,
     });
-    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
-      "message-tool-not-called",
-    );
+    expect(terminalEvent?.data.terminalReply).toEqual({
+      disposition: "visible",
+      text: finalAssistantText,
+    });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
@@ -3749,9 +3750,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       onDeliberateSilentTerminalReply,
       payloadText: "Auto-compaction complete (count 1).",
     });
-    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
-      "message-tool-not-called",
-    );
+    expect(terminalEvent?.data.terminalReply).toEqual({ disposition: "silent" });
     expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
