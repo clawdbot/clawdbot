@@ -17,6 +17,7 @@ type UnknownSendQueueEntry = {
   enqueuedAt: number;
   retryCount: number;
   platformSendStartedAt?: number;
+  lastError?: string;
   effectiveReplyToId?: string | null;
   renderedBatchPlan?: RenderedMessageBatchPlan;
   replyToId?: string | null;
@@ -43,6 +44,7 @@ export function buildUnknownSendContext(params: {
     ...(entry.platformSendStartedAt !== undefined
       ? { platformSendStartedAt: entry.platformSendStartedAt }
       : {}),
+    ...(entry.lastError !== undefined ? { lastError: entry.lastError } : {}),
     ...(entry.effectiveReplyToId !== undefined
       ? { effectiveReplyToId: entry.effectiveReplyToId }
       : {}),

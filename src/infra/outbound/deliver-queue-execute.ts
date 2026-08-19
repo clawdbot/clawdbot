@@ -3,8 +3,8 @@ import { hasTrustedMessageAuditListeners } from "../../audit/message-audit-event
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
+  classifyOutboundSendFailure,
   findPlatformMessageRejectedError,
-  isProvenDeliveryNotSentError,
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import type { DeliverOutboundPayloadsParams, PlatformSendRoute } from "./deliver-contracts.js";
@@ -28,8 +28,8 @@ import { rejectDurableDelivery, settleDurableDelivery } from "./delivery-complet
 import {
   failDelivery,
   failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
+  resolveNotSentAwareFailureRecorder,
 } from "./delivery-queue-storage.js";
 import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
@@ -63,7 +63,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
   let lastPayloadError: unknown;
-  let partialFailuresAreProvenNotSent = true;
+  const partialFailureErrors: unknown[] = [];
   const ownsAuditTerminal = params.deliveryQueueId === undefined;
   const auditPayloadOutcomes =
     ownsAuditTerminal && hasTrustedMessageAuditListeners()
@@ -274,7 +274,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       throwIfProducerLeaseLost();
       hadPartialFailure = true;
       lastPayloadError = err;
-      partialFailuresAreProvenNotSent &&= isProvenDeliveryNotSentError(err);
+      partialFailureErrors.push(err);
       params.onError?.(err, payload);
     },
     ...(auditPayloadOutcomes || stablePayloadOutcomes
@@ -357,10 +357,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           (partialSendEvidence ? await persistOwnedPostSendState() : undefined);
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
-          const recordFailure =
-            !partialSendEvidence && partialFailuresAreProvenNotSent
-              ? failDeliveryBeforePlatformSend
-              : failDelivery;
+          const recordFailure = partialSendEvidence
+            ? failDelivery
+            : resolveNotSentAwareFailureRecorder(partialFailureErrors);
           await recordOwnedQueueFailure(recordFailure, error).catch((err: unknown) => {
             log.warn(
               `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
@@ -546,8 +545,16 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           }
         } else {
           const permanentRejection = findPlatformMessageRejectedError(err);
+          const classification = classifyOutboundSendFailure(err);
+          // A semantic platform rejection (explicit marker or a classified
+          // non-retryable platform error response) cannot succeed on replay.
+          const terminalRejectionMessage = permanentRejection
+            ? permanentRejection.message
+            : classification.kind === "provably_not_sent" && !classification.retryable
+              ? formatErrorMessage(err)
+              : undefined;
           let terminalRejectionHandled = false;
-          if (permanentRejection) {
+          if (terminalRejectionMessage !== undefined) {
             let ownerRejected = false;
             let queueAcked = false;
             try {
@@ -559,7 +566,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
               if (ambiguousStableRejection) {
                 await recordOwnedQueueFailure(
                   failDeliveryAfterPlatformSend,
-                  `delivery partially sent before permanent rejection: ${permanentRejection.message}`,
+                  `delivery partially sent before permanent rejection: ${terminalRejectionMessage}`,
                 );
                 queuedPostSendState = "failed";
                 terminalRejectionHandled = true;
@@ -567,7 +574,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                 if (params.deliveryCompletion) {
                   await rejectDurableDelivery(
                     params.deliveryCompletion,
-                    permanentRejection.message,
+                    terminalRejectionMessage,
                     platformQueueStateDir,
                   );
                   ownerRejected = true;
@@ -597,16 +604,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             }
           }
           if (!terminalRejectionHandled) {
-            const recordFailure = isProvenDeliveryNotSentError(err)
-              ? failDeliveryBeforePlatformSend
-              : failDelivery;
-            await recordOwnedQueueFailure(recordFailure, formatErrorMessage(err)).catch(
-              (failErr: unknown) => {
-                log.warn(
-                  `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
-                );
-              },
-            );
+            await recordOwnedQueueFailure(
+              resolveNotSentAwareFailureRecorder([err]),
+              formatErrorMessage(err),
+            ).catch((failErr: unknown) => {
+              log.warn(
+                `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+              );
+            });
           }
         }
       }

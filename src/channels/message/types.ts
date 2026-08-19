@@ -292,6 +292,8 @@ export type ChannelMessageUnknownSendContext<TConfig = OpenClawConfig> = {
   enqueuedAt: number;
   retryCount: number;
   platformSendStartedAt?: number;
+  /** Failure evidence recorded at the send boundary for the latest attempt. */
+  lastError?: string;
   /** Canonical reply target persisted after hooks and before platform I/O. */
   effectiveReplyToId?: string | null;
   payloads: readonly ReplyPayload[];

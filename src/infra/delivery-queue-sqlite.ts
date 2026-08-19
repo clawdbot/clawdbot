@@ -6,6 +6,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   bindDeliveryQueueEntry,
+  deliveryQueueMetadata,
   deliveryQueueRowColumns,
   inflateDeliveryQueueRow,
   loadDeliveryQueueEntryInDatabase,
@@ -379,6 +380,7 @@ export function moveDeliveryQueueEntryToFailed(
   queueName: string,
   id: string,
   stateDir?: string,
+  terminalError?: string,
 ): void {
   const current = loadDeliveryQueueEntry(queueName, id, stateDir);
   if (!current) {
@@ -389,6 +391,7 @@ export function moveDeliveryQueueEntryToFailed(
     id,
     entry: current,
     stateDir,
+    ...(terminalError !== undefined ? { terminalError } : {}),
   });
   if (result.status !== "terminalized") {
     throw enoent(queueName, id);
@@ -401,6 +404,8 @@ export function terminalizePendingDeliveryQueueEntry(params: {
   id: string;
   entry: DeliveryQueueEntryState;
   stateDir?: string;
+  /** Terminal explanation recorded when the entry has no recorded send error. */
+  terminalError?: string;
 }): TerminalizePendingDeliveryQueueEntryResult {
   if (params.entry.id !== params.id) {
     throw new Error(`Delivery queue entry id mismatch: ${params.entry.id} != ${params.id}`);
@@ -421,7 +426,18 @@ export function terminalizePendingDeliveryQueueEntry(params: {
       ? { status: "terminalized", retained: false }
       : { status: "not_pending" };
   }
-  const failedEntry = projectDeliveryQueueTerminalEntry(params.entry, now, "failed", retention);
+  // The recorded send error is stronger evidence than a caller's terminal
+  // explanation; the explanation fills in only for never-recorded failures.
+  const metadata = deliveryQueueMetadata(params.queueName, params.entry);
+  const lastError = params.entry.lastError ?? params.terminalError;
+  const failedEntry = projectDeliveryQueueTerminalEntry(params.entry, now, "failed", retention, {
+    ...(metadata.channel ? { channel: metadata.channel } : {}),
+    ...(metadata.target ? { to: metadata.target } : {}),
+    ...(lastError ? { lastError } : {}),
+    ...(params.entry.lastAttemptAt !== undefined
+      ? { lastAttemptAt: params.entry.lastAttemptAt }
+      : {}),
+  });
   if (
     !terminalizeBoundDeliveryQueueEntry(
       database.db,

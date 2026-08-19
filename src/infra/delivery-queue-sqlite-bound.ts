@@ -3,7 +3,10 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
+import type {
+  DeliveryQueueEntryState,
+  DeliveryQueueTerminalEvidence,
+} from "./delivery-queue-sqlite.types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -111,7 +114,7 @@ export function terminalizeBoundDeliveryQueueEntry(
   queueName: string,
   id: string,
   expectedJson: string,
-  failedEntry: DeliveryQueueEntryState | undefined,
+  failedEntry: (DeliveryQueueEntryState & DeliveryQueueTerminalEvidence) | undefined,
   now: number,
 ): boolean {
   if (!failedEntry) {
@@ -125,17 +128,23 @@ export function terminalizeBoundDeliveryQueueEntry(
         .run(queueName, id, expectedJson).changes === 1
     );
   }
+  // Dead-letter rows keep channel/target/last_error evidence for operator
+  // diagnosis; stripping them made silent burial undebuggable in production.
   return (
     // sqlite-allow-raw: Exact JSON CAS keeps compaction atomic on the caller's transaction.
     db
       .prepare(
         `UPDATE delivery_queue_entries SET status = 'failed', entry_kind = NULL,
-        session_key = NULL, channel = NULL, target = NULL, account_id = NULL,
-        last_attempt_at = NULL, last_error = NULL, platform_send_started_at = NULL,
+        session_key = NULL, channel = ?, target = ?, account_id = NULL,
+        last_attempt_at = ?, last_error = ?, platform_send_started_at = NULL,
         recovery_state = ?, entry_json = ?, enqueued_at = ?, updated_at = ?, failed_at = ?
       WHERE queue_name = ? AND id = ? AND status = 'pending' AND entry_json = ?`,
       )
       .run(
+        failedEntry.channel ?? null,
+        failedEntry.to ?? null,
+        failedEntry.lastAttemptAt ?? null,
+        failedEntry.lastError ?? null,
         failedEntry.recoveryState ?? null,
         JSON.stringify(failedEntry),
         now,

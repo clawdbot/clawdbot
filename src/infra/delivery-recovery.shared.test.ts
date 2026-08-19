@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  classifyOutboundSendFailure,
   createDeliveryRecoveryCoordinator,
   isDeliveryRecoveryRetryEligible,
   resolveDeliveryRecoveryDeadlineMs,
 } from "./delivery-recovery.shared.js";
+import { PlatformMessageNotDispatchedError } from "./outbound/deliver-types.js";
 
 type RecoveryTestEntry = {
   id: string;
@@ -180,5 +182,97 @@ describe("shared durable delivery recovery coordinator", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+function errnoError(message: string, code: string, syscall?: string): Error {
+  return Object.assign(new Error(message), { code, ...(syscall ? { syscall } : {}) });
+}
+
+describe("classifyOutboundSendFailure", () => {
+  it.each([
+    ["connect refusal", errnoError("connect ECONNREFUSED 10.0.0.1:443", "ECONNREFUSED", "connect")],
+    ["dns not found", errnoError("getaddrinfo ENOTFOUND api.example", "ENOTFOUND", "getaddrinfo")],
+    ["dns backoff", errnoError("getaddrinfo EAI_AGAIN api.example", "EAI_AGAIN", "getaddrinfo")],
+    ["connect timeout", errnoError("connect ETIMEDOUT 10.0.0.1:443", "ETIMEDOUT", "connect")],
+    ["undici connect timeout", errnoError("Connect Timeout Error", "UND_ERR_CONNECT_TIMEOUT")],
+    [
+      "tls hostname mismatch",
+      errnoError("Hostname/IP does not match", "ERR_TLS_CERT_ALTNAME_INVALID"),
+    ],
+    ["tls expired certificate", errnoError("certificate has expired", "CERT_HAS_EXPIRED")],
+    [
+      "provider no-send marker",
+      new PlatformMessageNotDispatchedError("request not started", { cause: new Error("x") }),
+    ],
+    [
+      "nested connect refusal",
+      new Error("send failed", {
+        cause: errnoError("connect ECONNREFUSED 10.0.0.1:443", "ECONNREFUSED", "connect"),
+      }),
+    ],
+  ])("classifies %s as provably not sent and retryable", (_label, error) => {
+    expect(classifyOutboundSendFailure(error)).toEqual({
+      kind: "provably_not_sent",
+      retryable: true,
+    });
+  });
+
+  it("classifies platform 5xx and 429 responses as retryable, honoring retry_after", () => {
+    expect(
+      classifyOutboundSendFailure(
+        Object.assign(new Error("500: Internal Server Error"), {
+          error_code: 500,
+          description: "Internal Server Error",
+        }),
+      ),
+    ).toEqual({ kind: "provably_not_sent", retryable: true });
+    expect(
+      classifyOutboundSendFailure(
+        Object.assign(new Error("429: Too Many Requests: retry after 5"), {
+          error_code: 429,
+          description: "Too Many Requests: retry after 5",
+          parameters: { retry_after: 5 },
+        }),
+      ),
+    ).toEqual({ kind: "provably_not_sent", retryable: true, retryAfterMs: 5_000 });
+  });
+
+  it.each([
+    [
+      "platform semantic 400",
+      Object.assign(new Error("400: Bad Request: chat not found"), {
+        error_code: 400,
+        description: "Bad Request: chat not found",
+      }),
+    ],
+    [
+      "http client 404 response",
+      Object.assign(new Error("Not Found"), { status: 404, body: "{}" }),
+    ],
+    [
+      "provider permanent rejection marker",
+      new PlatformMessageNotDispatchedError("rejected payload", {
+        cause: new Error("x"),
+        retryable: false,
+      }),
+    ],
+  ])("classifies %s as provably not sent but terminal", (_label, error) => {
+    expect(classifyOutboundSendFailure(error)).toEqual({
+      kind: "provably_not_sent",
+      retryable: false,
+    });
+  });
+
+  it.each([
+    ["socket reset after write", errnoError("read ECONNRESET", "ECONNRESET", "read")],
+    ["non-connect timeout", errnoError("ETIMEDOUT", "ETIMEDOUT", "read")],
+    ["bare timeout code", errnoError("timed out", "ETIMEDOUT")],
+    ["plain error", new Error("boom")],
+    ["socket hang up", errnoError("socket hang up", "ECONNRESET")],
+    // A bare status number without response evidence is not a platform reply.
+    ["status without response evidence", Object.assign(new Error("failed"), { status: 500 })],
+  ])("keeps %s ambiguous", (_label, error) => {
+    expect(classifyOutboundSendFailure(error)).toEqual({ kind: "ambiguous" });
   });
 });

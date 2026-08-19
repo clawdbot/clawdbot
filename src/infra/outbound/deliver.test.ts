@@ -153,7 +153,7 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
-vi.mock("./delivery-queue-storage.js", () => ({
+vi.mock("./delivery-queue-storage.js", async () => ({
   enqueueDelivery: async (params: Record<string, unknown>) =>
     queueMocks.enqueueDelivery(withoutInitialProducerClaim(params)),
   enqueueDeliveryOnce: async (params: Record<string, unknown>, id: string) =>
@@ -166,6 +166,17 @@ vi.mock("./delivery-queue-storage.js", () => ({
     queueMocks.failDeliveryAfterPlatformSend(id, error),
   failDeliveryBeforePlatformSend: async (id: string, error: string) =>
     queueMocks.failDeliveryBeforePlatformSend(id, error),
+  // Mirrors production selection through the real classifier so assertions on
+  // the mocked before/after recorders keep observing the same routing.
+  resolveNotSentAwareFailureRecorder: await import("../delivery-recovery.shared.js").then(
+    ({ classifyOutboundSendFailure }) =>
+      (errors: readonly unknown[]) =>
+        errors.length > 0 &&
+        errors.every((error) => classifyOutboundSendFailure(error).kind === "provably_not_sent")
+          ? async (id: string, error: string) =>
+              queueMocks.failDeliveryBeforePlatformSend(id, error)
+          : async (id: string, error: string) => queueMocks.failDelivery(id, error),
+  ),
   markDeliveryPlatformOutcomeUnknown: async (id: string) =>
     queueMocks.markDeliveryPlatformOutcomeUnknown(id),
   markDeliveryPlatformSendDispatched: async (

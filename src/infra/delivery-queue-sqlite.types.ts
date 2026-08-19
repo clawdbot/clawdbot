@@ -105,13 +105,25 @@ export type DeliveryQueueEntryState = {
   recoveryState?: string;
 };
 
-/** Strip a terminal queue row to the producer policy needed for admission. */
+/** Longest failure evidence a terminal row retains; keeps tombstones bounded. */
+const DELIVERY_TERMINAL_ERROR_CAP = 300;
+
+/** Routing and failure facts a terminal row keeps for operator diagnosis. */
+export type DeliveryQueueTerminalEvidence = {
+  channel?: string;
+  to?: string;
+  lastError?: string;
+  lastAttemptAt?: number;
+};
+
+/** Strip a terminal queue row to producer admission policy plus failure evidence. */
 export function projectDeliveryQueueTerminalEntry(
   entry: Pick<DeliveryQueueEntryState, "id" | "retryCount">,
   terminalAt: number,
   terminal: "completed" | "failed",
   completionRetention?: DeliveryQueueCompletionRetention,
-): DeliveryQueueEntryState {
+  evidence?: DeliveryQueueTerminalEvidence,
+): DeliveryQueueEntryState & DeliveryQueueTerminalEvidence {
   const retryCount =
     Number.isSafeInteger(entry.retryCount) && entry.retryCount >= 0 ? entry.retryCount : 0;
   const recoveryState =
@@ -120,6 +132,7 @@ export function projectDeliveryQueueTerminalEntry(
       : completionRetention
         ? "completed_bounded"
         : undefined;
+  const lastError = evidence?.lastError?.slice(0, DELIVERY_TERMINAL_ERROR_CAP);
   return {
     id: entry.id,
     enqueuedAt: terminalAt,
@@ -127,5 +140,9 @@ export function projectDeliveryQueueTerminalEntry(
     ...(terminal === "completed" ? { acknowledgedAt: terminalAt } : { failedAt: terminalAt }),
     ...(completionRetention ? { completionRetention } : {}),
     ...(recoveryState ? { recoveryState } : {}),
+    ...(evidence?.channel ? { channel: evidence.channel } : {}),
+    ...(evidence?.to ? { to: evidence.to } : {}),
+    ...(lastError ? { lastError } : {}),
+    ...(evidence?.lastAttemptAt !== undefined ? { lastAttemptAt: evidence.lastAttemptAt } : {}),
   };
 }
