@@ -142,7 +142,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       ? {
           sourceConfig: configSnapshot.sourceConfig,
           authoredConfig: isRecord(configSnapshot.parsed)
-            ? (configSnapshot.parsed as OpenClawConfig)
+            ? (configSnapshot.parsed as OpenClawConfig) // SAFETY: snapshot parser validated this config record.
             : configSnapshot.sourceConfig,
         }
       : undefined);

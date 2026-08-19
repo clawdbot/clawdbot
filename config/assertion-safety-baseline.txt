@@ -2505,7 +2505,6 @@ src/cli/update-cli/plugin-payload-validation.ts	2
 src/cli/update-cli/shared.ts	1
 src/cli/update-cli/update-command-config.ts	6
 src/cli/update-cli/update-command-plugins.ts	1
-src/cli/update-cli/update-command-post-core.ts	1
 src/cli/update-cli/update-command-post-update.ts	2
 src/cli/users-cli.ts	1
 src/commands/agent-exec.ts	6
