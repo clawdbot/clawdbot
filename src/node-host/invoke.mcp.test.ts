@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { handleInvoke } from "./invoke.js";
-import { testing } from "./invoke.test-support.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 
 const MEBIBYTE = 1024 * 1024;
