@@ -47,10 +47,22 @@ describe("scripts/check", () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it("keeps the assertion safety ratchet in the aggregate preflight", () => {
+  it("keeps script policy guards in the aggregate preflight", () => {
+    expect(PREFLIGHT_CHECKS).not.toContainEqual({
+      name: "environment variable count ratchet",
+      args: ["check:env-var-count"],
+    });
+    expect(PREFLIGHT_CHECKS).toContainEqual({
+      name: "max-lines suppression ratchet",
+      args: ["check:max-lines-ratchet"],
+    });
     expect(PREFLIGHT_CHECKS).toContainEqual({
       name: "assertion SAFETY comment ratchet",
       args: ["check:assertion-safety"],
+    });
+    expect(PREFLIGHT_CHECKS).toContainEqual({
+      name: "script TypeScript erasability",
+      args: ["check:script-erasability"],
     });
   });
 });

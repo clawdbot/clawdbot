@@ -21,7 +21,6 @@ import {
   startConnectedTunnel,
   success,
   waitForFast,
-  waitForStarts,
   workspaceSetup,
 } from "./tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
@@ -177,7 +176,6 @@ describe("worker tunnel manager", () => {
     });
     const { handle } = await startConnectedTunnel(fake, "worker:fallback-sync", 1, {
       ssh: endpoint,
-      beforeReady: (start) => expect(sshArgvPort(start.argv)).toBe(2222),
     });
 
     try {
@@ -209,7 +207,7 @@ describe("worker tunnel manager", () => {
       const knownHostsOption = fake.runs[0]!.argv.find((value) =>
         value.startsWith("UserKnownHostsFile="),
       )!;
-      for (const connection of [...freshConnections, ...fake.starts]) {
+      for (const connection of freshConnections) {
         expect(connection.argv.join(" ")).toContain(identityPath);
         expect(connection.argv.join(" ")).toContain(knownHostsOption);
       }
@@ -386,17 +384,13 @@ describe("worker tunnel manager", () => {
         },
       );
       const manager = createWorkerTunnelManager({ runner: fake.runner });
-      const starting = manager.start({
+      const handle = await manager.start({
         bundleHash: BUNDLE_HASH,
         environmentId: "worker:convergent-sync",
         ownerEpoch: 1,
         ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
-        gateway: { host: "127.0.0.1", port: 18789 },
         resolveIdentity,
       });
-      await waitForStarts(fake.starts, 1);
-      fake.starts[0]!.process.becomeReady();
-      const handle = await starting;
 
       try {
         const syncing = handle.syncWorkspace({
@@ -592,17 +586,13 @@ describe("worker tunnel manager", () => {
         },
       );
       const manager = createWorkerTunnelManager({ runner: fake.runner });
-      const starting = manager.start({
+      const handle = await manager.start({
         bundleHash: BUNDLE_HASH,
         environmentId: "worker:retry-owner",
         ownerEpoch: 1,
         ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
-        gateway: { host: "127.0.0.1", port: 18789 },
         resolveIdentity,
       });
-      await waitForStarts(fake.starts, 1);
-      fake.starts[0]!.process.becomeReady();
-      const handle = await starting;
 
       try {
         await expect(

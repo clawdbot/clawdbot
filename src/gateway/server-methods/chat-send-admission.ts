@@ -11,6 +11,7 @@ import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main
 import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
@@ -27,7 +28,6 @@ import {
   hasRestartRecoveryTerminalRun,
   isRetryableUnadoptedChatClaim,
   resolveRestartSafeChatAdmission,
-  terminalizeRestartSafeChatAdmission,
 } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
@@ -72,7 +72,6 @@ export async function admitChatSend(params: {
     now,
     restartSafeRequest,
     expectedLeafEntryId,
-    expectedRunId,
   } = session;
   const chatSendTraceAttributes = {
     runId: clientRunId,
@@ -131,7 +130,9 @@ export async function admitChatSend(params: {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
-  let messageInjectionTarget: ReturnType<typeof replyRunRegistry.resolveMessageInjectionTarget>;
+  let messageInjectionTarget: ReturnType<
+    typeof replyRunRegistry.resolveCurrentMessageInjectionTarget
+  >;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
   const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
@@ -195,30 +196,16 @@ export async function admitChatSend(params: {
     if (entry && !latestEntry) {
       throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
     }
-    // An active owner can advance this branch while a steer is being composed.
-    // The lifecycle admission keeps branch identity fixed after this check; if
-    // the owner clears, acceptance-aware dispatch preserves this turn as follow-up.
-    const hasSteerIdentity = expectedRunId !== undefined || expectedLeafEntryId !== undefined;
+    // Capture the exact direct owner under the writer barrier. If it clears
+    // later, the opaque target rejects instead of resolving a successor.
     const resolvedInjectionTarget =
-      p.queueMode === "steer" && hasSteerIdentity
-        ? replyRunRegistry.resolveMessageInjectionTarget({
-            sessionKey: activeRunScopeKey,
-            originatingLeafEntryId: expectedLeafEntryId,
-            expectedRunId,
-          })
+      p.queueMode === "steer"
+        ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeRunScopeKey)
         : undefined;
     if (commitOutcome && resolvedInjectionTarget) {
       messageInjectionTarget = resolvedInjectionTarget;
     }
-    if (
-      commitOutcome &&
-      p.queueMode === "steer" &&
-      expectedRunId === undefined &&
-      !resolvedInjectionTarget
-    ) {
-      throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
-    }
-    if (commitOutcome && expectedLeafEntryId !== undefined && !resolvedInjectionTarget) {
+    if (commitOutcome && p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
       // Runtime session identity resolves through the canonical SQLite accessor;
       // legacy/reset-archive files are read-only history fallbacks, never send targets.
       const activePathRelation = latestEntry?.sessionId
@@ -410,6 +397,11 @@ export async function admitChatSend(params: {
     });
     return { ok: false as const };
   }
+  // Reserved here, while the request's root is provably live, rather than after the ACK: the
+  // detached dispatch must keep that root until terminal persistence settles or restart drain
+  // completes early and loses the session's terminal state. Callers outside a Gateway request
+  // envelope (internal chat entries) hold no root, so there is nothing to extend for them.
+  const releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? (() => {});
   if (params.onAdmissionOwned) {
     let proceed: boolean;
     try {
@@ -417,11 +409,13 @@ export async function admitChatSend(params: {
     } catch (error) {
       activeRunAbort.cleanup({ force: true });
       gatewayWorkAdmission.release();
+      releaseGatewayRootContinuation();
       throw error;
     }
     if (!proceed) {
       activeRunAbort.cleanup({ force: true });
       gatewayWorkAdmission.release();
+      releaseGatewayRootContinuation();
       return { ok: false as const };
     }
   }
@@ -459,7 +453,6 @@ export async function admitChatSend(params: {
       releaseGatewayWorkAdmission();
     };
   };
-  let releaseGatewayRootContinuation: (() => void) | undefined;
   // Prepared inbound media has no transcript reference until the user turn
   // persists; every abandonment exit funnels through cleanupAdmittedRun, so
   // the armed discard here is the single custody owner for that window. The
@@ -469,29 +462,9 @@ export async function admitChatSend(params: {
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
     activeRunAbort.cleanup(options);
     releaseInitialGatewayWorkAdmission();
-    releaseGatewayRootContinuation?.();
-    releaseGatewayRootContinuation = undefined;
+    releaseGatewayRootContinuation();
     discardAbandonedPreparedMedia?.();
     discardAbandonedPreparedMedia = undefined;
-  };
-  const rejectActiveLeafChanged = async () => {
-    if (
-      restartSafeAdmission &&
-      !(await terminalizeRestartSafeChatAdmission({
-        admittedSessionId,
-        clientRunId,
-        sessionKey,
-        startedAt: now,
-        status: "failed",
-        storePath,
-        retryable: true,
-      }))
-    ) {
-      throw new Error("chat admission ownership changed before terminalization");
-    }
-    cleanupAdmittedRun({ force: true });
-    clearAgentRunContext(clientRunId, lifecycleGeneration);
-    respondChatActiveLeafChanged(respond);
   };
   const rejectSessionRoutingChanged = () => {
     cleanupAdmittedRun({ force: true });
@@ -529,15 +502,11 @@ export async function admitChatSend(params: {
       lifecycleGeneration,
       messageInjectionTarget,
       originatingRoute,
-      rejectActiveLeafChanged,
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission,
       restartSafeAdmission,
       setDiscardAbandonedPreparedMedia: (discard: (() => void) | undefined) => {
         discardAbandonedPreparedMedia = discard;
-      },
-      setReleaseGatewayRootContinuation: (release: (() => void) | undefined) => {
-        releaseGatewayRootContinuation = release;
       },
     },
   };

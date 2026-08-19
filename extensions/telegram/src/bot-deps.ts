@@ -3,6 +3,7 @@ import {
   resolveApprovalOverGateway,
   type ApprovalResolveResult,
 } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -46,8 +47,8 @@ type ResolveTelegramApprovalParams = {
   senderId?: string | null;
   gatewayUrl?: string;
 } & (
-  | { approvalKind: "exec" | "plugin"; resolveMethod?: never }
-  | { approvalKind?: never; resolveMethod: "exec" | "plugin" }
+  | { approvalKind: ChannelApprovalKind; resolveMethod?: never }
+  | { approvalKind?: never; resolveMethod: ChannelApprovalKind }
 );
 
 type ResolveTelegramApproval = (

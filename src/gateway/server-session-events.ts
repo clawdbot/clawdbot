@@ -17,7 +17,6 @@ import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
@@ -30,10 +29,8 @@ import {
   buildGatewaySessionEventRow,
 } from "./session-event-payload.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
-import {
-  attachOpenClawTranscriptMeta,
-  readSessionMessageCountAsync,
-} from "./session-transcript-readers.js";
+import { projectSessionMessagePayload } from "./session-transcript-message.js";
+import { readSessionMessageCountAsync } from "./session-transcript-readers.js";
 import {
   loadGatewaySessionRow,
   loadGatewaySessionEntryReadOnly,
@@ -45,26 +42,6 @@ type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
 
 function tryResolveCompatibilityDefaultAgentId(): string | undefined {
   return tryResolveLegacyCompatibilityAgentId(getRuntimeConfig());
-}
-
-function readMessageIdempotencyKey(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const value = (message as Record<string, unknown>).idempotencyKey;
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function readMessageSenderIsOwner(message: unknown): boolean | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const openclaw = (message as Record<string, unknown>)["__openclaw"];
-  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
-    return undefined;
-  }
-  const value = (openclaw as Record<string, unknown>).senderIsOwner;
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function readTranscriptUpdateLifecycleOwner(
@@ -97,13 +74,14 @@ function readTranscriptUpdateLifecycleOwner(
   return lifecycleRevision ? { lifecycleRevision } : {};
 }
 
-function buildGatewaySessionSnapshot(params: {
+export function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
   includeSession?: boolean;
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
+  status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
   activeRunIds?: string[];
 }): Record<string, unknown> {
@@ -124,6 +102,9 @@ function buildGatewaySessionSnapshot(params: {
     // scoped goal as the global/default session goal.
     delete session.goal;
   }
+  if (session && params.status !== undefined) {
+    session.status = params.status;
+  }
   if (session && params.hasActiveRun !== undefined) {
     session.hasActiveRun = params.hasActiveRun;
   }
@@ -138,6 +119,7 @@ function buildGatewaySessionSnapshot(params: {
       label: params.label,
       displayName: params.displayName,
       parentSessionKey: params.parentSessionKey,
+      status: params.status,
       hasActiveRun: params.hasActiveRun,
       activeRunIds: params.activeRunIds,
     }),
@@ -360,6 +342,7 @@ async function handleTranscriptUpdateBroadcast(
     sessionRow,
     agentId: routingAgentId,
     includeSession: true,
+    status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
     hasActiveRun: activeRunState?.active,
     activeRunIds: activeRunState?.runIds,
   });
@@ -379,28 +362,16 @@ async function handleTranscriptUpdateBroadcast(
     );
     return;
   }
-  const idempotencyKey = readMessageIdempotencyKey(update.message);
-  const senderIsOwner = readMessageSenderIsOwner(update.message);
-  const rawMessage = attachOpenClawTranscriptMeta(update.message, {
-    ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
-    ...(idempotencyKey ? { idempotencyKey } : {}),
-    ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
+  const projected = projectSessionMessagePayload({
+    sessionKey,
+    ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
+    message: update.message,
+    ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+    ...(messageSeq !== undefined ? { messageSeq } : {}),
+    sessionSnapshot,
   });
-  const message = projectChatDisplayMessage(rawMessage, { resolveCurrentUserProfileDisplay });
-  if (message) {
-    params.broadcastToConnIds(
-      "session.message",
-      {
-        sessionKey,
-        ...(senderIsOwner === undefined ? {} : { senderIsOwner }),
-        ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
-        message,
-        ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-        ...(messageSeq !== undefined ? { messageSeq } : {}),
-        ...sessionSnapshot,
-      },
-      connIds,
-    );
+  if (projected.payload) {
+    params.broadcastToConnIds("session.message", projected.payload, connIds);
     return;
   }
 

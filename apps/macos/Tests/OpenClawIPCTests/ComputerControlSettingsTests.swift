@@ -31,6 +31,24 @@ struct ComputerControlSettingsTests {
         #expect(ComputerControlProvider.current(defaults: defaults, cuaAvailable: true) == .peekaboo)
     }
 
+    @Test func `elevation host ignores enabled CUA defaults while normal launches preserve them`() throws {
+        let suiteName = "ComputerControlElevationHostTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: computerControlEnabledKey)
+        defaults.set(ComputerControlProvider.cua.rawValue, forKey: computerControlProviderKey)
+
+        #expect(isComputerControlEnabled(defaults: defaults))
+        #expect(ComputerControlProvider.current(
+            defaults: defaults,
+            cuaAvailable: true,
+            launchPlan: AppLaunchRuntimePlan(arguments: ["OpenClaw"])) == .cua)
+        #expect(ComputerControlProvider.current(
+            defaults: defaults,
+            cuaAvailable: true,
+            launchPlan: AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"])) == .peekaboo)
+    }
+
     @Test func `bundled CUA locator accepts only a regular executable and never follows a symlink`() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-cua-artifact-\(UUID().uuidString)", isDirectory: true)

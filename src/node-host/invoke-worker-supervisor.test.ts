@@ -98,6 +98,7 @@ async function invokePrivate(params: {
   supervisor?: NodeWorkerSupervisorControl;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: { clientId: string; clientSecret: string };
   workspace?: NodeWorkerWorkspaceRuntime;
 }) {
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
@@ -118,6 +119,9 @@ async function invokePrivate(params: {
       gatewayUrl: params.gatewayUrl ?? "wss://gateway.example/tenant",
       ...(params.gatewayTlsFingerprint
         ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
+        : {}),
+      ...(params.gatewayCloudflareAccess
+        ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
         : {}),
     },
   );
@@ -221,13 +225,21 @@ describe("node-host worker supervisor commands", () => {
       paramsJSON: JSON.stringify(input),
       bundleInstaller: { ensure },
       gatewayUrl: "wss://gateway.example/tenant",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
+      gatewayCloudflareAccess: {
+        clientId: "cf-bundle-id",
+        clientSecret: "cf-bundle-secret",
+      },
     });
 
     expect(ensure).toHaveBeenCalledWith({
       input,
       gatewayUrl: "wss://gateway.example/tenant",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
+      gatewayCloudflareAccess: {
+        clientId: "cf-bundle-id",
+        clientSecret: "cf-bundle-secret",
+      },
       signal: undefined,
     });
     expect(pluginHandle).not.toHaveBeenCalled();
@@ -405,13 +417,21 @@ describe("node-host worker supervisor commands", () => {
       paramsJSON: JSON.stringify(input),
       supervisor,
       gatewayUrl: "wss://gateway.example/tenant/",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
+      gatewayCloudflareAccess: {
+        clientId: "cf-worker-id",
+        clientSecret: "cf-worker-secret",
+      },
     });
 
     expect(supervisorMocks(supervisor).launch.mock.calls[0]?.[1]).toEqual({
       kind: "websocket",
       url: "wss://gateway.example/tenant/__openclaw__/worker",
-      tlsFingerprint: "aa:bb:cc",
+      tlsFingerprint: "aa".repeat(32),
+      cloudflareAccess: {
+        clientId: "cf-worker-id",
+        clientSecret: "cf-worker-secret",
+      },
     });
   });
 

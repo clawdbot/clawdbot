@@ -7,6 +7,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestMock,
 } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatComposerMemoryFallback } from "./chat-state-host.ts";
@@ -133,7 +134,7 @@ export function makeChatHost(
     lastError: null,
     sessionKey: "agent:main",
     basePath: "",
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     chatAvatarUrl: null,
     chatAvatarSource: null,
     chatAvatarStatus: null,

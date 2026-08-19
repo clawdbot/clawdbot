@@ -35,8 +35,8 @@ const CRON_ACTIONS = [
 ] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream"] as const;
-// Stream schedules, script payloads, and condition triggers all require
-// cron.triggers.enabled; when it is off the scheduler rejects them, so the
+// When cron.triggers.enabled is explicitly false, the scheduler rejects
+// stream schedules, script payloads, and condition triggers, so the
 // model-facing schema must not advertise them.
 const CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
@@ -106,7 +106,7 @@ function createCronScheduleSchema(params: { triggersEnabled: boolean }): TSchema
                 Type.Array(Type.String({ minLength: 1 }), {
                   minItems: 1,
                   description:
-                    "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                    "Supervised source argv (kind=stream; disabled when cron.triggers.enabled=false)",
                 }),
               ),
               cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),

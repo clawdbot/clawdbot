@@ -119,6 +119,7 @@ describe("scripts/test-live-shard", () => {
       "src/infra/push-apns-http2.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual([
+      "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
       "test/image-generation.infer-cli.live.test.ts",
       "test/image-generation.runtime.live.test.ts",
       "test/openai-onboarding.live.test.ts",

@@ -381,6 +381,7 @@ export function renderTerminalPanelActions(params: {
               <button
                 class="rail-header__action tp-icon tp-open-fullscreen"
                 type="button"
+                data-new-tab-action
                 title=${t("terminal.openFullscreen")}
                 aria-label=${t("terminal.openFullscreen")}
                 @click=${params.onOpenFullscreen}

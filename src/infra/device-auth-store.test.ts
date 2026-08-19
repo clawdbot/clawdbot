@@ -376,4 +376,71 @@ describe("infra/device-auth-store", () => {
       );
     });
   });
+
+  it("keeps credentials rotated after a stale request snapshot", async () => {
+    await withTempDir("openclaw-device-auth-rotation-", async (stateDir) => {
+      const env = createEnv(stateDir);
+      const targets = [
+        {
+          name: "device",
+          load: () => loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env }),
+          store: (token: string, expectedToken?: string) =>
+            storeDeviceAuthToken({
+              deviceId: "device-1",
+              role: "operator",
+              token,
+              scopes: ["operator.read"],
+              env,
+              ...(expectedToken === undefined ? {} : { expectedToken }),
+            }),
+          clear: (expectedToken: string) =>
+            clearDeviceAuthToken({
+              deviceId: "device-1",
+              role: "operator",
+              env,
+              expectedToken,
+            }),
+        },
+        {
+          name: "origin",
+          load: () =>
+            loadOriginDeviceToken({
+              gatewayScope: "wss://one.example",
+              deviceId: "device-1",
+              role: "operator",
+              env,
+            }),
+          store: (token: string, expectedToken?: string) =>
+            storeOriginDeviceToken({
+              gatewayScope: "wss://one.example",
+              deviceId: "device-1",
+              role: "operator",
+              token,
+              scopes: ["operator.read"],
+              env,
+              ...(expectedToken === undefined ? {} : { expectedToken }),
+            }),
+          clear: (expectedToken: string) =>
+            clearOriginDeviceToken({
+              gatewayScope: "wss://one.example",
+              deviceId: "device-1",
+              role: "operator",
+              env,
+              expectedToken,
+            }),
+        },
+      ];
+
+      for (const target of targets) {
+        const prepared = target.store(`${target.name}-prepared`);
+        const rotated = target.store(`${target.name}-rotated`);
+        expect(prepared).not.toBeNull();
+        expect(rotated).not.toBeNull();
+
+        expect(target.store(`${target.name}-stale-replacement`, prepared!.token)).toBeNull();
+        expect(target.clear(prepared!.token)).toBe(false);
+        expect(target.load()).toEqual(rotated);
+      }
+    });
+  });
 });

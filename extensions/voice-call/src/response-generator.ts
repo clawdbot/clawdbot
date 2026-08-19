@@ -5,6 +5,7 @@
 
 import crypto from "node:crypto";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyModelOverrideWithAuthProfileCompatibility,
@@ -35,6 +36,8 @@ type VoiceResponseParams = {
   sessionKey?: string;
   /** Caller's phone number */
   from: string;
+  /** Caller ownership prepared by the call boundary. */
+  senderIsOwner: boolean | undefined;
   /** Agent frozen on the call record. */
   agentId?: string;
   /** Conversation transcript */
@@ -75,14 +78,7 @@ function resolveVoiceAgentToolsAllow(
   config: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  const agents = isRecord(config.agents) ? config.agents : undefined;
-  const list = Array.isArray(agents?.list) ? agents.list : [];
-  const agent = list.find((entry) => isRecord(entry) && entry.id === agentId);
-  if (!isRecord(agent)) {
-    return undefined;
-  }
-
-  return readExplicitToolsAllow(isRecord(agent.tools) ? agent.tools : undefined);
+  return readExplicitToolsAllow(resolveAgentConfig(config, agentId)?.tools);
 }
 
 const VOICE_SPOKEN_OUTPUT_CONTRACT = [
@@ -251,6 +247,7 @@ export async function generateVoiceResponse(
     callId,
     sessionKey,
     from,
+    senderIsOwner,
     transcript,
     userMessage,
     coreConfig,
@@ -413,6 +410,7 @@ export async function generateVoiceResponse(
           lane: "voice",
           extraSystemPrompt,
           agentDir,
+          senderIsOwner,
           toolsAllow,
           abortSignal,
           blockReplyBreak: "text_end",

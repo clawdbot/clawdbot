@@ -23,7 +23,10 @@ import {
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
-import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
+import type {
+  DispatchFromConfigResult,
+  DispatchReplyFromConfig,
+} from "./reply/dispatch-from-config.types.js";
 import type {
   InternalGetReplyFromConfig,
   InternalGetReplyOptions,
@@ -192,45 +195,6 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
 type DispatchInboundResult = DispatchFromConfigResult;
 export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
 
-function finalizeDispatchResult(
-  result: DispatchFromConfigResult,
-  dispatcher: ReplyDispatcher,
-): DispatchFromConfigResult {
-  const cancelledCounts = dispatcher.getCancelledCounts?.();
-  const failedCounts = dispatcher.getFailedCounts?.();
-  if (!cancelledCounts && !failedCounts) {
-    return result;
-  }
-
-  const resultCounts = {
-    tool: result.counts?.tool ?? 0,
-    block: result.counts?.block ?? 0,
-    final: result.counts?.final ?? 0,
-  };
-  // Dispatcher counts include cancelled/failed queued blocks; public result counts do not.
-  const counts = {
-    tool: Math.max(0, resultCounts.tool - (cancelledCounts?.tool ?? 0) - (failedCounts?.tool ?? 0)),
-    block: Math.max(
-      0,
-      resultCounts.block - (cancelledCounts?.block ?? 0) - (failedCounts?.block ?? 0),
-    ),
-    final: Math.max(
-      0,
-      resultCounts.final - (cancelledCounts?.final ?? 0) - (failedCounts?.final ?? 0),
-    ),
-  };
-  const hasFailedCounts =
-    (failedCounts?.tool ?? 0) > 0 ||
-    (failedCounts?.block ?? 0) > 0 ||
-    (failedCounts?.final ?? 0) > 0;
-  return {
-    ...result,
-    queuedFinal: result.queuedFinal && counts.final > 0,
-    counts,
-    ...(hasFailedCounts ? { failedCounts } : {}),
-  };
-}
-
 /** Dispatches one finalized inbound message through reply resolution and queued delivery. */
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
@@ -239,6 +203,7 @@ export async function dispatchInboundMessage(params: {
   toolsAllow?: string[];
   replyOptions?: InternalDispatchReplyOptions;
   replyResolver?: InternalGetReplyFromConfig;
+  dispatchReplyFromConfig?: DispatchReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   replyPayloadRunState?: ReplyPayloadRunState;
   /** Observe-only turns run the agent without entering outbound hook stages. */
@@ -271,6 +236,7 @@ export async function dispatchInboundMessage(params: {
   if (params.outboundHooks !== "disabled") {
     installReplyPayloadSendingBeforeDeliver(params.dispatcher, finalized, replyPayloadRunState);
   }
+  let settledReceipt: DispatchFromConfigResult["settledReceipt"];
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     onSettled: params.onSettled,
@@ -278,7 +244,7 @@ export async function dispatchInboundMessage(params: {
       measureDiagnosticsTimelineSpan(
         "auto_reply.dispatch_reply_from_config",
         () =>
-          dispatchReplyFromConfig({
+          (params.dispatchReplyFromConfig ?? dispatchReplyFromConfig)({
             ctx: finalized,
             cfg: params.cfg,
             dispatcher: params.dispatcher,
@@ -293,8 +259,11 @@ export async function dispatchInboundMessage(params: {
           attributes: buildDispatchTimelineAttributes(finalized),
         },
       ),
+    onSettledReceipt: (receipt) => {
+      settledReceipt = receipt;
+    },
   });
-  return finalizeDispatchResult(result, params.dispatcher);
+  return settledReceipt ? { ...result, settledReceipt } : result;
 }
 
 type BufferedInboundDispatcherParams = {
@@ -304,6 +273,7 @@ type BufferedInboundDispatcherParams = {
   toolsAllow?: string[];
   replyOptions?: InternalDispatchReplyOptions;
   replyResolver?: InternalGetReplyFromConfig;
+  dispatchReplyFromConfig?: DispatchReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 };
 
@@ -321,6 +291,15 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   const replyPayloadRunState = {
     runId: params.replyOptions?.runId,
   };
+  let settledDeliveries = Promise.resolve();
+  const settleDeliveries = () =>
+    (settledDeliveries = settledDeliveries.then(() =>
+      runOrderedForegroundReplySettledDeliveries(
+        foregroundReplyLease,
+        params.dispatcherOptions.onSettled,
+        params.dispatcherOptions.onFreshSettledDelivery,
+      ),
+    ));
   const replyPayloadBeforeDeliver =
     ownership.outboundHooks === "disabled"
       ? undefined
@@ -356,6 +335,8 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
       beforeDeliver,
+      onSettled: settleDeliveries,
+      onFreshSettledDelivery: undefined,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
   const onTypingController = params.replyOptions?.onTypingController
@@ -372,6 +353,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
       dispatcher,
       toolsAllow: params.toolsAllow,
       replyResolver: params.replyResolver,
+      dispatchReplyFromConfig: params.dispatchReplyFromConfig,
       replyOptions: {
         ...params.replyOptions,
         ...replyOptions,
@@ -383,11 +365,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     });
   } finally {
     try {
-      await runOrderedForegroundReplySettledDeliveries(
-        foregroundReplyLease,
-        params.dispatcherOptions.onSettled,
-        params.dispatcherOptions.onFreshSettledDelivery,
-      );
+      await settledDeliveries;
     } finally {
       foregroundReplyLease?.release();
       markRunComplete();

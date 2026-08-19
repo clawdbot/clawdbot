@@ -30,6 +30,10 @@ function mergeTtsFacts(
 }
 
 /** Strips final-answer directives in place so live state and persisted bytes stay identical. */
+// TRANSITIONAL(marker-retirement): once the visibleReplies default flips and the
+// model stops emitting inline markers, this projection parses nothing and the
+// whole applier (plus its parser imports) can be deleted; openclawDelivery facts
+// then come exclusively from structured message-tool sends.
 export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMessage>(
   message: T,
 ): T {

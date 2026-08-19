@@ -117,6 +117,38 @@ describe("prepared run admission", () => {
     expect(work).toEqual({ kind: "retry-reference", token });
   });
 
+  it("adopts an original retry token only for its explicitly bound operational run", async () => {
+    const token = createExecutionIdentityAdmissionToken("original-run");
+    let work: ExecutionIdentityAdmissionWork | undefined;
+    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
+      work = candidate;
+      return true;
+    });
+    const rejected = createExecutionIdentityRecoveryAdmission({
+      retryOnly: true,
+      token,
+      expectedOperationalRunId: facts.runId,
+    });
+
+    expect(rejected.consume("other-operational-run")).toEqual({ accepted: false });
+    expect(rejected.consume(facts.runId)).toEqual({ accepted: false });
+
+    const { runtime, ...admissionFacts } = facts;
+    const admitted = await prepareAgentRunAdmission({
+      cfg: enabledConfig,
+      facts: admissionFacts,
+      operationalRunInstance: createOperationalRunInstanceRef(facts.runId),
+      recovery: createExecutionIdentityRecoveryAdmission({
+        retryOnly: true,
+        token,
+        expectedOperationalRunId: facts.runId,
+      }),
+    }).admit(runtime.kind);
+
+    expect(admitted.executionIdentityToken).toBe(token);
+    expect(work).toEqual({ kind: "retry-reference", token });
+  });
+
   it("keeps missing or mismatched recovery identity unbound", async () => {
     const sink = vi.fn((_work: ExecutionIdentityAdmissionWork) => true);
     cleanupSink = configureExecutionIdentityAdmissionSink(sink);

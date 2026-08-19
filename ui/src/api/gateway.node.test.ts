@@ -15,10 +15,10 @@ import {
 } from "../lib/nodes/index.ts";
 import * as nodes from "../lib/nodes/index.ts";
 import {
-  migrateCloudSessionRecoveryScope,
-  readCloudSessionRecovery,
-  writeCloudSessionRecovery,
-} from "../lib/sessions/cloud-recovery.ts";
+  migrateSessionPlacementRecoveryScope,
+  readSessionPlacementRecovery,
+  writeSessionPlacementRecovery,
+} from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
@@ -27,7 +27,7 @@ const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
   migrate: vi.fn(),
 }));
 
-vi.mock("../lib/sessions/cloud-recovery-migration.runtime.ts", () => {
+vi.mock("../lib/sessions/session-placement-recovery-migration.runtime.ts", () => {
   recoveryMigrationRuntimeMock.loaded();
   return {
     default: (gatewayUrl: string, sourceScope: string, destinationScope: string) =>
@@ -424,7 +424,7 @@ describe("GatewayBrowserClient", () => {
     loadOrCreateDeviceIdentityMock.mockReset();
     signDevicePayloadMock.mockClear();
     recoveryMigrationRuntimeMock.loaded.mockClear();
-    recoveryMigrationRuntimeMock.migrate.mockImplementation(migrateCloudSessionRecoveryScope);
+    recoveryMigrationRuntimeMock.migrate.mockImplementation(migrateSessionPlacementRecoveryScope);
     loadOrCreateDeviceIdentityMock.mockResolvedValue({
       deviceId: "device-1",
       privateKey: "private-key", // pragma: allowlist secret
@@ -475,12 +475,14 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 
-  it("retries an old closed-schema Gateway once without client build identity", async () => {
+  it("surfaces build identity rejection and never retries without build identity", async () => {
     useNodeFakeTimers();
+    const onClose = vi.fn();
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
       clientBuildId: "build-a",
+      onClose,
     });
 
     const first = await startConnect(client);
@@ -495,21 +497,26 @@ describe("GatewayBrowserClient", () => {
       },
     });
     await expectSocketClosed(first.ws);
-    first.ws.emitClose(4008, "connect retry");
+    expect(first.ws.lastClose).toEqual({ code: 4008, reason: "connect failed" });
+    first.ws.emitClose(4008, "connect failed");
+    expect(onClose).toHaveBeenCalledWith({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "invalid connect params: at /client: unexpected property 'buildId'",
+        details: undefined,
+        retryable: false,
+        retryAfterMs: undefined,
+      },
+      willRetry: true,
+    });
 
     await vi.advanceTimersByTimeAsync(250);
+    expect(wsInstances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(550);
     const second = await continueConnect(getLatestWebSocket(), "nonce-2");
-    expect(second.connectFrame.params?.client.buildId).toBeUndefined();
-    second.ws.emitMessage({
-      type: "res",
-      id: second.connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-      },
-    });
+    expect(second.connectFrame.params?.client.buildId).toBe("build-a");
     expect(wsInstances).toHaveLength(2);
 
     client.stop();
@@ -1218,13 +1225,13 @@ describe("GatewayBrowserClient", () => {
       sessionKey: "agent:cloud:stale",
       messageId: "message-stale",
       message: "keep the current connection",
-      profileId: "aws",
+      target: { kind: "profile" as const, profileId: "aws" },
       agentId: "cloud",
       gatewayUrl: DEFAULT_GATEWAY_URL,
       recoveryScope: legacyScope,
       phase: "sending" as const,
     };
-    expect(writeCloudSessionRecovery(recovery)).toBe(true);
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
     const onRecoveryScopeChange = vi.fn();
     const client = new GatewayBrowserClient({
       url: DEFAULT_GATEWAY_URL,
@@ -1263,11 +1270,11 @@ describe("GatewayBrowserClient", () => {
     expect(onRecoveryScopeChange).not.toHaveBeenCalled();
     expect(recoveryMigrationRuntimeMock.migrate).not.toHaveBeenCalled();
     expect(client.recoveryScopeReady).toBe(false);
-    expect(readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey)).toEqual(
-      recovery,
-    );
     expect(
-      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toEqual(recovery);
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
     ).toBeNull();
 
     secondWs.emitMessage({
@@ -1302,13 +1309,13 @@ describe("GatewayBrowserClient", () => {
     expect(client.recoveryScopeReady).toBe(true);
     expect(client.recoveryScope).toBe("server-current");
     expect(
-      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
     ).toBeNull();
     expect(
-      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
     ).toBeNull();
     expect(
-      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
     ).toEqual({ ...recovery, recoveryScope: "server-current" });
     client.stop();
     expect(client.recoveryScopeReady).toBe(false);
@@ -1323,13 +1330,13 @@ describe("GatewayBrowserClient", () => {
       sessionKey: "agent:cloud:shared-browser",
       messageId: "message-shared-browser",
       message: "keep this task with its credential owner",
-      profileId: "aws",
+      target: { kind: "profile" as const, profileId: "aws" },
       agentId: "cloud",
       gatewayUrl: DEFAULT_GATEWAY_URL,
       recoveryScope: legacyScope,
       phase: "sending" as const,
     };
-    expect(writeCloudSessionRecovery(recovery)).toBe(true);
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
     const onRecoveryScopeChange = vi.fn();
     const client = new GatewayBrowserClient({
       url: DEFAULT_GATEWAY_URL,
@@ -1354,11 +1361,11 @@ describe("GatewayBrowserClient", () => {
     });
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScope).toBe(principalScope);
-    expect(readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey)).toEqual(
-      recovery,
-    );
     expect(
-      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, principalScope, recovery.sessionKey),
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toEqual(recovery);
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, principalScope, recovery.sessionKey),
     ).toBeNull();
     client.stop();
   });

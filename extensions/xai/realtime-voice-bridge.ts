@@ -342,7 +342,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }> {
     const apiKey = this.config.resolveApiKey
       ? await this.config.resolveApiKey()
-      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg);
+      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg, this.config.agentId);
     const model = this.config.model ?? XAI_REALTIME_DEFAULT_MODEL;
     const url = toXaiRealtimeWsUrl(
       this.config.baseUrl,

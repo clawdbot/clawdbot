@@ -347,6 +347,8 @@ extension SettingsProTab {
                         .font(OpenClawType.body)
                 }
                 .disabled(self.isRefreshingGateway)
+            } footer: {
+                self.gatewayActionStatusView
             }
 
             self.gatewaySetupCard
@@ -831,6 +833,17 @@ extension SettingsProTab {
             {
                 Task { await self.runDiagnostics() }
             }
+
+            self.gatewayActionStatusView
+        }
+    }
+
+    @ViewBuilder
+    var gatewayActionStatusView: some View {
+        if let gatewayActionStatusText {
+            Text(verbatim: gatewayActionStatusText)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 

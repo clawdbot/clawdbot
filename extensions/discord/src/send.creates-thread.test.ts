@@ -171,9 +171,11 @@ describe("sendMessageDiscord", () => {
         Routes.channelMessages("701"),
       ),
     ]);
-    expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.channelId)).toEqual(
-      Array.from({ length: testCase.expectedThreadMessages + 1 }, () => "701"),
-    );
+    expect(
+      onDeliveryResult.mock.calls.map(([delivery]) =>
+        delivery.target?.kind === "channel" ? delivery.target.id : undefined,
+      ),
+    ).toEqual(Array.from({ length: testCase.expectedThreadMessages + 1 }, () => "701"));
     expect(result?.receipt).toMatchObject({
       threadId: "701",
       platformMessageIds: [

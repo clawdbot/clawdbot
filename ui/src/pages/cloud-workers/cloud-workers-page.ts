@@ -185,7 +185,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     return t(`cloudWorkersPage.errors.${error}`);
   }
 
-  private async saveProfile() {
+  private async saveProfile(draft: CloudWorkerProfileDraft) {
     const scope = this.gateway.capture();
     const runtimeConfig = this.context.runtimeConfig;
     const editingId = this.editor?.kind === "edit" ? this.editor.profileId : null;
@@ -196,12 +196,12 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const currentProfiles = Object.fromEntries(
       this.profiles().map((profile) => [profile.id, true]),
     );
-    const validationError = validateCloudWorkerDraft(this.draft, currentProfiles, editingId);
+    const validationError = validateCloudWorkerDraft(draft, currentProfiles, editingId);
     if (validationError) {
       this.formError = this.errorText(validationError);
       return;
     }
-    const profileId = editingId ?? this.draft.id;
+    const profileId = editingId ?? draft.id;
     this.busyProfileId = profileId;
     this.formError = null;
     this.notice = null;
@@ -209,7 +209,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
     try {
       const patched = await runtimeConfig.patchFromSnapshot((base) => {
-        const built = buildCloudWorkerUpsertPatch(base, this.draft, editingId);
+        const built = buildCloudWorkerUpsertPatch(base, draft, editingId);
         return "error" in built
           ? { error: this.errorText(built.error) }
           : {
@@ -355,6 +355,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       return nothing;
     }
     const busy = this.busyProfileId !== null;
+    const canSave = this.canManage();
     const editing = this.editor.kind === "edit";
     const classMode = this.draft.customClass ? "custom" : this.draft.machineClass;
     return renderSettingsSection(
@@ -510,8 +511,8 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             <button
               class="btn primary"
               type="button"
-              ?disabled=${busy}
-              @click=${() => void this.saveProfile()}
+              ?disabled=${!canSave}
+              @click=${() => void this.saveProfile(this.draft)}
             >
               ${busy ? t("common.saving") : t("common.save")}
             </button>

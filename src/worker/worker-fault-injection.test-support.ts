@@ -294,7 +294,7 @@ export class ComposedGatewayHarness {
       throw new Error("fault descriptor epoch does not match its exact placement claim");
     }
     return {
-      version: 3,
+      version: 4,
       connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
         environmentId: ENVIRONMENT_ID,
@@ -380,12 +380,7 @@ export class ComposedGatewayHarness {
       throw new Error("fault placement has no active worker claim to reclaim");
     }
     this.settleRun(staleClaim.runId);
-    this.placementStore.finishReclaim({
-      sessionId: SESSION_ID,
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: staleClaim.owner.ownerEpoch,
-      expectedGeneration: placement.generation,
-    });
+    this.placementLifecycle.reclaimPlacement(placement, staleClaim.owner.ownerEpoch);
     const attached = this.store.get(ENVIRONMENT_ID);
     if (!attached || attached.state !== "attached") {
       throw new Error("fault environment is not attached");
@@ -662,7 +657,7 @@ export class ComposedGatewayHarness {
           return result;
         },
       } as workerServer.WorkerConnectionService,
-      ingress: "loopback",
+      publicAdmission: { clientIp: "127.0.0.1", rateLimiter: undefined },
       send: (frame) => this.send(socket, frame),
       close: (code = 1000, reason = "") => socket.close(code, reason),
       isClosed: () => closed || socket.readyState === WebSocket.CLOSED,

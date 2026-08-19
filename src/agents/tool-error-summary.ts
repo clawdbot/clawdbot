@@ -34,6 +34,8 @@ export type ToolErrorSummary = {
   terminalDiagnostic?: ProcessTerminalDiagnostic;
 };
 
+export type ToolRecoverySummary = Pick<ToolErrorSummary, "toolName">;
+
 const EXEC_LIKE_TOOL_NAMES = new Set(["exec", "bash"]);
 
 /** Detects shell-execution tools that share retry and mutation semantics. */

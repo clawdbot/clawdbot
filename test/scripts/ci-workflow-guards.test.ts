@@ -3092,7 +3092,6 @@ NODE
       repository: "openclaw/openclaw",
       runAttempt: 1,
     } as const;
-
     expect(configurableJobs).toEqual(Object.keys(expectedHostedRunners).toSorted());
     expect(jobs["check-lint-hosted-core-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
     for (const [jobName, hostedRunner] of Object.entries(expectedHostedRunners)) {
@@ -3903,6 +3902,11 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       rmSync(path.join(root, "scripts"), { recursive: true });
       expect(fingerprint()).toBe(baseline);
 
+      writeFileSync(path.join(root, "node-version.mjs"), "export {};\n");
+      expect(fingerprint()).not.toBe(baseline);
+      rmSync(path.join(root, "node-version.mjs"));
+      expect(fingerprint()).toBe(baseline);
+
       // Formatting, key order, and scripts that pnpm install never executes
       // should keep the existing dependency snapshot warm.
       writeManifest({
@@ -4369,7 +4373,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     }
     expect(hostedLintCache.if).toBe(
-      "matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid')",
+      "matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))",
     );
     expect(hostedLintCache.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
     expect(hostedLintCache.with).toEqual(boundaryCache.with);
@@ -5684,14 +5688,32 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const manifestStep = workflow.jobs.preflight.steps.find(
       (step: WorkflowStep) => step.name === "Build CI manifest",
     );
-    const checkShardRun = workflow.jobs["check-shard"].steps.find(
+    const checkShardStep = workflow.jobs["check-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run check shard",
-    ).run;
+    );
+    const checkShardRun = checkShardStep.run;
     const hostedCoreLint = workflow.jobs["check-lint-hosted-core-shard"];
+    const untrustedForkPullRequest = {
+      authorAssociation: "NONE",
+      eventName: "pull_request",
+      headRepository: "contributor/openclaw",
+      repository: "openclaw/openclaw",
+      runnerBackend: "",
+      runAttempt: 1,
+    } as const;
 
     expect(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND).toBe(
-      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}",
+      "${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}",
     );
+    expect(
+      evaluateWorkflowExpression(
+        manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND,
+        untrustedForkPullRequest,
+      ),
+    ).toBe("github");
+    expect(
+      evaluateWorkflowExpression(checkShardStep.env.RUNNER_BACKEND, untrustedForkPullRequest),
+    ).toBe("github");
     expect(manifestStep.run).toContain("runnerBackend: process.env.OPENCLAW_CI_RUNNER_BACKEND");
     expect(checkShardRun).toContain('if [ "$RUNNER_BACKEND" = "github" ]; then');
     expect(checkShardRun).toContain("lint_args=(--only=extensions --only=scripts --threads=1)");
@@ -5704,6 +5726,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"',
     );
     expect(hostedCoreLint.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
+    expect(hostedCoreLint.if).toContain(
+      "github.event.pull_request.head.repo.full_name != github.repository",
+    );
+    expect(workflow.jobs["check-test-types-hosted-core-shard"].if).toContain(
+      "github.event.pull_request.head.repo.full_name != github.repository",
+    );
     expect(hostedCoreLint["runs-on"]).toBe("ubuntu-24.04");
     expect(hostedCoreLint.strategy).toEqual({
       "fail-fast": false,
@@ -5720,8 +5748,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toContain("--only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1");
   });
 
-  it("runs both baseline ratchets against the exact tested tree", () => {
+  it("runs all baseline ratchets against the exact tested tree", () => {
     const workflow = readCiWorkflow();
+    const maxLinesRatchet = readFileSync("scripts/check-max-lines-ratchet.mts", "utf8");
     const checksFastJob = workflow.jobs["checks-fast-core"];
     const checksFastSteps = checksFastJob.steps;
     const checkout = checksFastSteps.find((step: WorkflowStep) => step.name === "Checkout");
@@ -5822,6 +5851,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-ratchet-base");
     expect(checksFastRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');
     expect(checksFastRun.run).toContain('pnpm check:assertion-safety --base "$base_ref"');
+    expect(maxLinesRatchet).toContain(
+      'import { main as checkEnvVarCount } from "./check-env-var-count.mts";',
+    );
+    expect(maxLinesRatchet).toContain("checkEnvVarCount(envVarCountArgs(argv), root);");
     expect(checksFastRun.run).toContain(
       'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
     );

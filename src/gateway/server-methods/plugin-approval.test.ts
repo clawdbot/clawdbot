@@ -305,6 +305,7 @@ describe("createPluginApprovalHandlers", () => {
 
       const requestedBroadcast = broadcastCall(opts);
       expect(requestedBroadcast.event).toBe("plugin.approval.requested");
+      expect(requestedBroadcast.payload.approvalKind).toBe("plugin");
       expect(requestedBroadcast.payload.id).toBeTypeOf("string");
       expect(requestedBroadcast.options).toEqual({ dropIfSlow: true });
 
@@ -796,6 +797,7 @@ describe("createPluginApprovalHandlers", () => {
       const approvals = requireArray(listCall.result, "approval list");
       expect(approvals).toHaveLength(1);
       const approval = requireRecord(approvals[0], "approval");
+      expect(approval.approvalKind).toBe("plugin");
       const listedApprovalId = expectPluginApprovalId(approval.id, "listed approval id");
       const request = requireRecord(approval.request, "approval request");
       expect(request.title).toBe("Sensitive action");

@@ -58,6 +58,7 @@ struct SettingsProTab: View {
     @State var manualGatewayPortText = ""
     @State var manualGatewayContextPath: String?
     @State var setupStatusText: String?
+    @State var gatewayActionStatusText: String?
     @State var setupAttemptID: UUID?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?

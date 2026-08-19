@@ -47,6 +47,39 @@ describe("session manager codec compatibility", () => {
     expect(isIndexedSessionEntry(entry)).toBe(false);
   });
 
+  it.each([
+    { name: "singleton", reason: ["reset"] },
+    { name: "nested singleton", reason: [["reset"]] },
+  ])("preserves a $name legacy reset reason", ({ reason }) => {
+    const manager = SessionManager.fromEntries([
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "legacy-reset-session",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: "/tmp",
+      },
+      {
+        type: "message",
+        id: "before-reset",
+        parentId: null,
+        message: { role: "user", content: "before" },
+      },
+      { type: "reset", id: "legacy-reset", parentId: "before-reset", reason },
+      {
+        type: "message",
+        id: "after-reset",
+        parentId: "legacy-reset",
+        message: { role: "user", content: "after" },
+      },
+    ]);
+
+    expect(manager.getEntry("legacy-reset")).toBeDefined();
+    const context = JSON.stringify(manager.buildSessionContext());
+    expect(context).not.toContain("before");
+    expect(context).toContain("after");
+  });
+
   it("parses opaque tree links without widening their variants", () => {
     expect(parseParentLinkedOpaqueEntry({ type: "future", id: "f1", parentId: null })).toEqual({
       id: "f1",

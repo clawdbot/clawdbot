@@ -39,10 +39,8 @@ export type DoctorHealthFlowContext = {
   cfgForPersistence: OpenClawConfig;
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
-  /** Cron ownership could not be made safe, so every config write remains deferred this run. */
-  configWriteDeferredByCronOwnership?: true;
-  /** The repaired candidate failed write validation; nothing was persisted this run. */
-  configWriteBlockedByValidation?: true;
+  /** The requested config write was refused; later repairs must not consume its candidate. */
+  configWriteRefusal?: "validation" | "cron-owner-safety";
   /** One-shot repairs that require a durable config write have completed. */
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;

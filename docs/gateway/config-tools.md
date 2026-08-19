@@ -23,7 +23,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | Profile     | Includes                                                                                                                                                                                                                                                |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `minimal`   | `session_status` only                                                                                                                                                                                                                                   |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate`                |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate`              |
 | `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `ask_user` |
 | `full`      | No restriction (same as unset)                                                                                                                                                                                                                          |
 
@@ -42,7 +42,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                                                                                                   |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
-| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`                                                                                                                                                     |
+| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
 | `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                     |
 | `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                    |
 | `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
@@ -145,6 +145,14 @@ Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildca
 `allow` and `alsoAllow` cannot both be set in the same scope (`tools`, `tools.byProvider.<id>`, `agents.entries.*.tools`) — config validation rejects it. Merge `alsoAllow` entries into `allow`, or drop `allow` and use `profile` + `alsoAllow` instead.
 </Note>
 
+The image inspection tool is `view_image`. If an older config still names
+`image` in an allow, `alsoAllow`, or deny list, run `openclaw doctor --fix` to
+rewrite supported global, per-agent, provider, sandbox, sender, channel, and
+Gateway policy surfaces. Doctor preserves patterns such as `image*` that may
+still match other tools and adds `view_image` when the pattern no longer covers
+inspection. Patterns that already cover both names, such as `*` or `*image*`,
+remain unchanged.
+
 ### `tools.byProvider`
 
 Further restrict tools for specific providers or models. Order: base profile → provider profile → allow/deny.
@@ -202,6 +210,47 @@ Controls elevated exec access outside the sandbox:
 - Per-agent override (`agents.entries.*.tools.elevated`) can only further restrict.
 - `/elevated on|off|ask|full` stores state per session; inline directives apply to single message.
 - Elevated `exec` bypasses sandboxing and uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`).
+
+### `tools.github`
+
+GitHub CLI identity is native by default. When `tools.github` is omitted, local agent tools, the Codex harness, and Agent Settings follow normal `gh` resolution: `GH_TOKEN` or `GITHUB_TOKEN` from the Gateway process takes precedence, followed by the runtime user's `gh` keyring/config. The Git author comes from the selected agent's workspace.
+
+Use **Agents → Tools → GitHub Identity** to configure a managed fine-grained personal access token. The browser places the pasted token in the secret store as a one-use handoff. The Gateway hard-deletes that handoff before passing its value to `gh auth login` on stdin, verifies the account, publishes an account-owned managed `gh` profile, and stores only this secret-free config:
+
+```json5
+{
+  tools: {
+    github: {
+      profileId: "ghp_0123456789abcdef0123456789abcdef",
+      gitAuthor: { name: "Automation User", email: "automation@example.com" },
+    },
+  },
+  agents: {
+    entries: {
+      reviewer: {
+        tools: {
+          github: {
+            profileId: "ghp_fedcba9876543210fedcba9876543210",
+            gitAuthor: { name: "Review Agent" },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Omitting `agents.entries.<id>.tools.github` inherits the system identity. An agent object is a complete managed override. If a configured managed profile is missing or unusable, GitHub status reports `configured_unavailable`; it never falls back to the native profile.
+
+Managed identity applies to the `gh` CLI/API account and optional Git author/committer metadata in local OpenClaw exec and the local Codex harness. OpenClaw supplies a private `GH_CONFIG_DIR`, clears ambient `GH_TOKEN` and `GITHUB_TOKEN` precedence, and applies configured author fields through process-local environment and Git config overlays. It does not install a credential helper, rewrite SSH remotes, add HTTP authorization headers, or otherwise override an existing repository's Git network credentials. New runs switch to a replacement or inherited identity immediately. Existing local processes keep their immutable profile generation until they close; retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
+
+Managed profiles provide execution and coordination identity; they are not an OS-user security sandbox. A process with unrestricted host execution under the same OS account can access account-owned files, including managed `gh` profiles. Use an OpenClaw sandbox, a dedicated host, or a dedicated OS user when adversarial isolation is required.
+
+The profile is not forwarded to node hosts, OpenClaw sandboxes, remote-exec placements, or cloud workers; cloud workers remain credential-free. Direct branch or pull request publication is not part of this identity foundation and belongs to PR3 in this stacked series. Until that separate Gateway broker lands, repository remotes continue to use their existing credentials and publication workflow.
+
+Verification proves which account answered the GitHub API request. Status distinguishes missing or invalid managed credentials, unverified transport failures, and GitHub rate limiting without returning `gh` diagnostics. It does not claim that fine-grained write permissions or Git transport access were remotely verified. GitHub App and brokered publication support remain future work.
+
+Control UI repository previews and project discovery use the separate optional `gateway.controlUi.github.token` service credential. They never consume an agent tool identity. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
 
 ### `tools.exec`
 
@@ -320,7 +369,7 @@ Configures inbound media understanding (image/audio/video):
 
     - `capabilities`: list containing one or more of `image`, `audio`, and `video`.
     - `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`: per-entry overrides.
-    - Matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
+    - Matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `view_image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
     - Failures fall back to the next entry.
 
     Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
@@ -417,19 +466,19 @@ Controls inline attachment support for `sessions_spawn`.
 
 ### `tools.updatePlan`
 
-Kill switch for the structured `update_plan` checklist tool used for non-trivial multi-step work tracking.
+Kill switch for `progress_card`, the durable plan and status note used for non-trivial multi-step work tracking.
 
 ```json5
 {
   tools: {
-    updatePlan: false, // hide update_plan from every run
+    updatePlan: false, // hide progress_card from every run
   },
 }
 ```
 
 - Default: `true` for every provider and model. Set `false` to keep the tool off; there is no model-specific auto-enable rule.
-- The tool description adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
-- `tools.deny: ["update_plan"]` also removes the tool, so use whichever surface already carries your tool policy.
+- The tool description tells the model to keep the plan current, use at most one `in_progress` step, and add Markdown only when it contributes information beyond the steps.
+- Use `progress_card` in new `tools.allow` and `tools.deny` policies. Existing policies that name `update_plan` map to `progress_card`, so shipped allowlists and denylists keep their meaning.
 
 Older configs used `tools.experimental.planTool`. Run `openclaw doctor --fix` to move the value to `tools.updatePlan`.
 

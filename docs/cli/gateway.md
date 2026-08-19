@@ -512,6 +512,9 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
   Machine-readable JSON output.
 </ParamField>
 
+`openclaw.setup.detect` uses a 40-second default so the Gateway can finish its
+bounded AI-access scan. An explicit `--timeout` still takes precedence.
+
 <Note>
 `--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected). Use `--port` for a custom-port local Gateway; explicit `--url` targets still require explicit credentials.
 </Note>

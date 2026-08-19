@@ -165,20 +165,6 @@ export function loadOrCreateProcessDeviceIdentity(
 export function loadDeviceIdentityIfPresent(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity | null {
-  return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) => {
-    const stored = readStoredDeviceIdentityReadOnly(resolvedOptions);
-    if (stored) {
-      return toDeviceIdentity(stored);
-    }
-    assertNoPendingLegacyIdentity(resolvedOptions);
-    return null;
-  });
-}
-
-/** Load a persisted identity without creating coordinator or shared-state artifacts. */
-export function loadDeviceIdentityIfPresentReadOnly(
-  options: DeviceIdentityStoreOptions = {},
-): DeviceIdentity | null {
   const stored = readStoredDeviceIdentityReadOnly(options);
   if (stored) {
     return toDeviceIdentity(stored);

@@ -34,12 +34,15 @@ export async function runPreparedReply(
 
   const { acquireAgentRunPreparedModelRuntime } =
     await import("../../agents/prepared-model-runtime.js");
-  const lease = await acquireAgentRunPreparedModelRuntime({
-    config: dispatchRuntime.config,
-    agentId: dispatchRuntime.agentId,
-    agentDir: dispatchRuntime.agentDir,
-    workspaceDir: context.workspaceDir,
-  });
+  const lease = await acquireAgentRunPreparedModelRuntime(
+    {
+      config: dispatchRuntime.config,
+      agentId: dispatchRuntime.agentId,
+      agentDir: dispatchRuntime.agentDir,
+      workspaceDir: context.workspaceDir,
+    },
+    { pluginGeneration: dispatchRuntime.pluginGeneration },
+  );
   try {
     return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
       executePreparedReplyContext(context),

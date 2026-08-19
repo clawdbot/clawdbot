@@ -149,7 +149,13 @@ const sendDurableMessageBatch = vi.fn(
     }
     return {
       status: "sent",
-      results: [{ channel: "telegram", messageId: last.messageId, chatId: last.chatId }],
+      results: [
+        {
+          channel: "telegram",
+          messageId: last.messageId,
+          target: { kind: "chat", id: last.chatId },
+        },
+      ],
       receipt: {
         primaryPlatformMessageId: last.messageId,
         platformMessageIds: [last.messageId],

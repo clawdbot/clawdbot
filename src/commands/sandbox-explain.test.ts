@@ -153,7 +153,7 @@ describe("sandbox explain command", () => {
     } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
     const parsed = JSON.parse(logs.join(""));
-    expect(parsed.sandbox.tools.allow).toEqual(["browser", "message", "tts", "image"]);
+    expect(parsed.sandbox.tools.allow).toEqual(["browser", "message", "tts", "view_image"]);
     expect(parsed.sandbox.tools.deny).not.toContain("browser");
     expect(parsed.sandbox.tools.sources.allow).toEqual({
       source: "agent",

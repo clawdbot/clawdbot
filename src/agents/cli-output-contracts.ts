@@ -59,6 +59,7 @@ export type CliOutput = {
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
   yielded?: true;
+  yieldAcknowledgment?: string;
 };
 
 export type CliStreamingDelta = {

@@ -1894,6 +1894,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       getRuntimeConfig: () => ({}) as never,
     });
 
+    const ownerContext = { owner: "gateway-a" } as never;
+    const resolveGatewayContext = () => ownerContext;
     const result = await deliverSubagentAnnouncement({
       requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
       targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
@@ -1912,6 +1914,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-dispatch",
+      resolveGatewayContext,
     });
 
     expectDeliveryPath(result, "direct");
@@ -1936,6 +1939,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-local-dispatch",
       },
       timeoutMs: 120_000,
+      resolveGatewayContext,
     });
   });
 
@@ -3706,6 +3710,39 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("records a committed direct completion when the announce turn ends incomplete", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: "Agent couldn't generate a response.",
+        },
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
+            text: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
+            sourceReplyFinal: true,
+          },
+        ],
+      },
+    });
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: "(no output)",
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
   });
 
   it.each([

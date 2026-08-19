@@ -1885,7 +1885,6 @@ describe("Anthropic provider", () => {
     expect(result.stopReason).toBe("error");
     // Keep salient transport fields while replacing the cycle, so the terminal
     // diagnostic remains actionable without stranding the stream.
-    expect(result.errorMessage).toBeTruthy();
     expect(result.errorMessage).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
   });
 

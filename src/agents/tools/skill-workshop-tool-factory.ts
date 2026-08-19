@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillProposalOrigin, SkillWorkshopRunOptions } from "../../skills/workshop/types.js";
+import { getCanonicalSkillWorkspace } from "../skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
 export function createConfiguredSkillWorkshopTool(params: {
@@ -11,6 +12,7 @@ export function createConfiguredSkillWorkshopTool(params: {
   runId?: string;
   messageId?: string | number;
   run?: SkillWorkshopRunOptions;
+  modelContextWindowTokens?: number;
 }) {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const runId = normalizeOptionalString(params.runId);
@@ -18,7 +20,7 @@ export function createConfiguredSkillWorkshopTool(params: {
     params.messageId === undefined ? undefined : String(params.messageId),
   );
   return createSkillWorkshopTool({
-    workspaceDir: params.workspaceDir,
+    workspaceDir: getCanonicalSkillWorkspace() ?? params.workspaceDir,
     config: params.config,
     env: params.run?.env,
     agentId: params.agentId,
@@ -38,5 +40,6 @@ export function createConfiguredSkillWorkshopTool(params: {
       (params.run?.proposalOnly ? { remaining: 1 } : undefined),
     proposalReviewCompletion: params.run?.proposalReviewCompletion,
     collectionReconcile: params.run?.collectionReconcile,
+    modelContextWindowTokens: params.modelContextWindowTokens,
   });
 }

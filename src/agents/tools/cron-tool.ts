@@ -172,13 +172,13 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
     ? "{name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}"
     : "{name?,schedule,payload,sessionTarget?,pacing?,delivery?,enabled?}";
   const streamScheduleLine = params.triggersEnabled
-    ? '\n- {kind:"stream",command:[argv],mode?:"line"|"match",match?}: fires on supervised process output; needs cron.triggers.enabled.'
+    ? '\n- {kind:"stream",command:[argv],mode?:"line"|"match",match?}: fires on supervised process output; disabled only when cron.triggers.enabled=false.'
     : "";
   const scriptPayloadLine = params.triggersEnabled
-    ? '\n- script {kind:"script",script,timeoutSeconds?,toolBudget?}: main|isolated only; needs cron.triggers.enabled.'
+    ? '\n- script {kind:"script",script,timeoutSeconds?,toolBudget?}: main|isolated only; disabled only when cron.triggers.enabled=false.'
     : "";
   const triggerSection = params.triggersEnabled
-    ? `TRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.enabled — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call("exec",{command:"..."}).`
+    ? `TRIGGER (condition watcher on every/cron): {script,once?}; available unless cron.triggers.enabled=false — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call("exec",{command:"..."}).`
     : `TRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.`;
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
@@ -209,15 +209,11 @@ DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?,co
 Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`;
 }
 
-// Trigger-gated surfaces stay advertised for config-less callers; only an
-// explicit runtime config with cron.triggers.enabled !== true narrows the
-// model-facing surface, matching the scheduler's own gate in
+// Trigger-gated surfaces are advertised by default. Only an explicit false
+// narrows the model-facing surface, matching the scheduler's own gate in
 // cron/service/jobs-validation.ts.
 function resolveCronTriggersEnabled(config?: OpenClawConfig): boolean {
-  if (!config) {
-    return true;
-  }
-  return config.cron?.triggers?.enabled === true;
+  return config?.cron?.triggers?.enabled !== false;
 }
 
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {

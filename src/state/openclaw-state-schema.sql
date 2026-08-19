@@ -92,8 +92,22 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   rejected_at TEXT,
   quarantined_at TEXT,
   stale_at TEXT,
-  status_reason TEXT
+  status_reason TEXT,
+  claim_released_time INTEGER
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
+  review_id TEXT NOT NULL PRIMARY KEY,
+  workspace_dir TEXT NOT NULL,
+  backup_id TEXT NOT NULL,
+  create_time INTEGER NOT NULL,
+  kept_names_json TEXT NOT NULL,
+  written_names_json TEXT NOT NULL,
+  dropped_json TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_workspace_time
+  ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
 
 CREATE TABLE IF NOT EXISTS skill_workshop_proposal_origin_runs (
   proposal_id TEXT NOT NULL,
@@ -909,6 +923,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_tls INTEGER,
   gateway_tls_fingerprint TEXT,
   gateway_context_path TEXT,
+  gateway_cloudflare_access_json TEXT,
   installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
@@ -2072,6 +2087,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   profile_snapshot_json TEXT NOT NULL,
   provision_operation_id TEXT NOT NULL UNIQUE,
   lease_id TEXT,
+  node_setup_id TEXT,
+  node_device_id TEXT,
   ssh_host TEXT,
   ssh_port INTEGER CHECK (ssh_port IS NULL OR (ssh_port >= 1 AND ssh_port <= 65535)),
   ssh_user TEXT,
@@ -2249,6 +2266,37 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
+
+-- Planned placement moves retain their exact source CAS and bounded target
+-- without widening the stable placement-state vocabulary. The opaque operation
+-- id fences stale asynchronous completion; it is correlation, never authority.
+CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
+  operation_id TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT NOT NULL UNIQUE
+    REFERENCES worker_session_placements(session_id) ON DELETE CASCADE,
+  source_generation INTEGER NOT NULL CHECK (source_generation >= 0),
+  source_environment_id TEXT NOT NULL CHECK (
+    length(source_environment_id) BETWEEN 1 AND 256
+    AND source_environment_id = trim(source_environment_id)
+  ),
+  source_owner_epoch INTEGER NOT NULL CHECK (source_owner_epoch >= 1),
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('gateway', 'profile', 'device')),
+  target_id TEXT,
+  -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the
+  -- same shape as fresh databases; placement-move code validates its value.
+  target_machine_class TEXT,
+  last_error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK (
+    (target_kind IS 'gateway' AND target_id IS NULL)
+    OR
+    (target_kind IN ('profile', 'device')
+      AND target_id IS NOT NULL
+      AND length(target_id) BETWEEN 1 AND 256
+      AND target_id = trim(target_id))
+  )
+) STRICT;
 
 -- Worker-visible session RPC authority is persisted against the exact turn
 -- claim. The launch descriptor is informative only; Gateway dispatch always

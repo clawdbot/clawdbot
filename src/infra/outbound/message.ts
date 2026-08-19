@@ -11,7 +11,7 @@ import {
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
 import type { DurableMessageSendIntent } from "../../channels/message/types.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { ChannelPlugin, ChannelPollResult } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -172,15 +172,23 @@ export type MessagePollResult = {
   durationSeconds: number | null;
   durationHours: number | null;
   via: "direct" | "gateway";
-  result?: {
-    messageId: string;
-    toJid?: string;
-    channelId?: string;
-    conversationId?: string;
-    pollId?: string;
-  };
+  result?: Pick<OutboundDeliveryResult, "messageId" | "target" | "toJid" | "pollId">;
   dryRun?: boolean;
 };
+
+function normalizeMessagePollDeliveryResult(
+  result: ChannelPollResult,
+): NonNullable<MessagePollResult["result"]> {
+  const { channelId, conversationId, ...delivery } = result;
+  return {
+    ...delivery,
+    ...(channelId
+      ? { target: { kind: "channel" as const, id: channelId } }
+      : conversationId
+        ? { target: { kind: "conversation" as const, id: conversationId } }
+        : {}),
+  };
+}
 
 function buildMessagePollResult(params: {
   channel: string;
@@ -566,17 +574,11 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       to: params.to,
       normalized,
       via: "direct",
-      result,
+      result: normalizeMessagePollDeliveryResult(result),
     });
   }
 
-  const result = await callMessageGateway<{
-    messageId: string;
-    toJid?: string;
-    channelId?: string;
-    conversationId?: string;
-    pollId?: string;
-  }>({
+  const result = await callMessageGateway<ChannelPollResult>({
     gateway: params.gateway,
     method: "poll",
     params: {
@@ -600,6 +602,6 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     to: params.to,
     normalized,
     via: "gateway",
-    result,
+    result: normalizeMessagePollDeliveryResult(result),
   });
 }

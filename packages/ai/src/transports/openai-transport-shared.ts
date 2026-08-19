@@ -7,6 +7,7 @@ import type {
   ToolCall,
   Usage,
 } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
@@ -36,9 +37,132 @@ export const log = {
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 
+export type OpenAICompletionsTextSource = "reasoning_detail" | "refusal";
+
 export type OpenAICompletionsContentDelta =
   | { kind: "thinking"; signature?: string; text: string }
-  | { kind: "text"; text: string; source?: "refusal" };
+  | { kind: "text"; text: string; source?: OpenAICompletionsTextSource };
+
+type OpenAICompletionsReasoningBatch = {
+  readonly deltas: readonly OpenAICompletionsContentDelta[];
+  readonly mirroredThinking: readonly string[];
+  readonly hasThinking: boolean;
+  readonly hasVisibleText: boolean;
+};
+
+type MutableOpenAICompletionsReasoningBatch = {
+  deltas: OpenAICompletionsContentDelta[];
+  mirroredThinking: string[];
+  hasThinking: boolean;
+  hasVisibleText: boolean;
+};
+
+const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch = {
+  deltas: [],
+  mirroredThinking: [],
+  hasThinking: false,
+  hasVisibleText: false,
+};
+
+const OPENAI_COMPLETIONS_REASONING_FIELDS = [
+  "reasoning_content",
+  "reasoning",
+  "reasoning_text",
+] as const;
+
+function appendOpenAICompletionsReasoningDelta(
+  batch: MutableOpenAICompletionsReasoningBatch,
+  next: OpenAICompletionsContentDelta,
+): void {
+  if (next.kind === "thinking") {
+    batch.hasThinking = true;
+  } else {
+    batch.hasVisibleText = true;
+  }
+  const previous = batch.deltas[batch.deltas.length - 1];
+  if (!previous || previous.kind !== next.kind) {
+    batch.deltas.push(next);
+    if (next.kind === "thinking") {
+      batch.mirroredThinking.push(next.text);
+    }
+    return;
+  }
+  if (next.kind === "thinking" && previous.kind === "thinking") {
+    if (previous.signature !== next.signature) {
+      batch.deltas.push(next);
+      batch.mirroredThinking.push(next.text);
+      return;
+    }
+    previous.text += next.text;
+    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
+    return;
+  }
+  previous.text += next.text;
+}
+
+function createOpenAICompletionsReasoningBatch(): MutableOpenAICompletionsReasoningBatch {
+  return {
+    deltas: [],
+    mirroredThinking: [],
+    hasThinking: false,
+    hasVisibleText: false,
+  };
+}
+
+export function readOpenAICompletionsReasoningBatch(
+  delta: Record<string, unknown>,
+  visibleReasoningDetailTypes: ReadonlySet<string>,
+): OpenAICompletionsReasoningBatch {
+  let batch: MutableOpenAICompletionsReasoningBatch | undefined;
+  const reasoningDetails = delta.reasoning_details;
+  let usedReasoningThinkingDetails = false;
+  if (Array.isArray(reasoningDetails)) {
+    for (const item of reasoningDetails) {
+      if (!isRecord(item)) {
+        continue;
+      }
+      const detail = item;
+      if (typeof detail.text !== "string" || !detail.text) {
+        continue;
+      }
+      if (detail.type === "reasoning.text") {
+        usedReasoningThinkingDetails = true;
+        batch ??= createOpenAICompletionsReasoningBatch();
+        appendOpenAICompletionsReasoningDelta(batch, {
+          kind: "thinking",
+          signature: "reasoning_details",
+          text: detail.text,
+        });
+        continue;
+      }
+      // Compat-classified visible details are explicit output items. Preserve
+      // their order with adjacent structured thinking instead of inferring commentary.
+      if (typeof detail.type === "string" && visibleReasoningDetailTypes.has(detail.type)) {
+        batch ??= createOpenAICompletionsReasoningBatch();
+        appendOpenAICompletionsReasoningDelta(batch, {
+          kind: "text",
+          text: detail.text,
+          source: "reasoning_detail",
+        });
+      }
+    }
+  }
+  if (!usedReasoningThinkingDetails) {
+    for (const field of OPENAI_COMPLETIONS_REASONING_FIELDS) {
+      const value = delta[field];
+      if (typeof value === "string" && value.length > 0) {
+        batch ??= createOpenAICompletionsReasoningBatch();
+        appendOpenAICompletionsReasoningDelta(batch, {
+          kind: "thinking",
+          signature: field,
+          text: value,
+        });
+        break;
+      }
+    }
+  }
+  return batch ?? EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH;
+}
 
 type OpenAIModeCompatInput = Omit<OpenAICompletionsCompat, "thinkingFormat"> & {
   thinkingFormat?: string;

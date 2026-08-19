@@ -615,7 +615,7 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     accountId?: string | null;
     senderId?: string | null;
     action: "approve";
-    approvalKind: "exec" | "plugin";
+    approvalKind: ChannelApprovalKind;
   }) => {
     authorized: boolean;
     reason?: string;

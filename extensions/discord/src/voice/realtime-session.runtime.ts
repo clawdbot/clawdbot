@@ -227,6 +227,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       providerConfigs: buildProviderConfigs(this.realtimeConfig),
       providerConfigOverrides: buildProviderConfigOverrides(this.realtimeConfig),
       cfg: this.params.cfg,
+      agentId: this.params.entry.route.agentId,
       defaultModel: this.realtimeConfig?.model,
       noRegisteredProviderMessage: "No configured realtime voice provider registered",
     });
@@ -284,6 +285,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.bridge = this.harness.createBridge({
       provider: resolved.provider,
       cfg: this.params.cfg,
+      agentId: this.params.entry.route.agentId,
       providerConfig: resolved.providerConfig,
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions,

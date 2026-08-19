@@ -23,6 +23,7 @@ import {
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatLookupMiss } from "../error-format.js";
+import { rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
@@ -205,21 +206,23 @@ function formatCronStatusForDisplay(job: CronJob): string {
 }
 
 export function handleCronCliError(err: unknown) {
+  rethrowExpectedCliError(err);
   const missingJob = readCronJobNotFoundError(err);
-  const message = missingJob
-    ? formatLookupMiss({
-        noun: "Automation",
-        value: sanitizeTerminalText(missingJob.jobId),
-        listCommand: "openclaw cron list",
-        valueLabel: "automation id",
-      })
-    : formatErrorMessage(err);
+  const message = missingJob ? formatCronLookupMiss(missingJob.jobId) : formatErrorMessage(err);
   if (isJsonOutputModeActive(process.argv)) {
-    throw new Error(message);
+    throw missingJob ? new Error(message) : err;
   }
   defaultRuntime.error(danger(message));
   defaultRuntime.exit(1);
 }
+
+export const formatCronLookupMiss = (jobId: string) =>
+  formatLookupMiss({
+    noun: "Automation",
+    value: sanitizeTerminalText(jobId),
+    listCommand: "openclaw cron list",
+    valueLabel: "automation id",
+  });
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   // Old/offline gateways should not make successful cron mutations fail after the fact.

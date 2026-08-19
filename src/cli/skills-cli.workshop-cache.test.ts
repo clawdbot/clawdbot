@@ -234,7 +234,12 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     registerSkillsCli(program);
     await expect(
       program.parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    ).rejects.toMatchObject({
+      name: "GatewayCredentialsRequiredError",
+      message: "gateway health requires credentials",
+      method: "health",
+      configPath: "/tmp/openclaw.json",
+    });
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
     expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(1);

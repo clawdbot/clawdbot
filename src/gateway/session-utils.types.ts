@@ -5,7 +5,9 @@ import type {
   SessionCreatedActor,
   SessionClassification,
   SessionPeerKind,
+  SessionOwner,
   SessionPlacement,
+  SessionPlacementMove,
   SessionRow,
   SessionRunStatus,
   SessionSharingRole,
@@ -72,6 +74,8 @@ export type GatewaySessionRow = {
   swarmGroupId?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  sessionRoot?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: SessionEntry["worktree"];
   /** Session-scoped exec node binding (exec host=node routing). */
@@ -84,12 +88,16 @@ export type GatewaySessionRow = {
   subagentControlScope?: SessionEntry["subagentControlScope"];
   createdVia?: SessionEntry["createdVia"];
   createdActor?: SessionCreatedActor;
+  owner?: SessionOwner;
+  participants?: SessionCreatedActor[];
+  participantCount?: number;
   createdAt?: SessionEntry["createdAt"];
   forkSource?: SessionEntry["forkSource"];
   previousSessionId?: SessionEntry["previousSessionId"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   icon?: string;
+  channelAvatarUrl?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   /** Preferred Control UI face for generic session navigation. */
@@ -102,7 +110,7 @@ export type GatewaySessionRow = {
   groupChannel?: string;
   space?: string;
   chatType?: ChatType;
-  origin?: SessionOrigin;
+  origin?: Omit<SessionOrigin, "avatar">;
   updatedAt: number | null;
   archived?: boolean;
   archivedAt?: number;
@@ -121,6 +129,7 @@ export type GatewaySessionRow = {
   lastActivityAt?: number;
   sessionId?: string;
   placement?: SessionPlacement;
+  placementMove?: SessionPlacementMove;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   restartRecoveryStatus?: "tombstoned";

@@ -19,7 +19,11 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
-import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import {
+  createWorkerEnvironmentStore,
+  type WorkerEnvironmentStore,
+  type WorkerEnvironmentTransitionPatch,
+} from "./store.js";
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -164,7 +168,8 @@ export function createService(
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
-      | "resolveWorkerGateway"
+      | "prepareNodeEnrollment"
+      | "retireNodeEnrollment"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
@@ -182,7 +187,6 @@ export function createService(
     prepareInstallation: testState.prepareInstallation,
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
-    resolveWorkerGateway: () => ({ host: "127.0.0.1", port: 18_789 }),
     generateWorkerCredential: () => CREDENTIAL,
     executeInference: async () => ({
       type: "error",
@@ -203,6 +207,7 @@ export function createService(
 export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
   return {
     id: "fake",
+    supportedExecutionModes: ["remote-exec"],
     provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
     inspect: async () => ({ status: "active" }),
     destroy: async () => {},
@@ -292,7 +297,10 @@ export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEn
   });
 }
 
-export function readyPatch(environmentId: string, receipt = BOOTSTRAP_RECEIPT) {
+export function readyPatch(
+  environmentId: string,
+  receipt: NonNullable<WorkerEnvironmentTransitionPatch["bootstrapReceipt"]> = BOOTSTRAP_RECEIPT,
+) {
   return {
     bootstrapReceipt: receipt,
     credential: {

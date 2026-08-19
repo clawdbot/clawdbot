@@ -120,6 +120,8 @@ export class BrowserPanelController implements ReactiveController {
     this.input.resetCaptureState();
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
+    this.urlDraftEditing = false;
+    this.setState("urlDraft", "");
     this.setState("pendingNewTab", false);
     // Re-probe per connection: another gateway may have evaluate enabled.
     this.setState("evaluateUnavailable", false);

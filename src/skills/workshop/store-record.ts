@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { z } from "zod";
 import {
@@ -35,14 +36,16 @@ const skillProposalFindingSchema = z.looseObject({
     .refine((value) => value >= 1)
     .optional(),
 });
+const skillProposalMetricValueSchema = z.union([
+  z.string().max(4_000),
+  z.number().finite(),
+  z.boolean(),
+]);
 const skillProposalMetricsSchema = z
-  .record(z.string(), z.union([z.string().max(4_000), z.number().finite(), z.boolean()]))
-  .superRefine((metrics, context) => {
-    const keys = Object.keys(metrics);
-    if (keys.length > 64 || keys.some((key) => key.length === 0 || key.length > 128)) {
-      context.addIssue({ code: "custom", message: "invalid evaluation metric keys" });
-    }
-  });
+  .custom<Record<string, unknown>>(isRecord)
+  .transform((metrics) => new Map(Object.entries(metrics)))
+  .pipe(z.map(z.string().min(1).max(128), skillProposalMetricValueSchema))
+  .refine((metrics) => metrics.size <= 64);
 const skillProposalEvaluationResultSchema = z.looseObject({
   summary: z.string().max(8_000).optional(),
   evaluatorVersion: z.string().max(128).optional(),

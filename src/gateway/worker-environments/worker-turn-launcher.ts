@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
-import type {
-  LocalTurnPlacementClaim,
-  SessionPlacementAdmissionProvider,
-  SessionPlacementTurnParams,
+import {
+  withSessionPlacementForcedTerminalSettlement,
+  type LocalTurnPlacementClaim,
+  type SessionPlacementAdmissionProvider,
+  type SessionPlacementTurnParams,
 } from "../../agents/session-placement-admission.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -30,6 +31,7 @@ import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunne
 import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
 import {
   claimWorkerTurn,
+  rejectPendingWorkerResult,
   releaseClaimIfOwned,
   requireActivePlacement,
   resolvePlacementIdentity,
@@ -83,10 +85,13 @@ async function executeLocalTurn<T>(params: {
     runId: params.claim.runId,
     owner: { kind: "local" },
   });
+  // Forced terminalization and ordinary completion share this exact-claim closure.
+  // Replacement fencing makes a late finally harmless after recovery settles it.
+  const settle = () => releaseClaimIfOwned(params.placements, turnClaim);
   try {
-    return await params.runLocal();
+    return await withSessionPlacementForcedTerminalSettlement(settle, params.runLocal);
   } finally {
-    await releaseClaimIfOwned(params.placements, turnClaim);
+    await settle();
   }
 }
 
@@ -201,6 +206,7 @@ async function executeWorkerTurn(params: {
   const { operationalRunInstance, runtimeIdentity } = await prepareWorkerAgentRuntimeIdentity({
     agentId: placement.agentId,
     runtimeInstanceId: placement.environmentId,
+    placements: params.placements,
     sessionKey: placement.sessionKey,
     turn,
     turnClaim: params.turnClaim,
@@ -212,7 +218,7 @@ async function executeWorkerTurn(params: {
     messages: initialMessages,
     build: (agentRuntimeIdentityToken, windowedMessages) =>
       parseWorkerLaunchPlan({
-        version: 3,
+        version: 4,
         admission: {
           environmentId: placement.environmentId,
           credential: credential.credential,
@@ -230,6 +236,12 @@ async function executeWorkerTurn(params: {
           prompt: turn.prompt,
           suppressPromptTranscript: true,
           workspaceDir: placement.remoteWorkspaceDir,
+          ...(turn.permissionMode
+            ? {
+                permissionMode: turn.permissionMode,
+                workerContainmentRoot: placement.remoteWorkspaceDir,
+              }
+            : {}),
           modelRef,
           inferenceOptions: reasoning ? { reasoning } : {},
           ...(turn.extraSystemPrompt === undefined ? {} : { systemPrompt: turn.extraSystemPrompt }),
@@ -279,6 +291,9 @@ async function executeWorkerTurn(params: {
       handoffAbort.abort(handoffError);
     }
   };
+  if (!tunnel.launchTurn) {
+    throw new Error("Worker tunnel does not support worker turns");
+  }
   const processPromise = tunnel.launchTurn({
     plan,
     turnClaim: params.turnClaim,
@@ -455,6 +470,18 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         routablePlacement = await options.redispatchReclaimed(routablePlacement);
       }
       const identity = resolvePlacementIdentity(claim, routablePlacement);
+      if (
+        routablePlacement.state === "draining" &&
+        options.placements
+          .listPendingWorkspaceResults()
+          .some((pending) => pending.sessionId === identity.sessionId)
+      ) {
+        await rejectPendingWorkerResult({
+          placements: options.placements,
+          sessionId: identity.sessionId,
+          ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+        });
+      }
       let placement = requireActivePlacement(routablePlacement);
       // The placement owns the managed worktree. Callers can carry a default or stale
       // workspace path, but remote results must only reconcile into that canonical root.

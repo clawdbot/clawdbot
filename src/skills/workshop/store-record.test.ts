@@ -146,6 +146,23 @@ describe("Skill Workshop persisted record validation", () => {
         },
       },
     },
+    {
+      name: "invalid own prototype-key metric",
+      value: {
+        ...shippedProposal,
+        evaluation: {
+          ...validEvaluation,
+          outcomes: [
+            {
+              evaluatorId: "reviewer",
+              pluginId: "review-plugin",
+              status: "completed",
+              result: { metrics: JSON.parse('{"__proto__":null}') as unknown },
+            },
+          ],
+        },
+      },
+    },
   ])("rejects $name", ({ value }) => {
     expect(parseSkillProposalRecord(value)).toBeNull();
   });

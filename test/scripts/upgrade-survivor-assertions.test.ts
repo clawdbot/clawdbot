@@ -367,6 +367,7 @@ describe("upgrade survivor assertions", () => {
 
     expect(scenarios).toContain("base");
     expect(scenarios).toContain("acpx-openclaw-tools-bridge");
+    expect(scenarios).toContain("sqlite-volume");
     expect(new Set(scenarios).size).toBe(scenarios.length);
   });
 

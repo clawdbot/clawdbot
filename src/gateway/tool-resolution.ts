@@ -75,11 +75,12 @@ export function resolveGatewayScopedTools(params: {
   modelProvider?: string;
   modelId?: string;
   modelHasVision?: boolean;
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   clientCaps?: string[];
   accountId?: string;
@@ -298,6 +299,7 @@ export function resolveGatewayScopedTools(params: {
     currentChannelId: params.currentChannelId ?? params.agentTo,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
+    replyToMode: params.replyToMode,
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
     onYield: params.onYield,
@@ -521,14 +523,16 @@ export function resolveGatewayScopedTools(params: {
     }),
   });
 
-  const gatewayDenySet = new Set([
-    ...defaultGatewayDeny,
-    ...ownerOnlyGatewayDeny,
-    ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
-    ...excludedToolNames,
-  ]);
+  const gatewayDenySet = new Set(
+    [
+      ...defaultGatewayDeny,
+      ...ownerOnlyGatewayDeny,
+      ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+      ...excludedToolNames,
+    ].map(normalizeToolPolicyName),
+  );
   const tools = applyToolAvailabilityDescriptions(
-    policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name)),
+    policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
   );
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.

@@ -98,6 +98,7 @@ export async function runQaFlowSuiteIsolated(
       .then(async () => {
         const partialFinishedAt = new Date();
         const { report, reportPath } = await writeQaSuiteArtifacts({
+          status: "running",
           repoRoot,
           outputDir,
           startedAt,

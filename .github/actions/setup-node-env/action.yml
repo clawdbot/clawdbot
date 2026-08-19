@@ -96,8 +96,11 @@ runs:
     # restore the rejected payload and re-download forever. The save below is
     # keyed on the version actually installed, so a newer resolve publishes a new
     # entry and later prefix restores pick it up.
+    # GitHub-hosted images carry a Node that already clears the floor, so they
+    # resolve from /opt/hostedtoolcache and would only ever miss here, then warn
+    # on a save whose path was never created. Scope both steps to self-hosted.
     - name: Restore Node toolchain cache
-      if: runner.os != 'Windows'
+      if: runner.os != 'Windows' && runner.environment != 'github-hosted'
       id: node-toolchain-restore
       continue-on-error: true
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -118,12 +121,18 @@ runs:
         source "$GITHUB_ACTION_PATH/../setup-pnpm-store-cache/ensure-node.sh"
         openclaw_ensure_node "$REQUESTED_NODE_VERSION"
         echo "resolved-version=$(node -p 'process.versions.node')" >> "$GITHUB_OUTPUT"
+        # Only a download populates the cached root. An image whose toolcache
+        # already clears the floor leaves it absent, and saving a missing path
+        # warns without producing an entry.
+        if [ -n "${OPENCLAW_NODE_TOOLCHAIN_ROOT:-}" ] && [ -d "${OPENCLAW_NODE_TOOLCHAIN_ROOT}" ]; then
+          echo "toolchain-populated=true" >> "$GITHUB_OUTPUT"
+        fi
 
     # Skipped when the restore already matched this exact resolved version, so a
     # warm run uploads nothing. On a version change the 46-way fanout races here;
     # the losers log a benign "cache already exists" and continue.
     - name: Save Node toolchain cache
-      if: ${{ runner.os != 'Windows' && steps.node-toolchain-restore.outputs.cache-matched-key != format('openclaw-node-toolchain-v1-{0}-{1}-{2}-{3}', runner.os, runner.arch, inputs.node-version, steps.setup-node.outputs.resolved-version) }}
+      if: ${{ runner.os != 'Windows' && runner.environment != 'github-hosted' && steps.setup-node.outputs.toolchain-populated == 'true' && steps.node-toolchain-restore.outputs.cache-matched-key != format('openclaw-node-toolchain-v1-{0}-{1}-{2}-{3}', runner.os, runner.arch, inputs.node-version, steps.setup-node.outputs.resolved-version) }}
       continue-on-error: true
       uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:

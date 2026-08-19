@@ -389,7 +389,9 @@ function resolveHostnamePolicyChecks(
   const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, policy);
 
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
-    throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
+    throw new SsrFBlockedError(
+      `Domain policy: Blocked hostname (not in allowlist): ${hostname}. Permitted hostname patterns: ${hostnameAllowlist.join(", ")}. Try a URL on a permitted domain.`,
+    );
   }
 
   if (!skipPrivateNetworkChecks) {

@@ -93,6 +93,32 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 }));
 
 const cfg = {} as OpenClawConfig;
+const visibleFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 1,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: true,
+} as const;
 
 function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -124,6 +150,7 @@ function createDispatch(
     return {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
+      settledReceipt: visibleFinalReceipt,
     };
   }) as DispatchReplyWithBufferedBlockDispatcher;
 }
@@ -741,6 +768,7 @@ describe("channel turn pipeline", () => {
       return {
         queuedFinal: true,
         counts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: visibleFinalReceipt,
       };
     });
 

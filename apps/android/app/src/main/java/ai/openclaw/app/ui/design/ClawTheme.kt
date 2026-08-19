@@ -98,6 +98,7 @@ internal data class ClawTypography(
   val body: TextStyle,
   val label: TextStyle,
   val caption: TextStyle,
+  val captionSmall: TextStyle,
   val mono: TextStyle,
 )
 
@@ -260,6 +261,14 @@ private fun clawTypography(fontFamily: FontFamily) =
         fontSize = 12.5.sp,
         lineHeight = 16.sp,
         letterSpacing = 0.sp,
+      ),
+    captionSmall =
+      TextStyle(
+        fontFamily = fontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        letterSpacing = 0.4.sp,
       ),
     mono =
       TextStyle(

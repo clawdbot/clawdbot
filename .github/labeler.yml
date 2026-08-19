@@ -285,6 +285,16 @@
       - any-glob-to-any-file:
           - "docs/**"
 
+"r: skill":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "custodian-skills/**"
+          - "skills/**"
+          - "src/skills/**"
+          - "docs/tools/custodian-skills.md"
+          - "docs/tools/skills-config.md"
+          - "docs/tools/skills.md"
+
 "cli":
   - changed-files:
       - any-glob-to-any-file:
@@ -387,10 +397,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-wiki/**"
-"extensions: media-understanding-core":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/media-understanding-core/**"
 "extensions: oc-path":
   - changed-files:
       - any-glob-to-any-file:

@@ -6,6 +6,7 @@ describe("OpenClaw state runtime schema projection", () => {
     const schema = getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false });
 
     expect(schema).not.toContain("CREATE TABLE IF NOT EXISTS cron_run_receipts");
+    expect(schema).not.toContain("CREATE TABLE IF NOT EXISTS worker_session_placement_moves");
     expect(schema).not.toContain("idx_cron_run_receipts_active_job");
     expect(schema).not.toContain("idx_cron_run_receipts_job_history");
     expect(schema).not.toContain("CREATE TABLE IF NOT EXISTS outbound_message_progress");

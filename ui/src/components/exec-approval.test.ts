@@ -28,6 +28,7 @@ async function renderApproval(
   requestOrQueue: ExecApprovalRequest | ExecApprovalRequest[],
   overrides: Partial<{
     busy: boolean;
+    canGrant: boolean;
     errors: ReadonlyMap<string, string>;
     nowMs: number;
     onDecision: ReturnType<typeof vi.fn>;
@@ -40,6 +41,7 @@ async function renderApproval(
       .props=${{
         queue,
         busy: overrides.busy ?? false,
+        canGrant: overrides.canGrant ?? true,
         errors: overrides.errors ?? new Map(),
         nowMs: overrides.nowMs ?? Date.now(),
         onDecision,
@@ -217,6 +219,25 @@ describe("openclaw-exec-approval", () => {
       ["approval-1", "allow-always"],
       ["approval-1", "deny"],
     ]);
+  });
+
+  it("keeps review-only decisions disabled and ignores their shortcuts", async () => {
+    const { onDecision } = await renderOpenedApproval(createExecRequest(), { canGrant: false });
+    const { modal } = await getRenderedModalDialog(container);
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
+    );
+
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
+    expect(buttons.every((button) => button.disabled)).toBe(true);
+
+    buttons[0]?.click();
+    modal.dispatchEvent(chord("Enter"));
+    modal.dispatchEvent(chord("d"));
+
+    expect(onDecision).not.toHaveBeenCalled();
   });
 
   it("ignores bare keys so stray typing cannot authorize a command", async () => {

@@ -5,6 +5,7 @@ import OpenClawProtocol
 /// so pin/search/ordering rules stay unit-testable across macOS and iOS.
 public enum ChatSessionSidebarModel {
     public struct Badges: Equatable, Sendable {
+        public let queuedCount: Int
         public let runningCount: Int
         public let failedCount: Int
         public let hasUnread: Bool
@@ -159,12 +160,15 @@ public enum ChatSessionSidebarModel {
 
     private static func node(session: OpenClawChatSessionEntry, children: [Node]) -> Node {
         let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let isRunning = session.hasActiveRun == true || session.hasActiveSubagentRun == true || status == "running"
+        let isQueued = status == "queued"
+        let isRunning = !isQueued &&
+            (session.hasActiveRun == true || session.hasActiveSubagentRun == true || status == "running")
         let hasFailed = status == "failed" || status == "timeout"
         return Node(
             session: session,
             children: children,
             badges: Badges(
+                queuedCount: (isQueued ? 1 : 0) + children.reduce(0) { $0 + $1.badges.queuedCount },
                 runningCount: (isRunning ? 1 : 0) + children.reduce(0) { $0 + $1.badges.runningCount },
                 failedCount: (hasFailed ? 1 : 0) + children.reduce(0) { $0 + $1.badges.failedCount },
                 hasUnread: session.unread == true || children.contains { $0.badges.hasUnread }))
@@ -209,8 +213,11 @@ public enum ChatSessionSidebarModel {
         let declaredAttention = agentStatus?.attention == nil ? nil : agentStatus?.note
         let failedAttention = self.unreadFailureReason(for: session)
         let statusNote = agentStatus?.note
+        let queued = self.normalized(session.status)?.lowercased() == "queued"
+            ? String(localized: "Waiting for a concurrency slot")
+            : nil
         let observer = self.visibleObserverDigest(for: session)?.headline
-        return declaredAttention ?? failedAttention ?? statusNote ?? observer ?? workSubtitle
+        return declaredAttention ?? failedAttention ?? statusNote ?? queued ?? observer ?? workSubtitle
     }
 
     /// Live observer events are useful only after a server row names the

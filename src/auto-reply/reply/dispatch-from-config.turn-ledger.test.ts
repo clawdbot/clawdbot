@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ReplyPayload } from "../reply-payload.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -97,26 +96,21 @@ describe("createReplyTurnLedger", () => {
     }
   });
 
-  it("keeps admission as the visibility fact for untracked dispatchers", () => {
+  it("keeps legacy accepted sends visible when settlement has no receipt", async () => {
     const ledger = createReplyTurnLedger(createUntrackedDispatcher());
     const send = ledger.sendQueued("final", { text: "hello" });
     expect(send.outcome).toBeUndefined();
+    await ledger.settleQueued();
     expect(ledger.hasVisibleDelivery()).toBe(true);
   });
 
-  it("never counts contentless payloads as visible", async () => {
-    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
-    const ledger = createReplyTurnLedger(dispatcher);
-    const payload: ReplyPayload = { text: "hi" };
-    // Metadata-only admissions on untracked dispatchers stay invisible too.
-    const untracked = createReplyTurnLedger(createUntrackedDispatcher());
-    untracked.sendQueued("final", { text: "   " });
-    expect(untracked.hasVisibleDelivery()).toBe(false);
-    ledger.sendQueued("final", payload);
+  it("does not fabricate visibility when a receipt-capable dispatcher omits its receipt", async () => {
+    const ledger = createReplyTurnLedger(
+      createUntrackedDispatcher({ supportsSettledReceipt: true }),
+    );
+    ledger.sendQueued("final", { text: "hello" });
     await ledger.settleQueued();
-    expect(ledger.hasVisibleDelivery()).toBe(true);
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    expect(ledger.hasVisibleDelivery()).toBe(false);
   });
 
   it("records routed settlements only when delivered and contentful", () => {
@@ -126,15 +120,6 @@ describe("createReplyTurnLedger", () => {
     expect(ledger.hasVisibleDelivery()).toBe(false);
     ledger.recordRoutedDelivery({ mediaUrl: "https://example.com/seatmap.png" }, true);
     expect(ledger.hasVisibleDelivery()).toBe(true);
-  });
-
-  it("reports foreign admissions the dispatch pipeline never sent", () => {
-    const dispatcher = createUntrackedDispatcher({
-      getQueuedCounts: () => ({ tool: 0, block: 1, final: 0 }),
-    });
-    const ledger = createReplyTurnLedger(dispatcher);
-    expect(ledger.hasForeignQueuedAdmissions()).toBe(true);
-    expect(ledger.hasVisibleDelivery()).toBe(false);
   });
 
   it("stops settling when the abort signal fires", async () => {

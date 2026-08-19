@@ -10,7 +10,7 @@ import java.util.Locale
 const val actionAskOpenClaw = "ai.openclaw.app.action.ASK_OPENCLAW"
 
 /** Debug action that opens the Voice tab directly for Android E2E automation. */
-const val actionOpenVoiceE2e = "ai.openclaw.app.debug.OPEN_VOICE_E2E"
+val actionOpenVoiceE2e = "${BuildConfig.APPLICATION_ID}.OPEN_VOICE_E2E"
 
 /** Intent extra that carries an optional assistant prompt for app actions. */
 const val extraAssistantPrompt = "prompt"
