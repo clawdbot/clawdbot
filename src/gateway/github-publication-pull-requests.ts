@@ -20,6 +20,8 @@ export function githubPublicationPullRequestLookupArgs(params: {
   return [
     "gh",
     "api",
+    "--hostname",
+    "github.com",
     "--method",
     "GET",
     `repos/${params.repository}/pulls`,
@@ -31,6 +33,20 @@ export function githubPublicationPullRequestLookupArgs(params: {
     "state=all",
     "--jq",
     'map({url: .html_url, userId: .user.id, state: .state, body: (.body // ""), headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref})',
+  ];
+}
+
+export function githubPublicationCreatePullRequestArgs(repository: string): string[] {
+  return [
+    "gh",
+    "api",
+    "--hostname",
+    "github.com",
+    "--method",
+    "POST",
+    `repos/${repository}/pulls`,
+    "--input",
+    "-",
   ];
 }
 

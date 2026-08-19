@@ -217,11 +217,13 @@ export function installGitHubPublicationTestHarness(): void {
           return commandResult(`${OLD_HEAD}\n`);
         }
         if (
-          command.startsWith("gh api repos/openclaw/openclaw --jq {fork, default_branch, parent:")
+          command.startsWith(
+            "gh api --hostname github.com repos/openclaw/openclaw --jq {fork, default_branch, parent:",
+          )
         ) {
           return commandResult('{"fork":false,"default_branch":"main"}\n');
         }
-        const baseRefPrefix = "gh api repos/openclaw/openclaw/git/ref/heads/";
+        const baseRefPrefix = "gh api --hostname github.com repos/openclaw/openclaw/git/ref/heads/";
         if (command.startsWith(baseRefPrefix)) {
           const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
           return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
@@ -264,7 +266,10 @@ export function installGitHubPublicationTestHarness(): void {
         if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
           return commandResult("[]\n");
         }
-        if (command === "gh api --method POST repos/openclaw/openclaw/pulls --input -") {
+        if (
+          command ===
+          "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
+        ) {
           return commandResult('{"html_url":"https://github.com/openclaw/openclaw/pull/125200"}\n');
         }
         return commandResult();

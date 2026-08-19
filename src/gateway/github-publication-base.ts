@@ -5,6 +5,8 @@ export function githubPublicationBaseLookupArgs(repository: string, baseBranch: 
   return [
     "gh",
     "api",
+    "--hostname",
+    "github.com",
     `repos/${repository}/git/ref/heads/${baseBranch}`,
     "--jq",
     "{ref: .ref, sha: .object.sha}",

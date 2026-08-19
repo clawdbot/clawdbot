@@ -47,7 +47,7 @@ export function createGitHubPublicationRuntime(params: {
       params.warn(
         `GitHub publication deferred for ${claim.sessionId}: ${formatErrorMessage(error)}`,
       );
-      return;
+      throw error;
     }
     for (const result of results) {
       await reportDeferred({

@@ -101,6 +101,8 @@ describe("Gateway GitHub publication", () => {
     expect(post?.argv).toEqual([
       "gh",
       "api",
+      "--hostname",
+      "github.com",
       "--method",
       "POST",
       "repos/openclaw/openclaw/pulls",
@@ -140,7 +142,7 @@ describe("Gateway GitHub publication", () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       const command = argv.join(" ");
-      if (command.startsWith("gh api repos/roboclaw-bot/openclaw --jq")) {
+      if (command.startsWith("gh api --hostname github.com repos/roboclaw-bot/openclaw --jq")) {
         return commandResult(
           '{"fork":true,"default_branch":"main","parent":{"name":"openclaw","default_branch":"main","owner":{"login":"openclaw"}}}\n',
         );
@@ -201,7 +203,7 @@ describe("Gateway GitHub publication", () => {
     let remoteLookups = 0;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       const command = argv.join(" ");
-      if (command.startsWith("gh api repos/roboclaw-bot/openclaw --jq")) {
+      if (command.startsWith("gh api --hostname github.com repos/roboclaw-bot/openclaw --jq")) {
         return commandResult(
           '{"fork":true,"default_branch":"main","parent":{"name":"openclaw","default_branch":"trunk","owner":{"login":"openclaw"}}}\n',
         );
@@ -213,7 +215,10 @@ describe("Gateway GitHub publication", () => {
       if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=all")) {
         return commandResult("[]\n");
       }
-      if (command === "gh api --method POST repos/openclaw/openclaw/pulls --input -") {
+      if (
+        command ===
+        "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
+      ) {
         return commandResult('{"html_url":"https://github.com/openclaw/openclaw/pull/125202"}\n');
       }
       return await fallback(argv, options);
@@ -245,6 +250,8 @@ describe("Gateway GitHub publication", () => {
     expect(post?.[0]).toEqual([
       "gh",
       "api",
+      "--hostname",
+      "github.com",
       "--method",
       "POST",
       "repos/openclaw/openclaw/pulls",
@@ -284,7 +291,10 @@ describe("Gateway GitHub publication", () => {
               ]),
         );
       }
-      if (command === "gh api --method POST repos/openclaw/openclaw/pulls --input -") {
+      if (
+        command ===
+        "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
+      ) {
         createdBody = String(JSON.parse(options?.input ?? "{}").body ?? "");
         return commandResult("", 1);
       }
@@ -329,7 +339,10 @@ describe("Gateway GitHub publication", () => {
           ]),
         );
       }
-      if (command === "gh api --method POST repos/openclaw/openclaw/pulls --input -") {
+      if (
+        command ===
+        "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
+      ) {
         return commandResult(
           '{"html_url":"https://github.com/openclaw/openclaw/pull/right-base"}\n',
         );
@@ -803,10 +816,18 @@ describe("Gateway GitHub publication", () => {
         if (command === "git rev-parse --verify HEAD^{commit}") {
           return commandResult(`${NEW_HEAD}\n`);
         }
-        if (command.startsWith("gh api repos/openclaw/openclaw --jq {fork, default_branch")) {
+        if (
+          command.startsWith(
+            "gh api --hostname github.com repos/openclaw/openclaw --jq {fork, default_branch",
+          )
+        ) {
           return commandResult('{"fork":false,"default_branch":"main"}\n');
         }
-        if (command.startsWith("gh api repos/openclaw/openclaw/git/ref/heads/main --jq")) {
+        if (
+          command.startsWith(
+            "gh api --hostname github.com repos/openclaw/openclaw/git/ref/heads/main --jq",
+          )
+        ) {
           return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: BASE_HEAD }));
         }
         if (command === "git show -s --format=%B HEAD") {
@@ -859,7 +880,10 @@ describe("Gateway GitHub publication", () => {
               : "[]\n",
           );
         }
-        if (command === "gh api --method POST repos/openclaw/openclaw/pulls --input -") {
+        if (
+          command ===
+          "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
+        ) {
           return commandResult('{"html_url":"https://github.com/openclaw/openclaw/pull/125200"}\n');
         }
         return commandResult();
@@ -941,6 +965,15 @@ describe("Gateway GitHub publication", () => {
     placements.markWorkspaceResultPending(claim);
     await runtime.prepareAcceptedWorkspacePublication(claim);
     placements.acceptWorkspaceResult(claim);
+    const processClaim = vi
+      .spyOn(runtime.coordinator, "processClaim")
+      .mockRejectedValueOnce(new Error("transient publication failure"));
+    await expect(runtime.publishAcceptedWorkspace(claim)).rejects.toThrow(
+      "transient publication failure",
+    );
+    expect(warnings).toEqual([expect.stringContaining("GitHub publication deferred")]);
+    processClaim.mockRestore();
+    warnings.length = 0;
     vi.spyOn(runtime.coordinator, "markReported").mockImplementationOnce(() => {
       throw new Error("Gateway stopped after transcript append");
     });
@@ -976,81 +1009,5 @@ describe("Gateway GitHub publication", () => {
     expect(publicationTranscriptMessages(events, requested.requestId)).toHaveLength(1);
     expect(restarted.coordinator.listUnreportedResults()).toEqual([]);
     expect(warnings).toHaveLength(1);
-  });
-
-  it("terminalizes local recovery when the managed worktree fingerprint changed", async () => {
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const first = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database }),
-    });
-    first.read("create-schema");
-    const requestId = "publication-stale-worktree";
-    seedLocalPublication(database, {
-      requestId,
-      status: "requested",
-      repositoryFingerprint: "replaced-fingerprint",
-    });
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const resumed = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database: reopened }),
-    });
-
-    await resumed.resumeLocalRequests();
-
-    expect(resumed.read(requestId)).toEqual({
-      requestId,
-      status: "failed",
-      code: "workspace_changed",
-      message: "GitHub publication failed.",
-      nextAction:
-        "Wait for the current turn to finish, inspect the reconciled workspace, and retry.",
-    });
-    expect(commands).toEqual([]);
-  });
-
-  it("terminalizes an accepted request whose turn ended before workspace acceptance", async () => {
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    const active = seedActivePlacement(placements, {
-      environmentId: "environment-1",
-      ownerEpoch: 2,
-    });
-    const claim = placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "claim-orphan",
-      runId: "run-orphan",
-      owner: { kind: "worker", environmentId: "environment-1", ownerEpoch: 2 },
-    });
-    const coordinator = createGitHubPublicationCoordinator({ placements });
-    const accepted = await coordinator.requestForClaim({
-      claim,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-      idempotencyKey: "publish-orphan",
-    });
-    placements.releaseTurn(claim);
-
-    const failed = coordinator.failOrphanedRequests();
-
-    expect(failed).toEqual([
-      {
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-        result: {
-          requestId: accepted.requestId,
-          status: "failed",
-          code: "session_changed",
-          message: "GitHub publication failed.",
-          nextAction:
-            "The originating turn ended before its workspace result was accepted. Start a new turn and request publication again.",
-        },
-      },
-    ]);
-    expect(coordinator.listUnreportedResults()).toEqual(failed);
-    expect(commands).toEqual([]);
   });
 });

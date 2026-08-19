@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   BASE_HEAD,
   BRANCH,
@@ -12,7 +15,12 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   root,
+  seedLocalPublication,
 } from "./github-publication.test-support.js";
+import {
+  REQUEST,
+  seedActivePlacement,
+} from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
@@ -273,5 +281,81 @@ describe("Gateway GitHub publication boundaries", () => {
       }),
     ).resolves.toMatchObject({ status: "published", branch: BRANCH });
     expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
+  });
+
+  it("terminalizes local recovery when the managed worktree fingerprint changed", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const first = createTestGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({ database }),
+    });
+    first.read("create-schema");
+    const requestId = "publication-stale-worktree";
+    seedLocalPublication(database, {
+      requestId,
+      status: "requested",
+      repositoryFingerprint: "replaced-fingerprint",
+    });
+    closeOpenClawStateDatabaseForTest();
+    const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const resumed = createTestGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({ database: reopened }),
+    });
+
+    await resumed.resumeLocalRequests();
+
+    expect(resumed.read(requestId)).toEqual({
+      requestId,
+      status: "failed",
+      code: "workspace_changed",
+      message: "GitHub publication failed.",
+      nextAction:
+        "Wait for the current turn to finish, inspect the reconciled workspace, and retry.",
+    });
+    expect(commands).toEqual([]);
+  });
+
+  it("terminalizes an accepted request whose turn ended before workspace acceptance", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    const active = seedActivePlacement(placements, {
+      environmentId: "environment-1",
+      ownerEpoch: 2,
+    });
+    const claim = placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "claim-orphan",
+      runId: "run-orphan",
+      owner: { kind: "worker", environmentId: "environment-1", ownerEpoch: 2 },
+    });
+    const coordinator = createTestGitHubPublicationCoordinator({ placements });
+    const accepted = await coordinator.requestForClaim({
+      claim,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+      idempotencyKey: "publish-orphan",
+    });
+    placements.releaseTurn(claim);
+
+    const failed = coordinator.failOrphanedRequests();
+
+    expect(failed).toEqual([
+      {
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        result: {
+          requestId: accepted.requestId,
+          status: "failed",
+          code: "session_changed",
+          message: "GitHub publication failed.",
+          nextAction:
+            "The originating turn ended before its workspace result was accepted. Start a new turn and request publication again.",
+        },
+      },
+    ]);
+    expect(coordinator.listUnreportedResults()).toEqual(failed);
+    expect(commands).toEqual([]);
   });
 });

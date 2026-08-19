@@ -27,6 +27,7 @@ import {
   githubPublicationResetIndexArgs,
 } from "./github-publication-git-transport.js";
 import {
+  githubPublicationCreatePullRequestArgs,
   githubPublicationPullRequestLookupArgs,
   parseGitHubPublicationPullRequests,
 } from "./github-publication-pull-requests.js";
@@ -365,6 +366,8 @@ export async function executeGitHubPublication(params: {
               [
                 "gh",
                 "api",
+                "--hostname",
+                "github.com",
                 `repos/${pushRepository}`,
                 "--jq",
                 "{fork, default_branch, parent: {name: .parent.name, default_branch: .parent.default_branch, owner: {login: .parent.owner.login}}}",
@@ -662,19 +665,16 @@ export async function executeGitHubPublication(params: {
       identity = await refreshIdentity();
       const created = await step(
         async () =>
-          await runCommand(
-            ["gh", "api", "--method", "POST", `repos/${repository}/pulls`, "--input", "-"],
-            {
-              env: identity.env,
-              input: JSON.stringify({
-                title: row.title?.trim() || `Publish ${branch}`,
-                body,
-                head: `${repositoryTarget.push.owner}:${branch}`,
-                base: baseBranch,
-                draft: true,
-              }),
-            },
-          ),
+          await runCommand(githubPublicationCreatePullRequestArgs(repository), {
+            env: identity.env,
+            input: JSON.stringify({
+              title: row.title?.trim() || `Publish ${branch}`,
+              body,
+              head: `${repositoryTarget.push.owner}:${branch}`,
+              base: baseBranch,
+              draft: true,
+            }),
+          }),
       );
       if (created.code === 0) {
         pullRequestUrl = readNonBlankString(
