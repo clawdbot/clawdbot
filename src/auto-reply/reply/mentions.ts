@@ -58,6 +58,22 @@ function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
   return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${parts.core}${trailing}`;
 }
 
+// Some Matrix clients (FluffyChat, at least) render a tapped mention pill as
+// literal "@[Display Name]" text instead of a bare display name (Element) or
+// a numeric/username token (Discord/Telegram). The brackets are ordinary
+// characters in the message body, so without a bracket-aware pattern the
+// whole "@[...]" construct survives stripping and a trailing "/command"
+// never matches the slash-command regex, which anchors at the string start.
+function wrapBracketedMentionPattern(core: string, emojiPattern: string): string {
+  // Match the "|)" empty-alternation shape used above instead of a group
+  // quantifier: a quantifier on a group that itself contains a quantified
+  // token (DECORATION_SPACING) reads as nested repetition and the config
+  // regex safety checker rejects it outright.
+  const emojiPrefix = emojiPattern ? `(?:${emojiPattern}${DECORATION_SPACING}|)` : "";
+  const emojiSuffix = emojiPattern ? `(?:${DECORATION_SPACING}${emojiPattern}|)` : "";
+  return String.raw`@\[${DECORATION_SPACING}${emojiPrefix}${core}${emojiSuffix}${DECORATION_SPACING}\]`;
+}
+
 function encodeOptionalJoiners(literal: string): string {
   return literal
     .split(/([\u200C\u200D]+)/u)
@@ -247,11 +263,15 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
   const name = normalizeOptionalString(identity?.name);
   const parts = name ? deriveNameParts(name) : undefined;
-  if (parts?.core) {
-    patterns.push(wrapDerivedMentionPattern(parts));
-  }
   const emoji = normalizeOptionalString(identity?.emoji);
   const emojiPattern = emoji ? escapeJoinerTolerantLiteral(emoji) : "";
+  if (parts?.core) {
+    // Bracket pattern first: it must claim the whole "@[Name]" construct
+    // before the bare-name pattern below eats "Name" out of the middle and
+    // leaves the brackets stranded with nothing left to match around them.
+    patterns.push(wrapBracketedMentionPattern(parts.core, emojiPattern));
+    patterns.push(wrapDerivedMentionPattern(parts));
+  }
   if (emojiPattern) {
     patterns.push(emojiPattern);
   }

@@ -561,9 +561,36 @@ describe("derived mention matching with decorated identity names", () => {
     } satisfies OpenClawConfig;
     const regexes = buildMentionRegexes(cfg, "decorated-agent");
 
-    expect(regexes).toHaveLength(1);
+    // One bare-name pattern plus one bracket-wrapped pattern (e.g. FluffyChat's
+    // "@[Clawd]" mention pills); the joiner-only emoji contributes no pattern
+    // of its own.
+    expect(regexes).toHaveLength(2);
     expect(matchesMentionPatterns("hello!", regexes)).toBe(false);
     expect(matchesMentionPatterns("clawd hello", regexes)).toBe(true);
+    expect(matchesMentionPatterns("@[Clawd] hello", regexes)).toBe(true);
+  });
+
+  it("strips a FluffyChat-style @[Name] mention pill so a following slash command matches", () => {
+    // FluffyChat renders a tapped mention pill as literal "@[Display Name]"
+    // text in the message body (Element renders a bare display name
+    // instead). Without a bracket-aware pattern the "@[...]" shell survives
+    // stripping and "/new" never reaches the start of the string, so the
+    // slash-command regex (which anchors at index 0) never matches and the
+    // command silently falls through to plain chat.
+    const cfg = {
+      agents: {
+        entries: { main: { identity: { name: "ping", emoji: "⚡️" } } },
+      },
+    } satisfies OpenClawConfig;
+    const ctx = {} as MsgContext;
+
+    expect(stripMentions("@[ping ⚡️] /new", ctx, cfg, "main")).toBe("/new");
+    expect(stripMentions("@[ping ⚡️]/new", ctx, cfg, "main")).toBe("/new");
+    expect(stripMentions("hey @[ping ⚡️] can you check this", ctx, cfg, "main")).toBe(
+      "hey can you check this",
+    );
+    // Element's bare-display-name convention must keep working unchanged.
+    expect(stripMentions("ping ⚡️ /new", ctx, cfg, "main")).toBe("/new");
   });
 
   it("never requires a bare variation selector as the identity token", () => {
