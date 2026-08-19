@@ -207,9 +207,10 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         throw new Error("GitHub publication session authority changed after verification.");
       }
       const snapshot =
-        existing?.source_head_commit && existing.workspace_tree
+        existing?.source_head_commit && existing.source_index_tree && existing.workspace_tree
           ? {
               sourceHeadCommit: existing.source_head_commit,
+              sourceIndexTree: existing.source_index_tree,
               workspaceTree: existing.workspace_tree,
             }
           : await captureGitHubPublicationWorkspaceSnapshot({
@@ -263,6 +264,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
                 branch: worktree.branch,
                 base_branch: null,
                 source_head_commit: snapshot.sourceHeadCommit,
+                source_index_tree: snapshot.sourceIndexTree,
                 workspace_tree: snapshot.workspaceTree,
                 head_commit: null,
                 pull_request_url: null,
@@ -339,7 +341,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           .where("run_id", "=", claim.runId)
           .orderBy("created_at_ms"),
       ).rows;
-      if (rows.some((row) => !row.source_head_commit || !row.workspace_tree)) {
+      if (
+        rows.some((row) => !row.source_head_commit || !row.source_index_tree || !row.workspace_tree)
+      ) {
         return failClaimPreparation(
           claim,
           new Error("GitHub publication accepted workspace snapshot is missing."),

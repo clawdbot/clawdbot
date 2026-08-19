@@ -823,6 +823,7 @@ export interface GithubPublicationRequests {
   session_id: string;
   session_key: string;
   source_head_commit: string | null;
+  source_index_tree: string | null;
   status: string;
   title: string | null;
   updated_at_ms: number;

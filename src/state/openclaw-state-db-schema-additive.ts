@@ -254,6 +254,7 @@ export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
       branch TEXT NOT NULL,
       base_branch TEXT,
       source_head_commit TEXT,
+      source_index_tree TEXT,
       workspace_tree TEXT,
       head_commit TEXT,
       pull_request_url TEXT,
@@ -278,7 +279,7 @@ export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
           AND identity_profile_id IS NOT NULL)
       ),
       CHECK (
-        (source_head_commit IS NULL AND workspace_tree IS NULL)
+        (source_head_commit IS NULL AND source_index_tree IS NULL AND workspace_tree IS NULL)
         OR
         (source_head_commit IS NOT NULL AND workspace_tree IS NOT NULL)
       ),

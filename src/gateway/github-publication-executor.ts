@@ -19,12 +19,19 @@ import {
   githubPublicationBaseFetchArgs,
   githubPublicationBaseLineageArgs,
   githubPublicationBaseLookupArgs,
+  parseGitHubPublicationBaseBranch,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
 import {
+  assertGitHubPublicationRefCasCompleted,
+  updateGitHubPublicationBranchAndIndex,
+} from "./github-publication-git-index.js";
+import {
+  appendGitHubPublicationMessage,
+  assertGitHubPublicationBranchRef,
   githubPublicationPushArgs,
   githubPublicationRemoteHeadArgs,
-  githubPublicationResetIndexArgs,
+  githubPublicationUpdateRefArgs,
 } from "./github-publication-git-transport.js";
 import {
   githubPublicationCreatePullRequestArgs,
@@ -91,29 +98,6 @@ function parseJsonObject(value: string, label: string): Record<string, unknown> 
   return parsed;
 }
 
-function parseBaseBranch(baseRef: string, defaultBranch: string): string {
-  const trimmed = baseRef.trim();
-  if (!trimmed || trimmed === "HEAD" || /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(trimmed)) {
-    return defaultBranch;
-  }
-  if (trimmed.startsWith("refs/remotes/origin/")) {
-    return trimmed.slice("refs/remotes/origin/".length);
-  }
-  if (trimmed.startsWith("origin/")) {
-    return trimmed.slice("origin/".length);
-  }
-  if (trimmed.startsWith("refs/heads/")) {
-    return trimmed.slice("refs/heads/".length);
-  }
-  return trimmed;
-}
-
-function appendLines(base: string, lines: readonly string[]): string {
-  const present = new Set(base.split(/\r?\n/u).map((line) => line.trim()));
-  const missing = lines.filter((line) => !present.has(line));
-  return missing.length > 0 ? `${base.trimEnd()}\n\n${missing.join("\n")}` : base.trimEnd();
-}
-
 async function assertSafeGitPublicationConfig(cwd: string): Promise<void> {
   const unsafe = await runCommand(
     [
@@ -136,7 +120,7 @@ async function assertSafeGitPublicationConfig(cwd: string): Promise<void> {
 export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   cwd: string;
   assertCurrent?: () => void;
-}): Promise<{ sourceHeadCommit: string; workspaceTree: string }> {
+}): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
   const step = async <T>(operation: () => Promise<T>): Promise<T> => {
     params.assertCurrent?.();
     const result = await operation();
@@ -149,6 +133,13 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
       await requireCommand(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
         cwd: params.cwd,
       }),
+  );
+  const sourceIndexTree = await step(
+    async () =>
+      await requireCommand(
+        ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
+        { cwd: params.cwd },
+      ),
   );
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-snapshot-"));
   try {
@@ -184,7 +175,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
           { cwd: params.cwd, env },
         ),
     );
-    return { sourceHeadCommit, workspaceTree };
+    return { sourceHeadCommit, sourceIndexTree, workspaceTree };
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -247,6 +238,7 @@ export async function executeGitHubPublication(params: {
   bindWorkspaceSnapshot: (input: {
     row: PublicationRow;
     sourceHeadCommit: string;
+    sourceIndexTree: string;
     workspaceTree: string;
   }) => PublicationRow;
   updatePublishingFacts: (input: {
@@ -330,14 +322,16 @@ export async function executeGitHubPublication(params: {
     }
     let row = initial;
     let sourceHeadCommit = row.source_head_commit;
+    let sourceIndexTree = row.source_index_tree;
     let workspaceTree = row.workspace_tree;
-    if (!sourceHeadCommit || !workspaceTree) {
+    if (!sourceHeadCommit || !sourceIndexTree || !workspaceTree) {
       const snapshot = await captureGitHubPublicationWorkspaceSnapshot({
         cwd: worktree.path,
         assertCurrent: assertAuthority,
       });
       row = params.bindWorkspaceSnapshot({ row, ...snapshot });
       sourceHeadCommit = snapshot.sourceHeadCommit;
+      sourceIndexTree = snapshot.sourceIndexTree;
       workspaceTree = snapshot.workspaceTree;
     }
     let headCommit = await step(
@@ -385,7 +379,10 @@ export async function executeGitHubPublication(params: {
     const repository = `${repositoryTarget.pullRequest.owner}/${repositoryTarget.pullRequest.repo}`;
     const baseBranch = repositoryTarget.fork
       ? repositoryTarget.pullRequest.defaultBranch
-      : parseBaseBranch(worktree.baseRef, repositoryTarget.pullRequest.defaultBranch);
+      : parseGitHubPublicationBaseBranch(
+          worktree.baseRef,
+          repositoryTarget.pullRequest.defaultBranch,
+        );
     if (!repositoryTarget.fork && branch === baseBranch) {
       throw new Error("GitHub publication branch changed to its pull request base.");
     }
@@ -510,6 +507,7 @@ export async function executeGitHubPublication(params: {
     const currentTree = await step(
       async () => await requireCommand(["git", "rev-parse", "HEAD^{tree}"], { cwd: worktree.path }),
     );
+    let updateBranchRef: (() => Promise<void>) | undefined;
     if (markerPresent) {
       const markerParent = await step(
         async () => await requireCommand(["git", "rev-parse", "HEAD^"], { cwd: worktree.path }),
@@ -534,7 +532,10 @@ export async function executeGitHubPublication(params: {
         storePath: loaded.storePath,
       });
       const title = row.title?.trim() || `Publish ${branch}`;
-      const message = appendLines(title, [...(attribution?.trailers ?? []), marker]);
+      const message = appendGitHubPublicationMessage(title, [
+        ...(attribution?.trailers ?? []),
+        marker,
+      ]);
       const timestamp = new Date(row.created_at_ms).toISOString();
       identity = await refreshIdentity();
       const authorEnv = {
@@ -554,38 +555,28 @@ export async function executeGitHubPublication(params: {
             input: `${message}\n`,
           }),
       );
-      const symbolicBranch = await step(
-        async () =>
-          await runCommand(["git", "symbolic-ref", "--quiet", `refs/heads/${branch}`], {
-            cwd: worktree.path,
-          }),
-      );
-      if (symbolicBranch.code === 0) {
-        throw new Error("GitHub publication workspace branch ref became symbolic.");
-      }
-      if (symbolicBranch.code !== 1) {
-        throw new Error("GitHub publication workspace branch ref could not be verified.");
-      }
-      await step(async () => {
-        await requireCommand(
-          [
-            "git",
-            "-c",
-            `core.hooksPath=${os.devNull}`,
-            "-c",
-            "core.fsmonitor=false",
-            "update-ref",
-            `refs/heads/${branch}`,
-            commit,
-            headCommit,
-          ],
+      await assertGitHubPublicationBranchRef(branch, async (argv) => {
+        return (await step(async () => await runCommand(argv, { cwd: worktree.path }))).code ?? -1;
+      });
+      const previousHead = headCommit;
+      updateBranchRef = async () => {
+        const result = await runCommand(
+          githubPublicationUpdateRefArgs(branch, commit, previousHead),
           { cwd: worktree.path },
         );
-      });
+        assertGitHubPublicationRefCasCompleted(result);
+      };
       headCommit = commit;
     }
-    await step(async () => {
-      await requireCommand(githubPublicationResetIndexArgs(headCommit), { cwd: worktree.path });
+    await updateGitHubPublicationBranchAndIndex({
+      cwd: worktree.path,
+      sourceIndexTree,
+      workspaceTree,
+      headCommit,
+      env: identity.env,
+      assertCurrent: assertAuthority,
+      run: async (argv, options) => await step(async () => await requireCommand(argv, options)),
+      ...(updateBranchRef ? { updateRef: updateBranchRef } : {}),
     });
     row = params.updatePublishingFacts({
       row,

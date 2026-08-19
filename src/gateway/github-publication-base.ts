@@ -34,6 +34,19 @@ export function githubPublicationBaseLineageArgs(ancestor: string, descendant: s
   return ["git", "merge-base", "--is-ancestor", ancestor, descendant];
 }
 
+export function parseGitHubPublicationBaseBranch(baseRef: string, defaultBranch: string): string {
+  const trimmed = baseRef.trim();
+  if (!trimmed || trimmed === "HEAD" || /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(trimmed)) {
+    return defaultBranch;
+  }
+  for (const prefix of ["refs/remotes/origin/", "origin/", "refs/heads/"]) {
+    if (trimmed.startsWith(prefix)) {
+      return trimmed.slice(prefix.length);
+    }
+  }
+  return trimmed;
+}
+
 /** Returns the authenticated target-base SHA or fails the publication boundary closed. */
 export function parseGitHubPublicationBaseRef(raw: string, baseBranch: string): string {
   let parsed: unknown;

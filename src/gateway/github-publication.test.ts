@@ -74,17 +74,13 @@ describe("Gateway GitHub publication", () => {
         candidate.includes("update-ref") ||
         candidate.includes("read-tree") ||
         candidate.includes("add") ||
-        candidate.includes("write-tree") ||
         candidate.includes("reset"),
     )) {
-      expect(argv).toContain(`core.hooksPath=${os.devNull}`);
+      expect(argv, argv.join(" ")).toContain(`core.hooksPath=${os.devNull}`);
     }
     for (const argv of commands.filter(
       (candidate) =>
-        candidate.includes("read-tree") ||
-        candidate.includes("add") ||
-        candidate.includes("write-tree") ||
-        candidate.includes("reset"),
+        candidate.includes("read-tree") || candidate.includes("add") || candidate.includes("reset"),
     )) {
       expect(argv).toContain("core.fsmonitor=false");
     }
@@ -546,10 +542,9 @@ describe("Gateway GitHub publication", () => {
     const fetchIndex = commands.findIndex((argv) => argv.includes("fetch"));
     const commitIndex = commands.findIndex((argv) => argv.includes("commit-tree"));
     const updateRefIndex = commands.findIndex((argv) => argv.includes("update-ref"));
-    const resetIndex = commands.findIndex((argv) => argv.includes("reset"));
     expect(fetchIndex).toBeGreaterThanOrEqual(0);
     expect(commitIndex).toBeGreaterThan(fetchIndex);
-    expect(resetIndex).toBeGreaterThan(updateRefIndex);
+    expect(updateRefIndex).toBeGreaterThan(commitIndex);
     expect(commands.filter((argv) => argv.includes("push"))).toHaveLength(1);
     expect(commands.filter((argv) => argv[0] === "gh" && argv.includes("POST"))).toHaveLength(1);
   });
@@ -722,11 +717,12 @@ describe("Gateway GitHub publication", () => {
 
     const stored = database.db
       .prepare(
-        "SELECT source_head_commit, workspace_tree FROM github_publication_requests WHERE request_id = ?",
+        "SELECT source_head_commit, source_index_tree, workspace_tree FROM github_publication_requests WHERE request_id = ?",
       )
       .get(requested.requestId);
     expect(stored).toEqual({
       source_head_commit: OLD_HEAD,
+      source_index_tree: WORKSPACE_TREE,
       workspace_tree: WORKSPACE_TREE,
     });
     const snapshotCommandCount = commands.filter((argv) => argv.includes("write-tree")).length;
@@ -834,6 +830,9 @@ describe("Gateway GitHub publication", () => {
           return commandResult(`Resume the publication\n\nOpenClaw-Publication: ${requestId}\n`);
         }
         if (command === "git rev-parse HEAD^{tree}") {
+          return commandResult(`${WORKSPACE_TREE}\n`);
+        }
+        if (command.endsWith("write-tree")) {
           return commandResult(`${WORKSPACE_TREE}\n`);
         }
         if (command === "git rev-parse HEAD^") {

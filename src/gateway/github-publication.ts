@@ -199,6 +199,7 @@ export function createGitHubPublicationCoordinator(params: {
               branch: worktree.branch,
               base_branch: null,
               source_head_commit: null,
+              source_index_tree: null,
               workspace_tree: null,
               head_commit: null,
               pull_request_url: null,
@@ -240,6 +241,7 @@ export function createGitHubPublicationCoordinator(params: {
   const bindWorkspaceSnapshot = (input: {
     row: PublicationRow;
     sourceHeadCommit: string;
+    sourceIndexTree: string;
     workspaceTree: string;
   }): PublicationRow =>
     runOpenClawStateWriteTransaction(
@@ -251,6 +253,7 @@ export function createGitHubPublicationCoordinator(params: {
             .updateTable("github_publication_requests")
             .set({
               source_head_commit: input.sourceHeadCommit,
+              source_index_tree: input.sourceIndexTree,
               workspace_tree: input.workspaceTree,
               updated_at_ms: Date.now(),
             })
@@ -258,6 +261,7 @@ export function createGitHubPublicationCoordinator(params: {
             .where("status", "=", "publishing")
             .where("gateway_instance_id", "=", instanceId)
             .where("source_head_commit", "is", null)
+            .where("source_index_tree", "is", null)
             .where("workspace_tree", "is", null),
         );
         if (updated.numAffectedRows !== 1n) {
@@ -279,6 +283,7 @@ export function createGitHubPublicationCoordinator(params: {
     row: PublicationRow;
     claim: WorkerSessionTurnClaim;
     sourceHeadCommit: string;
+    sourceIndexTree: string;
     workspaceTree: string;
   }): PublicationRow =>
     runOpenClawStateWriteTransaction(
@@ -304,9 +309,10 @@ export function createGitHubPublicationCoordinator(params: {
         ) {
           throw new Error("GitHub publication workspace snapshot owner changed.");
         }
-        if (current.source_head_commit || current.workspace_tree) {
+        if (current.source_head_commit || current.source_index_tree || current.workspace_tree) {
           if (
             current.source_head_commit !== input.sourceHeadCommit ||
+            current.source_index_tree !== input.sourceIndexTree ||
             current.workspace_tree !== input.workspaceTree
           ) {
             throw new Error("GitHub publication accepted workspace snapshot changed.");
@@ -319,11 +325,13 @@ export function createGitHubPublicationCoordinator(params: {
             .updateTable("github_publication_requests")
             .set({
               source_head_commit: input.sourceHeadCommit,
+              source_index_tree: input.sourceIndexTree,
               workspace_tree: input.workspaceTree,
               updated_at_ms: Date.now(),
             })
             .where("request_id", "=", input.row.request_id)
             .where("source_head_commit", "is", null)
+            .where("source_index_tree", "is", null)
             .where("workspace_tree", "is", null),
         );
         if (updated.numAffectedRows !== 1n) {
@@ -504,18 +512,23 @@ export function createGitHubPublicationCoordinator(params: {
         throw new Error("GitHub publication worktree changed before accepted snapshot.");
       }
     }
-    const bound = rows.find((row) => row.source_head_commit && row.workspace_tree);
+    const bound = rows.find(
+      (row) => row.source_head_commit && row.source_index_tree && row.workspace_tree,
+    );
     if (bound) {
       for (const row of rows) {
         if (
-          (row.source_head_commit || row.workspace_tree) &&
+          (row.source_head_commit || row.source_index_tree || row.workspace_tree) &&
           (row.source_head_commit !== bound.source_head_commit ||
+            row.source_index_tree !== bound.source_index_tree ||
             row.workspace_tree !== bound.workspace_tree)
         ) {
           throw new Error("GitHub publication accepted workspace snapshot changed.");
         }
       }
-      if (rows.every((row) => row.source_head_commit && row.workspace_tree)) {
+      if (
+        rows.every((row) => row.source_head_commit && row.source_index_tree && row.workspace_tree)
+      ) {
         return;
       }
     }

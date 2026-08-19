@@ -59,6 +59,26 @@ vi.mock("../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeConfigSnapshot: mocks.getConfigSnapshot,
 }));
 
+vi.mock("./github-publication-git-index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-publication-git-index.js")>()),
+  updateGitHubPublicationBranchAndIndex: async (params: {
+    cwd: string;
+    sourceIndexTree: string;
+    workspaceTree: string;
+    run: (argv: string[], options?: { cwd?: string }) => Promise<string>;
+    updateRef?: () => Promise<void>;
+  }) => {
+    const currentIndexTree = await params.run(
+      ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
+      { cwd: params.cwd },
+    );
+    if (currentIndexTree !== params.sourceIndexTree && currentIndexTree !== params.workspaceTree) {
+      throw new Error("GitHub publication workspace index changed after its accepted snapshot.");
+    }
+    await params.updateRef?.();
+  },
+}));
+
 export function createTestGitHubPublicationRuntime(...args: Parameters<typeof createRuntime>) {
   return createRuntime(...args);
 }
@@ -104,10 +124,11 @@ export function seedLocalPublication(
         worktree_id, repository_fingerprint, claim_id, run_id, environment_id, owner_epoch,
         placement_generation, identity_source, identity_profile_id, identity_account_id,
         identity_login, title, body, status, gateway_instance_id, repository, branch,
-        base_branch, source_head_commit, workspace_tree, head_commit, pull_request_url,
+        base_branch, source_head_commit, source_index_tree, workspace_tree, head_commit,
+        pull_request_url,
         error_code, next_action, created_at_ms, updated_at_ms, reported_at_ms
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
     )
     .run(
       params.requestId,
@@ -130,6 +151,7 @@ export function seedLocalPublication(
       BRANCH,
       "main",
       OLD_HEAD,
+      WORKSPACE_TREE,
       WORKSPACE_TREE,
       params.headCommit ?? NEW_HEAD,
       1_000,
