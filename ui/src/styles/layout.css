@@ -891,6 +891,7 @@ openclaw-settings-save-indicator {
 /* The shell owns the resting boundary. The wider resize target takes over
    that same edge during interaction, avoiding a doubled divider. */
 .sidebar-resizer {
+  --resize-handle-line-inline: 100%;
   grid-area: nav;
   align-self: stretch;
   justify-self: end;

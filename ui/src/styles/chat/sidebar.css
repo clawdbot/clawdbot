@@ -127,6 +127,7 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region--bottom .sidebar-column__divider {
+  --resize-handle-line-block: 100%;
   width: 100%;
 }
 
@@ -251,6 +252,7 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-column__divider {
+  --resize-handle-line-inline: 100%;
   z-index: 2;
 }
 

@@ -48,7 +48,7 @@ class ResizableDivider extends OpenClawLitElement {
       position: absolute;
       top: 0;
       bottom: 0;
-      inset-inline-start: 50%;
+      inset-inline-start: var(--resize-handle-line-inline, 50%);
       width: var(--resize-handle-line-size, 1px);
       transform: translateX(-50%);
       background: var(--resize-handle-rest-color, var(--border, #1e2028));
@@ -78,7 +78,7 @@ class ResizableDivider extends OpenClawLitElement {
       bottom: -4px;
     }
     :host([orientation="horizontal"])::after {
-      top: 50%;
+      top: var(--resize-handle-line-block, 50%);
       bottom: auto;
       inset-inline-start: 0;
       left: 0;
@@ -89,20 +89,6 @@ class ResizableDivider extends OpenClawLitElement {
       transition:
         background 150ms ease-out,
         height 150ms ease-out;
-    }
-    :host(:is(.bp-resizer--right, .tp-resizer--right, .cp-resizer--right))::after {
-      inset-inline-start: 0;
-    }
-    :host(:is(.sidebar-resizer, .sidebar-column__divider:not([orientation="horizontal"])))::after {
-      inset-inline-start: 100%;
-    }
-    :host(
-      [orientation="horizontal"]:is(.bp-resizer--bottom, .tp-resizer--bottom, .cp-resizer--bottom)
-    )::after {
-      top: 0;
-    }
-    :host([orientation="horizontal"].sidebar-column__divider)::after {
-      top: 100%;
     }
     :host([orientation="horizontal"]:hover)::after,
     :host([orientation="horizontal"].dragging)::after,
