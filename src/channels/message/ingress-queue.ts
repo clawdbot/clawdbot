@@ -1032,13 +1032,13 @@ export function createChannelIngressQueue<
     ).rows;
     let recovered = 0;
     for (const row of claimedRows) {
-      const claim = decodeClaimColumns(row);
-      const claimRec = claim === null ? null : claimedRecord<TPayload, TMetadata>(row);
+      const claimColumns = decodeClaimColumns(row);
+      const claimRec = claimColumns === null ? null : claimedRecord<TPayload, TMetadata>(row);
       if (claimRec === null) {
-        if (claim !== null) {
+        if (claimColumns !== null) {
           const shouldRecoverCorrupt = recoverOptions?.shouldRecoverCorrupt;
           if (shouldRecoverCorrupt) {
-            if (!(await shouldRecoverCorrupt(corruptClaimRecord(row, claim)))) {
+            if (!(await shouldRecoverCorrupt(corruptClaimRecord(row, claimColumns)))) {
               continue;
             }
           } else if (recoverOptions?.shouldRecover) {
@@ -1048,8 +1048,8 @@ export function createChannelIngressQueue<
             continue;
           }
         }
-        // claim === null: no reachable owner can exist, so no policy consult —
-        // tombstone the row unconditionally to keep the queue recoverable.
+        // claimColumns === null: no reachable owner can exist, so no policy
+        // consult — tombstone unconditionally to keep the queue recoverable.
         const tombstoned = runOpenClawStateWriteTransaction(
           (tx) =>
             tombstoneCorruptRow({
@@ -1058,7 +1058,7 @@ export function createChannelIngressQueue<
               expectedStatus: "claimed",
               failedAt: current,
               staleCutoff: cutoff,
-              reason: claim === null ? "corrupt_claim" : "corrupt_payload",
+              reason: claimColumns === null ? "corrupt_claim" : "corrupt_payload",
             }),
           { path: database.path },
         );
