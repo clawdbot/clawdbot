@@ -401,8 +401,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                       }
                     : {}),
                   hasActiveRun: activeRunState.active,
+                  ...(activeRunState.active
+                    ? { status: activeRunState.status ?? ("running" as const) }
+                    : {}),
                   ...projectPlacement(session.sessionId),
-                  ...(activeRunState.runIds.length > 0
+                  ...(activeRunState.runIds !== undefined
                     ? { activeRunIds: activeRunState.runIds }
                     : {}),
                 });

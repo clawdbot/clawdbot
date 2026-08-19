@@ -1068,14 +1068,9 @@ export const zh_TW = {
       controlUiTitle: "Control UI",
       controlUiDocs: "文件：https://docs.openclaw.ai/web/control-ui",
       dashboardCopyPaste: "在本機瀏覽器中複製/貼上這個 URL 來控制 OpenClaw。",
-      dashboardLinkWithToken: "Dashboard 連結（含權杖）：{url}",
       dashboardOpened: "已在瀏覽器中開啟。保留該分頁以控制 OpenClaw。",
       dashboardOpenAnytime: "隨時開啟 dashboard：{command}",
       dashboardReady: "Dashboard 已就緒",
-      dashboardTokenMemory:
-        "Web UI 會把 dashboard URL 中的權杖保存在目前分頁記憶體中，並在載入後從 URL 中移除。",
-      dashboardTokenPrompt:
-        "如果被提示：把權杖貼到 Control UI 設定中（或使用帶權杖的 dashboard URL）。",
       dashboardWhenReady: "準備好後執行：{command}",
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
@@ -1171,7 +1166,6 @@ export const zh_TW = {
       webSearchUnavailableAction:
         "重新啟用該 provider 或選擇其他 provider 前，web_search 無法運作。",
       webUiUrl: "Web UI：{url}",
-      webUiWithTokenUrl: "Web UI（含權杖）：{url}",
       whatNow: '下一步：https://openclaw.ai/showcase（"What People Are Building"）。',
       whatNowTitle: "下一步",
       workspaceBackupTitle: "工作區備份",

@@ -196,6 +196,7 @@ async function authenticateGatewayConnectCore(
       authProvided,
       reason: failedAuth.reason,
       client: connectParams.client,
+      isLocalClient,
     });
     const authLogDecision = shouldLimitMissingCredentialAuthLog({
       reason: failedAuth.reason,

@@ -23,6 +23,7 @@ describe("buildQaSuiteSummaryJson", () => {
 
   it("records provider/model/mode so parity gates can verify labels", () => {
     const json = buildQaSuiteSummaryJson(baseParams);
+    expect(json.run.status).toBe("completed");
     expect(json.run.startedAt).toBe("2026-04-11T00:00:00.000Z");
     expect(json.run.finishedAt).toBe("2026-04-11T00:05:00.000Z");
     expect(json.run.providerMode).toBe("mock-openai");
@@ -39,6 +40,12 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelCapabilityMatrixPath).toBeNull();
     expect(json.run.channelDriverSmokePath).toBeNull();
     expect(json.run.scenarioIds).toBeNull();
+  });
+
+  it("distinguishes an in-progress artifact from terminal suite output", () => {
+    const json = buildQaSuiteSummaryJson({ ...baseParams, status: "running" });
+
+    expect(json.run.status).toBe("running");
   });
 
   it("records Crabline channel-driver metadata when selected", () => {

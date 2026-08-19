@@ -2,6 +2,7 @@
 import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
@@ -488,6 +489,7 @@ export function adoptPausedSubagentRunForFollowUp(params: {
   childSessionKey: string;
   runId: string;
   task: string;
+  gatewayContextResolver?: GatewayContextResolver;
 }): boolean {
   const childSessionKey = params.childSessionKey.trim();
   const runId = params.runId.trim();
@@ -522,6 +524,9 @@ export function adoptPausedSubagentRunForFollowUp(params: {
     // Persist the follow-up text so restart recovery cannot reissue the task that
     // the child already yielded on.
     task: params.task,
+    ...(params.gatewayContextResolver
+      ? { gatewayContextResolver: params.gatewayContextResolver }
+      : {}),
   });
 }
 

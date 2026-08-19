@@ -333,10 +333,10 @@ openclaw-chat-pane {
 .chat-pane__placement-menu::part(menu) {
   width: 250px;
   padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: 8px;
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--overlay-shadow);
 }
 
 .chat-pane__placement-chip {
@@ -369,10 +369,10 @@ openclaw-chat-pane {
 
 .chat-pane__gateway-menu::part(menu) {
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .chat-pane__gateway-menu-item {
@@ -724,11 +724,15 @@ openclaw-chat-pane {
   min-height: 44px;
 }
 
-.chat-header-session-menu--compact .session-menu__section-label {
-  padding: 4px 8px 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
+.chat-header-session-menu--compact .session-menu__back {
+  z-index: 1;
+  position: sticky;
+  top: 0;
+  background: var(--wa-color-surface-raised);
+}
+
+.chat-header-session-menu--compact .session-menu__chevron {
+  display: inline-flex;
 }
 
 .chat-header-session-menu--compact::part(menu) {

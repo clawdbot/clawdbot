@@ -13,7 +13,7 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("projects live tunnel status and fences the tunnel before provider teardown", async () => {
+  it("projects live workspace transport status and fences it before provider teardown", async () => {
     support.seedReady("worker-tunnel", undefined, true);
     const order: string[] = [];
     let tunnelStatus: "stopped" | "connected" = "stopped";
@@ -24,7 +24,6 @@ describe("worker environment service", () => {
         return {
           environmentId: request.environmentId,
           ownerEpoch: request.ownerEpoch,
-          launchTurn: vi.fn(),
           runWorkspaceCommand: vi.fn(),
           syncWorkspace: vi.fn(),
           stop: async () => {},
@@ -55,7 +54,6 @@ describe("worker environment service", () => {
     expect(tunnelManager.start).toHaveBeenCalledWith(
       expect.objectContaining({
         bundleHash: support.BUNDLE_HASH,
-        gateway: { host: "127.0.0.1", port: 18_789 },
         sharedHost: true,
       }),
     );
@@ -105,17 +103,14 @@ describe("worker environment service", () => {
     expect(tunnelManager.start).not.toHaveBeenCalled();
   });
 
-  it("starts a Gateway-bundle node tunnel without entering SSH", async () => {
+  it("selects a node tunnel from the persisted transport instead of provider id", async () => {
     const tunnelManager = {
       status: () => "stopped" as const,
       start: vi.fn(),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => {}),
     } as unknown as WorkerTunnelManager;
-    support.testState.config.cloudWorkers!.profiles!.development!.provider = "device";
-    support.testState.config.cloudWorkers!.profiles!.development!.settings = {
-      device: "device-1",
-    };
+    support.testState.config.cloudWorkers!.profiles!.development!.provider = "crabbox";
     const nodeHandle = {
       environmentId: "pending",
       ownerEpoch: 0,
@@ -139,9 +134,10 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
-        id: "device",
+        supportedExecutionModes: ["worker-turn"],
+        id: "crabbox",
         provision: async () => ({
-          leaseId: "device-lease",
+          leaseId: "cloud-lease",
           node: { deviceId: "device-1" },
         }),
       }),
@@ -151,7 +147,7 @@ describe("worker environment service", () => {
         ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       },
     );
-    const environment = await workerService.create("development", "device-tunnel-gate");
+    const environment = await workerService.create("development", "cloud-node-tunnel-gate");
     const credential = await workerService.attachSession({
       environmentId: environment.environmentId,
       ownerEpoch: environment.ownerEpoch,
@@ -206,6 +202,7 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         id: "device",
         provision: async () => ({
           leaseId: "device-lease",

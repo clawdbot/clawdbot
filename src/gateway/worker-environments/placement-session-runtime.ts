@@ -46,11 +46,16 @@ export function resolveWorkerPlacementExecutionMode(
 
 export function projectWorkerPlacementAgentRuntime(
   runtime: GatewayAgentRuntime,
-): GatewayAgentRuntime & { cloudPlacementSupported: boolean } {
+): GatewayAgentRuntime & {
+  cloudPlacementSupported: boolean;
+  devicePlacementSupported: boolean;
+} {
   const { source, ...identity } = runtime;
+  const executionMode = resolveWorkerPlacementExecutionMode(runtime.id);
   return {
     ...identity,
-    cloudPlacementSupported: resolveWorkerPlacementExecutionMode(runtime.id) !== undefined,
+    cloudPlacementSupported: executionMode !== undefined,
+    devicePlacementSupported: executionMode === "worker-turn",
     source,
   };
 }

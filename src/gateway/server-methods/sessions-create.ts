@@ -21,6 +21,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   ProjectCheckoutError,
   resolveProjectCheckout,
+  resolveProjectDirectory,
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -258,11 +259,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        const checkout = await resolveProjectCheckout(project.repoRoot);
-        if (project.source !== "workspace" && checkout.path !== checkout.repoRoot) {
+        const checkout =
+          p.worktree === true ? await resolveProjectCheckout(project.repoRoot) : undefined;
+        projectRoot = checkout?.path ?? (await resolveProjectDirectory(project.repoRoot));
+        if (checkout && project.source !== "workspace" && checkout.path !== checkout.repoRoot) {
           throw new ProjectCheckoutError(`project root is no longer a git checkout`);
         }
-        projectRoot = checkout.path;
       } catch (error) {
         const detail =
           error instanceof ProjectCheckoutError ? error.message : formatErrorMessage(error);
@@ -271,7 +273,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.UNAVAILABLE,
-            `project ${requestedProjectId} is unavailable (${detail}); re-register it or run openclaw doctor --fix`,
+            `project ${requestedProjectId} is unavailable (${detail}); update the agent workspace path or re-register the project`,
           ),
         );
         return;
@@ -468,6 +470,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               id: preparedWorktree.id,
               branch: preparedWorktree.branch,
               repoRoot: preparedWorktree.repoRoot,
+              canonicalWorkspaceDir: workspace,
             },
             ...(provisioned
               ? {
@@ -475,7 +478,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
                     await managedWorktrees.remove({
                       id: preparedWorktree.id,
                       reason: "session-create-failed",
-                      force: true,
+                      allowSnapshotLoss: true,
                     });
                   },
                 }
@@ -625,6 +628,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!created.ok) {
       respond(false, undefined, created.error);
       return;
+    }
+    if (created.postCommit.status === "failed") {
+      runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
     registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
     const createdWorktree = sessionWorktree

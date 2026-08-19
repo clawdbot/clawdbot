@@ -23,7 +23,6 @@ import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
-  buildOnboardingControlUiUrl,
   probeGatewayReachable,
   waitForGatewayReachable,
   resolveAdvertisedControlUiLinks,
@@ -507,7 +506,6 @@ export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
-  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput === true;
   let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
   let resolvedGatewayPassword = "";
   let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;
@@ -668,12 +666,6 @@ export async function finalizeSetupWizard(
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const authedUrl = buildOnboardingControlUiUrl({
-      httpUrl: displayLinks.httpUrl,
-      authMode: settings.authMode,
-      token: settings.gatewayToken,
-      suppressTokenOutput: suppressGatewayTokenOutput,
-    });
     if (gateway.status !== "failed" && (opts.skipHealth || !gatewayProbe.ok)) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
@@ -766,14 +758,6 @@ export async function finalizeSetupWizard(
     await prompter.note(
       [
         dashboardReady ? t("wizard.finalize.webUiUrl", { url: displayLinks.httpUrl }) : undefined,
-        dashboardReady &&
-        !opts.skipUi &&
-        gatewayProbe.ok &&
-        settings.authMode === "token" &&
-        settings.gatewayToken &&
-        !suppressGatewayTokenOutput
-          ? t("wizard.finalize.webUiWithTokenUrl", { url: authedUrl })
-          : undefined,
         t("wizard.finalize.gatewayWsUrl", { url: displayLinks.wsUrl }),
         gatewayStatusLine,
         ...windowsFirewallLines,
@@ -820,11 +804,9 @@ export async function finalizeSetupWizard(
           t("wizard.finalize.gatewayTokenGenerate", {
             command: formatCliCommand("openclaw doctor --generate-gateway-token"),
           }),
-          suppressGatewayTokenOutput ? undefined : t("wizard.finalize.dashboardTokenMemory"),
           t("wizard.finalize.dashboardOpenAnytime", {
             command: formatCliCommand("openclaw dashboard --no-open"),
           }),
-          suppressGatewayTokenOutput ? undefined : t("wizard.finalize.dashboardTokenPrompt"),
         ].filter(Boolean);
         await prompter.note(tokenNotes.join("\n"), "Token");
       }

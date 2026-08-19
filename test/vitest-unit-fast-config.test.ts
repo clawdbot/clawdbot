@@ -383,12 +383,6 @@ describe("unit-fast vitest lane", () => {
     expect(getUnitFastTestFilesForIncludePatterns(["**/*.test.ts"], { dir: "extensions" })).toEqual(
       extensionUnitFastFiles,
     );
-    expect(extensionUnitFastFiles).toEqual(
-      expect.arrayContaining([
-        "extensions/canvas/src/host/server.test.ts",
-        "extensions/canvas/src/host/server.state-dir.test.ts",
-      ]),
-    );
     expect(getUnitFastTestFilesForIncludePatterns(["!src/**/*.test.ts"])).toEqual(
       unitFastTestFiles,
     );

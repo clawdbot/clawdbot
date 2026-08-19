@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import type { RuntimeTargetIssue } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import type {
+  EnvironmentStatus,
+  RuntimeTargetIssue,
+  WorkerSlotSummary,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 
 export type DraftBranches = {
   repoRoot: string;
@@ -17,19 +21,6 @@ export type DraftRepositoryState =
   | { kind: "direct"; repoRoot: string }
   | { kind: "unavailable"; repoRoot: string };
 
-export type DraftNode = {
-  nodeId: string;
-  displayName: string;
-  platform?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  remoteIp?: string;
-  connected: boolean;
-  canExec: boolean;
-  canBrowse: boolean;
-  issues?: RuntimeTargetIssue[];
-};
-
 export type DraftCloudProfile = {
   id: string;
   providerId: string;
@@ -40,15 +31,19 @@ export type DraftCloudProfile = {
 export type DraftMachineOption = {
   id: string;
   label: string;
-  description?: string;
+  cpu?: number;
+  memoryGb?: number;
   default?: boolean;
 };
 
 export type DraftEnvironment = {
   id: string;
   type: "local" | "node" | "worker";
+  label?: string;
+  status: EnvironmentStatus;
   platform?: string;
   sessionHost?: boolean;
+  workerSlots?: WorkerSlotSummary;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
   lastSeenAtMs?: number;
@@ -60,17 +55,15 @@ export type DraftEnvironment = {
 
 export type BrowserTarget = { nodeId: string; label: string };
 
-export function draftNodeUpdateIssue(node: DraftNode): RuntimeTargetIssue | undefined {
-  return node.issues?.find((issue) => issue.code === "update-required");
-}
-
-export function isDraftNodeSessionEligible(node: DraftNode): boolean {
-  return node.canExec && node.connected && draftNodeUpdateIssue(node) === undefined;
-}
-
 function normalizeTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.trunc(value)
+    : undefined;
+}
+
+function normalizeMachineSize(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 65_536
+    ? value
     : undefined;
 }
 
@@ -87,56 +80,6 @@ function readRuntimeTargetIssues(value: unknown): RuntimeTargetIssue[] | undefin
       : [];
   });
   return issues.length > 0 ? issues : undefined;
-}
-
-export function readDraftNodes(value: unknown): DraftNode[] {
-  const rawNodes = Array.isArray(value) ? value : [];
-  return rawNodes
-    .flatMap((raw) => {
-      if (!isRecord(raw)) {
-        return [];
-      }
-      const node = raw as {
-        nodeId?: unknown;
-        displayName?: unknown;
-        platform?: unknown;
-        deviceFamily?: unknown;
-        modelIdentifier?: unknown;
-        remoteIp?: unknown;
-        connected?: unknown;
-        commands?: unknown;
-        issues?: unknown;
-      };
-      const nodeId = normalizeOptionalString(node.nodeId);
-      const commands = Array.isArray(node.commands)
-        ? node.commands.filter((command): command is string => typeof command === "string")
-        : [];
-      if (!nodeId) {
-        return [];
-      }
-      const connected = node.connected === true;
-      const canExec = commands.includes("system.run");
-      const issues = readRuntimeTargetIssues(node.issues);
-      return [
-        {
-          nodeId,
-          displayName: normalizeOptionalString(node.displayName) ?? nodeId,
-          platform: normalizeOptionalString(node.platform),
-          deviceFamily: normalizeOptionalString(node.deviceFamily),
-          modelIdentifier: normalizeOptionalString(node.modelIdentifier),
-          remoteIp: normalizeOptionalString(node.remoteIp),
-          connected,
-          canExec,
-          canBrowse: connected && canExec && commands.includes("fs.listDir"),
-          ...(issues ? { issues } : {}),
-        },
-      ];
-    })
-    .toSorted(
-      (left, right) =>
-        left.displayName.localeCompare(right.displayName) ||
-        left.nodeId.localeCompare(right.nodeId),
-    );
 }
 
 export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
@@ -177,15 +120,49 @@ function readDraftMachineOptions(value: unknown): DraftMachineOption[] {
     if (!id || id.length > 128 || !label || label.length > 128 || options.has(id)) {
       continue;
     }
-    const description = normalizeOptionalString(raw.description);
+    const cpu = normalizeMachineSize(raw.cpu);
+    const memoryGb = normalizeMachineSize(raw.memoryGb);
     options.set(id, {
       id,
       label,
-      ...(description && description.length <= 512 ? { description } : {}),
+      ...(cpu === undefined ? {} : { cpu }),
+      ...(memoryGb === undefined ? {} : { memoryGb }),
       ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
     });
   }
   return [...options.values()];
+}
+
+const ENVIRONMENT_STATUSES = new Set<EnvironmentStatus>([
+  "available",
+  "unavailable",
+  "starting",
+  "stopping",
+  "error",
+]);
+
+function isEnvironmentStatus(value: unknown): value is EnvironmentStatus {
+  return typeof value === "string" && ENVIRONMENT_STATUSES.has(value);
+}
+
+function isSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value);
+}
+
+function readWorkerSlots(value: unknown): WorkerSlotSummary | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => key !== "total" && key !== "available") ||
+    !isSafeInteger(value.total) ||
+    !isSafeInteger(value.available)
+  ) {
+    return undefined;
+  }
+  const total = value.total;
+  const available = value.available;
+  return total >= 1 && total <= 1_024 && available >= 0 && available <= total
+    ? { total, available }
+    : undefined;
 }
 
 export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
@@ -197,8 +174,11 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       const environment = raw as {
         id?: unknown;
         type?: unknown;
+        label?: unknown;
+        status?: unknown;
         platform?: unknown;
         sessionHost?: unknown;
+        workerSlots?: unknown;
         lastConnectedAtMs?: unknown;
         lastDisconnectedAtMs?: unknown;
         lastSeenAtMs?: unknown;
@@ -209,9 +189,15 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       };
       const id = normalizeOptionalString(environment.id);
       const type = normalizeOptionalString(environment.type);
-      if (!id || (type !== "local" && type !== "node" && type !== "worker")) {
+      if (
+        !id ||
+        (type !== "local" && type !== "node" && type !== "worker") ||
+        !isEnvironmentStatus(environment.status)
+      ) {
         return [];
       }
+      const status = environment.status;
+      const label = normalizeOptionalString(environment.label);
       const platform = normalizeOptionalString(environment.platform);
       const trust: DraftEnvironment["trust"] =
         environment.trust === "persistent" || environment.trust === "disposable"
@@ -223,14 +209,18 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
       const lastSeenReason = normalizeOptionalString(environment.lastSeenReason);
       const issues = readRuntimeTargetIssues(environment.issues);
+      const workerSlots = readWorkerSlots(environment.workerSlots);
       return [
         {
           id,
           type,
+          status,
+          ...(label ? { label } : {}),
           ...(platform ? { platform } : {}),
           ...(typeof environment.sessionHost === "boolean"
             ? { sessionHost: environment.sessionHost }
             : {}),
+          ...(workerSlots ? { workerSlots } : {}),
           ...(lastConnectedAtMs !== undefined ? { lastConnectedAtMs } : {}),
           ...(lastDisconnectedAtMs !== undefined ? { lastDisconnectedAtMs } : {}),
           ...(lastSeenAtMs !== undefined ? { lastSeenAtMs } : {}),

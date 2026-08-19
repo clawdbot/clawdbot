@@ -25,6 +25,7 @@ import {
   isSecretEgressProxyActive,
   registerSecretEgressProxyRun,
 } from "../secrets/egress-proxy/registry.js";
+import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -33,6 +34,7 @@ import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
   createExecRequestPreparation,
   type ExecToolArgs,
+  resolveExecPreparedRunEnvironment,
   resolveNotifyOnExitEmptySuccess,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
@@ -77,30 +79,27 @@ export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
   const secretEgressEnabled = isSecretEgressProxyActive();
+  const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
   // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
   // A new run constructs a new instance and observes later store mutations.
-  let storeEnvPromise:
-    | Promise<import("../secrets/store/secret-store.js").SecretStoreExecEnvironment>
-    | undefined;
-  const resolveStoreEnv = () => {
-    storeEnvPromise ??= import("../secrets/store/secret-store.js").then((store) => {
-      return store.readSecretStoreExecEnvironment({
+  let storeEnvPromise: Promise<SecretStoreExecEnvironment>;
+  const resolveStoreEnv = () =>
+    (storeEnvPromise ??= import("../secrets/store/secret-store.js").then((store) =>
+      store.readSecretStoreExecEnvironment({
         includeSecretSentinels: secretEgressEnabled,
-      });
-    });
-    return storeEnvPromise;
-  };
+        excludeNames: preparedRunEnvironment.excludedStoreNames,
+      }),
+    ));
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
     10_000,
     10,
     120_000,
   );
-  const allowBackground = defaults?.allowBackground ?? true;
+  const allowBackground =
+    defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
   const defaultTimeoutSec =
-    typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
-      ? defaults.timeoutSec
-      : 1800;
+    defaults?.timeoutSec && defaults.timeoutSec > 0 ? defaults.timeoutSec : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const {
     safeBins,
@@ -208,14 +207,12 @@ export function createExecTool(
       const startedAt = Date.now();
       let execCommandOverride: string | undefined;
       let revalidateGatewayApproval: GatewayApprovalRevalidator | undefined;
-      const backgroundRequested = params.background === true;
-      const yieldRequested = typeof params.yieldMs === "number";
       const foregroundFallbackWarning =
-        !allowBackground && (backgroundRequested || yieldRequested)
-          ? "Warning: background execution is disabled; running synchronously."
+        !allowBackground && (params.background === true || typeof params.yieldMs === "number")
+          ? "Warning: continuation options are unavailable; running synchronously."
           : undefined;
       const yieldWindow = allowBackground
-        ? backgroundRequested
+        ? params.background === true
           ? 0
           : clampWithDefault(
               params.yieldMs ?? defaultBackgroundMs,
@@ -299,7 +296,7 @@ export function createExecTool(
         ask: defaults?.ask ?? "off",
       });
       const approvalPolicy =
-        host === "sandbox"
+        host === "sandbox" || defaults?.bypassHostApprovalFloors === true
           ? undefined
           : resolveExecApprovalsFromFile({
               file: loadExecApprovals(),
@@ -309,7 +306,7 @@ export function createExecTool(
                 ask: "off",
               },
             }).agent;
-      let security = minSecurity(
+      const security = minSecurity(
         modePolicy.security,
         approvalPolicy?.security ?? modePolicy.security,
       );
@@ -322,24 +319,17 @@ export function createExecTool(
       const hostPolicyAllowsFullBypass =
         (approvalPolicy?.security ?? "full") === "full" && (approvalPolicy?.ask ?? "off") === "off";
       const modePolicyAllowsFullBypass = modePolicy.security === "full" && modePolicy.ask === "off";
-      if (
-        elevatedRequested &&
-        elevatedMode === "full" &&
-        modePolicyAllowsFullBypass &&
-        hostPolicyAllowsFullBypass
-      ) {
-        security = "full";
-      }
-      // Keep local exec defaults in sync with host approval state when tools.exec.* is unset.
+      // Explicit full-session authority is the sole exception to host approval floors.
       const requestedAsk = normalizeExecAsk(params.ask);
       const hostAsk = maxAsk(modePolicy.ask, approvalPolicy?.ask ?? modePolicy.ask);
       const trustedAsk = defaults?.messageProvider && hostAsk === "off" ? undefined : requestedAsk;
       let ask = maxAsk(hostAsk, trustedAsk ?? hostAsk);
       const bypassApprovals =
-        elevatedRequested &&
-        elevatedMode === "full" &&
-        modePolicyAllowsFullBypass &&
-        hostPolicyAllowsFullBypass;
+        defaults?.bypassHostApprovalFloors === true ||
+        (elevatedRequested &&
+          elevatedMode === "full" &&
+          modePolicyAllowsFullBypass &&
+          hostPolicyAllowsFullBypass);
       if (bypassApprovals) {
         ask = "off";
       }
@@ -438,9 +428,10 @@ export function createExecTool(
           channelContext: defaults?.channelContext,
           defaultPathPrepend,
           pluginEnv: resolvedExecEnvState?.pluginEnv,
-          storeEnv: storeEnv.env,
+          storeEnv: host === "gateway" ? storeEnv.env : undefined,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
           secretEgressEnv,
+          ...preparedRunEnvironment,
           warnings,
         });
 
@@ -466,6 +457,7 @@ export function createExecTool(
             agentId,
             security,
             ask,
+            bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
             autoReview,
             autoReviewer,
             signal,
@@ -477,6 +469,8 @@ export function createExecTool(
             approvalRunningNoticeMs,
             warnings,
             foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
+            // Remote system.run has no process-session owner.
+            processContinuationAvailable: false,
             notifySessionKey,
             notifyOnExit,
             trustedSafeBinDirs,
@@ -529,6 +523,7 @@ export function createExecTool(
             approvalRunningNoticeMs,
             maxOutput,
             pendingMaxOutput,
+            processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
           });
           if (gatewayResult.pendingResult) {
@@ -550,8 +545,7 @@ export function createExecTool(
           warnings.push(foregroundFallbackWarning);
         }
 
-        const explicitTimeoutSec = params.timeoutSeconds ?? null;
-        effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
+        effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 
         // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
@@ -590,6 +584,7 @@ export function createExecTool(
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,
+          processContinuationAvailable: allowBackground,
           onUpdate,
           onSettledBeforeNotify: (outcome) => {
             settledOutcome = outcome;
@@ -680,7 +675,7 @@ export function createExecTool(
         };
 
         const onYieldNow = () => {
-          if (yielded || toolAborted) {
+          if (yielded || toolAborted || run.session.finalizing) {
             return;
           }
           if (settledOutcome) {

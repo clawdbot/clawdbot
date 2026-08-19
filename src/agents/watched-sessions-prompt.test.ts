@@ -17,9 +17,7 @@ function stubStateDir() {
 }
 
 function watchGroup(sessionKey: string) {
-  expect(registerMainSessionGroupWatch({ sessionKey, agentId: "main", dmScope: "main" })).toBe(
-    true,
-  );
+  expect(registerMainSessionGroupWatch({ sessionKey, agentId: "main" })).toBe(true);
 }
 
 afterEach(() => {

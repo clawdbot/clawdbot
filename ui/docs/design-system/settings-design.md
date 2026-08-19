@@ -1,6 +1,6 @@
 # Settings Design Language
 
-Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Styles live in `ui/src/styles/settings.css`; templates are built through the helpers in `ui/src/components/settings-ui.ts`.
+Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Workspace styles live in `ui/src/styles/settings.css`, while controls shared with startup surfaces live in `ui/src/styles/settings-controls.css`; templates are built through the helpers in `ui/src/components/settings-ui.ts`.
 
 ## Anatomy
 

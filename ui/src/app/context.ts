@@ -9,13 +9,14 @@ import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capab
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
-import type { ApplicationCloudStartup } from "./cloud-session-startup.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
+import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
+import type { ApplicationSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -58,21 +59,6 @@ export type ApplicationNavigationOptions = Partial<
   Pick<RouteLocation, "pathname" | "search" | "hash">
 >;
 
-type SkillWorkshopRevisionHandoff = {
-  sessionKey: string;
-  instructions: string;
-  /** Stable for ordinary snapshots and session selection; rotates on reconnect. */
-  owner: object;
-  proposalId: string;
-  proposalAgentId: string;
-};
-
-export type ApplicationSkillWorkshopRevisionHandoff = {
-  prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
-  consume: (sessionKey: string, owner: object | null) => SkillWorkshopRevisionHandoff | null;
-  clear: (handoff?: SkillWorkshopRevisionHandoff) => void;
-};
-
 type ChatAttachmentHandoffKey = {
   owner: ApplicationGateway["snapshot"]["client"];
   paneId: string;
@@ -98,6 +84,7 @@ export type ApplicationChatAttachmentHandoff = {
 
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
+  readonly resourceBasePath: string;
   readonly gateway: ApplicationGateway;
   readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;
@@ -106,7 +93,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly config: ApplicationConfigCapability;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
-  readonly cloudStartup: ApplicationCloudStartup;
+  readonly placementStartup: ApplicationPlacementStartup;
   readonly workboard: WorkboardCapability;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;
@@ -114,7 +101,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly nativeChatDrafts: NativeChatDrafts;
   readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;
-  readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
+  readonly skillWorkshopRevisionAdmissions: ApplicationSkillWorkshopRevisionAdmissions;
   readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
   readonly chatAttachmentHandoff: ApplicationChatAttachmentHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;

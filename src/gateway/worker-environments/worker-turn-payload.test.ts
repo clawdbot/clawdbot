@@ -82,7 +82,7 @@ function buildDescriptor(
   operationalRunInstance: OperationalRunInstanceRef,
 ): WorkerLaunchPlan {
   return {
-    version: 3,
+    version: 4,
     admission: {
       environmentId: "environment",
       credential: "worker-fixture-credential",

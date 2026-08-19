@@ -72,6 +72,9 @@ export const execSchema = Type.Object({
   ),
 });
 
+/** Exec parameters when no process-control continuation is authorized. */
+export const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
+
 /** Parameters exposed by node-only exec surfaces. */
 export const nodeExecSchema = Type.Object({
   command: execSchema.properties.command,

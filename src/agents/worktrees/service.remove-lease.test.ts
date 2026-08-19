@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { getRegistryWorktree } from "./registry.js";
-import { acquireWorktreeRunLease } from "./run-lease.js";
+import { acquireWorktreeRunLease, hasLiveWorktreeRunLease } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 
@@ -75,6 +75,74 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
 
     await lease.release();
     expect((await service.remove({ id: created.id, reason: "manual-delete" })).removed).toBe(true);
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not let snapshot-loss permission bypass a live run lease", async () => {
+    const created = await createSessionWorktree();
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+
+    await expect(
+      service.remove({ id: created.id, reason: "manual-delete", allowSnapshotLoss: true }),
+    ).rejects.toThrow("worktree is busy");
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+    expect(await fs.stat(created.path)).toBeTruthy();
+
+    await lease.release();
+  });
+
+  it("does not let snapshot-loss permission bypass a foreign Git lock", async () => {
+    const created = await createSessionWorktree();
+    await git(repo, "worktree", "lock", "--reason", "other-tool", created.path);
+
+    await expect(
+      service.remove({ id: created.id, reason: "manual-delete", allowSnapshotLoss: true }),
+    ).rejects.toThrow("worktree has a foreign lock: other-tool");
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+    expect(await fs.stat(created.path)).toBeTruthy();
+  });
+
+  it("rejects a snapshot-loss retry when a run starts after snapshot failure", async () => {
+    const created = await createSessionWorktree();
+    const nested = path.join(created.path, "nested");
+    await fs.mkdir(nested);
+    await git(nested, "init", "-b", "main");
+
+    await expect(service.remove({ id: created.id, reason: "manual-delete" })).rejects.toThrow(
+      "nested git repositories cannot be snapshotted losslessly",
+    );
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+
+    await expect(
+      service.remove({ id: created.id, reason: "manual-delete", allowSnapshotLoss: true }),
+    ).rejects.toThrow("worktree is busy");
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+    expect(await fs.stat(created.path)).toBeTruthy();
+
+    await lease.release();
+  });
+
+  it("continues after snapshot failure when snapshot loss is allowed", async () => {
+    const created = await createSessionWorktree();
+    const nested = path.join(created.path, "nested");
+    await fs.mkdir(nested);
+    await git(nested, "init", "-b", "main");
+
+    const result = await service.remove({
+      id: created.id,
+      reason: "manual-delete",
+      allowSnapshotLoss: true,
+    });
+
+    expect(result).toEqual({
+      removed: true,
+      snapshotError: expect.stringContaining(
+        "nested git repositories cannot be snapshotted losslessly",
+      ),
+    });
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBe(now);
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

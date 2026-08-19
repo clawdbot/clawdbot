@@ -4,6 +4,7 @@
  * JSON success/failure payloads and human-readable gateway health diagnostics
  * are kept here so local and remote setup report failures consistently.
  */
+import type { GatewayServiceLoadState } from "../../../daemon/service-types.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
@@ -11,7 +12,8 @@ import type { OnboardOptions } from "../../onboard-types.js";
 export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
-    loaded: boolean;
+    loaded: boolean | null;
+    loadState: GatewayServiceLoadState;
     loadedText: string;
     runtimeStatus?: string;
     state?: string;
@@ -121,7 +123,10 @@ export function classifyGatewayHealthFailure(params: {
   ) {
     return "module-missing";
   }
-  if (params.diagnostics?.service?.loaded === false && hasConnectionRefusedDetail(detail)) {
+  if (
+    params.diagnostics?.service?.loadState.status === "not-loaded" &&
+    hasConnectionRefusedDetail(detail)
+  ) {
     return "service-missing";
   }
   const runtimeStatus = params.diagnostics?.service?.runtimeStatus;
@@ -193,6 +198,12 @@ export function logNonInteractiveOnboardingFailure(params: {
   const recoveryHint = recoveryHintForGatewayHealthFailure(classification);
   const hints = [...(recoveryHint ? [recoveryHint] : []), ...(params.hints?.filter(Boolean) ?? [])];
   const gatewayRuntime = formatGatewayRuntimeSummary(params.diagnostics);
+  const service = params.diagnostics?.service;
+  const serviceLoadText = service
+    ? service.loadState.status === "loaded"
+      ? service.loadedText
+      : service.loadState.status.replace("-", " ")
+    : undefined;
 
   if (params.opts.json) {
     writeRuntimeJson(params.runtime, {
@@ -216,9 +227,7 @@ export function logNonInteractiveOnboardingFailure(params: {
     params.message,
     classification ? `Classification: ${classification}` : undefined,
     params.detail ? `Last probe: ${params.detail}` : undefined,
-    params.diagnostics?.service
-      ? `Service: ${params.diagnostics.service.label} (${params.diagnostics.service.loaded ? params.diagnostics.service.loadedText : "not loaded"})`
-      : undefined,
+    service ? `Service: ${service.label} (${serviceLoadText})` : undefined,
     gatewayRuntime ? `Runtime: ${gatewayRuntime}` : undefined,
     params.diagnostics?.lastGatewayError
       ? `Last gateway error: ${params.diagnostics.lastGatewayError}`

@@ -120,6 +120,7 @@ permissions:
 concurrency:
   group: qa-lab-all-lanes-${{ github.event_name != 'schedule' && inputs.ref || github.sha }}
   cancel-in-progress: false
+  queue: max
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

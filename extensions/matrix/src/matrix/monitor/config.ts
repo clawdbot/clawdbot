@@ -116,7 +116,7 @@ function addUniqueMatrixAllowlistEntry(params: {
   if (!trimmed) {
     return;
   }
-  const key = trimmed.toLowerCase();
+  const key = normalizeMatrixUserId(trimmed);
   if (params.seen.has(key)) {
     return;
   }
@@ -178,6 +178,7 @@ function resolveStableMatrixMonitorUserAllowlist(params: {
   const canonicalized = canonicalizeAllowlistWithResolvedIds({
     existing: allowList,
     resolvedMap: resolution.resolvedMap,
+    entryKey: normalizeMatrixUserId,
   });
   logStableMatrixAllowlistUnresolved({
     label: params.label,
@@ -289,6 +290,7 @@ async function resolveMatrixMonitorUserAllowlist(params: {
   const canonicalized = canonicalizeAllowlistWithResolvedIds({
     existing: allowList,
     resolvedMap: resolution.resolvedMap,
+    entryKey: normalizeMatrixUserId,
   });
 
   summarizeMapping(params.label, resolution.mapping, resolution.unresolved, params.runtime);
@@ -376,6 +378,7 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
   const canonicalized = canonicalizeAllowlistWithResolvedIds({
     existing: pending,
     resolvedMap: resolution.resolvedMap,
+    entryKey: normalizeMatrixUserId,
   });
   const resolvedEntries = params.failClosedOnUnresolved
     ? filterFailClosedMatrixAllowlistEntries(canonicalized)
@@ -490,6 +493,7 @@ async function resolveMatrixMonitorRoomsConfig(params: {
       entries: nextRooms,
       resolvedMap: resolution.resolvedMap,
       strategy: "canonicalize",
+      entryKey: normalizeMatrixUserId,
     });
     return patched;
   }
@@ -512,6 +516,7 @@ async function resolveMatrixMonitorRoomsConfig(params: {
     entries: nextRooms,
     resolvedMap: resolution.resolvedMap,
     strategy: "canonicalize",
+    entryKey: normalizeMatrixUserId,
   });
   return patched;
 }

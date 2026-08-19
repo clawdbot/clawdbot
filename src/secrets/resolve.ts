@@ -32,12 +32,13 @@ import {
 } from "./provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
+  isBuiltInDefaultSecretProviderRef,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
-  SINGLE_VALUE_FILE_REF_ID,
-  resolveDefaultSecretProviderAlias,
+  resolveSecretRefProviderSourceMismatch,
   secretRefKey,
+  SINGLE_VALUE_FILE_REF_ID,
 } from "./ref-contract.js";
 import {
   isMissingSecretRefResolutionError,
@@ -157,12 +158,13 @@ function resolveConfiguredProvider(params: {
 }): SecretProviderConfig {
   const { ref, config } = params;
   const providerConfig = config.secrets?.providers?.[ref.provider];
-  if (
-    providerConfig?.source !== ref.source &&
-    (ref.source === "env" || ref.source === "store") &&
-    ref.provider === resolveDefaultSecretProviderAlias(config, ref.source)
-  ) {
-    return { source: ref.source };
+  if (isBuiltInDefaultSecretProviderRef(config, ref)) {
+    if (ref.source === "env") {
+      return { source: "env" };
+    }
+    if (ref.source === "store") {
+      return { source: "store" };
+    }
   }
   if (!providerConfig) {
     throw providerResolutionError({
@@ -172,12 +174,13 @@ function resolveConfiguredProvider(params: {
       message: `Secret provider "${ref.provider}" is not configured (ref: ${ref.source}:${ref.provider}:${ref.id}).`,
     });
   }
-  if (providerConfig.source !== ref.source) {
+  const configuredSource = resolveSecretRefProviderSourceMismatch(config, ref);
+  if (configuredSource) {
     throw providerResolutionError({
       code: "SECRET_PROVIDER_INVALID",
       source: ref.source,
       provider: ref.provider,
-      message: `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
+      message: `Secret provider "${ref.provider}" has source "${configuredSource}" but ref requests "${ref.source}".`,
     });
   }
   if (isPluginIntegrationSecretProviderConfig(providerConfig)) {

@@ -90,4 +90,5 @@ export const GATEWAY_EVENTS = [
   "terminal.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   "portal.changed",
+  "progressCard.changed",
 ];
