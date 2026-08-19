@@ -179,17 +179,21 @@ if (!Number.isSafeInteger(watchdog.pid) || watchdog.pid < 1) {
   throw new Error("workspace quiescence watchdog did not start");
 }
 let watchdogStart = null;
-for (let attempt = 0; attempt < 100 && !watchdogStart; attempt += 1) {
-  watchdogStart = processIdentity(watchdog.pid);
-  if (!watchdogStart) Atomics.wait(sleeper, 0, 0, 10);
+try {
+  for (let attempt = 0; attempt < 100 && !watchdogStart; attempt += 1) {
+    watchdogStart = processIdentity(watchdog.pid);
+    if (!watchdogStart) Atomics.wait(sleeper, 0, 0, 10);
+  }
+  if (!watchdogStart) {
+    throw new Error("workspace quiescence watchdog identity was not observable");
+  }
+  watchdogReference = { pid: watchdog.pid, start: watchdogStart };
+  writeLease();
+} catch (error) {
+  try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || (killError.code !== "ESRCH" && killError.code !== "EPERM")) throw killError; }
+  try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
+  throw error;
 }
-if (!watchdogStart) {
-  try { process.kill(watchdog.pid, "SIGTERM"); } catch {}
-  fs.unlinkSync(leasePath);
-  throw new Error("workspace quiescence watchdog identity was not observable");
-}
-watchdogReference = { pid: watchdog.pid, start: watchdogStart };
-writeLease();
 let quietScans = 0;
 try {
   if (sharedHost) {

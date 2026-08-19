@@ -287,6 +287,44 @@ describe("remote workspace quiescence scripts", () => {
     expect(result.code).not.toBe(0);
   });
 
+  it("cleans up the initial watchdog when identity probing times out", async () => {
+    const input = await fixture();
+    const watchdogPidPath = path.join(input.home, "initial-watchdog.pid");
+    await fs.writeFile(
+      path.join(input.bin, "ps"),
+      `#!/bin/sh
+case "$*" in
+  *"lstart= -p"*)
+    for pid do :; done
+    printf "%s\n" "$pid" > "$OPENCLAW_TEST_WATCHDOG_PID"
+    trap '' TERM
+    while true; do sleep 1; done
+    ;;
+  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\n" "$$" "$PPID" "$(id -u)" ;;
+esac
+`,
+    );
+    await fs.chmod(path.join(input.bin, "ps"), 0o755);
+
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000", "dedicated"],
+      {
+        timeoutMs: 10_000,
+        baseEnv: { ...input.env, OPENCLAW_TEST_WATCHDOG_PID: watchdogPidPath },
+      },
+    );
+
+    expect(result.termination).toBe("exit");
+    expect(result.code).not.toBe(0);
+    const watchdogPid = Number((await fs.readFile(watchdogPidPath, "utf8")).trim());
+    expect(Number.isSafeInteger(watchdogPid)).toBe(true);
+    const leaseDirectory = path.join(input.home, ".openclaw-worker", "quiescence");
+    await expect(fs.readdir(leaseDirectory)).resolves.toEqual([]);
+    await vi.waitFor(() => {
+      expect(() => process.kill(watchdogPid, 0)).toThrow();
+    });
+  });
+
   it("bounds identity lookups so a stalled host ps cannot strand frozen processes", async () => {
     const input = await fixture();
     const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
