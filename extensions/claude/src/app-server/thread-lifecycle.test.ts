@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeAppServerClient } from "./client.js";
 import type { ResolvedClaudeAppServerConfig } from "./config.js";
 import type { ClaudeDynamicToolBridge } from "./dynamic-tools.js";
-import { isThreadNotFound, startOrResumeClaudeThread } from "./thread-lifecycle.js";
+import {
+  isCollapsedToolCatalog,
+  isThreadNotFound,
+  startOrResumeClaudeThread,
+} from "./thread-lifecycle.js";
 import {
   createClaudeAppServerBindingStore,
   type ClaudeAppServerBinding,
@@ -603,3 +607,146 @@ async function seedBinding(
     dynamicToolsFingerprint: overrides.dynamicToolsFingerprint,
   });
 }
+
+// ── collapsed dynamic tool catalog (openclaw-tb9g) ──────────────────────────
+
+function makeBridgeWithToolCount(count: number): ClaudeDynamicToolBridge {
+  const specs = Array.from({ length: count }, (_, i) => ({
+    name: `tool_${i}`,
+    description: "",
+    inputSchema: { type: "object" },
+  }));
+  return { specs, handlers: new Map() } as unknown as ClaudeDynamicToolBridge;
+}
+
+describe("isCollapsedToolCatalog", () => {
+  it("treats an emptied catalog as collapsed when the binding had tools", () => {
+    expect(isCollapsedToolCatalog({ boundCount: 78, nextCount: 0 })).toBe(true);
+  });
+
+  it("does not treat an empty catalog as collapsed without a baseline", () => {
+    // Bindings predating dynamicToolsCount must not trip the guard, or every
+    // no-tool session would refuse to ever rotate.
+    expect(isCollapsedToolCatalog({ boundCount: undefined, nextCount: 0 })).toBe(false);
+    expect(isCollapsedToolCatalog({ boundCount: 0, nextCount: 0 })).toBe(false);
+  });
+
+  it("treats the observed 78 -> 2 remnant as collapsed", () => {
+    // The real incidents (2026-08-12, 2026-08-17). Codex's literal-zero guard
+    // would miss these, which is why the ratio exists.
+    expect(isCollapsedToolCatalog({ boundCount: 78, nextCount: 2 })).toBe(true);
+  });
+
+  it("leaves a legitimately smaller catalog alone", () => {
+    expect(isCollapsedToolCatalog({ boundCount: 78, nextCount: 40 })).toBe(false);
+    // Exactly at the ratio is NOT a collapse — the comparison is strict.
+    expect(isCollapsedToolCatalog({ boundCount: 80, nextCount: 20 })).toBe(false);
+  });
+
+  it("cannot judge a remnant without a baseline", () => {
+    expect(isCollapsedToolCatalog({ boundCount: undefined, nextCount: 2 })).toBe(false);
+  });
+});
+
+describe("startOrResumeClaudeThread — collapsed catalog", () => {
+  let store: ClaudeAppServerBindingStore;
+
+  beforeEach(() => {
+    store = createClaudeTestBindingStore();
+  });
+
+  async function seedCollapsedCatalogBinding(overrides: Partial<ClaudeAppServerBinding> = {}) {
+    await store.write(IDENTITY, {
+      threadId: "thr_durable_001",
+      cwd: "/tmp/ws",
+      model: "claude-sonnet-4-6",
+      approvalPolicy: BASE_CFG.appServer.approvalPolicy,
+      approvalsReviewer: "user",
+      sandbox: BASE_CFG.appServer.sandbox,
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+      dynamicToolsCount: 78,
+      ...overrides,
+    } as ClaudeAppServerBinding);
+  }
+
+  it("resumes instead of forking when the catalog collapses to a remnant", async () => {
+    await seedCollapsedCatalogBinding();
+    const client = makeClient({});
+    const result = await startOrResumeClaudeThread({
+      client,
+      params: makeParams(),
+      cfg: BASE_CFG,
+      bridge: makeBridgeWithToolCount(2),
+      bindingStore: store,
+      developerInstructions: "x",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: "fp-collapsed-catalog",
+      effectiveWorkspace: "/tmp/ws",
+      nativeDisallowedTools: [],
+    });
+    expect(result.outcome).toBe("resumed");
+    expect(result.rotationReason).toBeUndefined();
+  });
+
+  it("keeps the binding describing the real catalog across a collapse", async () => {
+    await seedCollapsedCatalogBinding();
+    await startOrResumeClaudeThread({
+      client: makeClient({}),
+      params: makeParams(),
+      cfg: BASE_CFG,
+      bridge: makeBridgeWithToolCount(2),
+      bindingStore: store,
+      developerInstructions: "x",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: "fp-collapsed-catalog",
+      effectiveWorkspace: "/tmp/ws",
+      nativeDisallowedTools: [],
+    });
+    const binding = await store.read(IDENTITY);
+    // Same durable thread, and the remnant was NOT adopted as the new
+    // baseline — otherwise the next real collapse looks normal.
+    expect(binding?.threadId).toBe("thr_durable_001");
+    expect(binding?.dynamicToolsFingerprint).toBe(STABLE_DYNAMIC_TOOLS_FP);
+    expect(binding?.dynamicToolsCount).toBe(78);
+  });
+
+  it("still forks on a genuine catalog change", async () => {
+    await seedCollapsedCatalogBinding();
+    const result = await startOrResumeClaudeThread({
+      client: makeClient({}),
+      params: makeParams(),
+      cfg: BASE_CFG,
+      bridge: makeBridgeWithToolCount(64),
+      bindingStore: store,
+      developerInstructions: "x",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: "fp-genuinely-different",
+      effectiveWorkspace: "/tmp/ws",
+      nativeDisallowedTools: [],
+    });
+    expect(result.outcome).toBe("forked");
+    expect(result.rotationReason).toMatch(/dynamic tool catalog changed/);
+    const binding = await store.read(IDENTITY);
+    expect(binding?.dynamicToolsCount).toBe(64);
+  });
+
+  it("backfills the baseline on a matching-fingerprint turn", async () => {
+    // A binding written before dynamicToolsCount existed gains its baseline on
+    // the next ordinary turn, not after the first rotation.
+    await seedCollapsedCatalogBinding({ dynamicToolsCount: undefined });
+    await startOrResumeClaudeThread({
+      client: makeClient({}),
+      params: makeParams(),
+      cfg: BASE_CFG,
+      bridge: makeBridgeWithToolCount(78),
+      bindingStore: store,
+      developerInstructions: "x",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+      effectiveWorkspace: "/tmp/ws",
+      nativeDisallowedTools: [],
+    });
+    expect((await store.read(IDENTITY))?.dynamicToolsCount).toBe(78);
+  });
+});
