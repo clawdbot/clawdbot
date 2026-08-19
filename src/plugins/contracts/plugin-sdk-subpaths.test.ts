@@ -496,7 +496,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(docs).toContain("scripts/lib/plugin-sdk-entrypoints.json");
     expect(docs).toContain("scripts/lib/plugin-sdk-private-local-only-subpaths.json");
     expect(docs).toContain("scripts/lib/plugin-sdk-deprecated-public-subpaths.json");
-    expect(docs).toContain("private-local entries explicitly");
+    expect(docs).toContain("are labeled private-local below");
 
     for (const subpath of pluginSdkSubpaths) {
       expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`, {
