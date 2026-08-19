@@ -16,41 +16,52 @@ type PosixProcess = {
 };
 
 const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
+const MAX_CONTAINED_PROCESSES = 512;
+const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const MAX_PROCESS_QUIESCE_PASSES = 16;
 
 export function terminateCodexAppServerDescendants(
   child: ContainableTransport,
 ): (() => void) | undefined {
   const rootPid = child.pid;
-  if (process.platform === "win32" || !rootPid || hasExited(child)) {
-    return;
+  if (process.platform === "win32" || !rootPid || !child.kill || hasExited(child)) {
+    return undefined;
   }
-  const snapshot = readProcessSnapshot();
-  if (!snapshot) {
-    return;
+  const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
+  const snapshot = readProcessSnapshot(deadline);
+  if (!snapshot || Date.now() >= deadline) {
+    return undefined;
   }
   const root = snapshot.find((row) => row.pid === rootPid);
   if (!root || !isSameLiveRoot(root, root)) {
-    return;
+    return undefined;
   }
 
   const initialDescendants = collectDescendants(snapshot, [rootPid]);
+  if (initialDescendants.length > MAX_CONTAINED_PROCESSES) {
+    return undefined;
+  }
   const stoppedDescendants = new Map<string, PosixProcess>();
-  if (!signalSameRoot(root, "SIGSTOP")) {
-    return;
+  if (!signalSameRoot(root, "SIGSTOP", deadline)) {
+    return undefined;
   }
   let resumeRootOnUnwind = true;
   try {
-    const descendants = quiesceDescendants(root, initialDescendants, stoppedDescendants);
+    const descendants = quiesceDescendants(root, initialDescendants, stoppedDescendants, deadline);
     if (!descendants) {
-      return;
+      return undefined;
     }
 
     // Parents are last: every destructive signal revalidates the exact live PID
     // while the stopped ancestry still prevents new descendants.
     for (const descendant of descendants.toReversed()) {
+      if (Date.now() >= deadline) {
+        return undefined;
+      }
       if (!descendant.state.startsWith("Z")) {
-        signalSameProcess(descendant, "SIGKILL");
+        if (!signalSameProcess(descendant, "SIGKILL", deadline) || Date.now() >= deadline) {
+          return undefined;
+        }
       }
     }
     resumeRootOnUnwind = false;
@@ -70,10 +81,6 @@ export function terminateCodexAppServerDescendants(
         signalProcess(descendant.pid, "SIGCONT");
       }
       resumeTransportRoot(child, root, true);
-    } else {
-      for (const descendant of stoppedDescendants.values()) {
-        signalSameProcess(descendant, "SIGCONT");
-      }
     }
   }
 }
@@ -82,12 +89,16 @@ function quiesceDescendants(
   root: PosixProcess,
   initialDescendants: PosixProcess[],
   stopped: Map<string, PosixProcess>,
+  deadline: number,
 ): PosixProcess[] | undefined {
   const provenByPid = new Map(initialDescendants.map((descendant) => [descendant.pid, descendant]));
   const stopFailures = new Map<string, number>();
   for (let pass = 0; pass < MAX_PROCESS_QUIESCE_PASSES; pass += 1) {
-    const snapshot = readProcessSnapshot();
-    if (!snapshot) {
+    if (Date.now() >= deadline) {
+      return undefined;
+    }
+    const snapshot = readProcessSnapshot(deadline);
+    if (!snapshot || Date.now() >= deadline) {
       return undefined;
     }
     const currentRoot = snapshot.find((row) => row.pid === root.pid);
@@ -95,7 +106,7 @@ function quiesceDescendants(
       return undefined;
     }
     if (!isSameLiveRoot(currentRoot, root, true)) {
-      if (!signalSameRoot(root, "SIGSTOP")) {
+      if (!signalSameRoot(root, "SIGSTOP", deadline) || Date.now() >= deadline) {
         return undefined;
       }
       continue;
@@ -128,16 +139,25 @@ function quiesceDescendants(
       }
       provenByPid.set(descendant.pid, descendant);
     }
+    if (provenByPid.size > MAX_CONTAINED_PROCESSES) {
+      return undefined;
+    }
     const quiescenceTargets = new Map(liveProven.map((process) => [process.pid, process]));
     for (const descendant of descendants) {
       quiescenceTargets.set(descendant.pid, descendant);
     }
     let allStopped = true;
     for (const descendant of quiescenceTargets.values()) {
+      if (Date.now() >= deadline) {
+        return undefined;
+      }
       if (isStoppedState(descendant.state)) {
         continue;
       }
-      const stopQueued = signalSameProcess(descendant, "SIGSTOP");
+      const stopQueued = signalSameProcess(descendant, "SIGSTOP", deadline);
+      if (Date.now() >= deadline) {
+        return undefined;
+      }
       if (stopQueued) {
         stopFailures.delete(identityKey(descendant));
         stopped.set(identityKey(descendant), descendant);
@@ -160,17 +180,26 @@ function quiesceDescendants(
   return undefined;
 }
 
-function readProcessSnapshot(): PosixProcess[] | undefined {
-  return readProcesses(["-axo", PROCESS_COLUMNS]);
+function readProcessSnapshot(deadline: number): PosixProcess[] | undefined {
+  return readProcesses(["-axo", PROCESS_COLUMNS], deadline);
 }
 
-function readProcess(pid: number): PosixProcess | undefined {
-  return readProcesses(["-o", PROCESS_COLUMNS, "-p", String(pid)])?.find((row) => row.pid === pid);
+function readProcess(pid: number, deadline: number): PosixProcess | undefined {
+  return readProcesses(["-o", PROCESS_COLUMNS, "-p", String(pid)], deadline)?.find(
+    (row) => row.pid === pid,
+  );
 }
 
-function readProcesses(args: string[]): PosixProcess[] | undefined {
+function readProcesses(args: string[], deadline: number): PosixProcess[] | undefined {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    return undefined;
+  }
   try {
-    const result = spawnSync("ps", args, { encoding: "utf8", timeout: 500 });
+    const result = spawnSync("ps", args, {
+      encoding: "utf8",
+      timeout: Math.max(1, Math.min(500, remainingMs)),
+    });
     if (result.error || result.status !== 0) {
       return undefined;
     }
@@ -260,8 +289,8 @@ function isSameLiveRoot(
   );
 }
 
-function signalSameRoot(root: PosixProcess, signal: NodeJS.Signals): boolean {
-  const current = readProcess(root.pid);
+function signalSameRoot(root: PosixProcess, signal: NodeJS.Signals, deadline: number): boolean {
+  const current = readProcess(root.pid, deadline);
   return Boolean(current && isSameLiveRoot(current, root) && signalProcess(current.pid, signal));
 }
 
@@ -287,10 +316,14 @@ function resumeTransportRoot(
   }
 }
 
-function signalSameProcess(expected: PosixProcess, signal: NodeJS.Signals): boolean {
+function signalSameProcess(
+  expected: PosixProcess,
+  signal: NodeJS.Signals,
+  deadline: number,
+): boolean {
   // Portable Node POSIX signals are PID-based, so never retain numeric authority:
   // take this final identity snapshot synchronously immediately before every signal.
-  const current = readProcess(expected.pid);
+  const current = readProcess(expected.pid, deadline);
   return Boolean(
     current && isSameLiveProcess(current, expected) && signalProcess(current.pid, signal),
   );

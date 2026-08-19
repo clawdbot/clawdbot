@@ -204,19 +204,15 @@ process.stdin.on("end", () => process.exit(0));
     );
     await fs.writeFile(
       fakePsPath,
-      `#!/usr/bin/env node
-import { readFileSync, writeFileSync } from "node:fs";
-const scenarioPath = ${JSON.stringify(scenarioPath)};
-const counterPath = ${JSON.stringify(fakePsCounterPath)};
-const scenario = JSON.parse(readFileSync(scenarioPath, "utf8"));
-let count = 0;
-try { count = Number(readFileSync(counterPath, "utf8")); } catch {}
-writeFileSync(counterPath, String(count + 1));
-const rows = scenario.snapshots[Math.min(count, scenario.snapshots.length - 1)];
-if (rows === null) process.exit(1);
-for (const row of rows) {
-  process.stdout.write([row.pid, row.ppid, row.pgid, row.state, row.startedAt].join(" ") + "\\n");
-}
+      `#!/bin/sh
+count=0
+if [ -f ${JSON.stringify(fakePsCounterPath)} ]; then count=$(command cat ${JSON.stringify(fakePsCounterPath)}); fi
+printf '%s' "$((count + 1))" > ${JSON.stringify(fakePsCounterPath)}
+last=$(command cat ${JSON.stringify(scenarioPath)})
+if [ "$count" -gt "$last" ]; then count=$last; fi
+rows=${JSON.stringify(scenarioPath)}.$count
+if [ "$(command cat "$rows")" = FAIL ]; then exit 1; fi
+command cat "$rows"
 `,
       { mode: 0o755 },
     );
@@ -352,7 +348,13 @@ try {
               [stoppedRoot, { ...stoppedSentinel, ppid: root.pid }],
             ];
   await fs.writeFile(counterPath, "0");
-  await fs.writeFile(scenarioPath, JSON.stringify({ snapshots }));
+  await fs.writeFile(scenarioPath, String(snapshots.length - 1));
+  await Promise.all(snapshots.map(async (rows, index) => {
+    const contents = rows === null
+      ? "FAIL\\n"
+      : rows.map((row) => [row.pid, row.ppid, row.pgid, row.state, row.startedAt].join(" ")).join("\\n") + "\\n";
+    await fs.writeFile(scenarioPath + "." + index, contents);
+  }));
   process.env.PATH = fakeBin + path.delimiter + (originalPath ?? "");
   const closed = await closeCodexAppServerTransportAndWait(root, { forceKillDelayMs: 500, exitTimeoutMs: 2_000 });
   process.env.PATH = originalPath;
