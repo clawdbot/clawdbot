@@ -497,6 +497,8 @@ class ChatControllerReconnectRestoreTest {
         "chat.history",
         history(emptyList(), hasActiveRun = true, activeRunIds = null),
       )
+      val pendingSessionList = CompletableDeferred<String>()
+      gateway.respond("sessions.list") { pendingSessionList.await() }
       reconnect(controller)
 
       assertEquals(1, controller.selectedActiveRunPresentation.value.count)
