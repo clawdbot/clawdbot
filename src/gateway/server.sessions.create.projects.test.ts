@@ -4,9 +4,14 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runWithCanonicalSkillWorkspace } from "../agents/skill-workshop-workspace-context.js";
+import { createConfiguredSkillWorkshopTool } from "../agents/tools/skill-workshop-tool-factory.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { migrateManagedWorktreeCanonicalWorkspaces } from "../config/sessions/worktree-workspace-migration.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
+import { inspectSkillProposal } from "../skills/workshop/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { testState } from "./test-helpers.js";
 import {
@@ -35,9 +40,10 @@ async function initializeRepository(root: string, name: string): Promise<string>
   return await fs.realpath(repo);
 }
 
-test("sessions.create starts directly in a synthesized workspace project", async () => {
+test("sessions.create starts directly in a synthesized non-Git workspace project", async () => {
   const root = tempDirs.make("openclaw-session-workspace-project-");
-  const workspace = await initializeRepository(root, "workspace");
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace);
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
 
@@ -47,7 +53,7 @@ test("sessions.create starts directly in a synthesized workspace project", async
     { client: { connect: { scopes: ["operator.write"] } } as never },
   );
 
-  expect(created.ok).toBe(true);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.spawnedCwd).toBe(workspace);
 });
 
@@ -85,12 +91,21 @@ test("sessions.create provisions a managed worktree from a registered project at
   const workspace = await initializeRepository(root, "workspace");
   const projectRoot = await initializeRepository(root, "project");
   testState.agentConfig = { workspace };
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
   let worktreeId: string | undefined;
   try {
     const created = await directSessionReq<{
-      entry?: { spawnedCwd?: string };
+      key?: string;
+      entry?: {
+        spawnedCwd?: string;
+        worktree?: {
+          id: string;
+          branch: string;
+          repoRoot: string;
+          canonicalWorkspaceDir?: string;
+        };
+      };
       worktree?: { id: string; path: string };
     }>(
       "sessions.create",
@@ -101,9 +116,64 @@ test("sessions.create provisions a managed worktree from a registered project at
     expect(created.ok).toBe(true);
     worktreeId = created.payload?.worktree?.id;
     expect(created.payload?.entry?.spawnedCwd).toBe(created.payload?.worktree?.path);
+    expect(created.payload?.entry?.worktree?.canonicalWorkspaceDir).toBe(projectRoot);
+    const sessionKey = created.payload?.key ?? "";
+    const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+    if (!entry?.worktree) {
+      throw new Error("expected persisted project worktree session");
+    }
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        ...entry,
+        worktree: {
+          id: entry.worktree.id,
+          branch: entry.worktree.branch,
+          repoRoot: entry.worktree.repoRoot,
+        },
+      },
+    );
+    await migrateManagedWorktreeCanonicalWorkspaces({
+      agentId: "main",
+      cfg: getRuntimeConfig(),
+      storePath,
+    });
+    const migrated = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+    const canonicalWorkspaceDir = migrated?.worktree?.canonicalWorkspaceDir;
+    const spawnedCwd = migrated?.spawnedCwd;
+    if (!canonicalWorkspaceDir || !spawnedCwd) {
+      throw new Error("expected migrated project worktree session");
+    }
+    expect(canonicalWorkspaceDir).toBe(projectRoot);
+    const proposal = await runWithCanonicalSkillWorkspace(canonicalWorkspaceDir, async () => {
+      const tool = createConfiguredSkillWorkshopTool({
+        workspaceDir: spawnedCwd,
+        config: getRuntimeConfig(),
+        agentId: "main",
+        sessionKey,
+      });
+      return await tool.execute("legacy-project-proposal", {
+        action: "create",
+        name: "legacy-project-learning",
+        description: "Preserve learning from a resumed project worktree.",
+        proposal_content: "# Legacy Project Learning\n\nPersist this in the project workspace.\n",
+      });
+    });
+    const proposalDetails = proposal.details as { id: string };
+    const inspected = await inspectSkillProposal(proposalDetails.id, {
+      agentId: "main",
+      workspaceDir: projectRoot,
+    });
+    expect(inspected?.record.target.skillFile).toBe(
+      path.join(projectRoot, "skills", "legacy-project-learning", "SKILL.md"),
+    );
   } finally {
     if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
   }
 });
@@ -132,17 +202,25 @@ test("sessions.create returns a typed error for an unknown project", async () =>
   });
 });
 
-test("sessions.create reports a stale registered project as unavailable with repair guidance", async () => {
-  const root = tempDirs.make("openclaw-session-stale-project-");
-  const repo = await initializeRepository(root, "project");
-  const project = await registerProjectRegistry({ path: repo });
-  await fs.rm(repo, { recursive: true, force: true });
+test.each(["missing", "non-directory"] as const)(
+  "sessions.create reports an unavailable %s registered project with truthful recovery guidance",
+  async (state) => {
+    const root = tempDirs.make("openclaw-session-stale-project-");
+    const repo = await initializeRepository(root, "project");
+    const project = await registerProjectRegistry({ path: repo });
+    await fs.rm(repo, { recursive: true, force: true });
+    if (state === "non-directory") {
+      await fs.writeFile(repo, "not a directory\n");
+    }
 
-  const created = await directSessionReq("sessions.create", { projectId: project.id });
-  expect(created.ok).toBe(false);
-  expect(created.error?.code).toBe("UNAVAILABLE");
-  expect(created.error?.message).toContain("re-register it or run openclaw doctor --fix");
-});
+    const created = await directSessionReq("sessions.create", { projectId: project.id });
+    expect(created.ok).toBe(false);
+    expect(created.error?.code).toBe("UNAVAILABLE");
+    expect(created.error?.message).toMatch(
+      /; update the agent workspace path or re-register the project$/u,
+    );
+  },
+);
 
 test("sessions.create rejects an outside project for a sandboxed agent", async () => {
   const root = tempDirs.make("openclaw-session-sandbox-project-");

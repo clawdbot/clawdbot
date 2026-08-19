@@ -20,7 +20,8 @@ describe("plugin-entry reply trigger contract", () => {
     expectTypeOf<WorkerMachineOption>().toEqualTypeOf<{
       readonly id: string;
       readonly label: string;
-      readonly description?: string;
+      readonly cpu?: number;
+      readonly memoryGb?: number;
       readonly default?: boolean;
     }>();
   });

@@ -781,6 +781,55 @@ describe("pw-session connection scoping", () => {
     ).toEqual([1, 1]);
   });
 
+  it("reports unavailable when every accessible page identity is unresolved", async () => {
+    vi.useFakeTimers();
+    const fixture = makePageEnumerationBrowser([
+      {
+        targetId: "STUCK_A",
+        title: "Stuck A",
+        url: "https://stuck-a.example",
+        readTargetInfo: () => new Promise(() => {}),
+      },
+      {
+        targetId: "STUCK_B",
+        title: "Stuck B",
+        url: "https://stuck-b.example",
+        readTargetInfo: () => new Promise(() => {}),
+      },
+    ]);
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    const listing = listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
+    const unavailable = expect(listing).rejects.toThrow(/target identities.*unavailable/i);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await unavailable;
+  });
+
+  it("rejects an unavailable complete target enumeration even with zero cached pages", async () => {
+    const fixture = makeEmptyBrowser();
+    const detach = vi.fn(async () => {});
+    const browser = Object.assign(fixture.browser, {
+      newBrowserCDPSession: vi.fn(async () => ({
+        send: vi.fn(async () => {
+          throw new Error("Target identities are unavailable");
+        }),
+        detach,
+      })),
+    });
+    connectOverCdpSpy.mockResolvedValue(browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(
+      listPagesViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        requireCompleteTargetList: true,
+      }),
+    ).rejects.toThrow(/target identities.*unavailable/i);
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
   it("times out stuck page enumeration and evicts the scoped connection", async () => {
     const stuck = makeStuckPageTargetBrowser();
     const refreshed = makeBrowser("A", "https://a.example/recovered");

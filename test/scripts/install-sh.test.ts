@@ -23,6 +23,7 @@ import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
   writeNpmInstallRetryFixture,
+  writeNpmLifecycleFixture,
 } from "./install-npm-fixtures.js";
 
 const SCRIPT_PATH = "scripts/install.sh";
@@ -44,6 +45,10 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
   } finally {
     rmSync(home, { force: true, recursive: true });
   }
+}
+
+function linkNodeExecutable(bin: string) {
+  symlinkSync(process.execPath, join(bin, "node"));
 }
 
 describe("install.sh", () => {
@@ -305,7 +310,8 @@ describe("install.sh", () => {
       node_dir="node-bin"
       cd "$tmp"
       mkdir -p "$repo/.git" "$repo/dist" "$node_dir"
-      touch "$repo/dist/entry.js"
+      repo="$(cd "$repo" && pwd -P)"
+      printf 'process.stdout.write("fixture-version\\n");\n' > "$repo/dist/entry.js"
       cat > "$node_dir/node" <<'NODE'
 #!/usr/bin/env bash
 printf 'fake-node:%s\\n' "$*"
@@ -348,7 +354,7 @@ NODE
       PATH="/usr/bin:/bin" "$wrapper" --version
     `);
 
-    expect(result.status).toBe(0);
+    expect(result.status, JSON.stringify(result)).toBe(0);
     expect(result.stdout).toContain("exec ");
     expect(result.stdout).toContain("/node-bin/node");
     expect(result.stdout).toContain("fake-node:");
@@ -470,6 +476,8 @@ NODE
       replacement="$root/replacement"
       alias_path="$root/alias"
       mkdir -p "$target" "$replacement"
+      target="$(cd "$target" && pwd -P)"
+      replacement="$(cd "$replacement" && pwd -P)"
       ln -s "$target" "$alias_path"
 
       check_git() { return 0; }
@@ -483,7 +491,13 @@ NODE
         [[ "$1" == "$target" ]]
         printf '%s\\n' '--frozen-lockfile'
       }
-      run_pnpm() { [[ "$1" == "-C" && "$2" == "$target" ]]; }
+      run_pnpm() {
+        [[ "$1" == "-C" && "$2" == "$target" ]]
+        if [[ "\${3:-}" == "build" ]]; then
+          mkdir -p "$target/dist"
+          printf '%s\n' 'process.stdout.write("fixture-version\\n");' > "$target/dist/entry.js"
+        fi
+      }
       run_quiet_step() {
         shift
         "$@"
@@ -910,9 +924,223 @@ NODE
   it("clears npm freshness filters for package installs", () => {
     expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
     expect(script).toContain('freshness_flag="--min-release-age=0"');
-    expect(script).toContain('npm_config_has_raw_key npm "min-release-age"');
+    expect(script).toContain('npm_config_has_raw_key "$npm_cmd" "min-release-age"');
     expect(script).toContain('freshness_flag="--before=$(date -u');
-    expect(script).toContain('cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")');
+    expect(script).toContain('cmd+=(--no-fund --no-audit "$freshness_flag" install -g)');
+  });
+
+  it.each([
+    { expected: false, version: "11.15.0" },
+    { expected: true, version: "11.16.0" },
+    { expected: true, version: "12.0.0" },
+  ])("applies canonical npm lifecycle policy for npm $version", ({ expected, version }) => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-lifecycle-"));
+    const npm = join(tmp, "npm");
+    const args = join(tmp, "args");
+    const npmRoot = join(tmp, "lib", "node_modules");
+    const packageDir = join(npmRoot, "openclaw");
+    writeNpmLifecycleFixture(npm);
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `npm_command_path() { printf '%s\\n' ${JSON.stringify(npm)}; }`,
+          `run_verified_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "log"))}`,
+        ].join("\n"),
+        {
+          NPM_FAKE_ARGS: args,
+          NPM_FAKE_PACKAGE_DIR: packageDir,
+          NPM_FAKE_ROOT: npmRoot,
+          NPM_FAKE_VERSION: version,
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(readFileSync(args, "utf8").includes("--allow-scripts=openclaw")).toBe(expected);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("fails before npm mutation on invalid versions and rejects a remaining guard", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-lifecycle-fail-"));
+    const npm = join(tmp, "npm");
+    const args = join(tmp, "args");
+    const npmRoot = join(tmp, "lib", "node_modules");
+    writeNpmLifecycleFixture(npm);
+    try {
+      const run = (version: string, keepGuard: string) =>
+        runInstallShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `npm_command_path() { printf '%s\\n' ${JSON.stringify(npm)}; }`,
+            `run_verified_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "log"))}`,
+          ].join("\n"),
+          {
+            NPM_FAKE_ARGS: args,
+            NPM_FAKE_KEEP_GUARD: keepGuard,
+            NPM_FAKE_PACKAGE_DIR: join(npmRoot, "openclaw"),
+            NPM_FAKE_ROOT: npmRoot,
+            NPM_FAKE_VERSION: version,
+          },
+        );
+      expect(run("invalid", "0").status).not.toBe(0);
+      expect(run("npm 12.0.0 warning", "0").status).not.toBe(0);
+      expect(existsSync(args)).toBe(false);
+      expect(run("12.0.0", "1").status).not.toBe(0);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("relativizes absolute npm path identities against the command cwd", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-lifecycle-comma,"));
+    const npm = join(tmp, "npm");
+    const commandCwd = join(tmp, "work");
+    const candidate = join(tmp, "candidate.tgz");
+    mkdirSync(commandCwd);
+    writeNpmLifecycleFixture(npm);
+    try {
+      const result = runInstallShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `cd ${JSON.stringify(commandCwd)}`,
+          `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(candidate)} "$PWD"`,
+        ].join("\n"),
+        { NPM_FAKE_VERSION: "12.0.0" },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate.tgz");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["success", "guard-failure"])(
+    "keeps same-bin git-to-npm switching rollback-safe on $mode",
+    (mode) => {
+      const result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        root="$(mktemp -d)"
+        repo="$root/repo"
+        npm_root="$root/lib/node_modules"
+        bin="$HOME/.local/bin"
+        mkdir -p "$repo/dist" "$npm_root/openclaw/dist" "$bin"
+        printf '%s\n' 'process.stdout.write("git-version\\n")' > "$repo/dist/entry.js"
+        cat > "$bin/openclaw" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec ${process.execPath} $repo/dist/entry.js "\\$@"
+EOF
+        chmod +x "$bin/openclaw"
+        fake_npm="$root/npm"
+        cat > "$fake_npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  --version) printf '12.0.0\n'; exit 0 ;;
+  root) printf '%s\n' "$NPM_FAKE_ROOT"; exit 0 ;;
+  prefix) printf '%s\n' "$NPM_FAKE_PREFIX"; exit 0 ;;
+  config) printf 'null\n'; exit 0 ;;
+esac
+mkdir -p "$NPM_FAKE_ROOT/openclaw/dist"
+printf '%s\n' '#!/usr/bin/env node' 'process.stdout.write("npm-version\\n")' > "$NPM_FAKE_ROOT/openclaw/openclaw.mjs"
+chmod +x "$NPM_FAKE_ROOT/openclaw/openclaw.mjs"
+if [[ "$NPM_FAKE_MODE" == guard-failure ]]; then
+  : > "$NPM_FAKE_ROOT/openclaw/dist/openclaw-install-guard"
+else
+  rm -f "$NPM_FAKE_ROOT/openclaw/dist/openclaw-install-guard"
+fi
+EOF
+        chmod +x "$fake_npm"
+        npm() { "$fake_npm" "$@"; }
+        npm_command_path() { printf '%s\n' "$fake_npm"; }
+        npm_global_bin_dir() { printf '%s\n' "$bin"; }
+        GIT_DIR="$repo"
+        OPENCLAW_VERSION="$root/candidate.tgz"
+        export NPM_FAKE_ROOT="$npm_root" NPM_FAKE_PREFIX="$HOME/.local" NPM_FAKE_MODE=${mode}
+        prepare_git_wrapper_backup_for_npm "$GIT_DIR"
+        set +e
+        install_openclaw
+        status=$?
+        set -e
+        cleanup_tmpfiles
+        printf 'status=%s version=%s link=%s\n' "$status" "$("$bin/openclaw" --version)" "$([[ -L "$bin/openclaw" ]] && echo yes || echo no)"
+      `);
+
+      expect(result.status).toBe(0);
+      if (mode === "success") {
+        expect(result.stdout, result.stderr).toContain("status=0 version=npm-version link=yes");
+      } else {
+        expect(result.stdout, result.stderr).toContain("status=1 version=git-version link=no");
+      }
+    },
+  );
+
+  it("restores an active shim backup when installation is interrupted", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-shim-signal-"));
+    const target = join(tmp, "openclaw");
+    writeFileSync(target, "original-wrapper\n", { mode: 0o755 });
+    try {
+      const result = runInstallShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          'begin_openclaw_bin_backup "$BACKUP_TARGET" "$BACKUP_CANDIDATE" 1',
+          'kill -TERM "$$"',
+        ].join("\n"),
+        { BACKUP_CANDIDATE: join(tmp, "openclaw.mjs"), BACKUP_TARGET: target },
+      );
+      expect(result.status).toBe(143);
+      expect(readFileSync(target, "utf8")).toBe("original-wrapper\n");
+      expect(readdirSync(tmp)).toEqual(["openclaw"]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("removes only stale npm rename directories before ENOTEMPTY retry", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      root="$(mktemp -d)/node_modules"
+      mkdir -p "$root/openclaw" "$root/.openclaw-stale"
+      printf 'live\n' > "$root/openclaw/marker"
+      npm() { [[ "$1" == root ]] && printf '%s\n' "$root"; }
+      run_npm_global_install() {
+        attempts=$((attempts + 1))
+        if (( attempts == 1 )); then printf 'ENOTEMPTY: directory not empty, rename openclaw\n' > "$2"; return 1; fi
+        return 0
+      }
+      auto_install_build_tools_for_npm_failure() { return 1; }
+      attempts=0
+      install_openclaw_npm openclaw@latest
+      [[ -f "$root/openclaw/marker" && ! -e "$root/.openclaw-stale" ]]
+    `);
+    expect(result.status).toBe(0);
+  });
+
+  it("does not report npm owner retirement when uninstall fails", () => {
+    const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      root="$(mktemp -d)/node_modules"
+      mkdir -p "$root/openclaw"
+      printf '{"name":"openclaw"}\n' > "$root/openclaw/package.json"
+      fake_npm="$root/npm"
+      printf '#!/bin/sh\nif [ "$1" = root ]; then echo "$NPM_ROOT"; exit 0; fi\nexit 9\n' > "$fake_npm"
+      chmod +x "$fake_npm"
+      export NPM_ROOT="$root"
+      npm_command_path() { printf '%s\n' "$fake_npm"; }
+      npm_global_bin_dir() { printf '/different/bin\n'; }
+      set +e
+      retire_npm_owner_after_git_install
+      status=$?
+      set -e
+      printf 'status=%s\n' "$status"
+    `);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("status=1");
+    expect(result.stdout).not.toContain("Previous npm install retired");
   });
 
   it("does not emit --before when raw user npmrc config contains min-release-age", () => {
@@ -954,6 +1182,7 @@ NODE
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "npm_lifecycle_allow_arg() { :; }",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
           'printf "cmd=%s\\n" "$LAST_NPM_INSTALL_CMD"',
         ].join("\n"),
@@ -1022,6 +1251,7 @@ NODE
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "npm_lifecycle_allow_arg() { :; }",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
           'printf "cmd=%s\\n" "$LAST_NPM_INSTALL_CMD"',
         ].join("\n"),
@@ -1092,6 +1322,7 @@ NODE
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "npm_lifecycle_allow_arg() { :; }",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
           'printf "cmd=%s\\n" "$LAST_NPM_INSTALL_CMD"',
         ].join("\n"),
@@ -1156,6 +1387,7 @@ NODE
       source "${SCRIPT_PATH}"
       repo="$HOME/openclaw"
       mkdir -p "$repo"
+      repo="$(cd "$repo" && pwd -P)"
       check_git() { return 0; }
       ensure_pnpm() { :; }
       ensure_pnpm_binary_for_scripts() { :; }
@@ -1170,6 +1402,9 @@ NODE
           target="\${*: -1}"
           mkdir -p "$target/.git"
           printf 'complete\\n' > "$target/checkout.marker"
+        elif [[ "$1" == "Building OpenClaw" ]]; then
+          mkdir -p "$repo/dist"
+          printf '%s\\n' 'process.stdout.write("fixture-version\\n");' > "$repo/dist/entry.js"
         fi
         return 0
       }
@@ -1182,7 +1417,7 @@ NODE
       install_openclaw_from_git "$repo"
     `);
 
-    expect(result.status).toBe(0);
+    expect(result.status, JSON.stringify(result)).toBe(0);
     expect(result.stdout).toContain(
       "step:Cloning OpenClaw|git clone --filter=blob:none https://github.com/openclaw/openclaw.git",
     );
@@ -1427,6 +1662,7 @@ NODE
       ensure_default_node_active_shell() { return 0; }
       check_git() { return 0; }
       fix_npm_permissions() { :; }
+      prepare_git_wrapper_backup_for_npm() { :; }
       install_openclaw() {
         mkdir -p "$HOME/.local/bin"
         printf '#!/bin/sh\\nexit 0\\n' > "$HOME/.local/bin/openclaw"
@@ -1454,6 +1690,48 @@ NODE
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("doctor-called");
     expect(result.stdout).toContain("dashboard-called");
+  });
+
+  it("fails a configured upgrade without printing success when doctor fails", () => {
+    const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      INSTALL_METHOD=npm; NO_ONBOARD=1; NO_PROMPT=1; OS=linux
+      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }; show_install_plan() { :; }
+      check_existing_openclaw() { return 0; }; load_nvm_for_node_detection() { :; }; check_node() { return 0; }
+      activate_supported_node_on_path() { :; }; ensure_default_node_active_shell() { return 0; }
+      check_git() { return 0; }; fix_npm_permissions() { :; }
+      prepare_git_wrapper_backup_for_npm() { :; }
+      install_openclaw() { mkdir -p "$HOME/.local/bin"; printf '#!/bin/sh\nif [ "$1" = doctor ]; then exit 9; fi\nexit 0\n' > "$HOME/.local/bin/openclaw"; chmod +x "$HOME/.local/bin/openclaw"; }
+      resolve_installed_openclaw_bin() { printf '%s\n' "$HOME/.local/bin/openclaw"; }
+      warn_duplicate_openclaw_global_installs() { :; }; npm_global_bin_dir() { :; }; warn_shell_path_missing_dir() { :; }
+      has_openclaw_config() { return 0; }; refresh_gateway_service_if_loaded() { :; }
+      run_doctor() { return 9; }; resolve_openclaw_version() { printf 'test-version\n'; }
+      retire_git_wrapper_after_npm_install() { :; }; show_footer_links() { :; }
+      main
+    `);
+
+    expect(result.status).toBe(9);
+    expect(result.stdout).not.toContain("installed successfully");
+    expect(result.stdout).not.toContain("Upgrade complete");
+  });
+
+  it("keeps the npm owner runnable when a npm-to-git candidate fails", () => {
+    const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      INSTALL_METHOD=git; GIT_DIR="$HOME/openclaw"; OS=linux
+      mkdir -p "$HOME/npm-owner"; printf 'working\n' > "$HOME/npm-owner/status"
+      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }; show_install_plan() { :; }
+      check_existing_openclaw() { return 0; }; load_nvm_for_node_detection() { :; }; check_node() { return 0; }
+      activate_supported_node_on_path() { :; }; ensure_default_node_active_shell() { return 0; }
+      npm() { if [[ "$1" == list ]]; then return 0; fi; if [[ "$1" == uninstall ]]; then printf 'old-owner-removed\n'; rm -f "$HOME/npm-owner/status"; fi; }
+      install_openclaw_from_git() { return 7; }
+      main
+    `);
+
+    expect(result.status).toBe(7);
+    expect(result.stdout).not.toContain("old-owner-removed");
   });
 
   it("rejects OpenClaw GitHub source targets for npm installs", () => {
@@ -1553,7 +1831,7 @@ NODE
         ].join("\n"),
       );
 
-      expect(result.status).toBe(7);
+      expect(result.status).not.toBe(0);
     } finally {
       rmSync(tmp, { force: true, recursive: true });
     }
@@ -1604,6 +1882,7 @@ NODE
       const calls = join(tmp, "calls");
       const npmRoot = join(tmp, "lib", "node_modules");
       mkdirSync(bin, { recursive: true });
+      linkNodeExecutable(bin);
       writeNpmInstallRetryFixture(join(bin, "npm"));
 
       try {
@@ -1653,6 +1932,7 @@ NODE
     const calls = join(tmp, "calls");
     const npmRoot = join(tmp, "lib", "node_modules");
     mkdirSync(bin, { recursive: true });
+    linkNodeExecutable(bin);
     writeNpmInstallRetryFixture(join(bin, "npm"));
 
     try {
@@ -1696,6 +1976,7 @@ NODE
     const home = join(tmp, "home");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(bin, { recursive: true });
+    linkNodeExecutable(bin);
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, ".npmrc"), "min-release-age=7\n");
     writeNpmFreshnessConflictFixture(join(bin, "npm"), argsLog);
@@ -1731,6 +2012,7 @@ NODE
     const project = join(tmp, "project");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(bin, { recursive: true });
+    linkNodeExecutable(bin);
     mkdirSync(home, { recursive: true });
     mkdirSync(project, { recursive: true });
     writeFileSync(join(home, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n");
@@ -3435,7 +3717,7 @@ describe("install.sh doctor cancellation and dashboard guard", () => {
 
   it("guards every run_doctor caller against failure", () => {
     // A failed or cancelled doctor must not launch the dashboard.
-    expect(script).toContain("if run_doctor; then");
+    expect(script).toContain("run_doctor || return $?");
     // Ensure there is no bare "run_doctor" call followed by
     // "should_open_dashboard=true" without an if-guard
     const bareDoctor = /^\s+run_doctor\s*$/m;

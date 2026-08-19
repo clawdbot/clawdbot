@@ -830,6 +830,15 @@ export function registerMcpCli(program: Command) {
           `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before probing it.`,
         );
       }
+      // Without this the human output is a bare header: both probe loops are empty,
+      // so an operator with no servers sees no outcome and no next step. JSON keeps
+      // emitting its empty envelope so machine consumers see a stable shape.
+      if (!opts.json && Object.keys(servers).length === 0) {
+        defaultRuntime.log(
+          `No MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand("openclaw mcp add <name> --command <command>")}.`,
+        );
+        return;
+      }
       const runtime = createSessionMcpRuntime({
         sessionId: "openclaw-cli-mcp-probe",
         workspaceDir: process.cwd(),

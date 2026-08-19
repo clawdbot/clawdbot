@@ -1108,12 +1108,16 @@ export function getDefaultRedactPatterns(): string[] {
 // line boundaries, then split back. Use this instead of mapping redactSensitiveText when
 // options are resolved once per request.
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
-  if (resolved.mode === "off" || !resolved.patterns.length || lines.length === 0) {
+  if (lines.length === 0 || resolved.mode === "off") {
     return lines;
   }
+  const exactRedactedLines = lines.map((line) => redactRegisteredSecretValues(line, maskToken));
+  if (!resolved.patterns.length) {
+    return exactRedactedLines;
+  }
   const redactedLines = resolved.redactFormBodies
-    ? lines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
-    : lines;
+    ? exactRedactedLines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
+    : exactRedactedLines;
   let redacted = redactedLines.join("\n");
   if (resolved.redactStructuredAuthHeaders) {
     redacted = redactStructuredAuthHeaders(redacted, "***");

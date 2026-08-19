@@ -192,6 +192,9 @@ describe("ApprovalPage", () => {
     expect(request).toHaveBeenCalledWith("approval.get", { id: "exec:approval-1" });
     expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");
     expect(decision.disabled).toBe(true);
+    expect(page.querySelector(".approval-page__heading p")?.textContent?.trim()).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
     decision.click();
     await settle(page);
 
@@ -292,6 +295,9 @@ describe("ApprovalPage", () => {
     expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");
     expect((page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).disabled).toBe(
       true,
+    );
+    expect(page.querySelector(".approval-page__heading p")?.textContent?.trim()).toBe(
+      "Review only. Sign in with approval access to record a decision.",
     );
 
     resolveDecision({ applied: true, approval: allowedApproval() });

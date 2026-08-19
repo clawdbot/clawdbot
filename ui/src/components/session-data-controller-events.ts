@@ -11,7 +11,7 @@ import {
 type SidebarSessionListOwner = {
   readonly context: ApplicationContext<RouteId> | undefined;
   readonly sessionCreatedOrder: Map<string, number>;
-  sessionRowsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>["sessions"]>;
+  sessionResultsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>>;
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
   sessionsLoading: boolean;
@@ -42,7 +42,7 @@ export function publishSidebarSessionList(
     }
   }
   if (snapshot.result && snapshot.agentId) {
-    owner.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
+    owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
   }
 }
 

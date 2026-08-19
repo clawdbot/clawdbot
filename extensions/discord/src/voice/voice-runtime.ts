@@ -8,6 +8,10 @@ import { resolveDiscordVoiceEnabled } from "./config.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
 import {
+  countDiscordVoiceHumanParticipants,
+  listDiscordVoiceParticipantStates,
+} from "./participant-context.js";
+import {
   logVoiceVerbose,
   type VoiceJoinOptions,
   type VoiceOperationResult,
@@ -71,7 +75,7 @@ export class DiscordVoiceManager {
   private readonly botUserId?: string;
   private readonly client: Client;
   private readonly voiceEnabled: boolean;
-  private autoJoinTask: Promise<void> | null = null;
+  private readonly autoJoinTasks = new Map<string, Promise<void>>();
   private readonly fatalAutoJoinFailures = new Map<
     string,
     { message: string; skipLogged: boolean }
@@ -188,66 +192,39 @@ export class DiscordVoiceManager {
     if (!this.voiceEnabled || this.destroyed) {
       return;
     }
-    if (this.autoJoinTask) {
-      return this.autoJoinTask;
+    const entriesByGuild = new Map<string, VoiceChannelResidency>();
+    const duplicateGuilds = new Set<string>();
+    for (const entry of this.autoJoinChannels) {
+      if (entriesByGuild.has(entry.guildId)) {
+        duplicateGuilds.add(entry.guildId);
+      }
+      entriesByGuild.set(entry.guildId, entry);
     }
-    this.autoJoinTask = (async () => {
-      const entries = this.autoJoinChannels;
-      const entriesByGuild = new Map<string, { guildId: string; channelId: string }>();
-      const duplicateGuilds = new Set<string>();
-      for (const entry of entries) {
-        const guildId = entry.guildId.trim();
-        const channelId = entry.channelId.trim();
-        if (!guildId || !channelId) {
-          continue;
-        }
-        if (entriesByGuild.has(guildId)) {
-          duplicateGuilds.add(guildId);
-        }
-        entriesByGuild.set(guildId, { guildId, channelId });
-      }
 
-      logVoiceVerbose(`autoJoin: ${entries.length} entries, ${entriesByGuild.size} guilds`);
-      for (const guildId of duplicateGuilds) {
-        const selected = entriesByGuild.get(guildId);
-        if (selected) {
-          logger.warn(
-            `discord voice: autoJoin has multiple entries for guild ${guildId}; using channel ${selected.channelId}`,
-          );
-        }
+    logVoiceVerbose(
+      `autoJoin: ${this.autoJoinChannels.length} entries, ${entriesByGuild.size} guilds`,
+    );
+    for (const guildId of duplicateGuilds) {
+      const selected = entriesByGuild.get(guildId);
+      if (selected) {
+        logger.warn(
+          `discord voice: autoJoin has multiple entries for guild ${guildId}; using channel ${selected.channelId}`,
+        );
       }
+    }
 
-      for (const entry of entriesByGuild.values()) {
-        const failureKey = formatAutoJoinFailureKey(entry);
-        const fatalFailure = this.fatalAutoJoinFailures.get(failureKey);
-        if (fatalFailure) {
-          if (!fatalFailure.skipLogged) {
-            logger.warn(
-              `discord voice: autoJoin suppressed guild=${entry.guildId} channel=${entry.channelId} after fatal startup failure; retry with /vc join or reload config after fixing credentials: ${fatalFailure.message}`,
-            );
-            fatalFailure.skipLogged = true;
-          }
-          continue;
-        }
-        logVoiceVerbose(`autoJoin: joining guild ${entry.guildId} channel ${entry.channelId}`);
-        const result = await this.join(entry);
-        if (!result.ok) {
-          logger.warn(
-            `discord voice: autoJoin skipped guild=${entry.guildId} channel=${entry.channelId}: ${result.message}`,
-          );
-          if (isFatalAutoJoinFailure(result.message)) {
-            this.fatalAutoJoinFailures.set(failureKey, {
-              message: result.message,
-              skipLogged: false,
-            });
-          }
-        }
-      }
-      await this.following.startReconciliation();
-    })().finally(() => {
-      this.autoJoinTask = null;
-    });
-    return this.autoJoinTask;
+    for (const entry of entriesByGuild.values()) {
+      await this.enqueueAutoJoin(entry);
+    }
+    await this.following.startReconciliation();
+  }
+
+  async reconcileAutoJoinGuild(guildId: string): Promise<void> {
+    const entry = this.resolveAutoJoinTarget(guildId);
+    if (!entry?.whenOccupied || !this.voiceEnabled || this.destroyed) {
+      return;
+    }
+    await this.enqueueAutoJoin(entry);
   }
 
   status(): VoiceOperationResult[] {
@@ -446,11 +423,16 @@ export class DiscordVoiceManager {
     }
     if (this.botUserId && userId === this.botUserId) {
       await this.following.handleBotVoiceStateUpdate({ guildId, channelId });
+      await this.reconcileAutoJoinGuild(guildId);
       return;
     }
     this.membership.track(this.sessions.get(guildId), data, previousVoiceState);
     if (this.following.isFollowedUser(userId)) {
       await this.following.handleFollowedUserVoiceStateUpdate({ guildId, channelId, userId });
+    }
+    const autoJoinTarget = this.resolveAutoJoinTarget(guildId);
+    if (autoJoinTarget?.whenOccupied) {
+      await this.enqueueAutoJoin(autoJoinTarget);
     }
   }
 
@@ -479,6 +461,97 @@ export class DiscordVoiceManager {
       lifecycle.instance === entry &&
       entry.sessionLifecycle.status === "active"
     );
+  }
+
+  private resolveAutoJoinTarget(guildId: string): VoiceChannelResidency | undefined {
+    return this.autoJoinChannels.toReversed().find((entry) => entry.guildId === guildId.trim());
+  }
+
+  private enqueueAutoJoin(entry: VoiceChannelResidency): Promise<void> {
+    const previous = this.autoJoinTasks.get(entry.guildId) ?? Promise.resolve();
+    const task = previous
+      .catch(() => undefined)
+      .then(async () => await this.reconcileAutoJoinEntry(entry))
+      .finally(() => {
+        if (this.autoJoinTasks.get(entry.guildId) === task) {
+          this.autoJoinTasks.delete(entry.guildId);
+        }
+      });
+    this.autoJoinTasks.set(entry.guildId, task);
+    return task;
+  }
+
+  private async reconcileAutoJoinEntry(entry: VoiceChannelResidency): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
+    const failureKey = formatAutoJoinFailureKey(entry);
+    const fatalFailure = this.fatalAutoJoinFailures.get(failureKey);
+    if (fatalFailure) {
+      if (!fatalFailure.skipLogged) {
+        logger.warn(
+          `discord voice: autoJoin suppressed guild=${entry.guildId} channel=${entry.channelId} after fatal startup failure; retry with /vc join or reload config after fixing credentials: ${fatalFailure.message}`,
+        );
+        fatalFailure.skipLogged = true;
+      }
+      return;
+    }
+
+    if (entry.whenOccupied) {
+      const states = listDiscordVoiceParticipantStates({
+        client: this.client,
+        guildId: entry.guildId,
+        channelId: entry.channelId,
+      });
+      if (states === null) {
+        logVoiceVerbose(
+          `autoJoin waiting for guild voice snapshot guild=${entry.guildId} channel=${entry.channelId}`,
+        );
+        return;
+      }
+      const humanCount = countDiscordVoiceHumanParticipants({
+        states,
+        botUserId: this.botUserId,
+      });
+      const existing = this.sessions.get(entry.guildId);
+      if (humanCount === 0) {
+        if (!existing?.autoJoinWhenOccupied || existing.channelId !== entry.channelId) {
+          return;
+        }
+        logger.info(
+          `discord voice: occupied autoJoin leaving empty channel guild=${entry.guildId} channel=${entry.channelId}`,
+        );
+        const result = await this.leave({ guildId: entry.guildId, channelId: entry.channelId });
+        if (!result.ok) {
+          logger.warn(
+            `discord voice: occupied autoJoin failed to leave guild=${entry.guildId} channel=${entry.channelId}: ${result.message}`,
+          );
+        }
+        return;
+      }
+      const lifecycle = this.guildLifecycles.get(entry.guildId);
+      if (existing || lifecycle?.status === "starting" || lifecycle?.status === "active") {
+        return;
+      }
+      logger.info(
+        `discord voice: occupied autoJoin joining guild=${entry.guildId} channel=${entry.channelId} humans=${humanCount}`,
+      );
+    } else {
+      logVoiceVerbose(`autoJoin: joining guild ${entry.guildId} channel ${entry.channelId}`);
+    }
+
+    const result = await this.join(entry, { autoJoinWhenOccupied: entry.whenOccupied === true });
+    if (!result.ok) {
+      logger.warn(
+        `discord voice: autoJoin skipped guild=${entry.guildId} channel=${entry.channelId}: ${result.message}`,
+      );
+      if (isFatalAutoJoinFailure(result.message)) {
+        this.fatalAutoJoinFailures.set(failureKey, {
+          message: result.message,
+          skipLogged: false,
+        });
+      }
+    }
   }
 }
 

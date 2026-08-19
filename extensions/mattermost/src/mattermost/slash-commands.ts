@@ -1,30 +1,14 @@
 // Mattermost plugin module implements slash commands behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export const MATTERMOST_SLASH_POST_METHOD = "P";
-const MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES = 128;
-
 // Mattermost rejects command descriptions above 128 UTF-8 bytes. Keep portable
 // descriptions intact until this API boundary so other channels retain their text.
-function truncateMattermostCommandDescription(description: string): string {
-  if (Buffer.byteLength(description, "utf8") <= MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES) {
-    return description;
-  }
-  let bytes = 0;
-  let end = 0;
-  for (const char of description) {
-    const charBytes = Buffer.byteLength(char, "utf8");
-    if (bytes + charBytes > MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES) {
-      break;
-    }
-    bytes += charBytes;
-    end += char.length;
-  }
-  return description.slice(0, end);
-}
+export const MATTERMOST_SLASH_POST_METHOD = "P";
+const MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES = 128;
 
 export type MattermostSlashCommandConfig = {
   /** Enable native slash commands. "auto" resolves to false for now (opt-in). */
@@ -311,7 +295,10 @@ export async function registerSlashCommands(params: {
   const registered: MattermostRegisteredCommand[] = [];
 
   for (const spec of commands) {
-    const description = truncateMattermostCommandDescription(spec.description);
+    const description = truncateUtf8Prefix(
+      spec.description,
+      MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES,
+    );
     const existingForTrigger = existingByTrigger.get(spec.trigger) ?? [];
     const ownedCommands = existingForTrigger.filter(
       (cmd) => cmd.creator_id?.trim() === normalizedCreatorUserId,

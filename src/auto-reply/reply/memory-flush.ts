@@ -81,6 +81,11 @@ export function resolveResponsesServerCompactionThreshold(params: {
   }
   const defaultOpenAIBaseUrl =
     normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
+  const activeContextTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider,
+    modelId,
+  });
   return resolveOpenAIResponsesServerCompactionPlan(
     {
       provider,
@@ -90,9 +95,8 @@ export function resolveResponsesServerCompactionThreshold(params: {
         (normalizedProvider === "openai" ? "openai-responses" : undefined),
       baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? defaultOpenAIBaseUrl,
       compat: configuredModel?.compat,
-      contextWindow:
-        configuredModel?.contextWindow ??
-        resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+      contextTokens: configuredModel?.contextTokens ?? activeContextTokens,
+      contextWindow: configuredModel?.contextWindow ?? activeContextTokens,
     },
     extraParams,
   ).threshold;

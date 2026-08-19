@@ -1,7 +1,11 @@
 // Local skill loader reads skill definitions from local filesystem roots.
 import fs from "node:fs";
 import path from "node:path";
-import { openRootFileSync } from "../../infra/boundary-file-read.js";
+import {
+  isRootFileMissingFailure,
+  openRootFileSync,
+  readFileDescriptorBoundedSync,
+} from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import {
@@ -26,6 +30,7 @@ function readSkillFileSync(params: {
   rootRealPath: string;
   filePath: string;
   maxBytes?: number;
+  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): string | null {
   const opened = openRootFileSync({
     absolutePath: params.filePath,
@@ -35,13 +40,25 @@ function readSkillFileSync(params: {
     // Operator skill roots are commonly symlinked; fs-safe still rejects hops
     // whose canonical target escapes the skill root.
     rejectSymlinks: false,
-    maxBytes: params.maxBytes,
   });
   if (!opened.ok) {
+    if (!isRootFileMissingFailure(opened)) {
+      const message =
+        opened.error instanceof Error
+          ? opened.error.message
+          : `failed to open skill file (${opened.reason})`;
+      params.onDiagnostic?.({ path: params.filePath, message });
+    }
     return null;
   }
   try {
-    return fs.readFileSync(opened.fd, "utf8");
+    return params.maxBytes === undefined
+      ? fs.readFileSync(opened.fd, "utf8")
+      : readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "failed to read skill file";
+    params.onDiagnostic?.({ path: params.filePath, message });
+    return null;
   } finally {
     fs.closeSync(opened.fd);
   }
@@ -59,8 +76,9 @@ function loadSingleSkillDirectory(params: {
     rootRealPath: params.rootRealPath,
     filePath: skillFilePath,
     maxBytes: params.maxBytes,
+    onDiagnostic: params.onDiagnostic,
   });
-  if (!raw) {
+  if (raw === null) {
     return null;
   }
 
@@ -77,6 +95,10 @@ function loadSingleSkillDirectory(params: {
   const name = frontmatter.name?.trim() || fallbackName;
   const description = frontmatter.description?.trim();
   if (!name || !description) {
+    params.onDiagnostic?.({
+      path: skillFilePath,
+      message: !name ? "name is required" : "description is required",
+    });
     return null;
   }
   const invocation = resolveSkillInvocationPolicy(frontmatter);
@@ -189,7 +211,7 @@ export function readSkillFrontmatterSafe(params: {
     filePath: path.resolve(params.filePath),
     maxBytes: params.maxBytes,
   });
-  if (!raw) {
+  if (raw === null) {
     return null;
   }
   try {

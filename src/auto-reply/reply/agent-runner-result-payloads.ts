@@ -18,6 +18,7 @@ import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-for
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -404,9 +405,7 @@ export async function prepareReplyAgentPayloads(state: {
   didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
   const hasTerminalReplyPayload = replyPayloads.some(
     (payload) =>
-      !payload.isReasoning &&
-      !payload.isCommentary &&
-      !isReplyPayloadStatusNotice(payload) &&
+      isReplyPayloadTerminalContent(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   if (shouldDeliverTerminalFailure && !hasTerminalReplyPayload && terminalFailurePayload) {

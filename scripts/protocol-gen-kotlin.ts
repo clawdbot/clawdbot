@@ -81,18 +81,6 @@ const androidEnums: EnumSpec[] = [
     ["VoiceWake", "voiceWake"],
     ["MobileUI", "mobileUI"],
   ]),
-  enumSpec("OpenClawCanvasCommand", "canvas.", [
-    ["Present", "present"],
-    ["Hide", "hide"],
-    ["Navigate", "navigate"],
-    ["Eval", "eval"],
-    ["Snapshot", "snapshot"],
-  ]),
-  enumSpec("OpenClawCanvasA2UICommand", "canvas.a2ui.", [
-    ["Push", "push"],
-    ["PushJSONL", "pushJSONL"],
-    ["Reset", "reset"],
-  ]),
   enumSpec("OpenClawCameraCommand", "camera.", [
     ["List", "list"],
     ["Snap", "snap"],

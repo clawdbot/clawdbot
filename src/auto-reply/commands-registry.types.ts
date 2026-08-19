@@ -96,6 +96,8 @@ export type NativeCommandSpec = {
 /** Extra context used when normalizing slash command text. */
 export type CommandNormalizeOptions = {
   botUsername?: string;
+  /** Strip an explicit command target only while channel bot identity is unavailable. */
+  targetedCommandMode?: "pre-identity";
 };
 
 /** Cached exact/regex command detector built from current registry aliases. */

@@ -32,6 +32,14 @@ final class OnboardingFinishState {
     var didFinish = false
 }
 
+/// Dashboard surface opened when onboarding finishes with working inference.
+enum OnboardingDashboardHandoff: Equatable {
+    /// Fresh activation: the custodian flow owns the remaining first-run steps.
+    case custodianOnboarding
+    /// Live-verified pre-existing setup: reopen the normal dashboard.
+    case dashboard
+}
+
 enum OnboardingSystemAgentResumeStore {
     struct ActivationOwner: Equatable {
         let id: String
@@ -662,7 +670,7 @@ struct OnboardingView: View {
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
-    let dashboardOnboardingOpener: @MainActor () -> Void
+    let dashboardHandoffOpener: @MainActor (OnboardingDashboardHandoff) -> Void
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
@@ -700,9 +708,7 @@ struct OnboardingView: View {
         switch mode {
         case .remote, .local:
             // Native onboarding ends once inference works: install (when
-            // needed) plus AI setup. Everything after — memory import,
-            // permissions, channels, hatch — belongs to the dashboard's
-            // custodian onboarding, which Finish opens.
+            // needed) plus AI setup. Successful first run lands in the normal dashboard.
             requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]
         case .unconfigured:
             // "Set up later" has no gateway to hand off to; keep the native
@@ -842,8 +848,11 @@ struct OnboardingView: View {
         aiSetupRouteIdentityProvider: (@MainActor () -> String?)? = nil,
         configuredGatewayProbeTimeoutMs: Double = 15000,
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,
-        dashboardOnboardingOpener: @escaping @MainActor () -> Void = {
-            AppNavigationActions.openDashboardOnboarding()
+        dashboardHandoffOpener: @escaping @MainActor (OnboardingDashboardHandoff) -> Void = {
+            switch $0 {
+            case .custodianOnboarding: AppNavigationActions.openDashboardOnboarding()
+            case .dashboard: AppNavigationActions.openDashboard()
+            }
         })
     {
         self.state = state
@@ -855,7 +864,7 @@ struct OnboardingView: View {
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
             state.syncGatewayConfigNow()
         }
-        self.dashboardOnboardingOpener = dashboardOnboardingOpener
+        self.dashboardHandoffOpener = dashboardHandoffOpener
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         _gatewayDiscovery = State(initialValue: discoveryModel)

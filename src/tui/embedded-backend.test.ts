@@ -61,6 +61,9 @@ const getRuntimeConfigMock = vi.fn(() => ({}));
 const loadGatewayModelCatalogMock = vi.fn(
   (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
 );
+const buildAllowedModelSetMock = vi.fn(({ catalog }: { catalog: unknown[] }) => ({
+  allowedCatalog: catalog,
+}));
 const readChatHistoryPageMock = vi.fn(
   async (_params?: unknown): Promise<{ messages: unknown[] }> => ({
     messages: [],
@@ -170,7 +173,8 @@ vi.mock("../agents/defaults.js", () => ({
 }));
 
 vi.mock("../agents/model-selection.js", () => ({
-  buildAllowedModelSet: ({ catalog }: { catalog: unknown[] }) => ({ allowedCatalog: catalog }),
+  buildAllowedModelSet: (params: { catalog: unknown[]; agentId?: string }) =>
+    buildAllowedModelSetMock(params),
   buildConfiguredModelCatalog: ({ cfg }: { cfg: { models?: { providers?: unknown } } }) =>
     Object.entries(
       (cfg.models?.providers as Record<string, { models?: Array<{ id: string }> }>) ?? {},
@@ -385,6 +389,7 @@ describe("EmbeddedTuiBackend", () => {
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
     loadGatewayModelCatalogMock.mockReturnValue([]);
+    buildAllowedModelSetMock.mockClear();
     readChatHistoryPageMock.mockReset();
     readChatHistoryPageMock.mockResolvedValue({ messages: [] });
     loadSessionEntryMock.mockReset();
@@ -714,6 +719,35 @@ describe("EmbeddedTuiBackend", () => {
       },
     ]);
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it("passes the selected agent into model filtering", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { modelPolicy: { allow: ["fixture/main-model"] } },
+          work: { modelPolicy: { allow: ["fixture/work-model"] } },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          fixture: {
+            models: [{ id: "main-model" }, { id: "work-model" }],
+          },
+        },
+      },
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await backend.listModels({ agentId: "work" });
+
+    expect(buildAllowedModelSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work" }),
+    );
   });
 
   it("patches wildcard replace-mode sessions against the same full catalog as model listing", async () => {

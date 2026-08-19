@@ -58,7 +58,7 @@ import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
-import type { GatewayWorkerIngress, GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
+import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
   buildWorkerHello,
@@ -141,7 +141,6 @@ type WorkerWsMessageHandlerParams = {
   connId: string;
   service?: WorkerConnectionService;
   isStartupPending?: () => boolean;
-  ingress: GatewayWorkerIngress;
   send(frame: unknown): void;
   close(code?: number, reason?: string): void;
   isClosed(): boolean;
@@ -399,8 +398,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
   }) => {
     const internalReason = rejection.internalReason ?? rejection.reason;
     const wireReason: WorkerProtocolCloseReason =
-      (rejection.opaqueOnPublicIngress && params.publicAdmission) ||
-      rejection.reason === "rate-limited"
+      rejection.opaqueOnPublicIngress || rejection.reason === "rate-limited"
         ? "invalid-handshake"
         : rejection.reason;
     const wireError =
@@ -430,7 +428,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       });
       return;
     }
-    if (params.ingress === "public" && !params.publicAdmission) {
+    if (!params.publicAdmission) {
       rejectAdmission({
         id,
         reason: "invalid-handshake",

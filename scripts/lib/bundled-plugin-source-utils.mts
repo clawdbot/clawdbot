@@ -24,27 +24,34 @@ function readJsonFile(filePath: string): unknown {
 }
 
 function collectTrackedBundledPluginSourceCandidates(repoRoot: string) {
-  const result = spawnSync(
-    "git",
-    [
-      "ls-files",
-      "--",
-      ":(glob)extensions/*/openclaw.plugin.json",
-      ":(glob)extensions/*/package.json",
-    ],
-    {
+  const pathspecs = [
+    ":(glob)extensions/*/openclaw.plugin.json",
+    ":(glob)extensions/*/package.json",
+  ];
+  const runGitLsFiles = (args: string[]) =>
+    spawnSync("git", ["ls-files", ...args, "--", ...pathspecs], {
       cwd: repoRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0) {
+    });
+  const result = runGitLsFiles([]);
+  const deletedResult = runGitLsFiles(["--deleted"]);
+  if (result.status !== 0 || deletedResult.status !== 0) {
     return null;
   }
+  const deletedPaths = new Set(
+    deletedResult.stdout
+      .split("\n")
+      .map((line) => line.trim().replaceAll("\\", "/"))
+      .filter(Boolean),
+  );
 
   const candidatesByDir = new Map<string, BundledPluginSourceCandidate>();
   for (const rawLine of result.stdout.split("\n")) {
     const line = rawLine.trim().replaceAll("\\", "/");
+    if (deletedPaths.has(line)) {
+      continue;
+    }
     const match = /^extensions\/([^/]+)\/(openclaw\.plugin\.json|package\.json)$/u.exec(line);
     if (!match?.[1] || !match[2]) {
       continue;

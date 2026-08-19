@@ -65,7 +65,7 @@ export async function attemptServerEndpointCompaction(params: {
     captureOpenAIResponsesCompaction(
       replacement,
       compacted.item,
-      replacement.content.length,
+      compacted.historyMode === "retained-users" ? "retained-users" : replacement.content.length,
       compacted.model,
       compacted.replayMetadata,
     );
@@ -74,7 +74,10 @@ export async function attemptServerEndpointCompaction(params: {
       replacements: [{ entryId: owner.id, message: replacement }],
       preserveReplacementCompactionReplay: true,
     });
-    if (replacement.providerReplay?.type !== "openai-responses-compaction" || !rewritten.changed) {
+    if (
+      replacement.providerReplay?.data !== compacted.item.encrypted_content ||
+      !rewritten.changed
+    ) {
       throw new Error(
         `Responses compact endpoint checkpoint was not persisted: ${rewritten.reason}`,
       );

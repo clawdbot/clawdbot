@@ -67,7 +67,6 @@ function resolveResultMessageId(result: ChannelMessageOutboundBridgeResult): str
     result.messageId ??
     result.receipt?.primaryPlatformMessageId ??
     result.receipt?.platformMessageIds[0] ??
-    result.target?.id ??
     result.chatId ??
     result.channelId ??
     result.roomId ??

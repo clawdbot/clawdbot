@@ -365,6 +365,17 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       details: "qa-suite-summary payload was not an object",
     };
   }
+  const runStatus = isRecord(payload.run) ? payload.run.status : undefined;
+  if (runStatus !== undefined && runStatus !== "completed") {
+    return {
+      passed: false,
+      status: "unknown",
+      details:
+        runStatus === "running"
+          ? "qa-suite-summary is still running"
+          : `qa-suite-summary has unsupported run.status=${readString(runStatus) ?? typeof runStatus}`,
+    };
+  }
   const accountingError = findQaSuiteSummaryAccountingError(payload);
   if (accountingError) {
     return {
