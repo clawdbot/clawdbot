@@ -396,9 +396,7 @@ export function scanTopLevelChars(
     }
 
     const arithmeticSecondParenIndex =
-      arithmeticDepth === 0 &&
-      char === "(" &&
-      (previousWasUnquotedDollar || atWordStart)
+      arithmeticDepth === 0 && char === "(" && (previousWasUnquotedDollar || atWordStart)
         ? findArithmeticSecondParen(command, i)
         : undefined;
     const startsArithmetic = arithmeticSecondParenIndex !== undefined;
@@ -522,14 +520,12 @@ function splitTopLevel(
 
 // `&` and `|` start commands unless they belong to redirects such as `>&`, `&>`, or `>|`.
 // Bash pipeline prefixes remain part of the command start that follows them.
-const SHELL_COMMAND_START_PATTERN =
-  String.raw`(?:^|;|\n|(?<!>)\||(?<![<>])&(?![>&]))\s*(?:(?:time(?:\s+-p)?(?:\s+--)?|!)(?:\s+|(?=\()))*`;
+const SHELL_COMMAND_START_PATTERN = String.raw`(?:^|;|\n|(?<!>)\||(?<![<>])&(?![>&]))\s*(?:(?:time(?:\s+-p)?(?:\s+--)?|!)(?:\s+|(?=\()))*`;
 const SHELL_TOKEN_END_PATTERN = String.raw`(?=$|[\s;&|()<>])`;
 const SHELL_NAMED_COMPOUND_START_PATTERN =
   `(?:(?:for|while|until|if|case|select|coproc)${SHELL_TOKEN_END_PATTERN}|` +
   `(?:\\[\\[|\\{)${SHELL_TOKEN_END_PATTERN})`;
-const SHELL_COMPOUND_START_PATTERN =
-  `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\((?!\\())`;
+const SHELL_COMPOUND_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\((?!\\())`;
 const SHELL_FUNCTION_BODY_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\()`;
 const SHELL_COMPOUND_AT_COMMAND_START_RE = new RegExp(
   `${SHELL_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
