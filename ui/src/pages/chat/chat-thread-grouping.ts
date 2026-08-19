@@ -552,10 +552,7 @@ function agentRunPartId(item: RenderChatItem | StreamRunRenderItem): string | un
 }
 
 function agentRunPartStartsBoundary(item: RenderChatItem | StreamRunRenderItem): boolean {
-  return (
-    item.kind === "group" &&
-    asRecord(asRecord(item.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true
-  );
+  return item.kind === "group" && chatItemStartsUserTurn(item);
 }
 
 function agentRunHasAssistantContent(parts: AgentRunRenderItem["parts"]): boolean {
