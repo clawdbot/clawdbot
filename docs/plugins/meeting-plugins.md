@@ -46,6 +46,45 @@ durable notes globally. An explicitly selected `transcribe` session retains its
 bounded live-caption tail without writing durable rows. Caption availability
 still depends on the meeting platform, account, language, and host policy.
 
+## Configure Teams or Zoom
+
+The Teams and Zoom plugins share the same configuration shape for their common
+meeting runtime. Add an entry only when you need to override a default. This
+example selects the normal agent path, changes the guest display name, and runs
+Chrome on a paired node:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "teams-meetings": {
+        config: {
+          defaultMode: "agent",
+          chrome: { guestName: "OpenClaw Agent" },
+          chromeNode: { node: "meeting-node" },
+        },
+      },
+    },
+  },
+}
+```
+
+Use `"zoom-meetings"` as the entry id for Zoom. Omit `chromeNode` to run
+Chrome on the Gateway host.
+
+| Setting                          | Purpose                                                                           |
+| -------------------------------- | --------------------------------------------------------------------------------- |
+| `defaultMode`                    | `agent` (default), `bidi`, or `transcribe`                                        |
+| `chrome.guestName`               | Guest display name entered on the platform prejoin page                           |
+| `chrome.browserProfile`          | OpenClaw browser profile used for the meeting                                     |
+| `chrome.audioBackend`            | `auto` (default), `blackhole-2ch`, or `pipewire-pulse`                            |
+| `chromeNode.node`                | Paired node id, name, or IP that owns Chrome and the native virtual-audio backend |
+| `realtime.transcriptionProvider` | Realtime transcription provider used by `agent` mode                              |
+| `realtime.voiceProvider`         | Realtime voice provider used by `bidi` mode                                       |
+| `realtime.model`                 | Optional realtime model override                                                  |
+| `realtime.agentId`               | Agent consulted in `agent` mode                                                   |
+| `realtime.toolPolicy`            | `safe-read-only`, `owner`, or `none`                                              |
+
 ## Prepare Chrome and audio
 
 Chrome can run on the Gateway host or on a paired node. A remote Chrome node must allow `browser.proxy` plus the platform command:
