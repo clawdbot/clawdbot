@@ -350,5 +350,19 @@ When the tester says `finish validation`:
 4. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
    notes, setup details, and cleanup details from the comment.
 5. Post the comment once with `gh` and show the tester its URL.
+6. Give the tester this concise copy-ready Discord summary, populated only from
+   the same release-facing worksheet evidence and final comment:
+
+   ```md
+   **Release validation — <tag>**
+   Tested: <surfaces with non-empty Testing notes, or "No manual surface testing completed">
+   Key findings: <concise release findings, or "None reported">
+   Recommendation: <yes / no>
+   Details: <GitHub comment URL>
+   ```
+
+   Keep it to these five lines. Exclude source gateway details, local paths,
+   OCM/setup information, cleanup, credentials, and untested surface guidance.
+   This is a copy/paste handoff for the tester; do not post it automatically.
 
 The skill collects release feedback; it does not make the go/no-go decision.
