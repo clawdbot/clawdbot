@@ -113,4 +113,26 @@ describe("cron primary delivery failure notifications", () => {
       expect(sendFailureNotificationAnnounce).toHaveBeenCalledTimes(expected);
     },
   );
+
+  it("keeps configured failure destinations from inheriting the primary delivery thread", () => {
+    const job = createThreadedJob(true);
+    job.sessionKey = "agent:main:telegram:group:-1001234567890:thread:42";
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "error", error: "boom" },
+      job,
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    expect(sendFailureNotificationAnnounce).toHaveBeenCalledTimes(1);
+    expect(sendFailureNotificationAnnounce.mock.calls[0]?.[4]).toEqual({
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: undefined,
+      sessionKey: "agent:main:telegram:group:-1001234567890:thread:42",
+      inheritSessionThread: false,
+    });
+  });
 });
