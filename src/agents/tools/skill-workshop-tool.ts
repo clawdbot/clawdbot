@@ -7,12 +7,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasRunWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
-import {
-  MAX_RECONCILED_SKILL_BYTES,
-  type SkillCollectionReconcileContext,
-} from "../../skills/workshop/collection-contracts.js";
+import type { SkillCollectionReconcileContext } from "../../skills/workshop/collection-contracts.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
+import { resolveSkillWorkshopProjectionBudgets } from "../../skills/workshop/model-context-budget.js";
 import {
   applySkillProposal,
   composeSkillBodyPatch,
@@ -65,6 +63,7 @@ import {
   formatProposalInspect,
   formatProposalList,
   listProposalEntries,
+  resolveProposalInspectArtifact,
 } from "./skill-workshop-tool-presentation.js";
 import {
   buildSkillWorkshopToolSchema,
@@ -74,10 +73,6 @@ import {
 } from "./skill-workshop-tool-schema.js";
 
 const SKILL_WORKSHOP_MUTATION_ACTIONS = new Set(["create", "patch", "update", "revise"]);
-// Reads give the model the text it must quote to patch. Composition still uses
-// the authoritative live body, while the cap bounds provider payloads.
-const SKILL_WORKSHOP_READ_MAX_CHARS = 20_000;
-
 function requireProposalContent(content: string | undefined): string {
   if (content === undefined) {
     throw new ToolInputError("proposal_content required");
@@ -115,11 +110,14 @@ type SkillWorkshopToolOptions = {
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
   /** Isolated collection review latch; when present only read/reconcile are exposed. */
   collectionReconcile?: SkillCollectionReconcileContext;
+  /** Effective selected-model context used for every model-visible Workshop projection. */
+  modelContextWindowTokens?: number;
 };
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   const workshopConfig = resolveSkillWorkshopConfig(options.config);
+  const projectionBudgets = resolveSkillWorkshopProjectionBudgets(options.modelContextWindowTokens);
   const readSkillHashes =
     options.collectionReconcile?.readSkillHashes ??
     options.proposalMutationBudget?.readSkillHashes ??
@@ -186,7 +184,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "history") {
-        return executeSkillCollectionHistory(options);
+        return executeSkillCollectionHistory(options, projectionBudgets.collectionHistoryChars);
       }
 
       if (action === "read") {
@@ -208,9 +206,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         ) {
           throw new ToolInputError(`skill is outside this collection review: ${skill.skillKey}`);
         }
-        const readMaxChars = options.collectionReconcile
-          ? MAX_RECONCILED_SKILL_BYTES
-          : SKILL_WORKSHOP_READ_MAX_CHARS;
+        const readMaxChars = projectionBudgets.artifactChars;
         const truncated = skill.content.length > readMaxChars;
         // A truncated read is context, not sight of the whole skill: it earns no
         // receipt, so oversized skills cannot be patched by a reviewer that never
@@ -227,12 +223,22 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         } else {
           readSkillHashes.set(skill.skillKey, sha256Hex(skill.content));
         }
+        const sizeBytes = Buffer.byteLength(skill.content);
         const text = truncated
-          ? `${truncateUtf16Safe(skill.content, readMaxChars)}\n[truncated: skill exceeds the Workshop read budget]`
+          ? truncateUtf16Safe(
+              [
+                `Skill: ${skill.skillKey} (${sizeBytes} bytes)`,
+                "Content omitted: the complete skill exceeds the selected-model read budget.",
+                options.collectionReconcile
+                  ? "Next: select a larger-context model or use operator/CLI access; this collection cannot be reconciled without a complete read."
+                  : "Next: use operator/CLI access for the complete skill; autonomous patch/update requires a complete model read.",
+              ].join("\n"),
+              readMaxChars,
+            )
           : skill.content;
         return {
           content: [{ type: "text", text }],
-          details: { skillKey: skill.skillKey, truncated },
+          details: { skillKey: skill.skillKey, sizeBytes, contentIncluded: !truncated },
         };
       }
 
@@ -282,9 +288,35 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           options.env,
           options.agentId,
         );
+        const artifactPath = readToolStringParam(params, "artifact_path", {
+          label: "artifact_path",
+        });
+        const artifact = resolveProposalInspectArtifact(proposal, artifactPath);
+        if (!artifact) {
+          const available = [
+            proposal.record.draftFile,
+            ...(proposal.record.supportFiles ?? []).map((file) => file.path),
+          ];
+          throw new ToolInputError(
+            truncateUtf16Safe(
+              `proposal artifact not found: ${artifactPath}. Inspect without artifact_path for the bounded manifest. Available artifacts: ${available.join(", ")}`,
+              projectionBudgets.artifactChars,
+            ),
+          );
+        }
+        const projection = formatProposalInspect(
+          proposal,
+          artifact,
+          projectionBudgets.artifactChars,
+        );
         return proposalResult(proposal, {
-          contentText: formatProposalInspect(proposal),
-          includeContent: true,
+          contentText: projection.text,
+          inspect: {
+            artifactPath: artifact.path,
+            artifactSizeBytes: artifact.sizeBytes,
+            availableArtifacts: projection.availableArtifacts,
+            contentIncluded: projection.contentIncluded,
+          },
         });
       }
 
@@ -396,7 +428,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const readHash = readSkillHashes.get(target.skillKey);
         if (!readHash) {
           throw new ToolInputError(
-            target.content.length > SKILL_WORKSHOP_READ_MAX_CHARS
+            target.content.length > projectionBudgets.artifactChars
               ? `skill "${target.skillKey}" exceeds the reviewer read budget and cannot be updated autonomously`
               : `read the live skill first: call action=read with skill_name "${target.skillKey}", then ${action === "patch" ? "quote its current text in the patch" : "rewrite it from the returned content"}`,
           );

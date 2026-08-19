@@ -84,10 +84,11 @@ describe("skill_workshop collection history", () => {
       );
     }
 
-    const result = await createSkillWorkshopTool({ workspaceDir, env: testState.env }).execute(
-      "history",
-      { action: "history" },
-    );
+    const result = await createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      modelContextWindowTokens: 200_000,
+    }).execute("history", { action: "history" });
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     const firstTenKept = names("kept", 19).slice(0, 10);
 
@@ -109,6 +110,16 @@ describe("skill_workshop collection history", () => {
     const boundedReviews = (result.details as { reviews: unknown[] }).reviews;
     expect(boundedReviews.length).toBeGreaterThan(0);
     expect(boundedReviews.length).toBeLessThan(20);
+
+    const smallContextResult = await createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      modelContextWindowTokens: 8_192,
+    }).execute("history-small", { action: "history" });
+    const smallContextText =
+      smallContextResult.content[0]?.type === "text" ? smallContextResult.content[0].text : "";
+    expect(smallContextText.length).toBeLessThanOrEqual(2_867);
+    expect(smallContextText).toMatch(/\(history truncated\)$/u);
   });
 
   it("keeps isolated collection reviews limited to read and reconcile", () => {

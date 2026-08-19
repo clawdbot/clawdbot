@@ -32,19 +32,13 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import {
   captureChatConnectionOwner,
   deliveryStateWriter,
-  failSkillWorkshopRevisionConnectionChange,
   finishChatDeliveryAdmission,
   finishScopedChatSending,
-  isSkillWorkshopRevisionConnectionCurrent,
   reconnectSafeQueuedSendState,
   setChatError,
   updateQueuedSendItem,
 } from "./chat-send-queue-state.ts";
-import {
-  isActiveLeafChangedError,
-  requestChatSend,
-  requestSkillWorkshopRevisionChatSend,
-} from "./chat-send-request.ts";
+import { isActiveLeafChangedError, requestChatSend } from "./chat-send-request.ts";
 import {
   formatTerminalChatSendAckError,
   OFFLINE_QUEUE_STORAGE_ERROR,
@@ -232,13 +226,6 @@ async function sendQueuedChatMessage(
       return "failed";
     }
   }
-  if (prepared.skillWorkshopRevision && !isSkillWorkshopRevisionConnectionCurrent(host, prepared)) {
-    return failSkillWorkshopRevisionConnectionChange(host, storageMode, sessionKey, prepared);
-  }
-  if (prepared.skillWorkshopRevision && attachments.length) {
-    setState("failed", "Skill Workshop revision requests do not support attachments.");
-    return "failed";
-  }
   if (!host.connected || !host.client) {
     const waiting = setState("waiting-reconnect");
     if (!waiting && canRestoreComposer(host, options)) {
@@ -289,33 +276,19 @@ async function sendQueuedChatMessage(
   }
 
   try {
-    const ack = prepared.skillWorkshopRevision
-      ? await requestSkillWorkshopRevisionChatSend(host, {
-          proposalId: prepared.skillWorkshopRevision.proposalId,
-          ...(prepared.skillWorkshopRevision.agentId
-            ? { agentId: prepared.skillWorkshopRevision.agentId }
-            : {}),
-          ...(prepared.agentId ? { targetAgentId: prepared.agentId } : {}),
-          instructions: message,
-          runId,
-          sessionKey,
-        })
-      : await requestChatSend(host, {
-          message,
-          attachments: attachments.length ? attachments : undefined,
-          runId,
-          sessionKey,
-          agentId: prepared.agentId,
-          ...(prepared.queueMode ? { queueMode: prepared.queueMode } : {}),
-          ...(prepared.queueMode !== "steer" && options?.expectedLeafEntryId !== undefined
-            ? { expectedLeafEntryId: options.expectedLeafEntryId }
-            : {}),
-          ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
-        });
+    const ack = await requestChatSend(host, {
+      message,
+      attachments: attachments.length ? attachments : undefined,
+      runId,
+      sessionKey,
+      agentId: prepared.agentId,
+      ...(prepared.queueMode ? { queueMode: prepared.queueMode } : {}),
+      ...(prepared.queueMode !== "steer" && options?.expectedLeafEntryId !== undefined
+        ? { expectedLeafEntryId: options.expectedLeafEntryId }
+        : {}),
+      ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
+    });
     if (!requestConnectionIsCurrent()) {
-      if (prepared.skillWorkshopRevision) {
-        return failSkillWorkshopRevisionConnectionChange(host, storageMode, sessionKey, prepared);
-      }
       return "pending";
     }
     updateChatSendAckTiming(host, runId, ack, sendingItem, requestStartedAtMs);
@@ -436,9 +409,6 @@ async function sendQueuedChatMessage(
     return retireOnAck ? "sent" : "pending";
   } catch (err) {
     if (!requestConnectionIsCurrent()) {
-      if (prepared.skillWorkshopRevision) {
-        return failSkillWorkshopRevisionConnectionChange(host, storageMode, sessionKey, prepared);
-      }
       return "pending";
     }
     const activeLeafChanged = isActiveLeafChangedError(err);

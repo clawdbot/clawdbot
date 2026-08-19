@@ -268,6 +268,7 @@
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
+  --cursor-action: default;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -996,37 +997,9 @@ openclaw-app {
   }
 }
 
-/* Cursor policy. A browser tab gets the pointer hand, the only hover affordance
-   a page owns; installed/app-like windows are desktop chrome and keep the arrow.
-   Controls consume --cursor-action rather than hardcoding a cursor, and real
-   hyperlinks keep the UA pointer in every mode. */
-/* stylelint-disable-next-line no-duplicate-selectors -- cursor policy block, see comment above */
-:root {
-  --cursor-action: pointer;
-}
-
-/* Separate from the standalone block above, which owns viewport and safe-area
-   insets; widening its condition would change those too. `fullscreen` is absent
-   on purpose: it is a transient presentation state any window can enter, and
-   the manifest installs this UI as `standalone`. */
-@media (display-mode: standalone),
-  (display-mode: minimal-ui),
-  (display-mode: window-controls-overlay) {
-  :root {
-    --cursor-action: default;
-  }
-}
-
-/* Native app hosts are installed desktop windows too, but they embed a plain
-   web view that reports `display-mode: browser`; they announce themselves with
-   these `<html>` markers instead (all three, as layout.css already matches). */
-html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) {
-  --cursor-action: default;
-}
-
-/* Generic actionable controls, at element/attribute specificity only so the
-   component rules that own semantic cursors (not-allowed, disabled, grab,
-   resize, deliberate `default` on non-actionable elements) still win. */
+/* State-changing controls use the desktop arrow. This stays at
+   element/attribute specificity so component rules that own semantic cursors
+   (not-allowed, disabled, grab, resize, deliberate `default`) still win. */
 button,
 summary,
 select,
@@ -1056,6 +1029,17 @@ a {
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+/* Real links keep the hand even when styled as controls. */
+a[href] {
+  cursor: pointer;
+}
+
+/* Non-anchor controls opt in only when their primary action opens a browser
+   tab/window. Disabled controls keep their component-owned cursor. */
+[data-new-tab-action]:not(:disabled):not([disabled]):not([aria-disabled="true"]) {
+  cursor: pointer;
 }
 
 a:hover {

@@ -10,6 +10,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -960,11 +961,23 @@ describe("gateway server chat", () => {
           rejectDispatch.resolve();
           await errorPromise;
           await persistenceEntered.promise;
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
+          const restartInspectors = {
+            getQueueSize: () => 0,
+            getPendingReplies: () => 0,
+            getEmbeddedRuns: () => 0,
+            getCronRuns: () => 0,
+            getBackgroundExecSessions: () => 0,
+            getActiveTasks: () => 0,
+            getTaskBlockers: () => [],
+          };
+          expect(createSafeGatewayRestartPreflight(restartInspectors)).toMatchObject({
+            safe: false,
+            counts: { rootRequests: 1 },
+          });
           releasePersistence.resolve();
           const changed = await sessionChangedPromise;
           await waitForFast(() => {
-            expect(getActiveGatewayRootWorkCount()).toBe(0);
+            expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
           });
           return changed;
         } finally {

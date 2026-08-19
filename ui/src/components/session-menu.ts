@@ -207,6 +207,7 @@ class SessionMenu extends OpenClawLightDomElement {
       <wa-dropdown-item
         class="session-menu__item"
         value="open-pr"
+        data-new-tab-action
         data-shortcut="g"
         aria-keyshortcuts="G"
         ?disabled=${this.disabled || !pullRequestUrl}

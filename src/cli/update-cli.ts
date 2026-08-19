@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
 import { defaultRuntime } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
@@ -125,6 +126,7 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           timeout: inheritedUpdateTimeout(opts, actionCommand),
           yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(actionCommand, "yes")),
           restart: false,
+          deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
           acknowledgeClawHubRisk:
             normalizeCommanderClawHubRiskOption(opts) || inheritedUpdateClawHubRisk(actionCommand),
         });

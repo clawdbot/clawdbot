@@ -12,6 +12,7 @@ export function createConfiguredSkillWorkshopTool(params: {
   runId?: string;
   messageId?: string | number;
   run?: SkillWorkshopRunOptions;
+  modelContextWindowTokens?: number;
 }) {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const runId = normalizeOptionalString(params.runId);
@@ -39,5 +40,6 @@ export function createConfiguredSkillWorkshopTool(params: {
       (params.run?.proposalOnly ? { remaining: 1 } : undefined),
     proposalReviewCompletion: params.run?.proposalReviewCompletion,
     collectionReconcile: params.run?.collectionReconcile,
+    modelContextWindowTokens: params.modelContextWindowTokens,
   });
 }

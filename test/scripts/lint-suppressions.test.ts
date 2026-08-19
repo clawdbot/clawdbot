@@ -202,7 +202,6 @@ describe("production lint suppressions", () => {
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
-        "src/audit/audit-event-writer.ts|unicorn/require-post-message-target-origin|2",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",

@@ -829,6 +829,7 @@ export function buildAgentSystemPrompt(params: {
     agentId?: string;
     sessionKey?: string;
     sessionId?: string;
+    sessionUrl?: string;
     host?: string;
     os?: string;
     arch?: string;
@@ -1559,6 +1560,7 @@ function buildRuntimeLine(
     agentId?: string;
     sessionKey?: string;
     sessionId?: string;
+    sessionUrl?: string;
     host?: string;
     os?: string;
     arch?: string;
@@ -1585,6 +1587,7 @@ function buildRuntimeLine(
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
     stableSessionId ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}` : "",
+    runtimeInfo?.sessionUrl ? `sessionUrl=${sanitizeForPromptLiteral(runtimeInfo.sessionUrl)}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os

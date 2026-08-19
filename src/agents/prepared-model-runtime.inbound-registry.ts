@@ -72,6 +72,7 @@ export function prepareWorkspacePluginRegistries(
   const runtimePluginRegistry =
     input.runtimePluginSelections || !inboundPluginRegistry
       ? loadAgentRuntimePluginRegistryHandle({
+          ...(input.loadRuntimePlugins ? { basePluginIds: [] } : {}),
           config: input.config,
           env: input.env ?? process.env,
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),

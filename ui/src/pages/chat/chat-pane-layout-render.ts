@@ -97,10 +97,15 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
     const browserPresented =
       this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
+    const desktopPresented =
+      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "desktop");
+    const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
     const panelDefinitions = sidebarPanelDefinitions({
       state,
       agentId: currentAgentId,
       browserPresented,
+      desktopPresented,
+      desktopRefreshOnPresentation,
       desktopAvailable,
       hasBoard: board.hasBoard,
       chat,

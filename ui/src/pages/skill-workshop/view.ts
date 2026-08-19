@@ -143,6 +143,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
 
 function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const busy = props.actionBusy?.key === proposal.key && props.actionBusy.action === "revise";
+  const cancelDisabled = Boolean(props.actionBusy) || props.revisionRecoveryActive;
   const canSubmit =
     props.access.canRevise && props.revisionDraft.trim().length > 0 && !props.actionBusy;
   const verb =
@@ -153,7 +154,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
       .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
       .description=${t("skillWorkshop.revision.description")}
       style="--openclaw-modal-width: 560px"
-      @modal-cancel=${props.onRevisionCancel}
+      @modal-cancel=${cancelDisabled ? undefined : props.onRevisionCancel}
     >
       <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
         <div class="sw-revision-dialog__head">
@@ -168,7 +169,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
               type="button"
               class="sw-revision-dialog__close"
               aria-label=${t("skillWorkshop.actions.close")}
-              ?disabled=${Boolean(props.actionBusy)}
+              ?disabled=${cancelDisabled}
               @click=${props.onRevisionCancel}
             >
               ×
@@ -181,7 +182,9 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           autofocus
           placeholder=${t("skillWorkshop.revision.placeholder")}
           .value=${props.revisionDraft}
-          ?disabled=${!props.access.canRevise || Boolean(props.actionBusy)}
+          ?disabled=${!props.access.canRevise ||
+          Boolean(props.actionBusy) ||
+          props.revisionRecoveryActive}
           @input=${(event: Event) =>
             props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
         ></textarea>
@@ -197,7 +200,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           <button
             type="button"
             class="sw-btn sw-btn--ghost"
-            ?disabled=${Boolean(props.actionBusy)}
+            ?disabled=${cancelDisabled}
             @click=${props.onRevisionCancel}
           >
             ${t("skillWorkshop.actions.cancel")}

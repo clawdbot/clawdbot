@@ -7,6 +7,7 @@ import {
   resolvePluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
+import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 const preparedPluginRuntimeLoadContext = Symbol("preparedPluginRuntimeLoadContext");
@@ -74,6 +75,15 @@ function resolveColdMetadataSnapshot(
     config: input.config,
     env,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
+      ? {
+          pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
+            config: input.config,
+            workspaceDir: input.workspaceDir,
+            selections: input.runtimePluginSelections,
+          }),
+        }
+      : {}),
   });
   return resolvedMetadataSnapshot;
 }

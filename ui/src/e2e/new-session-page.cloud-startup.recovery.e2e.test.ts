@@ -298,7 +298,10 @@ suite.define(() => {
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
-          if (key.startsWith("openclaw.new-session.session-placement-recovery.v1:")) {
+          if (
+            key.startsWith("openclaw.new-session.session-placement-recovery.v1:") ||
+            key.startsWith("openclaw.control-ui-e2e.")
+          ) {
             originalSetItem(key, value);
             return;
           }

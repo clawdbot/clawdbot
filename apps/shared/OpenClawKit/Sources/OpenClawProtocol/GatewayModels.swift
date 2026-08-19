@@ -16541,6 +16541,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let jobid: String
     public let action: String
     public let status: AnyCodable?
+    public let completionstatus: AnyCodable?
     public let error: String?
     public let errorreason: AnyCodable?
     public let summary: String?
@@ -16567,6 +16568,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         jobid: String,
         action: String,
         status: AnyCodable? = nil,
+        completionstatus: AnyCodable? = nil,
         error: String? = nil,
         errorreason: AnyCodable? = nil,
         summary: String? = nil,
@@ -16592,6 +16594,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.jobid = jobid
         self.action = action
         self.status = status
+        self.completionstatus = completionstatus
         self.error = error
         self.errorreason = errorreason
         self.summary = summary
@@ -16619,6 +16622,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         case jobid = "jobId"
         case action
         case status
+        case completionstatus = "completionStatus"
         case error
         case errorreason = "errorReason"
         case summary

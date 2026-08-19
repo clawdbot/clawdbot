@@ -161,7 +161,7 @@ describe("Skill Workshop proposal RPCs", () => {
     await runSkillWorkshopLifecycleAction(state, context, "apply", "proposal-1");
     await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
     await expect(requestSkillWorkshopRevision(state, context, "proposal-1", vi.fn())).resolves.toBe(
-      false,
+      null,
     );
     expect(request).not.toHaveBeenCalled();
   });
@@ -596,7 +596,11 @@ describe("Skill Workshop proposal RPCs", () => {
       {},
       ["skills.proposals.requestRevision"],
     );
-    const sendRevisionRequest = vi.fn(async () => {});
+    const sendRevisionRequest = vi.fn(async () => ({
+      id: "revision-1",
+      sessionKey: "agent:research:workshop",
+      status: "admitted" as const,
+    }));
 
     try {
       await requestSkillWorkshopRevision(state, context, "proposal-1", sendRevisionRequest);
@@ -608,63 +612,8 @@ describe("Skill Workshop proposal RPCs", () => {
       "Tighten the trigger.",
       expect.objectContaining({ key: "proposal-1" }),
       "research",
+      REVISION_HASH,
     );
-  });
-
-  it("does not send an originless revision after the agent scope changes", async () => {
-    const detail = createDeferred<ReturnType<typeof inspectResult>>();
-    const { state, context, request } = createFixture(
-      {
-        skillWorkshopAgentId: "research",
-        skillWorkshopProposals: [proposal({ body: "", bodyLoaded: false })],
-        skillWorkshopRevisionDraft: "Tighten the trigger.",
-      },
-      {},
-      ["skills.proposals.inspect", "skills.proposals.requestRevision"],
-    );
-    request.mockReturnValueOnce(detail.promise);
-    const sendRevisionRequest = vi.fn(async () => {});
-
-    const revision = requestSkillWorkshopRevision(
-      state,
-      context,
-      "proposal-1",
-      sendRevisionRequest,
-    );
-    state.skillWorkshopAgentId = "ops";
-    detail.resolve(inspectResult());
-
-    await expect(revision).resolves.toBe(false);
-    expect(sendRevisionRequest).not.toHaveBeenCalled();
-  });
-
-  it("does not prepare a revision after the initiating source changes during inspection", async () => {
-    const detail = createDeferred<ReturnType<typeof inspectResult>>();
-    const { state, context, request } = createFixture(
-      {
-        skillWorkshopAgentId: "research",
-        skillWorkshopProposals: [proposal({ body: "", bodyLoaded: false })],
-        skillWorkshopRevisionDraft: "Tighten the trigger.",
-      },
-      {},
-      ["skills.proposals.inspect", "skills.proposals.requestRevision"],
-    );
-    let current = true;
-    request.mockReturnValueOnce(detail.promise);
-    const sendRevisionRequest = vi.fn(async () => {});
-
-    const revision = requestSkillWorkshopRevision(
-      state,
-      context,
-      "proposal-1",
-      sendRevisionRequest,
-      () => current,
-    );
-    current = false;
-    detail.resolve(inspectResult());
-
-    await expect(revision).resolves.toBe(false);
-    expect(sendRevisionRequest).not.toHaveBeenCalled();
   });
 
   it("ignores a superseded selection and keeps its error out of the pane", async () => {

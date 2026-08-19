@@ -2387,6 +2387,19 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("keeps mixed Control UI root and source changes in the UI lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/index.html",
+      "ui/src/components/markdown.test.ts",
+      "ui/src/pages/agents/memory/dreaming.test.ts",
+    ]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
+    ]);
+  });
+
   it.each([
     ["ui/config/control-ui-chunking.ts", "ui/src/app/control-ui-chunking.test.ts"],
     ["ui/config/control-ui-locales.ts", "ui/src/app/vite-config.node.test.ts"],

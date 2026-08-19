@@ -435,7 +435,7 @@ export function createExecTool(
           channelContext: defaults?.channelContext,
           defaultPathPrepend,
           pluginEnv: resolvedExecEnvState?.pluginEnv,
-          storeEnv: storeEnv.env,
+          storeEnv: host === "gateway" ? storeEnv.env : undefined,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
           secretEgressEnv,
           ...preparedRunEnvironment,

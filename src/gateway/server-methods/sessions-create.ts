@@ -478,7 +478,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
                     await managedWorktrees.remove({
                       id: preparedWorktree.id,
                       reason: "session-create-failed",
-                      force: true,
+                      allowSnapshotLoss: true,
                     });
                   },
                 }

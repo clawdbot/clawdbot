@@ -898,7 +898,7 @@ describe("OpenAI-compatible completions params", () => {
   });
 
   it("enables Z.AI thinking with the documented payload when requested", async () => {
-    const stream = streamOpenAICompletions(
+    const stream = streamSimpleOpenAICompletions(
       {
         ...createModel(32_000),
         provider: "zai",
@@ -908,15 +908,16 @@ describe("OpenAI-compatible completions params", () => {
       context,
       {
         apiKey: "sk-test",
-        reasoningEffort: "high",
+        reasoning: "max",
       },
     );
 
     await stream.result();
 
     expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
-      thinking: { type: "enabled" },
+      thinking: { type: "enabled", clear_thinking: false },
     });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
     expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
   });
 

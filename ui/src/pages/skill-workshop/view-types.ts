@@ -28,6 +28,7 @@ export type SkillWorkshopProps = {
   actionNotice: SkillWorkshopActionNotice | null;
   revisionKey: string | null;
   revisionDraft: string;
+  revisionRecoveryActive: boolean;
   assistantName: string;
   workshopAgentName: string;
   selfLearning: SkillWorkshopSelfLearning | null;

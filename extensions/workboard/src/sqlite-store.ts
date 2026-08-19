@@ -1263,6 +1263,19 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
     });
   }
 
+  async deleteIfUpdatedAt(key: string, expectedUpdatedAt: number): Promise<boolean> {
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const current = this.db
+        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
+        .get(key);
+      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+        return false;
+      }
+      this.deleteCard(key);
+      return true;
+    });
+  }
+
   async lookup(key: string): Promise<PersistedWorkboardCard | undefined> {
     const row = this.db.prepare("SELECT * FROM workboard_cards WHERE id = ?").get(key) as
       | Row
@@ -1271,20 +1284,22 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   }
 
   async delete(key: string): Promise<boolean> {
-    const result = runSqliteImmediateTransactionSync(this.db, () => {
-      this.db
-        .prepare(
-          `
-            DELETE FROM workboard_attachment_blobs
-            WHERE attachment_id IN (
-              SELECT id FROM workboard_card_attachments WHERE card_id = ?
-            )
-          `,
-        )
-        .run(key);
-      return this.db.prepare("DELETE FROM workboard_cards WHERE id = ?").run(key);
-    });
+    const result = runSqliteImmediateTransactionSync(this.db, () => this.deleteCard(key));
     return result.changes > 0;
+  }
+
+  private deleteCard(key: string) {
+    this.db
+      .prepare(
+        `
+          DELETE FROM workboard_attachment_blobs
+          WHERE attachment_id IN (
+            SELECT id FROM workboard_card_attachments WHERE card_id = ?
+          )
+        `,
+      )
+      .run(key);
+    return this.db.prepare("DELETE FROM workboard_cards WHERE id = ?").run(key);
   }
 
   async entries(): Promise<Array<{ key: string; value: PersistedWorkboardCard }>> {

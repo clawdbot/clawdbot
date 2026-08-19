@@ -51,6 +51,7 @@ export type WorkboardCardStore = WorkboardKeyedStore & {
     value: PersistedWorkboardCard,
     expectedUpdatedAt: number,
   ): Promise<boolean>;
+  deleteIfUpdatedAt(key: string, expectedUpdatedAt: number): Promise<boolean>;
   claimIfOwnerAvailable(
     key: string,
     value: PersistedWorkboardCard,
@@ -70,6 +71,8 @@ export function isWorkboardCardStore(store: WorkboardKeyedStore): store is Workb
     "registerIfUpdatedAt" in store &&
     typeof store.registerIfUpdatedAt === "function" &&
     "claimIfOwnerAvailable" in store &&
-    typeof store.claimIfOwnerAvailable === "function"
+    typeof store.claimIfOwnerAvailable === "function" &&
+    "deleteIfUpdatedAt" in store &&
+    typeof store.deleteIfUpdatedAt === "function"
   );
 }

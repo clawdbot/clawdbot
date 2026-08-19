@@ -306,7 +306,8 @@ describe("subtitleForRoute", () => {
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       notifications: "Browser push notifications from your gateway.",
       security: "Gateway auth, exec policy, tool profile, and approvals.",
-      secrets: "Secret values are hidden after saving. Env var values stay visible here.",
+      secrets:
+        "Choose protected, write-only secrets or intentionally agent-readable Gateway environment values.",
       advanced: "Every remaining config section, plus the raw file editor.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",

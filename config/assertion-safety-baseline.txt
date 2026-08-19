@@ -868,7 +868,7 @@ extensions/msteams/src/monitor-handler.ts	5
 extensions/msteams/src/monitor-handler/inbound-content.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
-extensions/msteams/src/monitor.ts	9
+extensions/msteams/src/monitor.ts	8
 extensions/msteams/src/msteams-ingress.ts	1
 extensions/msteams/src/outbound.ts	1
 extensions/msteams/src/polls.ts	1
@@ -2100,7 +2100,6 @@ src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	2
 src/agents/tool-images.ts	3
 src/agents/tool-mutation-names.ts	2
-src/agents/tool-policy-pipeline.ts	1
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
@@ -2505,7 +2504,6 @@ src/cli/update-cli/plugin-payload-validation.ts	2
 src/cli/update-cli/shared.ts	1
 src/cli/update-cli/update-command-config.ts	6
 src/cli/update-cli/update-command-plugins.ts	1
-src/cli/update-cli/update-command-post-core.ts	1
 src/cli/update-cli/update-command-post-update.ts	2
 src/cli/users-cli.ts	1
 src/commands/agent-exec.ts	6
@@ -3819,7 +3817,6 @@ src/skills/runtime/remote-skills.ts	1
 src/skills/runtime/session-snapshot.ts	1
 src/skills/security/clawhub-verdicts.ts	2
 src/skills/workshop/experience-review.ts	2
-src/skills/workshop/history-scan-transcript.ts	1
 src/skills/workshop/history-scan.ts	2
 src/skills/workshop/policy.ts	1
 src/skills/workshop/store-record.ts	3
@@ -4282,7 +4279,7 @@ ui/src/pages/plugin/route.ts	1
 ui/src/pages/plugins/view.ts	2
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
-ui/src/pages/secrets/view.ts	6
+ui/src/pages/secrets/view.ts	5
 ui/src/pages/sessions/view.ts	13
 ui/src/pages/skill-workshop/header-controls.ts	1
 ui/src/pages/skill-workshop/route.ts	1

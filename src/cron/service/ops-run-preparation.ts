@@ -1,5 +1,6 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import {
@@ -98,15 +99,21 @@ export function emitCronRunFinished(
     errorClassification?: CronRunErrorClassification;
   },
 ): void {
+  const event = {
+    ...evt,
+    completionStatus:
+      evt.completionStatus ??
+      resolveCronCompletionStatus({ status: evt.status, deliveryStatus: evt.deliveryStatus }),
+  };
   tryFinishCronTaskRun(state, {
     taskRunId,
     job: evt.job,
-    event: evt,
+    event,
     errorClassification: details?.errorClassification,
     ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
     ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
   });
-  emit(state, evt);
+  emit(state, event);
   if (tracker) {
     tracker.emitted = true;
   }
@@ -162,6 +169,7 @@ async function skipInvalidPersistedManualRun(params: {
     params.job,
     {
       status: "skipped",
+      completionStatus: "failed",
       error: errorText,
       diagnostics,
       startedAt: endedAt,

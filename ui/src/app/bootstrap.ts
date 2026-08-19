@@ -56,7 +56,7 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
-import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
+import { createSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { isTerminalDocumentPath, isTerminalOnlyView } from "./terminal-document-mode.ts";
@@ -381,7 +381,7 @@ export function bootstrapApplication(
   });
   const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
-  const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
+  const skillWorkshopRevisionAdmissions = createSkillWorkshopRevisionAdmissions();
   const initialUserMessage = createInitialUserMessageHandoff();
   const placementStartup = createApplicationPlacementStartup({
     gateway,
@@ -515,7 +515,7 @@ export function bootstrapApplication(
     nativeChatDrafts,
     nativeNotifications,
     webPush,
-    skillWorkshopRevision,
+    skillWorkshopRevisionAdmissions,
     initialUserMessage,
     chatAttachmentHandoff,
     navigate: (routeId, options) => {
@@ -619,7 +619,7 @@ export function bootstrapApplication(
       nativeLinkRouting.dispose();
       nativeNotifications?.dispose();
       webPush.dispose();
-      skillWorkshopRevision.clear();
+      skillWorkshopRevisionAdmissions.dispose();
       initialUserMessage.clear();
       chatAttachmentHandoff.dispose();
     },

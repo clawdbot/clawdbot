@@ -59,14 +59,6 @@ export type ToolApprovalReview = {
   rationale?: string;
 };
 
-export type ChatQueueSkillWorkshopRevision = {
-  proposalId: string;
-  agentId?: string;
-  /** Process-local owner; revision requests must never replay after reconnect. */
-  connectionClient?: object;
-  connectionEpoch?: number;
-};
-
 export type ChatQueueItem = {
   id: string;
   text: string;
@@ -98,7 +90,6 @@ export type ChatQueueItem = {
   sessionKey?: string;
   agentId?: string;
   sender?: SenderIdentity;
-  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
 /** Union type for items in the chat thread */

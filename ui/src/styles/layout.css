@@ -504,8 +504,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   color: var(--muted);
 }
 
-/* Settings rail entries are anchors but read as app chrome: default arrow,
-   not the UA link pointer. */
+/* Settings rail entries are navigation anchors and keep the link pointer. */
 .settings-sidebar__item {
   position: relative;
   display: flex;
@@ -517,7 +516,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: var(--cursor-action);
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -589,7 +587,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   padding: 0 9px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -1500,8 +1497,7 @@ body.update-dialog-open .sidebar-update-card__status {
   flex-direction: column;
   gap: var(--sidebar-group-gap);
   margin-inline: -8px 0;
-  /* Sessions are app chrome, not hyperlinks: the whole region follows the
-     base.css cursor policy so it tracks the window it is running in. */
+  /* Sessions are stateful app chrome, not navigation links. */
   cursor: var(--cursor-action);
 }
 
@@ -2636,8 +2632,6 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   font: inherit;
   font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
-  /* More-menu route rows are anchors acting as chrome (see base.css cursor policy). */
-  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -3103,8 +3097,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   outline-offset: -2px;
 }
 
-/* Nav rail entries are anchors (for middle-click/new-tab) but read as app
-   chrome: override the UA link pointer back to the default arrow. */
+/* Nav rail entries are anchors so middle-click/new-tab keeps link behavior. */
 .nav-item {
   position: relative;
   display: flex;
@@ -3117,7 +3110,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  cursor: var(--cursor-action);
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,

@@ -2960,6 +2960,8 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
+    expect(embeddedArg.terminalReplyExpectation).toBe("optional");
+    expect(embeddedArg.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
   it("forwards exact cron creator authority into embedded execution", async () => {

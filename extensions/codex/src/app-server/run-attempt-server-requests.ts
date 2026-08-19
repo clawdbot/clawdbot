@@ -35,6 +35,12 @@ import {
 } from "./tool-progress-normalization.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 
+const DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES = [
+  "tool.execution.completed",
+  "tool.execution.error",
+  "tool.execution.blocked",
+] as const;
+
 export function createCodexAttemptServerRequestController(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
@@ -196,20 +202,23 @@ export function createCodexAttemptServerRequestController(
       const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
       const toolStartedAt = Date.now();
       let terminalDiagnosticObserved = false;
-      const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent((event) => {
-        if (
-          isDynamicToolTerminalDiagnosticEvent(event) &&
-          isMatchingDynamicToolTerminalDiagnostic({
-            event,
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
-        ) {
-          terminalDiagnosticObserved = true;
-        }
-      });
+      const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent(
+        (event) => {
+          if (
+            isDynamicToolTerminalDiagnosticEvent(event) &&
+            isMatchingDynamicToolTerminalDiagnostic({
+              event,
+              call,
+              runId: params.runId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+            })
+          ) {
+            terminalDiagnosticObserved = true;
+          }
+        },
+        { include: DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES },
+      );
       try {
         const { execution } = openClawDynamicToolExecutions.claim(call, () => {
           emitDynamicToolStartedDiagnostic({

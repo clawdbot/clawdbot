@@ -483,5 +483,4 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected abstract applySessionsState(state: ChatPageContext["sessions"]["state"]): void;
   protected abstract cancelHeaderRename(): void;
   protected abstract resetOlderMessagesViewport(): void;
-  protected abstract sendPendingSkillWorkshopRevision(expectedSessionKey: string): void;
 }

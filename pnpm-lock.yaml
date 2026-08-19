@@ -832,9 +832,6 @@ importers:
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
       typebox:
         specifier: 1.3.6
         version: 1.3.6
@@ -994,9 +991,6 @@ importers:
       jszip:
         specifier: 3.10.1
         version: 3.10.1
-      pretty-ms:
-        specifier: 9.3.0
-        version: 9.3.0
       typebox:
         specifier: 1.3.6
         version: 1.3.6
@@ -1286,9 +1280,6 @@ importers:
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
       typebox:
         specifier: 1.3.6
         version: 1.3.6
@@ -1621,18 +1612,9 @@ importers:
       '@openclaw/crabline':
         specifier: 0.1.11
         version: 0.1.11
-      p-limit:
-        specifier: 7.3.1
-        version: 7.3.1
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
-      pretty-ms:
-        specifier: 9.3.0
-        version: 9.3.0
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -1769,9 +1751,6 @@ importers:
       get-east-asian-width:
         specifier: 1.6.0
         version: 1.6.0
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
       typebox:
         specifier: 1.3.6
         version: 1.3.6

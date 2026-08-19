@@ -226,6 +226,7 @@ export async function finishGatewayStartup(params: {
           startCron: false,
           logCron,
           log,
+          resolveGatewayContext: resolvePluginGatewayContext,
         });
         kernel.setScheduledServiceHandles(activated);
       });

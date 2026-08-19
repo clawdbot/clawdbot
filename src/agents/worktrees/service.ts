@@ -75,7 +75,7 @@ const WORKTREE_OWNER_LEASE_SCOPE = "core:managed-worktrees:owner";
 const WORKTREE_CREATE_LEASE_MS = 60_000;
 const WORKTREE_CREATE_LEASE_WAIT_MS = 5 * 60_000;
 
-/** Non-forced removal aborted because the safety snapshot failed. */
+/** Removal aborted because snapshot loss was not permitted. */
 export class WorktreeSnapshotError extends Error {
   readonly snapshotError: string;
   constructor(snapshotError: string, options?: ErrorOptions) {
@@ -925,21 +925,20 @@ export class ManagedWorktreeService {
   async remove(params: {
     id: string;
     reason: string;
-    force?: boolean;
+    allowSnapshotLoss?: boolean;
     claimToken?: string;
     runEndCleanup?: ManagedWorktreeRunEndCleanup;
   }): Promise<RemoveManagedWorktreeResult> {
     const record = this.requireLiveRecord(params.id);
-    const force = params.force ?? false;
     // Claim removal before any cleanliness or snapshot work so a live run lease
     // rejects it and an admitted run cannot start once the claim is held. The
     // opaque token makes the claim exclusive against competing removers; a caller
     // that already claimed (removeIfLossless) passes its token to keep one claim.
     const claimToken = params.claimToken ?? randomUUID();
-    claimWorktreeRemoval(this.env, { worktreeId: record.id, token: claimToken, force });
+    claimWorktreeRemoval(this.env, { worktreeId: record.id, token: claimToken });
     try {
       const state = await lockState(record);
-      if ((state.kind === "live" || state.kind === "foreign") && !force) {
+      if (state.kind === "live" || state.kind === "foreign") {
         throw new Error(
           state.kind === "live"
             ? `worktree is locked by live OpenClaw pid ${state.pid}`
@@ -977,7 +976,7 @@ export class ManagedWorktreeService {
             { cause: cleanupError },
           );
         }
-        if (!force) {
+        if (!params.allowSnapshotLoss) {
           throw new WorktreeSnapshotError(snapshotError, { cause: error });
         }
       }
@@ -1105,7 +1104,7 @@ export class ManagedWorktreeService {
     // Run-end cleanup must leave a durable outcome even when safety retains the checkout.
     // QA and operators observe this product-boundary fact through worktrees.list.
     try {
-      claimWorktreeRemoval(this.env, { worktreeId: id, token: claimToken, force: false });
+      claimWorktreeRemoval(this.env, { worktreeId: id, token: claimToken });
     } catch (error) {
       if (error instanceof WorktreeRemovalContentionError) {
         if (error.kind === "finalized") {

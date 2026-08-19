@@ -7,6 +7,9 @@ const hoisted = vi.hoisted(() => ({
   loadPluginRegistryHandle: vi.fn(),
   adoptRuntimeContextEngineRegistrations: vi.fn((target: unknown) => target),
   resolveAgentRuntimePluginLoadPlan: vi.fn(),
+  resolveAgentRuntimePluginSelections: vi.fn(
+    (_config: unknown, selections: readonly unknown[]) => selections,
+  ),
 }));
 
 vi.mock("../context-engine/registry.js", () => ({
@@ -27,6 +30,7 @@ vi.mock("../plugins/loader.js", () => ({
 
 vi.mock("./harness/runtime-plugin-load-plan.js", () => ({
   resolveAgentRuntimePluginLoadPlan: hoisted.resolveAgentRuntimePluginLoadPlan,
+  resolveAgentRuntimePluginSelections: hoisted.resolveAgentRuntimePluginSelections,
 }));
 
 import {
@@ -68,6 +72,9 @@ describe("agent runtime plugin registries", () => {
       config,
       pluginIds: ["codex", "memory-core"],
     }));
+    hoisted.resolveAgentRuntimePluginSelections
+      .mockReset()
+      .mockImplementation((_config, selections) => selections);
   });
 
   it("adopts runtime context engines from the active composition-root registry", () => {

@@ -1,5 +1,6 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -123,18 +124,16 @@ export function applyJobResult(
       "cron: job run returned error status",
     );
   }
-  const deliveryState = resolveDeliveryState({
-    job,
-    runStatus: result.status,
-    delivered: result.delivered,
-    deliveryAttempted: result.deliveryAttempted,
-    // A successful run keeps `error` empty but may carry a dedicated
-    // `deliveryError` when post-run delivery failed (#94058/#95419); prefer it
-    // so `lastDeliveryError` is populated without conflating it with a
-    // run-level failure. Error runs fall back to the run error as before.
-    error: result.deliveryError ?? result.error,
-    globalFailureDestination: state.deps.cronConfig?.failureAlert,
-  });
+  const deliveryState =
+    result.deliveryState ??
+    resolveDeliveryState({
+      job,
+      runStatus: result.status,
+      delivered: result.delivered,
+      deliveryAttempted: result.deliveryAttempted,
+      error: result.deliveryError ?? result.error,
+      globalFailureDestination: state.deps.cronConfig?.failureAlert,
+    });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
   job.state.lastDeliveryError =
@@ -206,7 +205,9 @@ export function applyJobResult(
     isOneShotSchedule &&
     !preserveOneShotSchedule &&
     job.deleteAfterRun === true &&
-    result.status === "ok";
+    (result.completionStatus ??
+      resolveAdmittedCronCompletionStatus(job, result.status, deliveryState.status)) ===
+      "succeeded";
   const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
 
   if (!ownsSchedule) {
@@ -738,6 +739,7 @@ function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: nu
     action: "finished",
     job,
     status: result.status,
+    completionStatus: result.completionStatus,
     error: result.error,
     summary: result.summary,
     diagnostics: result.diagnostics,

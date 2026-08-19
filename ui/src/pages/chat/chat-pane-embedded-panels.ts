@@ -20,6 +20,8 @@ type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
   agentId: string | null;
   browserPresented: boolean;
+  desktopPresented: boolean;
+  desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   hasBoard: boolean;
   chat: TemplateResult;
@@ -133,6 +135,8 @@ export function sidebarPanelDefinitions(
           data-chat-autotype-exempt
           .client=${state.connected ? state.client : null}
           .available=${desktopAvailable}
+          .presented=${params?.desktopPresented ?? false}
+          .refreshOnPresentation=${params?.desktopRefreshOnPresentation ?? true}
         ></openclaw-desktop-panel>`
       : null;
   const discussion = params?.discussion
