@@ -491,6 +491,43 @@ describe("worker session tool topology", () => {
     expect(replay.resultJson).toBe(first.resultJson);
   });
 
+  it("rejects child spawn when the worker execution capability is missing", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    placements.releaseTurn(sourceClaim);
+    sourceClaim = placements.claimTurn({
+      sessionId: SOURCE.sessionId,
+      agentId: SOURCE.agentId,
+      sessionKey: SOURCE.sessionKey,
+      claimId: "unbound-source-claim",
+      runId: "unbound-source-run",
+      owner: {
+        kind: "worker",
+        environmentId: SOURCE.environmentId,
+        ownerEpoch: SOURCE.ownerEpoch,
+      },
+    });
+    placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_spawn"]);
+    identity = {
+      ...identity,
+      runId: sourceClaim.runId,
+      turnClaim: sourceClaim,
+    };
+
+    const result = await execute({
+      identity,
+      toolName: "sessions_spawn",
+      request: {
+        toolCallId: "spawn-without-execution-capability",
+        task: "must not start",
+      },
+    });
+
+    expect(result.resultJson).toContain("Worker sessions_spawn source authority changed");
+    expect(gatewayCreate).not.toHaveBeenCalled();
+    expect(dispatchChild).not.toHaveBeenCalled();
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
   it("carries the exact admitted parent identity into a worker-hosted child spawn", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
 

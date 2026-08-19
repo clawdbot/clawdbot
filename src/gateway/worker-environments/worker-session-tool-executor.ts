@@ -116,6 +116,9 @@ export function createWorkerSessionToolExecutor(params: {
       ownerEpoch: operation.source.turnClaim.owner.ownerEpoch,
       runId: operation.source.turnClaim.runId,
     });
+    if (!lineageCapability) {
+      throw new Error("Worker sessions_spawn source authority changed");
+    }
     let workerIdentity: WorkerTurnExecutionIdentity | undefined;
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
@@ -268,23 +271,20 @@ export function createWorkerSessionToolExecutor(params: {
         const childRunId = operationKey(operation.operationSeed, "initial-task");
         const config = getRuntimeConfig();
         const gatewayCaller = getGatewayToolCallerIdentity();
-        const sessionSpawnContext = lineageCapability
-          ? buildSubagentExecutionSessionSpawnContext({
-              enabled: true,
-              backend: "subagent",
-              parentAgentId: operation.source.agentId,
-              requesterRef: operation.source.sessionKey,
-              controllerRef: operation.source.sessionKey,
-              depth: (operation.source.entry.spawnDepth ?? 0) + 1,
-              maxDepth:
-                config.agents?.defaults?.subagents?.maxSpawnDepth ??
-                DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
-              targetAgentId,
-              sandbox: "inherit",
-              inheritedToolAllowlist: inheritedToolPolicy.allow,
-              inheritedToolDenylist: inheritedToolPolicy.deny,
-            })
-          : undefined;
+        const sessionSpawnContext = buildSubagentExecutionSessionSpawnContext({
+          enabled: true,
+          backend: "subagent",
+          parentAgentId: operation.source.agentId,
+          requesterRef: operation.source.sessionKey,
+          controllerRef: operation.source.sessionKey,
+          depth: (operation.source.entry.spawnDepth ?? 0) + 1,
+          maxDepth:
+            config.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+          targetAgentId,
+          sandbox: "inherit",
+          inheritedToolAllowlist: inheritedToolPolicy.allow,
+          inheritedToolDenylist: inheritedToolPolicy.deny,
+        });
         const run = await runWithScopedSessionAccess({
           cfg: config,
           expectedSessionId: childSessionId,
@@ -321,38 +321,33 @@ export function createWorkerSessionToolExecutor(params: {
                   ...(operation.signal ? { signal: operation.signal } : {}),
                   timeoutMs: null,
                 } as const;
-                sendResult =
-                  lineageCapability && workerIdentity
-                    ? await lineageCapability.run(async (identity) => {
-                        if (
-                          identity !== workerIdentity ||
-                          gatewayCaller?.agentId !== identity.agentId ||
-                          gatewayCaller.sessionKey !== identity.sessionKey ||
-                          gatewayCaller.operationalRunInstance !==
-                            identity.operationalRunInstance ||
-                          gatewayCaller.executionIdentityToken !==
-                            identity.executionIdentityToken ||
-                          gatewayCaller.workerTurnClaim !== identity.turnClaim
-                        ) {
-                          throw new Error("worker child admission identity changed");
-                        }
-                        return await callAgentToolGatewayRequest(
-                          withAgentToolGatewayRuntimeIdentity(request, {
-                            kind: "agentRuntime",
-                            agentId: identity.agentId,
-                            sessionKey: identity.sessionKey,
-                            operationalRunInstance: identity.operationalRunInstance,
-                            delegatedAuthority: {
-                              kind: "worker",
-                              ...identity.delegatedAuthority,
-                              turnClaim: identity.turnClaim,
-                            },
-                            executionIdentity: identity.executionIdentityToken,
-                            sessionSpawnContext,
-                          }),
-                        );
-                      })
-                    : await callAgentToolGatewayRequest(request);
+                sendResult = await lineageCapability.run(async (identity) => {
+                  if (
+                    identity !== workerIdentity ||
+                    gatewayCaller?.agentId !== identity.agentId ||
+                    gatewayCaller.sessionKey !== identity.sessionKey ||
+                    gatewayCaller.operationalRunInstance !== identity.operationalRunInstance ||
+                    gatewayCaller.executionIdentityToken !== identity.executionIdentityToken ||
+                    gatewayCaller.workerTurnClaim !== identity.turnClaim
+                  ) {
+                    throw new Error("worker child admission identity changed");
+                  }
+                  return await callAgentToolGatewayRequest(
+                    withAgentToolGatewayRuntimeIdentity(request, {
+                      kind: "agentRuntime",
+                      agentId: identity.agentId,
+                      sessionKey: identity.sessionKey,
+                      operationalRunInstance: identity.operationalRunInstance,
+                      delegatedAuthority: {
+                        kind: "worker",
+                        ...identity.delegatedAuthority,
+                        turnClaim: identity.turnClaim,
+                      },
+                      executionIdentity: identity.executionIdentityToken,
+                      sessionSpawnContext,
+                    }),
+                  );
+                });
                 break;
               } catch (error) {
                 if (attempt === 1) {
@@ -404,16 +399,14 @@ export function createWorkerSessionToolExecutor(params: {
         visible: true,
         worktree: true,
       });
-    return lineageCapability
-      ? await runWithWorkerTurnGatewayCaller(lineageCapability, async (identity) => {
-          workerIdentity = identity;
-          try {
-            return await executeSpawn();
-          } finally {
-            workerIdentity = undefined;
-          }
-        })
-      : await executeSpawn();
+    return await runWithWorkerTurnGatewayCaller(lineageCapability, async (identity) => {
+      workerIdentity = identity;
+      try {
+        return await executeSpawn();
+      } finally {
+        workerIdentity = undefined;
+      }
+    });
   };
 
   const send = async (operation: {

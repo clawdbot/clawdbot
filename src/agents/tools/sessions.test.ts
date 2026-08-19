@@ -1680,6 +1680,49 @@ describe("sessions_send gating", () => {
     });
   });
 
+  it("forwards cancellation into fresh session handoff admission", async () => {
+    const abortController = new AbortController();
+    const callAgentWithHandoff = vi.fn(async (request: { signal?: AbortSignal }) => {
+      request.signal?.throwIfAborted();
+      return { runId: "run-cancelled-handoff", acceptedAt: 123 };
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      signal: abortController.signal,
+      handoffContext: {
+        inheritedToolPolicy: { version: 1, allow: ["sessions_send"], deny: [] },
+        requester: { messageProvider: MAIN_AGENT_CHANNEL },
+      },
+      callAgentWithHandoff,
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        abortController.abort(new Error("worker operation cancelled"));
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-policy-cancelled", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result).status).toBe("error");
+    expect(callAgentWithHandoff).toHaveBeenCalledOnce();
+    expect(callAgentWithHandoff.mock.calls[0]?.[0].signal).toBe(abortController.signal);
+    expect(callAgentWithHandoff.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+  });
+
   it("gives detached handoff turns authority that survives parent release", async () => {
     const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
     vi.mocked(runSessionsSendA2AFlow).mockClear();

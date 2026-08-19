@@ -530,14 +530,19 @@ export function createSessionsSendTool(opts?: {
         : undefined;
       const agentCall: GatewayCaller = handoffContext
         ? async <T = Record<string, unknown>>(request: Parameters<GatewayCaller>[0]) => {
+            const signal =
+              request.signal && opts?.signal && request.signal !== opts.signal
+                ? AbortSignal.any([request.signal, opts.signal])
+                : (request.signal ?? opts?.signal);
+            const handoffRequest = signal ? { ...request, signal } : request;
             if (opts?.callAgentWithHandoff) {
-              return (await opts.callAgentWithHandoff(request, handoffContext)) as T;
+              return (await opts.callAgentWithHandoff(handoffRequest, handoffContext)) as T;
             }
             if (!authority) {
               throw new Error("sessions_send policy handoff requires trusted caller identity");
             }
             return await callSessionHandoffAgent<T>({
-              request,
+              request: handoffRequest,
               authority,
               context: handoffContext,
             });
