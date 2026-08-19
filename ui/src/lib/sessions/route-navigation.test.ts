@@ -74,22 +74,25 @@ describe("sessionNavigationTarget", () => {
     });
   });
 
-  it("keeps generic catalog URLs when a descriptor collides with a built-in route", () => {
-    const target = sessionNavigationTarget({
-      face: "chat",
-      sessionKey: buildCatalogSessionKey({
-        catalogId: "external",
-        hostId: "gateway",
-        threadId: "0123456789abcdef0123456789abcdef",
-      }),
-      fallbackAgentId: "main",
-      catalogShareRoute: { ...SHARE_ROUTE, routeSegment: "plugin" },
-    });
+  it.each(["chat", "plugin", "settings"])(
+    "keeps a generic catalog URL when a descriptor collides with the built-in %s route",
+    (routeSegment) => {
+      const target = sessionNavigationTarget({
+        face: "chat",
+        sessionKey: buildCatalogSessionKey({
+          catalogId: "external",
+          hostId: "gateway",
+          threadId: "0123456789abcdef0123456789abcdef",
+        }),
+        fallbackAgentId: "main",
+        catalogShareRoute: { ...SHARE_ROUTE, routeSegment },
+      });
 
-    expect(target.href).toBe(
-      "/chat/main?catalog=external&host=gateway&thread=0123456789abcdef0123456789abcdef",
-    );
-  });
+      expect(target.href).toBe(
+        "/chat/main?catalog=external&host=gateway&thread=0123456789abcdef0123456789abcdef",
+      );
+    },
+  );
 
   it("requires the destination face while preserving catalog identity", () => {
     const catalogKey = {

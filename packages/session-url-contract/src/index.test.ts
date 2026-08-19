@@ -115,6 +115,18 @@ describe("buildControlUiCatalogSharePath", () => {
 
   it.each([
     {
+      shareRoute: { ...SHARE_ROUTE, routeSegment: "chat" },
+      threadId: "0123456789abcdef0123456789abcdef",
+    },
+    {
+      shareRoute: { ...SHARE_ROUTE, routeSegment: "plugin" },
+      threadId: "0123456789abcdef0123456789abcdef",
+    },
+    {
+      shareRoute: { ...SHARE_ROUTE, routeSegment: "settings" },
+      threadId: "0123456789abcdef0123456789abcdef",
+    },
+    {
       shareRoute: { ...SHARE_ROUTE, routeSegment: "Beam" },
       threadId: "0123456789abcdef0123456789abcdef",
     },

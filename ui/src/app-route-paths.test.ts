@@ -1,8 +1,13 @@
 // @vitest-environment node
+import {
+  CONTROL_UI_RESERVED_ROUTE_SEGMENTS,
+  isControlUiReservedRouteSegment,
+} from "@openclaw/session-url-contract";
 import { notFound, type RouteLocation, type RouterHistory } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import {
   agentRouteFromPath,
+  APP_ROUTE_IDS,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
@@ -12,6 +17,7 @@ import {
   pathForWorkboardBoard,
   pluginsHubTabFromPath,
   routeIdFromPath,
+  routePageSpec,
   type RouteId,
   type MemoryRouteTab,
   type PluginsHubRouteTab,
@@ -101,6 +107,22 @@ const DYNAMIC_STARTUP_CASES = [
 }[];
 
 describe("Dynamic route startup bridge", () => {
+  it("keeps share-route reservations aligned with every built-in path and alias", () => {
+    const appRouteSegments = [
+      ...new Set(
+        APP_ROUTE_IDS.flatMap((routeId) => {
+          const definition = routePageSpec(routeId);
+          return [definition.path, ...(definition.aliases ?? [])]
+            .map((path) => path.split("/").find(Boolean))
+            .filter((segment): segment is string => Boolean(segment));
+        }),
+      ),
+    ].toSorted();
+
+    expect([...CONTROL_UI_RESERVED_ROUTE_SEGMENTS].toSorted()).toEqual(appRouteSegments);
+    expect(appRouteSegments.every(isControlUiReservedRouteSegment)).toBe(true);
+  });
+
   it("keeps plausible generic catalog share paths on chat", () => {
     for (const pathname of [
       "/beam/0123456789ab",

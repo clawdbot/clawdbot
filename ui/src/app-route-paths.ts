@@ -83,21 +83,9 @@ const APP_ROUTE_DEFINITIONS = {
 
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;
 export const APP_ROUTE_IDS = Object.keys(APP_ROUTE_DEFINITIONS) as RouteId[];
-const RESERVED_APP_ROUTE_SEGMENTS = new Set(
-  APP_ROUTE_IDS.flatMap((routeId) => {
-    const definition = APP_ROUTE_DEFINITIONS[routeId];
-    const paths: readonly string[] =
-      "aliases" in definition ? [definition.path, ...definition.aliases] : [definition.path];
-    return paths.map((path) => path.split("/").find(Boolean)).filter(Boolean);
-  }),
-);
 
 export function isRouteId(routeId: string): routeId is RouteId {
   return routeId in APP_ROUTE_DEFINITIONS;
-}
-
-export function isReservedAppRouteSegment(segment: string): boolean {
-  return RESERVED_APP_ROUTE_SEGMENTS.has(segment.toLowerCase());
 }
 
 // Single source for page definitions: ui/src/pages/*/route.ts spreads this
@@ -270,7 +258,7 @@ export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): 
     pathname: normalizedPath,
     basePath: normalizedBasePath,
   });
-  return catalogShare && !isReservedAppRouteSegment(catalogShare.routeSegment) ? "chat" : null;
+  return catalogShare ? "chat" : null;
 }
 
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {

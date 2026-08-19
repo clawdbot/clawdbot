@@ -196,9 +196,12 @@ export default definePluginEntry({
   or alias, and it must be unique across active session catalogs. Invalid,
   unsupported, reserved, or multiply owned descriptors fail closed; catalog
   sessions remain available through the generic
-  `/chat/<agent>?catalog=...&host=...&thread=...` URL. Keep one plugin-owned
-  descriptor constant and reuse it for registration, prefix lookup, and URL
-  generation so those obligations cannot drift.
+  `/chat/<agent>?catalog=...&host=...&thread=...` URL. The shared session URL
+  contract owns the built-in reservation decision: its share-path builder
+  returns `null` for reserved segments, and the Gateway omits reserved
+  descriptors before publishing catalogs. Keep one plugin-owned descriptor
+  constant and reuse it for registration, prefix lookup, and URL generation so
+  those obligations cannot drift.
 
   CLI-backed catalogs that expose the same local-plus-paired-node shape can use
   `createSessionCatalogFamily(...)`. The family composer owns canonical cursor

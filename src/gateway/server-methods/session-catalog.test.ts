@@ -165,6 +165,25 @@ describe("session catalog Gateway methods", () => {
     expect(catalogs.every((catalog) => catalog.shareRoute === undefined)).toBe(true);
   });
 
+  it.each(["chat", "plugin", "settings"])(
+    "does not project the reserved %s share route",
+    async (routeSegment) => {
+      hoisted.activeRegistry.sessionCatalogs = [
+        {
+          provider: provider("external", {
+            shareRoute: { ...SHARE_ROUTE, routeSegment },
+          }),
+        },
+      ];
+
+      const respond = await call("sessions.catalog.list", { catalogId: "external" });
+
+      expect(respond).toHaveBeenCalledWith(true, {
+        catalogs: [expect.not.objectContaining({ shareRoute: expect.anything() })],
+      });
+    },
+  );
+
   it("streams completed hosts to only the requesting connection", async () => {
     const broadcastToConnIds = vi.fn();
     const host = {

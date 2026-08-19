@@ -5,7 +5,7 @@ import {
 } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { INTERNAL_SESSION_PATH_PARAM, isReservedAppRouteSegment } from "../../app-route-paths.ts";
+import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,8 +18,7 @@ function targetFromLocation(context: ApplicationContext, location: RouteLocation
   const matchPath = (pathname: string) =>
     matchControlUiCatalogSharePath({ pathname, basePath: context.basePath });
   const internalPath = new URLSearchParams(location.search).get(INTERNAL_SESSION_PATH_PARAM);
-  const target = (internalPath ? matchPath(internalPath) : null) ?? matchPath(location.pathname);
-  return target && !isReservedAppRouteSegment(target.routeSegment) ? target : null;
+  return (internalPath ? matchPath(internalPath) : null) ?? matchPath(location.pathname);
 }
 
 function routeError(message: string): Extract<ChatRouteData, { kind: "route-error" }> {
