@@ -20,6 +20,7 @@ import {
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
+  type StatusGatewayDiagnosticsResult,
   type resolveStatusServiceSummaries,
 } from "../status-runtime-shared.ts";
 import { formatUpdateRestartStatusValue } from "../status-update-restart.ts";
@@ -81,8 +82,8 @@ async function resolveStatusAllLocalDiagnosis(params: {
     agentStatus: StatusScanOverviewResult["agentStatus"];
     gatewayReachable: boolean;
     health: StatusGatewayHealthSafe | undefined;
-    deliveryDiagnostics: unknown;
-    exporterDiagnostics: unknown;
+    deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
+    exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
     nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   };
 }> {
