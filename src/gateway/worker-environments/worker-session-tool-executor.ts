@@ -23,7 +23,7 @@ import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import type { GitHubPublicationCoordinator } from "../github-publication.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
 import {
   getWorkerTurnExecutionIdentityCapability,
   runWithWorkerTurnGatewayCaller,
@@ -78,6 +78,16 @@ export function createWorkerSessionToolExecutor(params: {
   githubPublication: Pick<GitHubPublicationCoordinator, "requestForClaim">;
 }) {
   const inFlight = new Map<string, Promise<string>>();
+  const resolveInheritedToolPolicy = (claim: WorkerSessionTurnClaim) => {
+    const allow = WORKER_TOOL_NAMES.filter((name) =>
+      params.placements.isWorkerTurnToolAuthorized(claim, name),
+    );
+    return {
+      version: 1 as const,
+      allow,
+      deny: WORKER_TOOL_NAMES.filter((name) => !allow.includes(name)),
+    };
+  };
 
   const spawn = async (operation: {
     source: ExactSource;
@@ -99,9 +109,7 @@ export function createWorkerSessionToolExecutor(params: {
       throw new Error("Worker source environment changed before child spawn");
     }
     const targetAgentId = normalizeAgentId(operation.request.agentId ?? operation.source.agentId);
-    const authorizedTools = WORKER_TOOL_NAMES.filter((name) =>
-      params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
-    );
+    const inheritedToolPolicy = resolveInheritedToolPolicy(operation.source.turnClaim);
     const lineageCapability = getWorkerTurnExecutionIdentityCapability(params.placements, {
       sessionId: operation.source.sessionId,
       environmentId: operation.source.turnClaim.owner.environmentId,
@@ -160,7 +168,7 @@ export function createWorkerSessionToolExecutor(params: {
               via: "spawn",
               actor: { type: "agent", id: operation.source.agentId },
               requesterSessionKey: operation.source.sessionKey,
-              inheritedToolPolicy: { version: 1, allow: authorizedTools, deny: [] },
+              inheritedToolPolicy,
             },
             {
               ...(operation.signal ? { signal: operation.signal } : {}),
@@ -273,8 +281,8 @@ export function createWorkerSessionToolExecutor(params: {
                 DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
               targetAgentId,
               sandbox: "inherit",
-              inheritedToolAllowlist: authorizedTools,
-              inheritedToolDenylist: [],
+              inheritedToolAllowlist: inheritedToolPolicy.allow,
+              inheritedToolDenylist: inheritedToolPolicy.deny,
             })
           : undefined;
         const run = await runWithScopedSessionAccess({
@@ -377,8 +385,8 @@ export function createWorkerSessionToolExecutor(params: {
       agentSessionKey: operation.source.sessionKey,
       requesterTurnRunId: operation.identity.runId ?? undefined,
       requesterAgentIdOverride: operation.source.agentId,
-      inheritedToolAllowlist: authorizedTools,
-      inheritedToolDenylist: [],
+      inheritedToolAllowlist: inheritedToolPolicy.allow,
+      inheritedToolDenylist: inheritedToolPolicy.deny,
       callGateway: gatewayCall,
       expectedParentSessionId: operation.source.sessionId,
       ...(operation.signal ? { signal: operation.signal } : {}),
@@ -432,9 +440,7 @@ export function createWorkerSessionToolExecutor(params: {
       throw new Error("Worker sessions_send source authority changed");
     }
     const executeFencedSend = async (workerIdentity: WorkerTurnExecutionIdentity) => {
-      const authorizedTools = WORKER_TOOL_NAMES.filter((name) =>
-        params.placements.isWorkerTurnToolAuthorized(workerIdentity.turnClaim, name),
-      );
+      const inheritedToolPolicy = resolveInheritedToolPolicy(workerIdentity.turnClaim);
       const assertCurrentTarget = () => {
         const target = exactAuthorizedTarget({
           source: operation.source,
@@ -454,11 +460,7 @@ export function createWorkerSessionToolExecutor(params: {
         agentSessionKey: operation.source.sessionKey,
         expectedTargetSessionId: operation.target.sessionId,
         handoffContext: {
-          inheritedToolPolicy: {
-            version: 1,
-            allow: authorizedTools,
-            deny: WORKER_TOOL_NAMES.filter((name) => !authorizedTools.includes(name)),
-          },
+          inheritedToolPolicy,
           requester: workerIdentity.sessionHandoffRequester,
         },
         idempotencyKey: operation.idempotencyKey,

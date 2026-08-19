@@ -34,6 +34,7 @@ const dispatchChild = vi.hoisted(() => vi.fn());
 const spawnCallerIdentity = vi.hoisted(() => vi.fn());
 const spawnArgs = vi.hoisted(() => vi.fn());
 const githubPublicationRequest = vi.hoisted(() => vi.fn());
+const spawnOptions = vi.hoisted(() => vi.fn());
 const scopedSessionAccess = vi.hoisted(() =>
   vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
 );
@@ -68,20 +69,23 @@ vi.mock("../../agents/tools/sessions-spawn-tool.js", async () => {
     createSessionsSpawnTool: (options: {
       agentSessionKey: string;
       callGateway: (method: string, params: Record<string, unknown>) => Promise<unknown>;
-    }) => ({
-      execute: async (_toolCallId: string, args: { task: string }) => {
-        spawnCallerIdentity(getGatewayToolCallerIdentity());
-        spawnArgs(args);
-        const details = await options.callGateway("sessions.create", {
-          parentSessionKey: options.agentSessionKey,
-          task: args.task,
-        });
-        return {
-          content: [{ type: "text", text: "spawned" }],
-          details,
-        };
-      },
-    }),
+    }) => {
+      spawnOptions(options);
+      return {
+        execute: async (_toolCallId: string, args: { task: string }) => {
+          spawnCallerIdentity(getGatewayToolCallerIdentity());
+          spawnArgs(args);
+          const details = await options.callGateway("sessions.create", {
+            parentSessionKey: options.agentSessionKey,
+            task: args.task,
+          });
+          return {
+            content: [{ type: "text", text: "spawned" }],
+            details,
+          };
+        },
+      };
+    },
   };
 });
 
@@ -214,6 +218,7 @@ describe("worker session tool topology", () => {
       status: "requested",
       message: "Publication was accepted.",
     });
+    spawnOptions.mockReset();
     scopedSessionAccess.mockClear();
     childSessionKey = undefined;
     spawnOrder = [];
@@ -516,7 +521,12 @@ describe("worker session tool topology", () => {
         inheritedToolPolicy: {
           version: 1,
           allow: ["sessions_spawn", "sessions_send", "github_publish"],
-          deny: [],
+          deny: WORKER_TOOL_NAMES.filter(
+            (name) =>
+              name !== "sessions_spawn" &&
+              name !== "sessions_send" &&
+              name !== "github_publish",
+          ),
         },
       },
     });
@@ -531,6 +541,37 @@ describe("worker session tool topology", () => {
       PARENT_EXECUTION_IDENTITY_TOKEN.executionId,
     );
     expect(JSON.stringify(runtimeIdentity?.sessionSpawnContext)).not.toContain(SOURCE.sessionKey);
+  });
+
+  it("preserves excluded worker tool names across worker-hosted child spawn policy", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    placements.authorizeWorkerTurnTools(sourceClaim, ["read", "sessions_spawn"]);
+
+    await execute({
+      identity,
+      toolName: "sessions_spawn",
+      request: { toolCallId: "spawn-with-restricted-policy", task: "start the child" },
+    });
+
+    const policy = {
+      version: 1,
+      allow: ["read", "sessions_spawn"],
+      deny: WORKER_TOOL_NAMES.filter((name) => name !== "read" && name !== "sessions_spawn"),
+    };
+    expect(gatewayCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        creation: expect.objectContaining({ inheritedToolPolicy: policy }),
+      }),
+    );
+    expect(spawnOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inheritedToolAllowlist: policy.allow,
+        inheritedToolDenylist: policy.deny,
+      }),
+    );
+    expect(gatewayRuntimeIdentity.mock.calls[0]?.[1]).toMatchObject({
+      sessionSpawnContext: { inheritedToolPolicy: policy },
+    });
   });
 
   it("coalesces concurrent spawn retries into one cloud child", async () => {
