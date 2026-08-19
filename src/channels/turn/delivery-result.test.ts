@@ -17,13 +17,14 @@ describe("createChannelDeliveryResultFromReceipt", () => {
       primaryPlatformMessageId: "m1",
       platformMessageIds: ["m1", "m2"],
       parts: [],
+      threadId: "canonical-thread",
       sentAt: 123,
     };
 
     expect(
       createChannelDeliveryResultFromReceipt({
         receipt,
-        threadId: "thread-1",
+        threadId: "requested-thread",
         replyToId: "reply-1",
         visibleReplySent: true,
         deliveryIntent: {
@@ -35,7 +36,7 @@ describe("createChannelDeliveryResultFromReceipt", () => {
     ).toEqual({
       messageIds: ["m1", "m2"],
       receipt,
-      threadId: "thread-1",
+      threadId: "canonical-thread",
       replyToId: "reply-1",
       visibleReplySent: true,
       deliveryIntent: {
