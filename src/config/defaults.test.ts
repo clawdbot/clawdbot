@@ -310,6 +310,56 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(model.input).toEqual(["text", "image"]);
   });
 
+  it("copies frozen catalog metadata before downstream normalization", async () => {
+    const supportedReasoningEfforts = Object.freeze(["low", "high"]);
+    const compat = Object.freeze({ supportedReasoningEfforts });
+    const frozenRegistry = {
+      plugins: [
+        {
+          id: "openai",
+          modelCatalog: {
+            providers: {
+              openai: {
+                models: [
+                  Object.freeze({
+                    id: "gpt-5.6-sol",
+                    name: "GPT-5.6 Sol",
+                    reasoning: true,
+                    compat,
+                  }),
+                ],
+              },
+            },
+          },
+        },
+      ],
+      // SAFETY: minimal frozen manifest record reproducing production registry ownership.
+    } as never;
+    const { applyModelDefaults } = await import("./defaults.js");
+    const cfg = applyModelDefaults(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [{ id: "gpt-5.6-sol", name: "GPT-5.6" } as never],
+            },
+          },
+        },
+      },
+      { manifestRegistry: frozenRegistry },
+    );
+    const model = expectDefined(
+      cfg.models?.providers?.openai?.models?.[0],
+      "materialized model entry",
+    );
+
+    expect(() => {
+      model.compat!.supportedReasoningEfforts = ["low"];
+    }).not.toThrow();
+    expect(compat.supportedReasoningEfforts).toEqual(["low", "high"]);
+  });
+
   it("falls back to generic defaults when no catalog row matches", async () => {
     const { applyModelDefaults } = await import("./defaults.js");
     const cfg = applyModelDefaults(
