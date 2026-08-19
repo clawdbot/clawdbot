@@ -369,6 +369,8 @@ export type EmbeddedRunAttemptResult = {
     startedCount: number;
     completedCount: number;
     activeCount: number;
+    /** Completed model-internal reasoning items; excluded from replay gating. */
+    completedReasoningCount?: number;
   };
   setTerminalLifecycleMeta?: (meta: {
     replayInvalid?: boolean;

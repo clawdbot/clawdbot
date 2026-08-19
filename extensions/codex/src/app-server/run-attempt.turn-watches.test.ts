@@ -16,6 +16,7 @@ import * as approvalBridge from "./approval-bridge.js";
 import { buildCodexAppServerPromptTimeoutOutcome } from "./attempt-results.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS } from "./attempt-timeouts.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -2252,6 +2253,47 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const result = await run;
     expectSuccessfulAttempt(result);
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+  });
+
+  it("marks a completion idle timeout after completed reasoning as replay-safe", async () => {
+    // Regression for the post-reasoning stall: a completed reasoning item is
+    // model-internal and must not block the one automatic replay when the
+    // stream then goes permanently silent. The completed reasoning item arms
+    // the 5-minute post-reasoning reply window (CODEX_POST_REASONING_REPLY_
+    // IDLE_TIMEOUT_MS); driving that wall-clock window is infeasible here, so
+    // an inert raw bookkeeping completion re-arms the short base completion
+    // watch — the fired timeout kind and replay gating are identical.
+    expect(CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS).toBeGreaterThan(0);
+    const harness = createStartedThreadHarness();
+    const params = makeTestParams({ timeoutMs: 60_000 });
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 100,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(
+      itemNotification("item/started", { id: "reasoning-1", type: "reasoning" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { id: "reasoning-1", type: "reasoning" }),
+    );
+    await harness.notify(rawItemCompleted({ id: "raw-bookkeeping-1", type: "bookkeeping" }));
+
+    const result = await run;
+    expectTimedOutAttempt(result);
+    expect(result.codexAppServerFailure).toMatchObject({
+      kind: "turn_completion_idle_timeout",
+      turnWatchTimeoutKind: "completion",
+      replaySafe: true,
+    });
+    expect(result.codexAppServerFailure?.replayBlockedReason).toBeUndefined();
+    expect(result.itemLifecycle).toMatchObject({
+      startedCount: 1,
+      completedCount: 1,
+      activeCount: 0,
+      completedReasoningCount: 1,
+    });
   });
 
   it("keeps waiting after reasoning and its raw mirror complete before a visible message call", async () => {

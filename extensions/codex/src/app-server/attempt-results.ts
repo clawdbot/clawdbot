@@ -94,7 +94,12 @@ export function resolveCodexAppServerReplayBlockedReason(
   ) {
     return "tool_activity";
   }
-  if (result.itemLifecycle.startedCount > 0 || result.itemLifecycle.activeCount > 0) {
+  // Completed reasoning items are model-internal text (app-server protocol
+  // ThreadItem::Reasoning) with no recipient-visible side effect; a turn whose
+  // only items are completed reasoning is still safe to replay once.
+  const startedNonReasoningCount =
+    result.itemLifecycle.startedCount - (result.itemLifecycle.completedReasoningCount ?? 0);
+  if (startedNonReasoningCount > 0 || result.itemLifecycle.activeCount > 0) {
     return "active_item";
   }
   return undefined;

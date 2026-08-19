@@ -49,6 +49,7 @@ type CodexAttemptResultInput = {
   completedCompactionCount: number;
   activeItemCount: number;
   completedItemCount: number;
+  completedReasoningItemCount: number;
   guardianReviewCount: number;
   toolTelemetry: CodexAppServerToolTelemetry;
   yieldDetected: boolean | undefined;
@@ -231,6 +232,7 @@ export function buildCodexAttemptResult(
       startedCount: input.activeItemCount + input.completedItemCount,
       completedCount: input.completedItemCount,
       activeCount: input.activeItemCount,
+      completedReasoningCount: input.completedReasoningItemCount,
     },
     yieldDetected: input.yieldDetected || false,
     didSendDeterministicApprovalPrompt: input.guardianReviewCount > 0 ? false : undefined,
