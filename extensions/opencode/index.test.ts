@@ -483,7 +483,9 @@ describe("opencode provider plugin", () => {
       buildStaticOpencodeZenProviderConfig().models[0],
       "runtime model",
     );
-    expect(manifestUserAgent).toBe(runtimeModel.headers?.["User-Agent"]);
+    expect(manifestUserAgent).toBe(
+      requireRecord(runtimeModel.headers, "runtime model headers")["User-Agent"],
+    );
   });
 
   it("keeps every OpenCode Zen row within the required cost contract", async () => {
