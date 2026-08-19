@@ -201,12 +201,19 @@ in.
 
 ### Telegram Desktop recorder
 
-The Telegram Desktop recorder is an operator/skill-driven tool: it records
-native Telegram Desktop without driving OpenClaw or Telegram messages. The
-caller (for example the Telegram userbot E2E skill) supplies `--user-driver`,
-starts and drives the SUT, then tells the recorder which message to show. The
-`Mantis Telegram Desktop Proof` workflow still runs its container-based
-runner; moving that workflow onto the recorder is a separate change.
+The Telegram Desktop recorder is a standalone operator utility, invoked
+directly through `pnpm qa:telegram-desktop-recorder`. It records native
+Telegram Desktop and nothing else: it never drives OpenClaw or sends Telegram
+messages. Whoever runs it owns the turn — start the SUT, send through a real
+Telegram user, then tell the recorder which message to show — and supplies
+`--user-driver`, the command the recorder shells out to for the TDLib calls it
+cannot make itself (`confirm-qr`, `terminate-session`). Any driver exposing
+those two verbs works, including this repo's
+`scripts/e2e/telegram-user-driver.py`.
+
+Nothing in this repository invokes it yet: the `Mantis Telegram Desktop Proof`
+workflow still runs its own container-based proof runner, and moving that
+workflow onto the recorder is a separate change.
 
 Start a fresh authorized desktop and begin recording:
 
