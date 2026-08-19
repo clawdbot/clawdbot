@@ -830,9 +830,9 @@ async function importChatGptConversationsUnlocked(params: {
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
     if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
+      await writeImportRunRecord(params.config.vault.path, importRunRecord);
       const compile = await compileMemoryWikiVault(params.config);
       indexUpdatedFiles = compile.updatedFiles;
-      await writeImportRunRecord(params.config.vault.path, importRunRecord);
       await appendMemoryWikiLog(params.config.vault.path, {
         type: "ingest",
         timestamp: nowIso,
