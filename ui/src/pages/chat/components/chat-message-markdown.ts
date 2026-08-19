@@ -130,12 +130,14 @@ export function resolveMessageActionDetails(params: {
   const role = normalizeRoleForGrouping(normalizedMessage.role);
   const previewMarkdown = resolveMessageReplyText(message);
   // Loaded text must not erase the preview's truncation fact or collapse its disclosure.
+  // Assistant-only: the full-message expander renders loaded content for assistant
+  // rows alone, so a capped user row must not trigger a fetch it never displays.
   const shouldFetchFullMessage = Boolean(
+    role === "assistant" &&
     canFetchFullMessage &&
     messageId &&
     !record.openclawMessageToolMirror &&
-    (transcriptMeta?.truncated === true ||
-      (role === "assistant" && previewMarkdown.includes("\n...(truncated)..."))),
+    (transcriptMeta?.truncated === true || previewMarkdown.includes("\n...(truncated)...")),
   );
   const expansion =
     role === "assistant" && shouldFetchFullMessage && messageId
