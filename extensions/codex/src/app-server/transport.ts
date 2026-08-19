@@ -2,6 +2,8 @@
  * Shared transport lifecycle helpers for stdio and WebSocket Codex app-server
  * connections.
  */
+import { terminateCodexAppServerDescendants } from "./transport-process-containment.js";
+
 /** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
   stdin: {
@@ -34,6 +36,7 @@ export function closeCodexAppServerTransport(
   child: CodexAppServerTransport,
   options: { forceKillDelayMs?: number } = {},
 ): void {
+  terminateCodexAppServerDescendants(child);
   child.stdin.end?.();
   child.stdin.destroy?.();
   const forceKillDelayMs = options.forceKillDelayMs ?? 1_000;
