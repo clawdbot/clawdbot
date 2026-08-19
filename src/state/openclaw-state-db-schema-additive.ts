@@ -132,6 +132,13 @@ export function ensureDevicePairSetupBootstrapSchema(database: DatabaseSync): vo
   ensureColumn(database, "device_bootstrap_tokens", "setup_id TEXT");
 }
 
+/** Installs environment-owned node binding columns at first cloud enrollment use. */
+export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: DatabaseSync): void {
+  ensureDevicePairSetupCompletionSchema(database);
+  ensureColumn(database, "worker_environments", "node_setup_id TEXT");
+  ensureColumn(database, "worker_environments", "node_device_id TEXT");
+}
+
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
     return null;
@@ -280,6 +287,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
+  ensureColumn(db, "node_host_config", "gateway_cloudflare_access_json TEXT");
   ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");

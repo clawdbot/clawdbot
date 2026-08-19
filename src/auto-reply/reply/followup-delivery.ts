@@ -4,18 +4,20 @@ import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
   hasCompletedTerminalDeliveryEvidence,
+  hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { logVerbose } from "../../globals.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   getReplyPayloadMetadata,
-  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -32,6 +34,7 @@ import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
@@ -208,7 +211,23 @@ export function resolveFollowupDeliveryDecision(params: {
         ? markReplyPayloadForSourceSuppressionDelivery(accounting.terminalFailurePayload)
         : accounting.terminalFailurePayload
       : undefined
-    : buildEmptyInteractiveReplyPayload({
+    : (buildSessionsYieldAcknowledgmentPayload({
+        yielded: result.meta?.yielded === true,
+        yieldAcknowledgment: result.meta?.yieldAcknowledgment,
+        isInteractive,
+        isHeartbeat: opts?.isHeartbeat,
+        silentExpected: turn.queued.run.silentExpected,
+        isSubagentSession:
+          turn.session.kind === "session" && isSubagentSessionKey(turn.session.key),
+        hasExplicitSilentReply: hasDeliberateSilentTerminalReply(result),
+        // Child spawns are side effects, not user-visible messages. They must not
+        // suppress the explicit waiting reply for the parent turn.
+        hasVisibleMessageDelivery:
+          hasCommittedSourceReplyDeliveryEvidence(result) ||
+          hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
+          result.didSendDeterministicApprovalPrompt === true,
+      }) ??
+      buildEmptyInteractiveReplyPayload({
         isInteractive,
         isHeartbeat: opts?.isHeartbeat,
         silentExpected: turn.queued.run.silentExpected,
@@ -224,12 +243,10 @@ export function resolveFollowupDeliveryDecision(params: {
           Surface: turn.queued.originatingChannel,
         },
         cfg: turn.config,
-      });
+      }));
   const hasTerminalPayload = payloads.some(
     (payload) =>
-      payload.isReasoning !== true &&
-      payload.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(payload) &&
+      isReplyPayloadTerminalContent(payload) &&
       (sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
@@ -318,9 +335,15 @@ async function sendFollowupPayloads(params: {
     mode: defaults.typingMode,
     isHeartbeat: defaults.opts?.isHeartbeat === true,
   });
-  let crossChannelFailure = false;
+  const crossChannelFailures: ReplyPayload[] = [];
   let deliveredCrossChannelOrigin = false;
   let visibleDelivery = false;
+  const provider = resolveOriginMessageProvider({
+    provider: turn.queued.run.messageProvider,
+  });
+  const origin = resolveOriginMessageProvider({ originatingChannel });
+  const sameChannelOrigin = Boolean(origin && origin === provider);
+  const crossChannelOrigin = Boolean(origin && provider && origin !== provider);
   for (const payload of payloads) {
     const providerRoute = deliveryPlan.resolveFollowupRoute({
       payload,
@@ -371,17 +394,13 @@ async function sendFollowupPayloads(params: {
       if (!result.delivered && !result.suppressed) {
         const routeError = result.error ?? "no visible delivery";
         logVerbose(`followup queue: route-reply failed: ${routeError}`);
-        const provider = resolveOriginMessageProvider({
-          provider: turn.queued.run.messageProvider,
-        });
-        const origin = resolveOriginMessageProvider({ originatingChannel });
-        if (origin && origin === provider && defaults.opts?.onBlockReply) {
+        if (sameChannelOrigin && defaults.opts?.onBlockReply) {
           const settled = await settleProgressVisibilityCallbackResult(
             defaults.opts.onBlockReply(payload),
           );
           visibleDelivery = settled.visible || visibleDelivery;
         } else if (defaults.opts?.onBlockReply) {
-          crossChannelFailure = true;
+          crossChannelFailures.push(payload);
         } else {
           defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
         }
@@ -394,15 +413,17 @@ async function sendFollowupPayloads(params: {
             }`,
           );
         }
-        const provider = resolveOriginMessageProvider({
-          provider: turn.queued.run.messageProvider,
-        });
-        const origin = resolveOriginMessageProvider({ originatingChannel });
-        deliveredCrossChannelOrigin ||= Boolean(origin && provider && origin !== provider);
+        deliveredCrossChannelOrigin ||= crossChannelOrigin;
       }
     }
   }
-  if (crossChannelFailure && !deliveredCrossChannelOrigin && defaults.opts?.onBlockReply) {
+  // A delivered supplement cannot settle missing terminal content, while a
+  // delivered terminal reply does settle failures of later supplements.
+  const terminalFailure = crossChannelFailures.some(isReplyPayloadTerminalContent);
+  if (
+    (terminalFailure || (crossChannelFailures.length > 0 && !deliveredCrossChannelOrigin)) &&
+    defaults.opts?.onBlockReply
+  ) {
     const settled = await settleProgressVisibilityCallbackResult(
       defaults.opts.onBlockReply({
         text:

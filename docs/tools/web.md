@@ -294,8 +294,10 @@ namespace.
   search; other managed providers remain available
 - Restricting the Codex native tool surface also keeps managed `web_search`
   available
-- When `allowedDomains` is set, automatic managed fallback fails closed if
-  hosted search is unavailable so the native allowlist cannot be bypassed
+- When `allowedDomains` is set, it restricts both hosted `web_search` and
+  managed `web_fetch` on turns where native hosted search is active. Turns
+  using a managed search provider are unchanged. Automatic managed search
+  fallback also fails closed if hosted search is unavailable.
 - Tool-disabled LLM-only runs disable both native and managed search
 - `tools.web.search.enabled: false` disables both managed and native search
 

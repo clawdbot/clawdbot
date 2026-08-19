@@ -1,4 +1,3 @@
-// Shared effective-tools loading for agent and Chat model changes.
 import type {
   ModelCatalogEntry,
   SessionsListResult,
@@ -9,6 +8,8 @@ import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "../chat/model-ref.ts";
+// Shared effective-tools loading for agent and Chat model changes.
+import { formatUiError } from "../format-error.ts";
 import type { SessionCapability } from "../sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../sessions/session-key.ts";
 
@@ -83,7 +84,7 @@ export async function loadToolsEffective(
     if (shouldIgnoreResponse()) {
       return;
     }
-    state.toolsEffectiveError = options.onError?.(error) ?? String(error);
+    state.toolsEffectiveError = options.onError?.(error) ?? formatUiError(error);
   } finally {
     if (isCurrentRequest() && state.toolsEffectiveLoadingKey === requestKey) {
       state.toolsEffectiveLoadingKey = null;

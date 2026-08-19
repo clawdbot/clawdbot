@@ -26,8 +26,8 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
-import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 import {
+  writeTelegramSpooledUpdate,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
 } from "./telegram-ingress-spool.test-support.js";

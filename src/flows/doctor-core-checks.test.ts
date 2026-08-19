@@ -100,7 +100,7 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async detectUnavailableSkills(): Promise<readonly SkillStatusEntry[]> {
       return [];
     },
-    async collectSecurityWarnings(): Promise<readonly string[]> {
+    async collectSecurityWarnings() {
       return [];
     },
     async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
@@ -539,14 +539,25 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
   });
 
-  it("converts security doctor warnings into health findings", async () => {
+  it("keeps one structured security condition as one health finding", async () => {
     const check = getCheck(
       createCoreHealthChecks(
         createDeps({
-          async collectSecurityWarnings(): Promise<readonly string[]> {
+          async collectSecurityWarnings() {
             return [
-              '- CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
-              '- WARNING: Gateway bound to "lan" (0.0.0.0).',
+              {
+                checkId: "gateway.bind_no_auth",
+                severity: "critical" as const,
+                title: "CRITICAL",
+                detail: [
+                  'Gateway bound to "lan" (0.0.0.0) without authentication.',
+                  "Anyone on your network can fully control your agent.",
+                ].join("\n"),
+                remediation: [
+                  "Fix: openclaw config set gateway.bind loopback",
+                  "Fix: openclaw doctor --fix to generate a token",
+                ].join("\n"),
+              },
             ];
           },
         }),
@@ -567,20 +578,18 @@ describe("CORE_HEALTH_CHECKS", () => {
       },
     });
 
-    expect(findings).toContainEqual(
+    expect(findings).toEqual([
       expect.objectContaining({
         checkId: "core/doctor/security",
         severity: "error",
-        message: expect.stringContaining("Gateway bound"),
+        message: 'CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
+        fixHint: [
+          "Anyone on your network can fully control your agent.",
+          "Fix: openclaw config set gateway.bind loopback",
+          "Fix: openclaw doctor --fix to generate a token",
+        ].join("\n"),
       }),
-    );
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/security",
-        severity: "warning",
-        message: expect.stringContaining("Gateway bound"),
-      }),
-    );
+    ]);
   });
 
   it("reports disabled Codex plugin routes as core health findings", async () => {
@@ -972,6 +981,65 @@ describe("CORE_HEALTH_CHECKS", () => {
         severity: "error",
         target: "mockplugin",
       }),
+    );
+  });
+
+  it("distinguishes migratable model refs from unknown providers and unconfirmed models", async () => {
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/model-references");
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.6-sol",
+              fallbacks: [
+                "codex-cli/gpt-5.6-sol",
+                "groq/llama3-70b-8192",
+                "groq/llama-3.3-70b-versatile",
+                "openai/not-in-the-local-catalog",
+              ],
+            },
+            imageModel: { primary: "no-such-provider/no-such-model" },
+          },
+        },
+      },
+    });
+
+    for (const [source, target, severity] of [
+      ["openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
+      ["codex-cli/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
+      ["groq/llama3-70b-8192", "groq/llama-3.3-70b-versatile", "info"],
+    ] as const) {
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          severity,
+          target: source,
+          message: `Configured model "${source}" is a legacy reference. Doctor can migrate it to "${target}".`,
+          fixHint: `Run \`openclaw doctor --fix\` to migrate this model reference to "${target}".`,
+        }),
+      );
+    }
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "info",
+          target: "openai/not-in-the-local-catalog",
+          fixHint:
+            "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
+        }),
+        expect.objectContaining({
+          severity: "warning",
+          target: "no-such-provider/no-such-model",
+          fixHint:
+            "Install a plugin that declares this provider, configure it under models.providers, or remove the model reference.",
+        }),
+      ]),
+    );
+    expect(findings).not.toContainEqual(
+      expect.objectContaining({ target: "groq/llama-3.3-70b-versatile" }),
     );
   });
 });

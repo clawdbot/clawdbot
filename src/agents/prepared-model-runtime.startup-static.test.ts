@@ -101,7 +101,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   isPluginMetadataSnapshotCompatible: () => true,
   loadPluginMetadataSnapshot: () => mocks.metadataSnapshot,
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
@@ -164,6 +165,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveDefaultAgentId: () => "default",
   tryResolveSoleAgentId: () => "default",
   resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentModelFallbacksOverride: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
     defaultAgentId: "default",
@@ -394,6 +396,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.discoverModels).toHaveBeenLastCalledWith(
       mocks.authStorage,
       expect.objectContaining({
+        config,
         includePluginCatalogs: true,
         modelsJsonContents: null,
         pluginCatalogs: [],
@@ -403,7 +406,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     );
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
-    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(configuredRuntimeModelCount).toBe(1);
     expect(generatedCatalogReadCount).toBe(0);
     const snapshot = getPreparedModelRuntimeSnapshot({

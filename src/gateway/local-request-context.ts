@@ -83,7 +83,7 @@ function createLocalGatewayRequestContext(
         storePath,
         cronEnabled: cfg.cron?.enabled !== false,
         cronConfig: cfg.cron,
-        log: getChildLogger({ module: "cron", storePath }),
+        log: getChildLogger({ module: "cron", storeKey: storePath }),
         defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
         legacyDefaultAgentId: tryGetLegacyDefaultAgentId(cfg),
         resolveDefaultAgentId: () =>

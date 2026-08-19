@@ -93,6 +93,32 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 }));
 
 const cfg = {} as OpenClawConfig;
+const visibleFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 1,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: true,
+} as const;
 
 function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -124,6 +150,7 @@ function createDispatch(
     return {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
+      settledReceipt: visibleFinalReceipt,
     };
   }) as DispatchReplyWithBufferedBlockDispatcher;
 }
@@ -741,6 +768,7 @@ describe("channel turn pipeline", () => {
       return {
         queuedFinal: true,
         counts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: visibleFinalReceipt,
       };
     });
 
@@ -950,15 +978,14 @@ describe("channel turn pipeline", () => {
     ]);
   });
 
-  it("still warns when a visible turn has zero counts and no observed delivery", async () => {
+  it("does not warn when an active run accepts deferred steer ownership", async () => {
     const events: string[] = [];
     const log = vi.fn();
     const recordInboundSession = createRecordInboundSession(events);
-    // Guard against over-suppression: a genuinely empty visible dispatch must still warn.
     const runDispatch = vi.fn(async () => ({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
-      observedReplyDelivery: false,
+      deferredToActiveRun: "steer" as const,
     }));
 
     const result = await runPreparedChannelTurn({
@@ -969,21 +996,16 @@ describe("channel turn pipeline", () => {
       recordInboundSession,
       runDispatch,
       log,
-      messageId: "msg-empty",
+      messageId: "msg-deferred-steer",
       record: {
         onRecordError: vi.fn(),
       },
     });
 
     expectDispatched(result);
-    expect(result.dispatchResult?.observedReplyDelivery).toBe(false);
-    expect(log.mock.calls).toContainEqual([
-      expect.objectContaining({
-        stage: "dispatch",
-        event: "warning",
-        messageId: "msg-empty",
-        reason: "zero-count-visible-dispatch",
-      }),
+    expect(result.dispatchResult?.deferredToActiveRun).toBe("steer");
+    expect(log.mock.calls).not.toContainEqual([
+      expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
     ]);
   });
 });

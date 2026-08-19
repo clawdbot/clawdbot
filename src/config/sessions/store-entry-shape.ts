@@ -1,8 +1,8 @@
 // Store entry shape normalization rejects unsafe persisted metadata before runtime use.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { normalizeSessionIconValue } from "../../sessions/session-agent-status.js";
 import { validateSessionId } from "./paths.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
 
@@ -12,13 +12,13 @@ function isSafeSessionId(value: unknown): value is string {
     return false;
   }
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 255) {
+  if (!trimmed || trimmed.length > 255 || trimmed !== trimmed.normalize("NFC")) {
     return false;
   }
   if (trimmed.includes("/") || trimmed.includes("\\") || trimmed === "." || trimmed === "..") {
     return false;
   }
-  return /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/.test(trimmed);
+  return /^[\p{L}\p{N}][\p{L}\p{N}\p{M}._:@-]*$/u.test(trimmed);
 }
 
 function normalizeTranscriptSessionId(value: string): string | undefined {
@@ -58,6 +58,9 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     memoryFlushFailureCount,
     memoryFlushLastFailedAt: _memoryFlushLastFailedAt,
     memoryFlushLastFailureError: _memoryFlushLastFailureError,
+    owner: _projectedOwner,
+    participants: _projectedParticipants,
+    participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
   const icon =

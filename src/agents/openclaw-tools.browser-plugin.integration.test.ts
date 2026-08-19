@@ -8,7 +8,6 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
-import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
@@ -191,20 +190,14 @@ describe("createOpenClawTools browser plugin integration", () => {
       manifestRegistry: makeRegistry([]),
       workspaceDir: "/tmp",
     });
-    const resolveMetadata = vi
-      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
-      .mockReturnValue(metadataSnapshot);
-    try {
-      expect(
-        prepareOwnedPluginLoadContext(
-          { agentDir: "/tmp/agent", config, workspaceDir: "/tmp" },
-          process.env,
-          pluginRegistry,
-        ),
-      ).toBe(metadataSnapshot);
-    } finally {
-      resolveMetadata.mockRestore();
-    }
+    expect(
+      prepareOwnedPluginLoadContext(
+        { agentDir: "/tmp/agent", config, workspaceDir: "/tmp" },
+        process.env,
+        pluginRegistry,
+        metadataSnapshot,
+      ),
+    ).toBe(metadataSnapshot);
     const loadContext = getPreparedPluginRuntimeLoadContext(pluginRegistry);
     if (!loadContext) {
       throw new Error("expected prepared plugin load context");

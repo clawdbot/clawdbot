@@ -1,3 +1,4 @@
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
@@ -69,6 +70,7 @@ type NodeWorkerSupervisorCommandResult =
 function resolveWorkerConnectionEndpoint(params: {
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
 }): WorkerConnectionEndpoint {
   if (!params.gatewayUrl) {
     throw new Error("node worker gateway connection unavailable");
@@ -91,6 +93,7 @@ function resolveWorkerConnectionEndpoint(params: {
     ...(gateway.protocol === "wss:" && params.gatewayTlsFingerprint
       ? { tlsFingerprint: params.gatewayTlsFingerprint }
       : {}),
+    ...(params.gatewayCloudflareAccess ? { cloudflareAccess: params.gatewayCloudflareAccess } : {}),
   });
   if (!endpoint) {
     throw new Error("node worker gateway connection could not form a worker endpoint");
@@ -107,6 +110,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   workspace?: NodeWorkerWorkspaceRuntime;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   signal?: AbortSignal;
 }): Promise<NodeWorkerSupervisorCommandResult> {
   const recognized =
@@ -122,8 +126,10 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   if (
     (params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && !params.bundleInstaller) ||
     (params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND && !params.workspace) ||
+    (params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND && !params.supervisor) ||
     (params.command !== NODE_WORKER_BUNDLE_INSTALL_COMMAND &&
       params.command !== NODE_WORKER_WORKSPACE_EXEC_COMMAND &&
+      params.command !== NODE_WORKER_WORKSPACE_RETAIN_COMMAND &&
       !params.supervisor)
   ) {
     return {
@@ -147,6 +153,9 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
           ...(params.gatewayTlsFingerprint
             ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
             : {}),
+          ...(params.gatewayCloudflareAccess
+            ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
+            : {}),
           signal: params.signal,
         }),
       };
@@ -164,19 +173,59 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
                 ...(params.gatewayTlsFingerprint
                   ? { tlsFingerprint: params.gatewayTlsFingerprint }
                   : {}),
+                ...(params.gatewayCloudflareAccess
+                  ? { cloudflareAccess: params.gatewayCloudflareAccess }
+                  : {}),
               }
             : undefined,
         ),
       };
     }
     if (params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND) {
+      const input = parseNodeWorkerWorkspaceRetainInput(params.paramsJSON);
+      const workspace = await params.supervisor!.retainWorkspaces(input, params.signal);
+      let bundles: { deleted: number; hasMore: boolean; generation: number } | undefined;
+      if (workspace.applied && input.bundleHashes) {
+        if (!params.bundleInstaller?.retain) {
+          throw new Error("node worker bundle retention unavailable");
+        }
+        bundles = await params.bundleInstaller.retain({
+          gatewayNamespace: input.gatewayNamespace,
+          bundleHashes: input.bundleHashes,
+          ...(input.acknowledgedBundleGeneration !== undefined
+            ? { acknowledgedGeneration: input.acknowledgedBundleGeneration }
+            : {}),
+        });
+      }
+      const hasMore = workspace.hasMore || bundles?.hasMore === true;
+      const inspectBundle = params.bundleInstaller?.inspect?.bind(params.bundleInstaller);
+      if (workspace.applied && input.bundleStatusHash && !hasMore && !inspectBundle) {
+        throw new Error("node worker bundle status unavailable");
+      }
+      const bundleStatus =
+        workspace.applied && input.bundleStatusHash && !hasMore && inspectBundle
+          ? await inspectBundle({
+              gatewayNamespace: input.gatewayNamespace,
+              bundleHash: input.bundleStatusHash,
+            })
+          : undefined;
       return {
         handled: true,
         ok: true,
-        payload: await params.supervisor!.retainWorkspaces(
-          parseNodeWorkerWorkspaceRetainInput(params.paramsJSON),
-          params.signal,
-        ),
+        payload:
+          bundles || bundleStatus
+            ? {
+                ...workspace,
+                ...(bundles
+                  ? {
+                      bundleDeleted: bundles.deleted,
+                      bundleGeneration: bundles.generation,
+                      hasMore,
+                    }
+                  : {}),
+                ...(bundleStatus ? { bundleStatus } : {}),
+              }
+            : workspace,
       };
     }
     const receipt =

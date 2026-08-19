@@ -30,6 +30,7 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, nu
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/doctor.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],
   ["@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
   ["@openclaw/imessage:dangerous-exec:src/client.ts", 1],
@@ -46,7 +47,8 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, nu
 const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
   ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
-  ["@openclaw/codex:dangerous-exec:dist/run-attempt-<hash>.js", 2],
+  ["@openclaw/codex:dangerous-exec:dist/api.js", 1],
+  ["@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 2],
   ["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
   ["@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 1],
@@ -96,6 +98,7 @@ function isScannerWalkedPackedPath(packedPath: string): boolean {
 
 function normalizePackedFindingPath(packedPath: string): string {
   for (const prefix of [
+    "dynamic-tools",
     "outbound-payload.test-harness",
     "run-attempt",
     "runtime-entry",
@@ -330,14 +333,20 @@ describe("publishable plugin npm package install security scan", () => {
   });
 
   it("requires exact occurrence counts for reviewed Codex dist chunks", () => {
-    const runAttemptKey = "@openclaw/codex:dangerous-exec:dist/run-attempt-<hash>.js";
+    const dynamicToolsKey = "@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js";
 
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath(
+        "@openclaw/codex",
+        "dist/dynamic-tools-current.js",
+      ),
+    ).toEqual([dynamicToolsKey, dynamicToolsKey]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
         "@openclaw/codex",
         "dist/run-attempt-current.js",
       ),
-    ).toEqual([runAttemptKey, runAttemptKey]);
+    ).toEqual([]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
         "@openclaw/codex",

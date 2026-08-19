@@ -1,3 +1,4 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -61,4 +62,3 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES: LegacyConfigMigrationSpec
     apply: migrateAgentEntries,
   }),
 ];
-import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";

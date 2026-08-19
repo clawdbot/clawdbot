@@ -12,6 +12,7 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
@@ -39,7 +40,7 @@ type LoginFailureFeedback = {
 };
 
 type LoginGateProps = {
-  basePath: string;
+  resourceBasePath: string;
   connected: boolean;
   lastError: string | null;
   lastErrorCode?: string | null;
@@ -78,7 +79,7 @@ function resolveDocsLabel(href: string): string {
 
 // Shared with offline presentation so no disconnected surface prints credentials.
 export function redactLoginFailureError(value: string): string {
-  return value
+  const redacted = value
     .replace(
       /([?#&])(?:access_token|auth|deviceToken|password|refresh_token|token)=([^&#\s]+)/gi,
       "$1[redacted-credential]",
@@ -88,6 +89,7 @@ export function redactLoginFailureError(value: string): string {
       /(["']?(?:access|accessToken|deviceToken|password|refresh|refreshToken|token)["']?\s*[:=]\s*)["']?[^"',\s}]+/gi,
       "$1[redacted]",
     );
+  return formatUiError(redacted);
 }
 
 function buildFeedback(params: {
@@ -323,8 +325,8 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
 }
 
 function renderLoginGate(props: LoginGateProps) {
-  const basePath = normalizeBasePath(props.basePath);
-  const faviconSrc = controlUiPublicAssetPath("favicon.svg", basePath);
+  const resourceBasePath = normalizeBasePath(props.resourceBasePath);
+  const faviconSrc = controlUiPublicAssetPath("favicon.svg", resourceBasePath);
   const failure = resolveLoginFailureFeedback({
     connected: props.connected,
     lastError: props.lastError,

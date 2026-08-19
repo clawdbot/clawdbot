@@ -16,6 +16,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
@@ -197,7 +198,7 @@ export async function prepareGatewayPluginBootstrap(params: {
  */
 export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   config: OpenClawConfig;
-  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
+  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders">>;
   log: Pick<GatewayPluginBootstrapLog, "warn">;
 }): void {
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
@@ -225,6 +226,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   startupTrace?: GatewayStartupTrace;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  resolveGatewayContext?: GatewayContextResolver;
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
@@ -244,6 +246,9 @@ export async function loadGatewayStartupPluginRuntime(params: {
     channelPluginLoadIntent: "full",
     startupTrace: params.startupTrace,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
   });
   warnUnregisteredConfiguredMemoryEmbeddingProviders({
     config: params.cfg,

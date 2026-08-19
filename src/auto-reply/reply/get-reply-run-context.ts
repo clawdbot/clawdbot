@@ -4,6 +4,7 @@ import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runn
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import { logVerbose } from "../../globals.js";
@@ -111,6 +112,10 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     ctx,
     isHeartbeat,
   });
+  copyChannelParticipantAdmissionEvidence(ctx, promptSessionCtx);
+  if (sessionCtx !== ctx) {
+    copyChannelParticipantAdmissionEvidence(sessionCtx, promptSessionCtx);
+  }
   const inboundEventKind = promptSessionCtx.InboundEventKind;
   const { sourceReplyDeliveryMode, injectedSessionStableMode } = resolvePromptSourceReplyMode({
     promptSessionCtx,
@@ -457,6 +462,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     startupContextPrelude,
     softResetTail,
     workspaceDir,
+    skillsWorkspaceDir: configuredWorkspaceDir,
     baseBodyFinal,
     hasUserBody,
     shouldInjectGroupIntro,

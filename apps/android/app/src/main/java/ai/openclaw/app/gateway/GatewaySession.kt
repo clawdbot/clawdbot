@@ -1980,11 +1980,8 @@ class GatewaySession(
         ?: endpoint.host.trim()
     if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
 
-    // For TLS connections, use the connected endpoint's scheme/port instead of raw canvas metadata.
     val fallbackScheme = if (isTlsConnection) "https" else scheme
-    // For TLS, always use the connected endpoint port.
-    val fallbackPort = if (isTlsConnection) endpoint.port else (endpoint.canvasPort ?: endpoint.port)
-    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = fallbackPort, suffix = suffix)
+    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = endpoint.port, suffix = suffix)
   }
 
   private fun buildCanvasUrl(

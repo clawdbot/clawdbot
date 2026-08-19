@@ -306,32 +306,42 @@ function assertIniValue(value: string, label: string): string {
 }
 
 function renderLlamaServerPreset(params: {
-  chatModelId: string;
-  chatModelPath: string;
+  chatModelId?: string;
+  chatModelPath?: string;
   contextSize?: number;
   maxTokens?: number;
   embeddingModelId: string;
   embeddingModelPath: string;
 }): string {
-  const chatId = assertIniValue(params.chatModelId, "llama.cpp model id");
   const embeddingId = assertIniValue(params.embeddingModelId, "llama.cpp embedding model id");
-  if (chatId.includes("]") || embeddingId.includes("]")) {
+  if (embeddingId.includes("]")) {
     throw new Error("llama.cpp model ids cannot contain ]");
   }
-  return [
-    "version = 1",
-    "",
-    `[${chatId}]`,
-    `model = ${assertIniValue(params.chatModelPath, "llama.cpp model path")}`,
-    `ctx-size = ${params.contextSize ?? DEFAULT_LLAMA_CPP_CONTEXT_SIZE}`,
-    `n-predict = ${params.maxTokens ?? 2048}`,
-    "jinja = true",
-    "",
+  const lines = ["version = 1", ""];
+  if (params.chatModelId || params.chatModelPath) {
+    if (!params.chatModelId || !params.chatModelPath) {
+      throw new Error("llama.cpp chat model id and path must be provided together");
+    }
+    const chatId = assertIniValue(params.chatModelId, "llama.cpp model id");
+    if (chatId.includes("]")) {
+      throw new Error("llama.cpp model ids cannot contain ]");
+    }
+    lines.push(
+      `[${chatId}]`,
+      `model = ${assertIniValue(params.chatModelPath, "llama.cpp model path")}`,
+      `ctx-size = ${params.contextSize ?? DEFAULT_LLAMA_CPP_CONTEXT_SIZE}`,
+      `n-predict = ${params.maxTokens ?? 2048}`,
+      "jinja = true",
+      "",
+    );
+  }
+  lines.push(
     `[${embeddingId}]`,
     `model = ${assertIniValue(params.embeddingModelPath, "llama.cpp embedding model path")}`,
     "embedding = true",
     "",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 async function writePreset(presetPath: string, contents: string): Promise<void> {
@@ -362,7 +372,7 @@ async function findAvailableLlamaServerPort(preferred = LLAMA_CPP_DEFAULT_PORT):
 
 export async function prepareManagedLlamaServer(params: {
   chatModelId?: string;
-  chatModelPath: string;
+  chatModelPath?: string;
   contextSize?: number;
   maxTokens?: number;
   embeddingModelPath: string;
@@ -373,8 +383,12 @@ export async function prepareManagedLlamaServer(params: {
   await writePreset(
     presetPath,
     renderLlamaServerPreset({
-      chatModelId: params.chatModelId ?? DEFAULT_LLAMA_CPP_MODEL_ID,
-      chatModelPath: params.chatModelPath,
+      ...(params.chatModelPath
+        ? {
+            chatModelId: params.chatModelId ?? DEFAULT_LLAMA_CPP_MODEL_ID,
+            chatModelPath: params.chatModelPath,
+          }
+        : {}),
       contextSize: params.contextSize,
       maxTokens: params.maxTokens,
       embeddingModelId: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,

@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
+import { CODE_MODE_NODES_TOOL_ID } from "./code-mode-bridge.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -145,8 +146,13 @@ function createCodeModeExecDescription(
   const swarmGuidance = swarmEnabled
     ? " Swarm globals `agents.run`, `phase`, and `log` are available; read `agents.d.ts` for types and orchestration idioms."
     : "";
+  // Nodes ride the owner-only core tool; advertising the namespace to a run
+  // whose catalog cannot resolve it turns the hint into hallucination bait.
+  const hasNodes = catalog?.some((entry) => entry.id === CODE_MODE_NODES_TOOL_ID) ?? false;
   const nodesGuidance =
-    "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n";
+    !catalogKnown || hasNodes
+      ? "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n"
+      : "";
   const skillsGuidance = ctx.codeModeSkills?.length
     ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
     : "";
@@ -156,7 +162,7 @@ function createCodeModeExecDescription(
   ).maxOutputBytes;
   const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
   return (
-    `Run JavaScript or TypeScript in OpenClaw code mode. Use \`return\` to pass the final value back; otherwise the result is \`null\`. Quick-index arrows show trusted declared output hints; \`-> ?\` means never guess result field names. For declared fields, process them in the first exec; do not spend another exec inspecting them. Perform dependent reads, checks, and follow-up calls in order; parallelize independent work only. For an unknown output, including a final dependent call after declared-output calls, return the raw tool value unchanged; do not wrap it in the requested answer shape or guess fields; filter or map it only in a later exec. Nested calls enforce normal tool policy and approvals. Nested results, output, and final value share ${maxOutputBytes} bytes; truncation reports omitted bytes and asks you to rerun with narrower args. \`ALL_TOOLS\` is the complete compact catalog. Select exact ids directly or with \`tools.search(query: string, options?)\`; use \`tools.describe(id: string)\` only when needed. Never invent or transform a tool id. \`tools.callValue(id: string, args?)\` returns its JSON value directly; \`tools.call(id: string, args?)\` preserves \`{ tool, result }\`. Example: \`const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});\`. Node.js modules and \`require\`/\`import\` are NOT available; use enabled catalog tools allowed by policy for shell, file, network, or external actions.` +
+    `Run JavaScript or TypeScript in OpenClaw code mode. Use \`return\` to pass the final value back; otherwise the result is \`null\`. Quick-index arrows show trusted declared output hints; \`-> ?\` means never guess result field names. For declared fields, process them in the first exec; do not spend another exec inspecting them. Perform dependent reads, checks, and follow-up calls in order; parallelize independent work only. \`setTimeout\` and \`clearTimeout\` work. For an unknown output, including a final dependent call after declared-output calls, return the raw tool value unchanged; do not wrap it in the requested answer shape or guess fields; filter or map it only in a later exec. Nested calls enforce normal tool policy and approvals. Nested results, output, and final value share ${maxOutputBytes} bytes; truncation reports omitted bytes and asks you to rerun with narrower args. \`ALL_TOOLS\` is the complete compact catalog. Select exact ids with \`tools.search(query: string, options?)\`; use \`tools.describe(id: string)\` only when needed. Never invent or transform a tool id. \`tools.callValue(id: string, args?)\` returns its JSON value directly; \`tools.call(id: string, args?)\` preserves \`{ tool, result }\`. \`const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});\`. Node.js modules and \`require\`/\`import\` are NOT available; use enabled catalog tools allowed by policy for shell, file, network, or external actions.` +
     apiGuidance +
     mcpGuidance +
     swarmGuidance +

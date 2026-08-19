@@ -25,14 +25,30 @@ import {
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
+import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
+import { stopTimer } from "./timer.js";
 
-const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
 let runnerScript = "";
+
+// Register this before the temp and store hooks because children can retain
+// both filesystem and SQLite ownership until their exit event is observed.
+afterEach(async () => {
+  const activeChildren = [...children].filter(
+    (child) => child.exitCode === null && child.signalCode === null,
+  );
+  for (const child of activeChildren) {
+    child.kill("SIGKILL");
+  }
+  await Promise.all(activeChildren.map(waitForExit));
+  children.clear();
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
 
 beforeEach(async () => {
   scriptRoot = tempDirs.make("cron-owner-hardening-script-", os.tmpdir());
@@ -110,15 +126,6 @@ beforeEach(async () => {
   );
 });
 
-afterEach(async () => {
-  for (const child of children) {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-  }
-  children.clear();
-});
-
 function makeCommandJob(id: string, nextRunAtMs: number, trigger = false): CronJob {
   return {
     id,
@@ -173,24 +180,59 @@ function spawnRunner(params: {
   return child;
 }
 
+// Wait on the child protocol itself; cold TypeScript imports are not part of
+// the cron ownership contract this fixture exercises.
 async function waitForLine(child: ChildProcess, expected: string): Promise<void> {
   let stdout = "";
   let stderr = "";
-  child.stdout?.on("data", (chunk) => {
-    stdout += String(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
+  let protocolFailure: Error | undefined;
+  const onStderr = (chunk: unknown) => {
     stderr += String(chunk);
-  });
-  await vi.waitFor(
-    () => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(`cron child exited before ${expected}: ${stderr || stdout}`);
+  };
+  if (!child.stdout) {
+    throw new Error(`cron child has no stdout while waiting for ${expected}`);
+  }
+  const failure = (reason: string, cause?: Error) =>
+    new Error(`cron child ${reason} before ${expected}: ${stderr || stdout}`, { cause });
+  const onExit = () => {
+    protocolFailure = failure("exited");
+    child.stdout?.destroy(protocolFailure);
+  };
+  const onChildError = (error: Error) => {
+    protocolFailure = failure("failed", error);
+    child.stdout?.destroy(protocolFailure);
+  };
+  const onStdoutClose = () => {
+    protocolFailure ??= failure("closed stdout");
+  };
+  const onStdoutError = (error: Error) => {
+    protocolFailure ??= failure("failed to read stdout", error);
+  };
+  if (child.exitCode !== null || child.signalCode !== null) {
+    throw failure("exited");
+  }
+  child.stderr?.on("data", onStderr);
+  child.once("exit", onExit);
+  child.once("error", onChildError);
+  child.stdout.once("close", onStdoutClose);
+  child.stdout.once("error", onStdoutError);
+  try {
+    for await (const chunk of child.stdout.iterator({ destroyOnReturn: false })) {
+      stdout += String(chunk);
+      if (stdout.split("\n").includes(expected)) {
+        return;
       }
-      expect(stdout.split("\n")).toContain(expected);
-    },
-    { timeout: 10_000, interval: 20 },
-  );
+    }
+    throw protocolFailure ?? failure("closed stdout");
+  } catch (error) {
+    throw protocolFailure ?? error;
+  } finally {
+    child.stderr?.off("data", onStderr);
+    child.off("exit", onExit);
+    child.off("error", onChildError);
+    child.stdout.off("close", onStdoutClose);
+    child.stdout.off("error", onStdoutError);
+  }
 }
 
 async function waitForExit(child: ChildProcess): Promise<void> {
@@ -201,6 +243,22 @@ async function waitForExit(child: ChildProcess): Promise<void> {
     child.once("exit", () => resolve());
     child.once("error", reject);
   });
+}
+
+async function waitForImmediate(
+  predicate: () => boolean,
+  description: string,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${description}`);
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
 }
 
 function makeParentService(storePath: string, runCommandJob = vi.fn()) {
@@ -510,6 +568,7 @@ describe("cron durable run ownership", () => {
     let second: ChildProcess | undefined;
     try {
       await replacement.start();
+      const replacementState = (replacement as unknown as { state: CronServiceState }).state;
       replacement.pauseScheduling();
       first.kill("SIGKILL");
       await waitForExit(first);
@@ -521,22 +580,31 @@ describe("cron durable run ownership", () => {
         outputPath: path.join(scriptRoot, `second-output-${now}`),
       });
       await waitForLine(second, "started");
+      const secondReceiptId = receipts(storePath, job.id)[0]?.receiptId;
+      expect(secondReceiptId).toBeDefined();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       replacement.resumeScheduling();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 2_500);
-      });
+      // Isolate the lifecycle-owned foreign receipt monitor from the ordinary job timer.
+      stopTimer(replacementState);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitForImmediate(
+        () => listForeignReceipts(replacementState)[0]?.receiptId === secondReceiptId,
+        "replacement foreign receipt enrollment",
+      );
       second.kill("SIGKILL");
       await waitForExit(second);
+      await vi.advanceTimersByTimeAsync(2_000);
 
       await vi.waitFor(
         async () => {
           expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
           expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
         },
-        { timeout: 6_000, interval: 50 },
+        { timeout: 1_000, interval: 10 },
       );
     } finally {
       replacement.stop();
+      vi.useRealTimers();
       for (const child of [first, second]) {
         if (child && child.exitCode === null && child.signalCode === null) {
           child.kill("SIGKILL");

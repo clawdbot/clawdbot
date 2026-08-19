@@ -2,12 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   getCronChannelOptions,
+  handleCronCliError,
   parseAt,
   parseCronToolsAllow,
   parsePositiveCronDurationMs,
@@ -39,6 +41,29 @@ function expectLogsToInclude(logs: readonly string[], text: string): void {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("handleCronCliError", () => {
+  it("renders typed automation lookup misses with the cron list recovery command", () => {
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "transport-neutral lookup miss",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
+    });
+    const errorOutput = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+
+    expect(() => handleCronCliError(error)).toThrow("exit 1");
+    expect(errorOutput).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.",
+      ),
+    );
+    errorOutput.mockRestore();
+    exit.mockRestore();
+  });
 });
 
 function createBaseJob(overrides: Partial<CronJob>): CronJob {

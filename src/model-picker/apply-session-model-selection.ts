@@ -384,7 +384,6 @@ export async function applySessionModelSelection(
     changed,
     contextTokens: resolveContextTokens({
       cfg: params.cfg,
-      agentCfg: params.cfg.agents?.defaults,
       provider: contextProvider,
       model,
       modelContextWindow: selectedCatalogEntry?.contextWindow,

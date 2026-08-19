@@ -6,16 +6,19 @@ import {
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -42,6 +45,7 @@ import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageTo } from "./origin-routing.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
+import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
 
@@ -134,13 +138,31 @@ export async function prepareReplyAgentPayloads(state: {
   const fallbackFailureKnown =
     fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback;
   const hasSpecificFallbackFailure = fallbackTransition.fallbackActive && fallbackFailureKnown;
+  const isInteractive =
+    followupRun.currentInboundEventKind !== "room_event" &&
+    (followupRun.run.inputProvenance?.kind === undefined ||
+      followupRun.run.inputProvenance.kind === "external_user");
+  const yieldAcknowledgmentPayload = terminalFailurePayload
+    ? undefined
+    : buildSessionsYieldAcknowledgmentPayload({
+        yielded: runResult.meta?.yielded === true,
+        yieldAcknowledgment: runResult.meta?.yieldAcknowledgment,
+        isInteractive,
+        isHeartbeat,
+        silentExpected: followupRun.run.silentExpected,
+        isSubagentSession: isSubagentSessionKey(sessionKey ?? followupRun.run.sessionKey),
+        hasExplicitSilentReply: deliberateSilentTerminalReply,
+        // Child spawns are side effects, not user-visible messages. They must not
+        // suppress the explicit waiting reply for the parent turn.
+        hasVisibleMessageDelivery:
+          successfulSourceReplyDelivery ||
+          committedMessagingToolSourceReplyDelivery ||
+          runResult.didSendDeterministicApprovalPrompt === true,
+      });
   const emptyInteractiveReplyPayload = terminalFailurePayload
     ? undefined
     : buildEmptyInteractiveReplyPayload({
-        isInteractive:
-          followupRun.currentInboundEventKind !== "room_event" &&
-          (followupRun.run.inputProvenance?.kind === undefined ||
-            followupRun.run.inputProvenance.kind === "external_user"),
+        isInteractive,
         isHeartbeat,
         silentExpected: followupRun.run.silentExpected,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
@@ -279,12 +301,17 @@ export async function prepareReplyAgentPayloads(state: {
     );
     return returnPreparedFallbackPayload(silentFallbackFailurePayload);
   };
-  const fallbackNoticePayloads: ReplyPayload[] = [];
-  if (
+  const fallbackNoticeChanged =
     !fallbackExhausted &&
     !preserveUserFacingSessionState &&
-    fallbackTransition.fallbackTransitioned
-  ) {
+    (fallbackTransition.fallbackTransitioned || fallbackTransition.fallbackCleared);
+  const fallbackNoticeChatType = fallbackNoticeChanged
+    ? normalizeChatType(sessionCtx.ChatType)
+    : undefined;
+  const shouldDeliverFallbackNotice =
+    fallbackNoticeChatType !== "group" && fallbackNoticeChatType !== "channel";
+  let fallbackNoticeText: string | null = null;
+  if (fallbackNoticeChanged && fallbackTransition.fallbackTransitioned) {
     emitAgentEvent({
       runId,
       sessionKey,
@@ -300,24 +327,18 @@ export async function prepareReplyAgentPayloads(state: {
         attempts: fallbackAttempts,
       },
     });
-    const fallbackNotice = buildFallbackNotice({
-      selectedProvider,
-      selectedModel,
-      activeProvider: providerUsed,
-      activeModel: modelUsed,
-      attempts: fallbackAttempts,
-      cfg,
-    });
-    if (fallbackNotice) {
-      fallbackNoticePayloads.push(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: fallbackNotice,
-          isFallbackNotice: true,
-        }),
-      );
+    if (shouldDeliverFallbackNotice) {
+      fallbackNoticeText = buildFallbackNotice({
+        selectedProvider,
+        selectedModel,
+        activeProvider: providerUsed,
+        activeModel: modelUsed,
+        attempts: fallbackAttempts,
+        cfg,
+      });
     }
   }
-  if (!fallbackExhausted && !preserveUserFacingSessionState && fallbackTransition.fallbackCleared) {
+  if (fallbackNoticeChanged && fallbackTransition.fallbackCleared) {
     emitAgentEvent({
       runId,
       sessionKey,
@@ -331,17 +352,22 @@ export async function prepareReplyAgentPayloads(state: {
         previousActiveModel: fallbackTransition.previousState.activeModel,
       },
     });
-    fallbackNoticePayloads.push(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: buildFallbackClearedNotice({
-          selectedProvider,
-          selectedModel,
-          previousActiveModel: fallbackTransition.previousState.activeModel,
-        }),
-        isFallbackNotice: true,
-      }),
-    );
+    if (shouldDeliverFallbackNotice) {
+      fallbackNoticeText = buildFallbackClearedNotice({
+        selectedProvider,
+        selectedModel,
+        previousActiveModel: fallbackTransition.previousState.activeModel,
+      });
+    }
   }
+  const fallbackNoticePayloads: ReplyPayload[] = fallbackNoticeText
+    ? [
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: fallbackNoticeText,
+          isFallbackNotice: true,
+        }),
+      ]
+    : [];
 
   // Drain any late tool/block deliveries before deciding there's "nothing to send".
   // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
@@ -350,6 +376,7 @@ export async function prepareReplyAgentPayloads(state: {
     payloadArray.length === 0 &&
     fallbackNoticePayloads.length === 0 &&
     !shouldDeliverTerminalFailure &&
+    !yieldAcknowledgmentPayload &&
     (!emptyInteractiveReplyPayload || hasSpecificFallbackFailure)
   ) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
@@ -378,15 +405,17 @@ export async function prepareReplyAgentPayloads(state: {
   didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
   const hasTerminalReplyPayload = replyPayloads.some(
     (payload) =>
-      !payload.isReasoning &&
-      !payload.isCommentary &&
-      !isReplyPayloadStatusNotice(payload) &&
+      isReplyPayloadTerminalContent(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   if (shouldDeliverTerminalFailure && !hasTerminalReplyPayload && terminalFailurePayload) {
     const terminalPayloadResult = await buildFinalPayloads([terminalFailurePayload]);
     replyPayloads = [...replyPayloads, ...terminalPayloadResult.replyPayloads];
     didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
+  } else if (yieldAcknowledgmentPayload && !hasTerminalReplyPayload) {
+    const acknowledgmentResult = await buildFinalPayloads([yieldAcknowledgmentPayload]);
+    replyPayloads = [...replyPayloads, ...acknowledgmentResult.replyPayloads];
+    didLogHeartbeatStrip = acknowledgmentResult.didLogHeartbeatStrip;
   } else if (hasSpecificFallbackFailure && !hasTerminalReplyPayload) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
     if (silentFallbackFailurePayload) {

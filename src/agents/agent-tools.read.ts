@@ -753,12 +753,11 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         sandbox: options.sandbox,
         signal,
       });
+      // This wrapper inherits the write tool's output schema, so report only
+      // the authoritative `changed`; deriving `created` before append is racy.
       return {
         content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
-        details: {
-          path: options.relativePath,
-          appendOnly: true,
-        },
+        details: { changed: true },
       };
     },
   };
@@ -779,12 +778,13 @@ function withWorkspaceSafeTempHint(error: unknown): unknown {
 }
 
 async function assertSandboxPathWithinAnyRoot(params: {
+  cwd?: string;
   filePath: string;
   roots: readonly string[];
 }) {
   let firstRootEscapeError: unknown;
   const seen = new Set<string>();
-  for (const candidateRoot of params.roots) {
+  for (const [index, candidateRoot] of params.roots.entries()) {
     const trimmedRoot = candidateRoot.trim();
     if (!trimmedRoot) {
       continue;
@@ -797,7 +797,7 @@ async function assertSandboxPathWithinAnyRoot(params: {
     try {
       return await assertSandboxPath({
         filePath: params.filePath,
-        cwd: root,
+        cwd: index === 0 ? (params.cwd ?? root) : root,
         root,
       });
     } catch (error) {
@@ -826,6 +826,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
     containerWorkdir?: string;
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
+    resolutionCwd?: string;
   },
 ): AnyAgentTool {
   const pathParamKeys =
@@ -880,6 +881,10 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
         try {
           sandboxResult = await assertSandboxPathWithinAnyRoot({
+            cwd:
+              guardedRoot === root && !workspaceMapping?.matched
+                ? options?.resolutionCwd
+                : undefined,
             filePath: sandboxPath,
             roots: [guardedRoot, ...additionalRoots],
           });
@@ -947,6 +952,7 @@ export function createSandboxedEditTool(
 export function createHostWorkspaceWriteTool(
   root: string,
   options?: {
+    containmentRoot?: string;
     workspaceOnly?: boolean;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
     createTool?: typeof createWriteTool;
@@ -954,7 +960,7 @@ export function createHostWorkspaceWriteTool(
 ) {
   const base = eraseSessionFileTool(
     (options?.createTool ?? createWriteTool)(root, {
-      operations: createHostWriteOperations(root, options),
+      operations: createHostWriteOperations(options?.containmentRoot ?? root, options),
     }),
   );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
@@ -964,6 +970,7 @@ export function createHostWorkspaceWriteTool(
 export function createHostWorkspaceEditTool(
   root: string,
   options?: {
+    containmentRoot?: string;
     workspaceOnly?: boolean;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
     createTool?: typeof createEditTool;
@@ -971,7 +978,7 @@ export function createHostWorkspaceEditTool(
 ) {
   const base = eraseSessionFileTool(
     (options?.createTool ?? createEditTool)(root, {
-      operations: createHostEditOperations(root, options),
+      operations: createHostEditOperations(options?.containmentRoot ?? root, options),
     }),
   );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);

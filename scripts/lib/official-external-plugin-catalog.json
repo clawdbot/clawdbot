@@ -462,6 +462,23 @@
       }
     },
     {
+      "name": "@openclaw/mxc-sandbox",
+      "description": "OpenClaw MXC sandbox execution plugin for MXC-capable hosts",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "mxc",
+          "label": "MXC Sandbox Execution"
+        },
+        "install": {
+          "npmSpec": "@openclaw/mxc-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.11"
+        }
+      }
+    },
+    {
       "name": "@openclaw/openshell-sandbox",
       "description": "OpenClaw OpenShell sandbox backend",
       "source": "official",
@@ -575,24 +592,6 @@
           "npmSpec": "@openclaw/perplexity-plugin",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
-        }
-      }
-    },
-    {
-      "name": "@openclaw/pixverse-provider",
-      "description": "OpenClaw PixVerse video generation provider plugin",
-      "source": "official",
-      "kind": "plugin",
-      "openclaw": {
-        "plugin": {
-          "id": "pixverse",
-          "label": "PixVerse"
-        },
-        "install": {
-          "clawhubSpec": "clawhub:@openclaw/pixverse-provider",
-          "npmSpec": "@openclaw/pixverse-provider",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.5.26"
         }
       }
     },

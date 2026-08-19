@@ -182,10 +182,7 @@ describe("worker turn launcher remote handoff", () => {
           }),
         );
         createWorkerSessionPlacementGate(placements).updateAckCursors({
-          sessionId: SESSION_ID,
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runId: "run-worker-turn",
+          claim: request.turnClaim,
           transcriptSeq: 2,
           liveSeq: 1,
         });
@@ -279,7 +276,7 @@ describe("worker turn launcher remote handoff", () => {
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.assignment.agentId).toBe(sessionTarget.agentId);
-    expect(descriptor?.version).toBe(3);
+    expect(descriptor?.version).toBe(4);
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
     );
@@ -420,10 +417,7 @@ describe("worker turn launcher remote handoff", () => {
           }),
         );
         createWorkerSessionPlacementGate(placements).updateAckCursors({
-          sessionId: SESSION_ID,
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runId: "run-persisted-user",
+          claim: request.turnClaim,
           transcriptSeq: 2,
           liveSeq: 1,
         });

@@ -14,6 +14,7 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "../config-form-utils.ts";
+import { formatUiError } from "../format-error.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
 import {
   resolveAgentConfigEntryTarget,
@@ -29,7 +30,8 @@ export function clearConfigDraftTracking(state: RuntimeConfigState): void {
 }
 
 export function formatConfigMutationError(error: unknown, submittedRaw: string | null): string {
-  let message = String(error);
+  const formatted = formatUiError(error);
+  let message = error instanceof GatewayRequestError ? `${error.name}: ${formatted}` : formatted;
   if (!submittedRaw || !(error instanceof GatewayRequestError) || !isRecord(error.details)) {
     return message;
   }

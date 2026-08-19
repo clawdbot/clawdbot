@@ -12,6 +12,8 @@ import {
 import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+
 const readActiveGatewayLockPortMock = vi.hoisted(() => vi.fn());
 const loadDeviceIdentityIfPresentMock = vi.hoisted(() => vi.fn());
 const loadOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
@@ -58,9 +60,9 @@ vi.mock("../infra/device-identity.js", async (importOriginal) => {
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 
-const resolveBoundGatewayConnection = (
+const resolveBoundGatewayConnection = async (
   opts: Parameters<typeof GatewayChatClient.connectBound>[0],
-) => GatewayChatClient.connectBound(opts).connection;
+) => (await GatewayChatClient.connectBound(opts)).connection;
 
 const resolveGatewayConnection = async (opts: Parameters<typeof GatewayChatClient.connect>[0]) =>
   (await GatewayChatClient.connect(opts)).connection;
@@ -180,10 +182,10 @@ describe("resolveGatewayConnection", () => {
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_URL: "wss://env.example/ws",
-        OPENCLAW_GATEWAY_TOKEN: "bound-global-shell-auth",
+        OPENCLAW_GATEWAY_TOKEN: "test-token",
       },
       async () => {
-        const result = resolveBoundGatewayConnection({
+        const result = await resolveBoundGatewayConnection({
           config: {
             gateway: {
               mode: "remote",
@@ -191,7 +193,7 @@ describe("resolveGatewayConnection", () => {
             },
           },
           url: "wss://selected.example/ws",
-          tlsFingerprint: "sha256:selected",
+          tlsFingerprint: TLS_FINGERPRINT,
         });
 
         expect(result).toEqual({
@@ -199,7 +201,7 @@ describe("resolveGatewayConnection", () => {
           deviceAuthScope: "wss://selected.example/ws",
           token: undefined,
           password: undefined,
-          tlsFingerprint: "sha256:selected",
+          tlsFingerprint: TLS_FINGERPRINT,
         });
         expect(loadConfig).not.toHaveBeenCalled();
       },
@@ -338,7 +340,7 @@ describe("resolveGatewayConnection", () => {
         remote: {
           url: "wss://remote.example/gateway",
           password: "configured-remote-password", // pragma: allowlist secret
-          tlsFingerprint: "sha256:configured-remote-pin",
+          tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
         },
       },
     });
@@ -351,7 +353,7 @@ describe("resolveGatewayConnection", () => {
       }),
     ).resolves.toMatchObject({
       password: "explicit-password",
-      tlsFingerprint: "sha256:configured-remote-pin",
+      tlsFingerprint: TLS_FINGERPRINT,
       url: "wss://remote.example/gateway",
     });
   });
@@ -416,7 +418,7 @@ describe("resolveGatewayConnection", () => {
         remote: {
           url: "wss://remote.example/gateway",
           token: "configured-remote-token",
-          tlsFingerprint: "sha256:configured-remote-pin",
+          tlsFingerprint: `sha256:${TLS_FINGERPRINT}`,
         },
       },
     });
@@ -508,10 +510,10 @@ describe("resolveGatewayConnection", () => {
     const result = await resolveGatewayConnection({
       url: "wss://override.example/ws",
       token: "explicit-token",
-      tlsFingerprint: "sha256:11:22:33:44",
+      tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
     });
 
-    expect(result.tlsFingerprint).toBe("sha256:11:22:33:44");
+    expect(result.tlsFingerprint).toBe(TLS_FINGERPRINT);
   });
 
   it.each([
@@ -527,11 +529,11 @@ describe("resolveGatewayConnection", () => {
     });
 
     const result = await resolveGatewayConnection({
-      tlsFingerprint: "sha256:local-self-signed-fingerprint",
+      tlsFingerprint: `sha256:${TLS_FINGERPRINT}`,
     });
 
     expect(result.url).toBe("wss://127.0.0.1:18789");
-    expect(result.tlsFingerprint).toBe("sha256:local-self-signed-fingerprint");
+    expect(result.tlsFingerprint).toBe(TLS_FINGERPRINT);
   });
 
   it("uses a verified active local Gateway port when no target is explicit", async () => {

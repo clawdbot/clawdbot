@@ -51,15 +51,30 @@ vi.mock("../../infra/device-pairing.js", async () => {
   );
   return {
     ...actual,
-    approveDevicePairing: approveDevicePairingMock,
     getPairedDevice: getPairedDeviceMock,
     getPendingDevicePairing: getPendingDevicePairingMock,
     listDevicePairing: listDevicePairingMock,
     removePairedDevice: removePairedDeviceMock,
     rejectDevicePairing: rejectDevicePairingMock,
+    updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
+  };
+});
+
+vi.mock("../../infra/device-pairing-approval.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/device-pairing-approval.js")>(
+    "../../infra/device-pairing-approval.js",
+  );
+  return { ...actual, approveDevicePairing: approveDevicePairingMock };
+});
+
+vi.mock("../../infra/device-pairing-tokens.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/device-pairing-tokens.js")>(
+    "../../infra/device-pairing-tokens.js",
+  );
+  return {
+    ...actual,
     revokeDeviceToken: revokeDeviceTokenMock,
     rotateDeviceToken: rotateDeviceTokenMock,
-    updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
   };
 });
 

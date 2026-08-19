@@ -75,6 +75,23 @@ describe("requested session agent ownership", () => {
     });
   });
 
+  it.each(["", "   ", "агент✨", "---"])(
+    "rejects explicit unrepresentable agent id %j instead of selecting main",
+    (agentId) => {
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+      };
+
+      expect(resolveRequestedSessionAgentId(cfg, "global", agentId)).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: `Unknown agent id "${agentId}"`,
+        },
+      });
+    },
+  );
+
   it("keeps retired agent-qualified history readable outside global scope", () => {
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },

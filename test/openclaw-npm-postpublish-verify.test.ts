@@ -834,7 +834,6 @@ describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
       expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toEqual([
         "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
         "installed package allows bundled runtime facade image-generation-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/image-generation-core/runtime-api.js.",
-        "installed package allows bundled runtime facade media-understanding-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/media-understanding-core/runtime-api.js.",
       ]);
     });
   });
@@ -843,7 +842,6 @@ describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
     withInstalledPackageRoot((packageRoot) => {
       writeInstalledFile(packageRoot, "dist/facade-activation-check.runtime.js");
       writeInstalledFile(packageRoot, "dist/extensions/image-generation-core/runtime-api.js");
-      writeInstalledFile(packageRoot, "dist/extensions/media-understanding-core/runtime-api.js");
 
       expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
     });
@@ -1180,7 +1178,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
-  it("refuses unbounded root dist dependency scans", () => {
+  it("excludes bundled extension modules from root dist dependency scans", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1188,10 +1186,16 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         version: "2026.4.22",
         dependencies: {},
       });
-      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
+      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
+      writeFileSync(join(packageRoot, "dist", "root-runtime.js"), 'import "root-only";\n', "utf8");
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "telegram", "runtime-api.js"),
+        'import "extension-only";\n',
+        "utf8",
+      );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
+        "installed package root is missing declared runtime dependency 'root-only' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

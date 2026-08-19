@@ -193,10 +193,6 @@ export async function resolveSlackThreadStarter(params: {
   }
 }
 
-export function resetSlackThreadStarterCacheForTest(): void {
-  THREAD_STARTER_CACHE.clear();
-}
-
 type SlackThreadMessage = {
   text: string;
   userId?: string;

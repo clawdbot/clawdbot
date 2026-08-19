@@ -660,6 +660,21 @@ describe("commands registry", () => {
     );
   });
 
+  it("normalizes targeted command bodies before bot identity only when requested", () => {
+    expect(
+      normalizeCommandBody("/help@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe("/help");
+    expect(normalizeCommandBody("/help@unresolved_bot")).toBe("/help@unresolved_bot");
+    expect(
+      normalizeCommandBody("/help@some_other_bot", {
+        botUsername: "openclaw_bot",
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe("/help@some_other_bot");
+  });
+
   it("keeps unregistered dock underscore aliases unchanged", () => {
     expect(normalizeCommandBody("/dock_telegram")).toBe("/dock_telegram");
   });

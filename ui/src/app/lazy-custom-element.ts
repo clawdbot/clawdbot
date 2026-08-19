@@ -44,6 +44,14 @@ export const COMMAND_PALETTE_ELEMENT = {
   loadModule: () => import("../components/command-palette.ts"),
 } satisfies OptionalCustomElement;
 
+const DEBUG_OVERLAY_TAG = "openclaw-debug-overlay";
+
+export const DEBUG_OVERLAY_ELEMENT = {
+  tagName: DEBUG_OVERLAY_TAG,
+  label: DEBUG_OVERLAY_TAG,
+  loadModule: () => import("../pages/debug/debug-overlay.ts"),
+} satisfies OptionalCustomElement;
+
 export const TERMINAL_PANEL_ELEMENT = {
   tagName: "openclaw-terminal-panel",
   label: "terminal panel",
@@ -60,6 +68,12 @@ export const DESKTOP_PANEL_ELEMENT = {
   tagName: "openclaw-desktop-panel",
   label: "desktop panel",
   loadModule: () => import("../components/desktop/desktop-panel.ts"),
+} satisfies OptionalCustomElement;
+
+export const DASHBOARD_DOCUMENT_ELEMENT = {
+  tagName: "openclaw-board-document",
+  label: "dashboard document",
+  loadModule: () => import("../components/board/board-document.ts"),
 } satisfies OptionalCustomElement;
 
 export const CUSTODIAN_PANEL_ELEMENT = {

@@ -1,3 +1,4 @@
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
@@ -42,13 +43,13 @@ import {
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 type RunSubagentAnnounceFlow =
   (typeof import("../announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
 type SubagentAnnounceFlowOutcome = Awaited<ReturnType<RunSubagentAnnounceFlow>>;
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
   entry.expectsCompletionMessage === true &&
@@ -606,6 +607,7 @@ export const startSubagentAnnounceCleanupFlow = (
         params.persist(runId);
       }
     },
+    resolveGatewayContext: getGatewayContextResolver(entry),
   };
   runDetachedCleanupAttempt(context, {
     runId,

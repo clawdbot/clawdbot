@@ -437,9 +437,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const reopenDock = dock === "hidden" ? board.reopenDock : dock;
     this.lastVisibleBoardDock.set(`${sessionKey}:${board.activeTabId}`, reopenDock);
     this.persistBoardReopenDock(board, reopenDock);
+    const owner = this.headerOutcomeOwner;
     void board.provider
       .applyOps([{ kind: "tab_update", tabId: board.activeTabId, chatDock: dock }])
-      .catch((error: unknown) => this.publishHeaderError(error));
+      .catch((error: unknown) => this.publishHeaderError(error, owner));
   }
 
   protected renderBoardDivider(dock: BoardVisibleChatDock) {

@@ -179,7 +179,7 @@ describe("pending approval attention", () => {
       {
         kind: "pendingApproval",
         severity: "warning",
-        icon: "shieldCheck",
+        icon: "shieldQuestion",
         action: { kind: "openApprovals" },
       },
     ]);

@@ -21,7 +21,7 @@ import type {
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry, SessionCompactionCheckpoint } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -440,7 +440,6 @@ export type SessionTranscriptManualTrimResult =
       kept: number;
     }
   | {
-      archived: string;
       compacted: true;
       kept: number;
     };
@@ -618,6 +617,8 @@ export type ForkSessionFromParentTranscriptResult =
 
 export type ForkSessionFromParentTranscriptParams = {
   agentId?: string;
+  /** Synchronous authority check run inside each transcript commit transaction. */
+  commitGuard?: () => void;
   parentEntry: SessionEntry;
   parentSessionKey: string;
   sessionKey: string;

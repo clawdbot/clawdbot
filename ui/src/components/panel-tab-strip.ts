@@ -193,6 +193,7 @@ export function renderPanelTabStrip(params: {
   onNew: () => void;
   newLabel: string;
   newDisabled?: boolean;
+  newTabAction?: boolean;
   newControl?: TemplateResult | typeof nothing;
   separateTabs?: boolean;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
@@ -209,6 +210,7 @@ export function renderPanelTabStrip(params: {
               slot=${slotted ? "nav" : nothing}
               class="rail-header__action tabstrip-new"
               type="button"
+              ?data-new-tab-action=${params.newTabAction}
               ?disabled=${params.newDisabled}
               title=${params.newLabel}
               aria-label=${params.newLabel}
@@ -424,6 +426,14 @@ export function renderPanelTabStrip(params: {
 }
 
 export const panelTabStripStyles = css`
+  :where(.tp-header, .bp-header) {
+    --rail-header-height: 46px;
+    --rail-header-padding-start: 8px;
+  }
+  :where(.tp-actions, .bp-actions) {
+    padding-left: 8px;
+    border-left: 1px solid var(--border, #262b34);
+  }
   .tabstrip {
     --track-width: 0;
     display: block;
@@ -435,7 +445,7 @@ export const panelTabStripStyles = css`
   }
   .tabstrip::part(nav) {
     display: flex;
-    align-items: stretch;
+    align-items: center;
   }
   .tabstrip::part(body) {
     display: none;
@@ -447,15 +457,17 @@ export const panelTabStripStyles = css`
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 0 4px 0 10px;
-    height: 36px;
+    height: 30px;
+    padding: 0 34px 0 10px;
+    border: 0;
+    border-radius: 7px;
     color: var(--muted, #8a919e);
     white-space: nowrap;
     font-size: 12.5px;
-    border-bottom: 2px solid transparent;
     transition:
       color 0.12s ease,
-      background 0.12s ease;
+      background 0.12s ease,
+      box-shadow 0.12s ease;
   }
   .tabstrip-tab:hover::part(base) {
     color: var(--text, #d7dae0);
@@ -463,9 +475,10 @@ export const panelTabStripStyles = css`
   }
   .tabstrip-tab[active]::part(base) {
     color: var(--text, #d7dae0);
-    border-bottom-color: var(--accent, #ff5c5c);
+    background: var(--bg-hover, #1f2330);
+    box-shadow: inset 0 0 0 1px var(--border-strong, #2e3040);
   }
-  .tabstrip-tab.is-exited::part(base) {
+  .tabstrip-tab.is-exited:not([active])::part(base) {
     opacity: 0.55;
   }
   .tabstrip-tab.is-connecting .tabstrip-tab__icon {
@@ -504,12 +517,14 @@ export const panelTabStripStyles = css`
     padding: 0 5px;
     text-transform: uppercase;
   }
-  /* Each close button sits right after its tab in the nav slot. The tab keeps
-     the active surface; the action itself follows the bare rail-control contract. */
+  /* Keep the close action inside the tab surface without nesting it in wa-tab;
+     wa-tab-group still owns the direct tab children for keyboard navigation. */
   .tabstrip-tab__close {
     flex: 0 0 auto;
     align-self: center;
-    margin-right: 1px;
+    z-index: 1;
+    margin-left: -32px;
+    margin-right: 4px;
     opacity: 0;
     transition: opacity 0.12s ease;
   }
@@ -529,6 +544,7 @@ export const panelTabStripStyles = css`
   .tabstrip-new {
     flex: none;
     align-self: center;
+    margin-left: 2px;
   }
   .tabstrip-new-control {
     display: inline-flex;

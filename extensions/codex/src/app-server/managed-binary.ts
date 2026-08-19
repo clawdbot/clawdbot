@@ -76,10 +76,7 @@ export function resolveManagedCodexNativeCommand(
   options: ResolveManagedCodexNativeCommandOptions = {},
 ): string | undefined {
   const platform = options.platform ?? process.platform;
-  if (
-    platform === "darwin" &&
-    MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS.some((candidate) => candidate === command)
-  ) {
+  if (isManagedCodexDesktopCommand(command, platform)) {
     return command;
   }
   const target = resolveCodexNativeTarget(platform, options.arch ?? process.arch);
@@ -109,6 +106,17 @@ export function resolveManagedCodexNativeCommand(
     }
   }
   return undefined;
+}
+
+/** Returns whether a resolved managed command is owned by the macOS desktop app. */
+export function isManagedCodexDesktopCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return (
+    platform === "darwin" &&
+    MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS.some((candidate) => candidate === command)
+  );
 }
 
 function resolveManagedCodexPackageRootForCommand(

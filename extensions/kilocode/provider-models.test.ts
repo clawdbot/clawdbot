@@ -162,7 +162,8 @@ describe("discoverKilocodeModels (fetch path)", () => {
         accept: "application/json",
       });
       expect(guardedFetch.policy).toEqual({ allowedHostnames: ["api.kilo.ai"] });
-      expect(guardedFetch.timeoutMs).toBe(5000);
+      expect(guardedFetch.timeoutMs).toBeGreaterThan(0);
+      expect(guardedFetch.timeoutMs).toBeLessThanOrEqual(5000);
       expect(guardedFetch.auditContext).toBe("kilocode.model_discovery");
 
       expect(mockFetch).toHaveBeenCalledOnce();

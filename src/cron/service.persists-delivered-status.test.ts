@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
@@ -159,6 +160,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
     delivered?: boolean;
     deliveryStatus?: string;
     deliveryError?: string;
+    completionStatus?: string;
     failureNotificationDelivery?: {
       delivered?: boolean;
       status: string;
@@ -189,6 +191,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
           delivered: evt.delivered,
           deliveryStatus: evt.deliveryStatus,
           deliveryError: evt.deliveryError,
+          completionStatus: evt.completionStatus,
           failureNotificationDelivery: evt.failureNotificationDelivery,
         });
       }
@@ -976,4 +979,93 @@ describe("CronService persists delivered status", () => {
     expect(capturedEvent?.deliveryStatus).toBe("not-delivered");
     expect(capturedEvent?.deliveryError).toBe("Message delivery failed");
   });
+
+  it.each([
+    {
+      name: "required to best-effort",
+      admittedBestEffort: false,
+      edits: [true],
+      expectedCompletionStatus: "failed",
+    },
+    {
+      name: "default to required",
+      admittedBestEffort: undefined,
+      edits: [false],
+      expectedCompletionStatus: "succeeded",
+    },
+    {
+      name: "best-effort to required",
+      admittedBestEffort: true,
+      edits: [false],
+      expectedCompletionStatus: "succeeded",
+    },
+    {
+      name: "required A to B to A",
+      admittedBestEffort: false,
+      edits: [true, false],
+      expectedCompletionStatus: "failed",
+    },
+  ])(
+    "authors completion from the admitted delivery policy: $name",
+    async ({ admittedBestEffort, edits, expectedCompletionStatus }) => {
+      const store = await makeStorePath();
+      const started = createDeferred();
+      const finish = createDeferred<{
+        status: "ok";
+        delivered: false;
+        deliveryError: string;
+      }>();
+      let finishedEvent: CronEvent | undefined;
+      const cron = new CronService({
+        storePath: store.storePath,
+        cronEnabled: true,
+        log: noopLogger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => {
+          started.resolve();
+          return await finish.promise;
+        }),
+        onEvent: (event) => {
+          if (event.action === "finished") {
+            finishedEvent = event;
+          }
+        },
+      });
+      await cron.start();
+      const job = await cron.add({
+        ...buildAnnounceIsolatedAgentTurnJob(`admitted-policy-${admittedBestEffort}`),
+        delivery: {
+          mode: "announce",
+          channel: "forum",
+          to: "123",
+          ...(admittedBestEffort === undefined ? {} : { bestEffort: admittedBestEffort }),
+        },
+      });
+
+      const run = cron.run(job.id, "force");
+      await started.promise;
+      for (const bestEffort of edits) {
+        await cron.update(job.id, { delivery: { bestEffort } });
+      }
+      finish.resolve({
+        status: "ok",
+        delivered: false,
+        deliveryError: "delivery rejected",
+      });
+      await run;
+
+      expect(finishedEvent).toMatchObject({
+        status: "ok",
+        deliveryStatus: "not-delivered",
+        completionStatus: expectedCompletionStatus,
+      });
+      expect(cron.getJob(job.id)?.state).toMatchObject({
+        lastRunStatus: "ok",
+        consecutiveErrors: 0,
+      });
+      cron.stop();
+      await store.cleanup();
+    },
+  );
 });

@@ -1,4 +1,5 @@
 // Line plugin module implements send behavior.
+import { randomUUID } from "node:crypto";
 import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -14,6 +15,7 @@ import { messageAction, normalizeLineMessageActions } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
 import { createLineSendReceipt } from "./send-receipt.js";
+import { runLinePushWithRetries } from "./send-retry.js";
 import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
@@ -172,6 +174,7 @@ async function sendLineProviderMessages(
   operation: "push" | "reply",
   token: string,
   request: messagingApi.PushMessageRequest | messagingApi.ReplyMessageRequest,
+  retryKey?: string,
 ): Promise<messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse> {
   const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
     `https://api.line.me/v2/bot/message/${operation}`,
@@ -181,12 +184,18 @@ async function sendLineProviderMessages(
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
         "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
+        ...(retryKey ? { "X-Line-Retry-Key": retryKey } : {}),
       },
       body: JSON.stringify(request),
     },
   );
 
-  if (!response.ok) {
+  // LINE answers a retried key with 409 and the accepted request's sent messages
+  // instead of delivering the batch a second time, so that conflict is the
+  // earlier attempt's success rather than a failure of this one.
+  const acceptedRetryConflict = retryKey !== undefined && response.status === 409;
+
+  if (!response.ok && !acceptedRetryConflict) {
     throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {
       status: response.status,
       statusText: response.statusText,
@@ -325,17 +334,25 @@ async function pushLineMessages(
 
   const { account, token, chatId } = createLinePushContext(to, opts);
   const normalizedMessages = messages.map(normalizeLineMessageActions);
-  const pushRequest = sendLineProviderMessages("push", token, {
-    to: chatId,
-    messages: normalizedMessages,
-  });
+  // One retry key per logical push: every attempt reuses it so LINE deduplicates
+  // an attempt that was accepted before its outcome reached us.
+  const retryKey = randomUUID();
 
-  const response = behavior.errorContext
-    ? await pushRequest.catch((err: unknown) => {
-        logLineHttpError(err, behavior.errorContext!);
-        throw err;
-      })
-    : await pushRequest;
+  const response = await runLinePushWithRetries(async () => {
+    try {
+      return await sendLineProviderMessages(
+        "push",
+        token,
+        { to: chatId, messages: normalizedMessages },
+        retryKey,
+      );
+    } catch (err) {
+      if (behavior.errorContext) {
+        logLineHttpError(err, behavior.errorContext);
+      }
+      throw err;
+    }
+  }, "line:push");
   const { messageId, messageIds } = resolveLineProviderMessageIds(response, "push");
   const result: LineSendResult = {
     messageId,

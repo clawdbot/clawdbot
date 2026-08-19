@@ -20,6 +20,7 @@ import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin
 import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
 
 export type ChannelsResolveOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   kind?: "auto" | "user" | "group" | "channel";
@@ -123,6 +124,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     config: loadedRaw,
     commandName: "channels resolve",
     targetIds: getChannelsCommandSecretTargetIds(),
+    agentId: opts.agent,
     mode: "read_only_operational",
     runtime,
     autoEnable: true,
@@ -139,6 +141,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     ? await resolveInstallableChannelPlugin({
         cfg,
         runtime,
+        agentId: opts.agent,
         rawChannel: explicitChannel,
         allowInstall: false,
         supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
@@ -165,6 +168,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     : await resolveMessageChannelSelection({
         cfg,
         channel: opts.channel ?? null,
+        agentId: opts.agent,
       });
   const plugin = selection.plugin;
   if (!plugin?.resolver?.resolveTargets) {

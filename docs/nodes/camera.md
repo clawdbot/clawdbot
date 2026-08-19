@@ -48,7 +48,7 @@ All camera access is gated behind a user-controlled setting per platform.
 
 ### iOS foreground requirement
 
-Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
+The iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### CLI helper
 
@@ -81,7 +81,7 @@ The app prompts for runtime permissions when possible.
 
 ### Android foreground requirement
 
-Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE: command requires foreground`.
+The Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE: command requires foreground`.
 
 ### Android commands (via Gateway `node.invoke`)
 

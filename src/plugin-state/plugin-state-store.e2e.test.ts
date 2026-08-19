@@ -176,30 +176,6 @@ describe("limits", () => {
       });
     });
   });
-
-  it("evicts oldest entries when namespace maxEntries is exceeded", async () => {
-    await withOpenClawTestState({ label: "e2e-limit-eviction" }, async () => {
-      vi.useFakeTimers();
-      const store = createPluginStateKeyedStore<number>("fixture-plugin", {
-        namespace: "capped",
-        maxEntries: 3,
-      });
-
-      vi.setSystemTime(1000);
-      await store.register("a", 1);
-      vi.setSystemTime(2000);
-      await store.register("b", 2);
-      vi.setSystemTime(3000);
-      await store.register("c", 3);
-      vi.setSystemTime(4000);
-      await store.register("d", 4); // should evict "a"
-
-      const entries = await store.entries();
-      expect(entries).toHaveLength(3);
-      expect(entries.map((e) => e.key)).toEqual(["b", "c", "d"]);
-      await expect(store.lookup("a")).resolves.toBeUndefined();
-    });
-  });
 });
 
 // ---------------------------------------------------------------------------

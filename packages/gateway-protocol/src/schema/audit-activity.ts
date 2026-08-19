@@ -14,8 +14,49 @@ export const AUDIT_ACTIVITY_STATUSES = [
   "blocked",
   "unknown",
 ] as const;
-export const AUDIT_ACTIVITY_KINDS = ["agent_run", "tool_action", "message"] as const;
+export const AUDIT_ACTIVITY_MESSAGE_KIND = "message" as const;
+export const AUDIT_ACTIVITY_KINDS = [
+  "agent_run",
+  "tool_action",
+  AUDIT_ACTIVITY_MESSAGE_KIND,
+] as const;
 export const AUDIT_ACTIVITY_DIRECTIONS = ["inbound", "outbound"] as const;
+
+type AuditActivityKind = (typeof AUDIT_ACTIVITY_KINDS)[number];
+const AUDIT_ACTIVITY_NON_MESSAGE_KINDS = ["agent_run", "tool_action"] as const;
+
+export function findAuditActivityFilterConflict(filters: {
+  kind?: AuditActivityKind;
+  sessionKey?: string;
+  direction?: string;
+  channel?: string;
+}) {
+  const messageField =
+    filters.direction !== undefined
+      ? "direction"
+      : filters.channel !== undefined
+        ? "channel"
+        : undefined;
+  const hasSessionFilter = filters.sessionKey !== undefined;
+  if (filters.kind === AUDIT_ACTIVITY_MESSAGE_KIND && hasSessionFilter) {
+    return {
+      type: "kind",
+      field: "sessionKey",
+      supportedKinds: AUDIT_ACTIVITY_NON_MESSAGE_KINDS,
+    } as const;
+  }
+  if (filters.kind !== undefined && filters.kind !== AUDIT_ACTIVITY_MESSAGE_KIND && messageField) {
+    return {
+      type: "kind",
+      field: messageField,
+      supportedKinds: [AUDIT_ACTIVITY_MESSAGE_KIND],
+    } as const;
+  }
+  if (filters.kind === undefined && hasSessionFilter && messageField) {
+    return { type: "filter", field: messageField, conflictingField: "sessionKey" } as const;
+  }
+  return undefined;
+}
 
 const AuditActivityStatusV1Schema: TSchema = Type.Union(
   AUDIT_ACTIVITY_STATUSES.map((value) => Type.Literal(value)),

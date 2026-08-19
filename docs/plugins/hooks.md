@@ -203,7 +203,6 @@ For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`
 
 - `subagent_spawned` / `subagent_ended` - observe subagent launch and completion.
 - `subagent_delivery_target` - compatibility hook for completion delivery when no core session binding can project a route.
-- `subagent_spawning` - deprecated compatibility hook. Core now prepares `thread: true` subagent bindings through channel session-binding adapters before `subagent_spawned` fires.
 - `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
 - `subagent_ended` carries `targetSessionKey` (identity - matches `subagent_spawned.childSessionKey`), `targetKind` (`"subagent"` or `"acp"`), `reason`, optional `outcome` (`"ok"`, `"error"`, `"timeout"`, `"killed"`, `"reset"`, or `"deleted"`), optional `error`, `runId`, `endedAt`, `accountId`, and `sendFarewell`. It does **not** include `agentId` or `childSessionKey`; use `targetSessionKey` to correlate with the matching `subagent_spawned` event.
 
@@ -673,9 +672,9 @@ bodies, or provider request IDs. These hooks include stable metadata such as
 `durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
 bounded provider request-id hash. When the runtime has resolved
 context-window metadata, the hook event and context also include
-`contextTokenBudget`, the effective token budget after model/config/agent
-caps, plus `contextWindowSource` and `contextWindowReferenceTokens` when a
-lower cap was applied.
+`contextTokenBudget`, the effective token budget after model configuration,
+fixed model contracts, and runtime discovery, plus `contextWindowSource` and
+`contextWindowReferenceTokens` when a lower cap was applied.
 
 `before_agent_finalize` runs only when a harness is about to accept a natural
 final assistant answer. It is not the `/stop` cancellation path and does not
@@ -1055,10 +1054,6 @@ before the next major release:
   handlers. Read `BodyForAgent` and the structured user-context blocks
   instead of parsing flat envelope text. See
   [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#removal-timeline).
-- **`subagent_spawning`** remains for compatibility with older plugins, but
-  new plugins should not return thread routing from it. Core prepares
-  `thread: true` subagent bindings through channel session-binding adapters
-  before `subagent_spawned` fires.
 - **`onResolution` in `before_tool_call`** now uses the typed
   `PluginApprovalResolution` union (`allow-once` / `allow-always` / `deny` /
   `timeout` / `cancelled`) instead of a free-form `string`.

@@ -122,6 +122,10 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
   };
 });
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
+vi.mock("openclaw/plugin-sdk/agent-scope-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-scope-runtime")>()),
+  resolveSessionAgentIds: agentRuntimeMocks.resolveSessionAgentIds,
+}));
 
 import {
   consumeCodexAppServerLiveThread,
@@ -737,6 +741,7 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params.ephemeral).toBe(true);
+    expect(requests[0]?.params.config).toMatchObject({ project_doc_max_bytes: 131_072 });
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       authProfileId: "openai:default",
@@ -1016,7 +1021,11 @@ describe("codex conversation binding", () => {
     expect(requests[1]?.params).toMatchObject({
       threadId: "thread-native-child",
       sandbox: "read-only",
-      config: { apps: { _default: { enabled: false } }, "features.apps": false },
+      config: {
+        project_doc_max_bytes: 131_072,
+        apps: { _default: { enabled: false } },
+        "features.apps": false,
+      },
     });
     await expect(consumeCodexAppServerLiveThread(client, "thread-native-child")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),
@@ -1935,12 +1944,59 @@ describe("codex conversation binding", () => {
         config: {
           tools: { exec: { host: "gateway" } },
           agents: {
-            list: [
-              {
-                id: "bot-a",
-                tools: { exec: { host: "node", node: "worker-1" } },
-              },
-            ],
+            entries: {
+              "bot-a": { tools: { exec: { host: "node", node: "worker-1" } } },
+            },
+          },
+        } as never,
+      },
+    );
+
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toContain("OpenClaw exec host=node is active");
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("does not infer an unscoped session owner from an explicit multi-agent roster", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "node-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "node-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+            agentId: "alpha",
+          },
+        },
+      },
+      {
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: {
+            entries: {
+              alpha: { tools: { exec: { host: "node", node: "worker-1" } } },
+              beta: {},
+            },
           },
         } as never,
       },

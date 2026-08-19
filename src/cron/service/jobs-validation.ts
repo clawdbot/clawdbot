@@ -77,9 +77,9 @@ export function assertScriptPayloadSupport(
     // persisted state slot two owners and make the next trigger run ambiguous.
     throw new Error("cron script payloads cannot be combined with a condition trigger");
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
     throw new Error(
-      "cron script payloads are disabled; set cron.triggers.enabled=true to allow unattended scripts",
+      "cron script payloads are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true to allow unattended scripts",
     );
   }
 }
@@ -91,8 +91,10 @@ export function assertTriggerSupport(
   if (!job.trigger) {
     return;
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
-    throw new Error("cron triggers are disabled; set cron.triggers.enabled=true");
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
+    throw new Error(
+      "cron triggers are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+    );
   }
   if (
     job.schedule.kind !== "every" &&
@@ -124,8 +126,10 @@ export function assertStreamScheduleSupport(
   if (job.schedule.kind !== "stream") {
     return;
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
-    throw new Error("cron stream schedules are disabled; set cron.triggers.enabled=true");
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
+    throw new Error(
+      "cron stream schedules are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+    );
   }
   const { command, mode = "line", match } = job.schedule;
   if (

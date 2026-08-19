@@ -19,8 +19,10 @@ import type {
 import type { ChannelMeta } from "../channels/plugins/types.core.js";
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
-import { shouldShowChannelInSetup } from "../commands/channel-setup/discovery.js";
+import {
+  resolveChannelSetupEntries,
+  shouldShowChannelInSetup,
+} from "../commands/channel-setup/discovery.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";

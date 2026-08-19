@@ -63,20 +63,6 @@ function normalizePositiveContextTokens(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
-function resolveAgentContextTokensForHint(params: {
-  cfg: FollowupRun["run"]["config"];
-  agentId?: string;
-}): number | undefined {
-  const defaultContextTokens = normalizePositiveContextTokens(
-    params.cfg.agents?.defaults?.contextTokens,
-  );
-  const agentId = normalizeLowercaseStringOrEmpty(params.agentId);
-  const agentContextTokens = agentId
-    ? normalizePositiveContextTokens(resolveAgentConfig(params.cfg, agentId)?.contextTokens)
-    : undefined;
-  return agentContextTokens ?? defaultContextTokens;
-}
-
 function resolveContextWindowForHint(params: {
   cfg: FollowupRun["run"]["config"];
   agentId?: string;
@@ -92,17 +78,7 @@ function resolveContextWindowForHint(params: {
     model: params.ref.model,
     allowAsyncLoad: false,
   });
-  const contextTokens = modelContextTokens ?? sessionContextTokens;
-  if (contextTokens === undefined) {
-    return undefined;
-  }
-  const agentContextTokens = resolveAgentContextTokensForHint({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  return agentContextTokens !== undefined
-    ? Math.min(agentContextTokens, contextTokens)
-    : contextTokens;
+  return modelContextTokens ?? sessionContextTokens;
 }
 
 function resolveHeartbeatBleedHint(params: {

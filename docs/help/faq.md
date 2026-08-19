@@ -70,14 +70,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
 <AccordionGroup>
   <Accordion title="What is OpenClaw, in one paragraph?">
-    OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (Discord, Google Chat, iMessage, Mattermost, Signal, Slack, Telegram, WebChat, WhatsApp, and bundled channel plugins such as QQ Bot) and can also do voice plus a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
+    OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (Discord, Google Chat, iMessage, Mattermost, Signal, Slack, Telegram, WebChat, WhatsApp, and bundled channel plugins such as QQ Bot) and can also do voice plus hosted widgets in chat, on session dashboards, and in the macOS panel. The **Gateway** is the always-on control plane; the assistant is the product.
   </Accordion>
 
   <Accordion title="Value proposition">
     OpenClaw is not "just a Claude wrapper." It is a **local-first control plane** that runs a capable assistant on **your own hardware**, reachable from the chat apps you already use, with stateful sessions, memory, and tools - without handing your workflows to a hosted SaaS.
 
     - **Your devices, your data**: run the Gateway wherever you want (Mac, Linux, VPS) and keep the workspace and session history local.
-    - **Real channels, not a web sandbox**: Discord/iMessage/Signal/Slack/Telegram/WhatsApp/etc, plus mobile voice and Canvas on supported platforms.
+    - **Real channels, not a web sandbox**: Discord/iMessage/Signal/Slack/Telegram/WhatsApp/etc, plus mobile voice and hosted widgets.
     - **Model-agnostic**: use Anthropic, MiniMax, OpenAI, OpenRouter, etc., with per-agent routing and failover.
     - **Local-only option**: run local models so all data can stay on your device.
     - **Multi-agent routing**: separate agents per channel, account, or task, each with its own workspace and defaults.
@@ -686,7 +686,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     Common pattern: **one Gateway** (for example a Raspberry Pi) plus **nodes** and **agents**.
 
     - **Gateway (central)**: owns channels (Signal/WhatsApp), routing, sessions.
-    - **Nodes (devices)**: Macs/iOS/Android connect as peripherals and expose local tools (`system.run`, `canvas`, `camera`).
+    - **Nodes (devices)**: Macs/iOS/Android connect as peripherals and expose local tools such as `system.run` and `camera`; Macs can also present hosted widgets in the native panel.
     - **Agents (workers)**: separate brains/workspaces for special roles (for example ops vs personal data).
     - **Sub-agents**: spawn background work from a main agent for parallelism.
     - **TUI**: connect to the Gateway and switch agents/sessions.
@@ -792,7 +792,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - **No inbound SSH required** - nodes connect out to the Gateway WebSocket via device pairing.
     - **Safer execution controls** - `system.run` is gated by node allowlists/approvals on that laptop.
-    - **More device tools** - nodes expose `canvas`, `camera`, and `screen` in addition to `system.run`.
+    - **More device tools** - nodes expose `camera` and `screen` in addition to `system.run`; Macs also expose the widget panel.
     - **Local browser automation** - keep the Gateway on a VPS but run Chrome locally through a node host, or attach to local Chrome via Chrome MCP.
 
     SSH is fine for ad-hoc shell access; nodes are simpler for ongoing agent workflows and device automation.
@@ -1003,7 +1003,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     openclaw onboard --install-daemon
     ```
 
-    Onboarding also offers **Reset** if it detects an existing config; see [Onboarding (CLI)](/start/wizard). If you used profiles (`--profile` / `OPENCLAW_PROFILE`), reset each state dir (default `~/.openclaw-<profile>`). Dev-only reset: `openclaw gateway --dev --reset` wipes dev config, credentials, sessions, and workspace.
+    To reset and immediately re-run onboarding, pass `openclaw onboard --reset`; reset is a command flag, not a **Setup mode** menu choice. See [Onboarding (CLI)](/start/wizard). If you used profiles (`--profile` / `OPENCLAW_PROFILE`), reset each state dir (default `~/.openclaw-<profile>`). Dev-only reset: `openclaw gateway --dev --reset` wipes dev config, credentials, sessions, and workspace.
 
   </Accordion>
 
@@ -1090,7 +1090,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Do groups/threads share context with DMs?">
-    Direct chats collapse to the main session by default. Groups/channels have their own session keys, and Telegram topics / Discord threads are separate sessions. See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
+    Direct chats collapse to the main session by default. Groups/channels get their own session keys unless a route binding sets `session.groupScope: "main"` to merge that room into the main session; Telegram topics / Discord threads are separate sessions. See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
   </Accordion>
 
   <Accordion title="How many workspaces and agents can I create?">

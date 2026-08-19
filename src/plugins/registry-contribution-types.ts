@@ -132,11 +132,6 @@ export type MemoryEmbeddingProviderAdapter = Omit<
   shouldContinueAutoSelection?: (err: unknown) => boolean;
 };
 
-export type RegisteredMemoryEmbeddingProvider = {
-  adapter: MemoryEmbeddingProviderAdapter;
-  ownerPluginId?: string;
-};
-
 export type MemoryPromptSectionParams = {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;

@@ -1,5 +1,9 @@
+import { existsSync, watch } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 // Covers Tailscale whois, Serve, and Funnel helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
 
@@ -7,11 +11,11 @@ const {
   getTailnetHostname,
   getTailnetHostnameAfterServe,
   readTailscaleWhoisIdentity,
-  enableTailscaleServe,
-  disableTailscaleServe,
+  claimTailscaleRoute,
   hasTailscaleFunnelRouteForPort,
 } = tailscale;
 const tailscaleBin = "tailscale";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectExecCall(
   exec: ReturnType<typeof vi.fn>,
@@ -38,7 +42,12 @@ describe("tailscale helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_TEST_TAILSCALE_BINARY", "NODE_ENV", "VITEST"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_TEST_TAILSCALE_BINARY",
+      "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
+      "NODE_ENV",
+      "VITEST",
+    ]);
     process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
     process.env.VITEST ??= "true";
   });
@@ -200,103 +209,52 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenCalledTimes(2);
   });
 
-  it("enableTailscaleServe attempts normal first, then sudo", async () => {
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("permission denied"))
-      .mockResolvedValueOnce({ stdout: "" });
+  it.runIf(process.platform !== "win32")(
+    "holds a foreground route claim until cleanup stops its owner",
+    async () => {
+      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
+      );
 
-    await enableTailscaleServe(3000, exec as never);
+      const claim = await claimTailscaleRoute("serve", 18789);
+      expect(claim.isActive()).toBe(true);
 
-    expect(exec).toHaveBeenCalledTimes(2);
-    expectExecCall(exec, 1, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    });
-    expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"], {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    });
-  });
+      await claim.stop();
+      await expect(claim.exited).resolves.toBeUndefined();
+      expect(claim.isActive()).toBe(false);
+    },
+  );
 
-  it("enableTailscaleServe does NOT use sudo if first attempt succeeds", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+  it.runIf(process.platform !== "win32")(
+    "preserves route diagnostics when startup readiness times out",
+    async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const fixture = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
+      );
+      const fixtureDir = tempDirs.make("openclaw-tailscale-fixture-");
+      const marker = path.join(fixtureDir, "started");
+      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
+      process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER = marker;
 
-    await enableTailscaleServe(3000, exec as never);
+      const markerWritten = new Promise<void>((resolve) => {
+        const watcher = watch(fixtureDir, (_event, filename) => {
+          if (`${filename}` === "started") {
+            watcher.close();
+            resolve();
+          }
+        });
+      });
+      const claimPromise = claimTailscaleRoute("funnel", 18790);
+      void claimPromise.catch(() => undefined);
+      await markerWritten;
+      expect(existsSync(marker)).toBe(true);
 
-    expect(exec).toHaveBeenCalledTimes(1);
-    expectExecCall(exec, 1, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    });
-  });
+      await vi.advanceTimersToNextTimerAsync();
 
-  it("enableTailscaleServe passes a configured service name", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: "" });
-
-    await enableTailscaleServe(3000, exec as never, "svc:openclaw");
-
-    expect(exec).toHaveBeenCalledTimes(1);
-    expectExecCall(
-      exec,
-      1,
-      tailscaleBin,
-      ["serve", "--service=svc:openclaw", "--bg", "--yes", "3000"],
-      {
-        maxBuffer: 200_000,
-        timeoutMs: 15_000,
-      },
-    );
-  });
-
-  it("disableTailscaleServe uses fallback", async () => {
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("permission denied"))
-      .mockResolvedValueOnce({ stdout: "" });
-
-    await disableTailscaleServe(exec as never);
-
-    expect(exec).toHaveBeenCalledTimes(2);
-    expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "reset"], {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    });
-  });
-
-  it("disableTailscaleServe disables only the configured service name", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: "" });
-
-    await disableTailscaleServe(exec as never, "svc:openclaw");
-
-    expect(exec).toHaveBeenCalledTimes(1);
-    expectExecCall(exec, 1, tailscaleBin, ["serve", "clear", "svc:openclaw"], {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    });
-  });
-
-  it("enableTailscaleServe skips sudo on non-permission errors", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("boom"));
-
-    await expect(enableTailscaleServe(3000, exec as never)).rejects.toThrow("boom");
-
-    expect(exec).toHaveBeenCalledTimes(1);
-  });
-
-  it("enableTailscaleServe rethrows original error if sudo fails", async () => {
-    const originalError = Object.assign(new Error("permission denied"), {
-      stderr: "permission denied",
-    });
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(originalError)
-      .mockRejectedValueOnce(new Error("sudo: a password is required"));
-
-    await expect(enableTailscaleServe(3000, exec as never)).rejects.toBe(originalError);
-
-    expect(exec).toHaveBeenCalledTimes(2);
-  });
+      await expect(claimPromise).rejects.toThrow("Funnel is not enabled on your tailnet.");
+    },
+  );
 
   it("hasTailscaleFunnelRouteForPort accepts noisy JSON status output", async () => {
     const exec = vi.fn().mockResolvedValue({
@@ -349,5 +307,12 @@ describe("tailscale helpers", () => {
     });
 
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toThrow(SyntaxError);
+  });
+
+  it("hasTailscaleFunnelRouteForPort preserves status command failures", async () => {
+    const failure = new Error("tailscale status unavailable");
+    const exec = vi.fn().mockRejectedValue(failure);
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toBe(failure);
   });
 });

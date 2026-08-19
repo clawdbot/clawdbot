@@ -12,10 +12,13 @@ import {
   type DiagnosticEventInput,
   type DiagnosticModelCallContent,
   type DiagnosticMemoryUsage,
-  emitTrustedDiagnosticEventWithPrivateData,
 } from "../../../infra/diagnostic-events.js";
 import type { DiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
-import { emitCoreModelRequestStartedDiagnosticEvent } from "../../../infra/diagnostic-model-request.js";
+import type { CoreModelRequestOwnerGeneration } from "../../../infra/diagnostic-model-request-provenance.js";
+import {
+  emitCoreModelRequestEndedDiagnosticEvent,
+  emitCoreModelRequestStartedDiagnosticEvent,
+} from "../../../infra/diagnostic-model-request.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -46,6 +49,7 @@ export type ModelCallDiagnosticContext = {
   trace: DiagnosticTraceContext;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
+  ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
   suppressPluginHooks?: boolean;
 };
@@ -269,26 +273,11 @@ function dispatchModelCallEndedHook(
   );
 }
 
-function emitModelCallStarted(
-  eventBase: ModelCallEventBase,
-  modelContent: DiagnosticModelCallContent | undefined,
-  suppressPluginHooks: boolean,
-): void {
-  emitCoreModelRequestStartedDiagnosticEvent(
-    {
-      ...eventBase,
-    },
-    modelContentPrivateData(modelContent),
-  );
-  if (!suppressPluginHooks) {
-    dispatchModelCallStartedHook(eventBase);
-  }
-}
-
 function emitModelCallCompleted(
   eventBase: ModelCallEventBase,
   startedAt: number,
   observer: ModelCallObserver,
+  ownerGeneration: CoreModelRequestOwnerGeneration | undefined,
 ): void {
   if (observer.state.terminalEventEmitted) {
     return;
@@ -303,7 +292,7 @@ function emitModelCallCompleted(
     true,
     observer.state.responseStatus,
   );
-  emitTrustedDiagnosticEventWithPrivateData(
+  emitCoreModelRequestEndedDiagnosticEvent(
     {
       type: "model.call.completed",
       ...eventBase,
@@ -311,6 +300,7 @@ function emitModelCallCompleted(
       ...sizeTimingFields,
       ...observer.usageField(),
     },
+    ownerGeneration,
     modelContentPrivateData(observer.completedContent()),
   );
   if (!observer.state.suppressPluginHooks) {
@@ -327,6 +317,7 @@ function emitModelCallError(
   startedAt: number,
   observer: ModelCallObserver,
   err: unknown,
+  ownerGeneration: CoreModelRequestOwnerGeneration | undefined,
 ): void {
   if (observer.state.terminalEventEmitted) {
     return;
@@ -339,7 +330,7 @@ function emitModelCallError(
   const responseStatus =
     observer.state.responseStatus ?? (errorStatus === undefined ? undefined : Number(errorStatus));
   emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false, responseStatus);
-  emitTrustedDiagnosticEventWithPrivateData(
+  emitCoreModelRequestEndedDiagnosticEvent(
     {
       type: "model.call.error",
       ...eventBase,
@@ -348,6 +339,7 @@ function emitModelCallError(
       ...fields,
       ...observer.usageField(),
     },
+    ownerGeneration,
     modelContentPrivateData(observer.completedContent()),
   );
   if (!observer.state.suppressPluginHooks) {
@@ -413,13 +405,22 @@ function withDiagnosticRequestContext(
 export function createModelLifecycle(params: {
   ctx: ModelCallDiagnosticContext;
   options: ModelCallStreamOptions;
+  requestTimeoutMs?: number;
   createObserver: (capturePromptStats: boolean) => ModelCallObserver;
 }) {
   const callId = params.ctx.nextCallId();
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(areDiagnosticsEnabledForProcess());
   const eventBase = baseModelCallEvent(params.ctx, callId, trace, observer.promptStats);
-  emitModelCallStarted(eventBase, observer.modelContent, params.ctx.suppressPluginHooks === true);
+  emitCoreModelRequestStartedDiagnosticEvent(
+    eventBase,
+    params.ctx.ownerGeneration,
+    params.requestTimeoutMs,
+    modelContentPrivateData(observer.modelContent),
+  );
+  if (params.ctx.suppressPluginHooks !== true) {
+    dispatchModelCallStartedHook(eventBase);
+  }
   params.ctx.onStarted?.();
   const startedAt = Date.now();
   const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
@@ -429,10 +430,10 @@ export function createModelLifecycle(params: {
     propagatedOptions,
     startedAt,
     emitCompleted() {
-      emitModelCallCompleted(eventBase, startedAt, observer);
+      emitModelCallCompleted(eventBase, startedAt, observer, params.ctx.ownerGeneration);
     },
     emitError(err: unknown) {
-      emitModelCallError(eventBase, startedAt, observer, err);
+      emitModelCallError(eventBase, startedAt, observer, err, params.ctx.ownerGeneration);
     },
   };
 }

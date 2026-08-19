@@ -49,6 +49,7 @@ export async function publishQaSuiteArtifactFiles(params: {
 }
 
 export type QaSuiteSummaryJsonParams = {
+  status?: QaSuiteSummaryJson["run"]["status"];
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
   finishedAt: Date;
@@ -108,6 +109,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
     ...(params.metrics ? { metrics: params.metrics } : {}),
     ...(params.evidence ? { evidence: params.evidence } : {}),
     run: {
+      status: params.status ?? "completed",
       startedAt: params.startedAt.toISOString(),
       finishedAt: params.finishedAt.toISOString(),
       providerMode: params.providerMode,
@@ -131,6 +133,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
 }
 
 export async function writeQaSuiteArtifacts(params: {
+  status?: QaSuiteSummaryJson["run"]["status"];
   repoRoot?: string;
   outputDir: string;
   startedAt: Date;
@@ -195,6 +198,7 @@ export async function writeQaSuiteArtifacts(params: {
       : crablineChannelDriverSelection;
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
+    inProgress: params.status === "running",
     startedAt: params.startedAt,
     finishedAt: params.finishedAt,
     checks: [],

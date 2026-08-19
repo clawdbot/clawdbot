@@ -13,15 +13,11 @@ import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type { Api } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
-import type {
-  ProviderRequestCapabilities,
-  ProviderRequestCapability,
-  ProviderRequestTransport,
-} from "./provider-attribution.js";
 import {
+  type ProviderRequestCapabilities,
+  type ProviderRequestCapability,
+  type ProviderRequestTransport,
   resolveProviderRequestCapabilities,
-  resolveProviderRequestPolicy,
-  type ProviderRequestPolicyResolution,
 } from "./provider-attribution.js";
 
 type RequestApi = Api | ModelDefinitionConfig["api"];
@@ -136,7 +132,7 @@ type ResolvedProviderRequestExtraHeadersConfig = {
   headers?: Record<string, string>;
 };
 
-export type ResolvedProviderRequestConfig = {
+type ResolvedProviderRequestConfig = {
   api?: RequestApi;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -144,7 +140,6 @@ export type ResolvedProviderRequestConfig = {
   auth: ResolvedProviderRequestAuthConfig;
   proxy: ResolvedProviderRequestProxyConfig;
   tls: ResolvedProviderRequestTlsConfig;
-  policy: ProviderRequestPolicyResolution;
 };
 
 type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
@@ -153,7 +148,7 @@ type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 // required before a provider request can be attached to a model call.
 type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
   allowPrivateNetwork: boolean;
-  privateNetworkExplicitlyDenied: boolean;
+  trustConfiguredBaseUrlOrigin: boolean;
   capabilities: ProviderRequestCapabilities;
 };
 
@@ -183,6 +178,7 @@ type ResolveProviderRequestPolicyConfigParams = {
   modelId?: string | null;
   allowPrivateNetwork?: boolean;
   request?: ModelProviderRequestTransportOverrides;
+  routeFacts?: ProviderRequestRouteFacts;
 };
 
 function resolvePrivateNetworkAccess(params: ResolveProviderRequestPolicyConfigParams): {
@@ -571,11 +567,15 @@ export function applyPreparedRuntimeAuthToModel<
     capability: "llm",
     transport: "stream",
   });
-  return {
+  const next = {
     ...model,
     ...(preparedAuth.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
     headers: requestConfig.headers,
   };
+  const routeFacts = getModelProviderRequestRouteFacts(model);
+  return routeFacts
+    ? attachModelProviderRequestRouteFacts(next, routeFacts.providerMetadataOwners)
+    : next;
 }
 
 function resolveProxyOverride(
@@ -696,13 +696,14 @@ export function resolveProviderRequestPolicyConfig(
       : {}),
     capability,
     transport,
-  } satisfies Parameters<typeof resolveProviderRequestPolicy>[0];
-  const policy = resolveProviderRequestPolicy(policyInput);
-  const capabilities = resolveProviderRequestCapabilities({
-    ...policyInput,
-    compat: params.compat,
-    modelId: params.modelId,
-  });
+  };
+  const capabilities =
+    params.routeFacts?.capabilities ??
+    resolveProviderRequestCapabilities({
+      ...policyInput,
+      compat: params.compat,
+      modelId: params.modelId,
+    });
   const auth = resolveAuthOverride({
     authHeader: params.authHeader,
     request: params.request,
@@ -717,7 +718,9 @@ export function resolveProviderRequestPolicyConfig(
     auth,
   );
   const protectedAttributionKeys = new Set(
-    Object.keys(policy.attributionHeaders ?? {}).map((key) => normalizeLowercaseStringOrEmpty(key)),
+    Object.keys(capabilities.attributionHeaders ?? {}).map((key) =>
+      normalizeLowercaseStringOrEmpty(key),
+    ),
   );
   const unprotectedCallerHeaders = params.callerHeaders
     ? Object.fromEntries(
@@ -726,7 +729,7 @@ export function resolveProviderRequestPolicyConfig(
         ),
       )
     : undefined;
-  const mergedDefaults = mergeProviderRequestHeaders(extraHeaders, policy.attributionHeaders);
+  const mergedDefaults = mergeProviderRequestHeaders(extraHeaders, capabilities.attributionHeaders);
   const headers =
     params.precedence === "caller-wins"
       ? mergeProviderRequestHeaders(mergedDefaults, unprotectedCallerHeaders)
@@ -744,10 +747,11 @@ export function resolveProviderRequestPolicyConfig(
     auth,
     proxy: resolveProxyOverride(params.request),
     tls: resolveTlsOverride(params.request?.tls),
-    policy,
     capabilities,
     allowPrivateNetwork: privateNetworkAccess.allowPrivateNetwork,
-    privateNetworkExplicitlyDenied: privateNetworkAccess.explicitlyDenied,
+    trustConfiguredBaseUrlOrigin:
+      !privateNetworkAccess.explicitlyDenied &&
+      (capabilities.endpointClass === "custom" || capabilities.endpointClass === "local"),
   };
 }
 
@@ -777,7 +781,6 @@ export function resolveProviderRequestConfig(params: {
     auth: resolved.auth,
     proxy: resolved.proxy,
     tls: resolved.tls,
-    policy: resolved.policy,
   };
 }
 
@@ -809,13 +812,28 @@ export function resolveProviderRequestHeaders(params: {
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
 );
-const MODEL_PROVIDER_METADATA_OWNERS_SYMBOL = Symbol.for("openclaw.modelProviderMetadataOwners");
+const MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRequestRouteFacts",
+);
+
+type ProviderRequestRouteFacts = {
+  providerMetadataOwners: PluginMetadataSnapshotOwnerMaps;
+  capabilities: ProviderRequestCapabilities;
+  providerOwner?: string;
+};
+type ProviderRequestRouteModel = {
+  provider?: string;
+  api?: RequestApi;
+  baseUrl?: string;
+  id?: string;
+  compat?: unknown;
+};
 
 type ModelWithProviderRequestTransport = {
   [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: ModelProviderRequestTransportOverrides;
 };
-type ModelWithProviderMetadataOwners = {
-  [MODEL_PROVIDER_METADATA_OWNERS_SYMBOL]?: PluginMetadataSnapshotOwnerMaps;
+type ModelWithProviderRequestRouteFacts = {
+  [MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL]?: ProviderRequestRouteFacts;
 };
 
 /** Attaches model-scoped provider request transport metadata without mutating the model. */
@@ -838,31 +856,50 @@ export function getModelProviderRequestTransport(
   return (model as ModelWithProviderRequestTransport)[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL];
 }
 
-/** Attaches the lifecycle-owned plugin metadata generation used for request policy. */
-export function attachModelProviderMetadataOwners<TModel extends object>(
+/** Resolves and attaches the final provider route against one lifecycle-owned metadata generation. */
+export function attachModelProviderRequestRouteFacts<TModel extends ProviderRequestRouteModel>(
   model: TModel,
-  owners: PluginMetadataSnapshotOwnerMaps | undefined,
+  providerMetadataOwners: PluginMetadataSnapshotOwnerMaps | undefined,
 ): TModel {
-  if (!owners) {
+  if (!providerMetadataOwners || !model.provider) {
     return model;
   }
-  const next = { ...model } as TModel & ModelWithProviderMetadataOwners;
-  next[MODEL_PROVIDER_METADATA_OWNERS_SYMBOL] = owners;
+  const next = { ...model } as TModel & ModelWithProviderRequestRouteFacts;
+  const capabilities = resolveProviderRequestCapabilities({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: normalizeBaseUrl(model.baseUrl),
+    providerMetadataOwners,
+    capability: "llm",
+    transport: "stream",
+    modelId: model.id,
+    compat: model.compat,
+  });
+  next[MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL] = {
+    providerMetadataOwners,
+    capabilities,
+    ...(!["default", "invalid", "local", "custom"].includes(capabilities.endpointClass)
+      ? { providerOwner: capabilities.endpointClass }
+      : {}),
+  };
   return next;
 }
 
-/** Reads the plugin metadata generation attached to a prepared model. */
-export function getModelProviderMetadataOwners(
+/** Reads the prepared provider route attached to a transport model. */
+export function getModelProviderRequestRouteFacts(
   model: object,
-): PluginMetadataSnapshotOwnerMaps | undefined {
-  return (model as ModelWithProviderMetadataOwners)[MODEL_PROVIDER_METADATA_OWNERS_SYMBOL];
+): ProviderRequestRouteFacts | undefined {
+  return (model as ModelWithProviderRequestRouteFacts)[MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL];
 }
 
-/** Carries request-policy ownership across provider/transport model projections. */
-export function inheritModelProviderMetadataOwners<TModel extends object>(
+/** Re-resolves a projected transport model against the source model's metadata generation. */
+export function inheritModelProviderRequestRouteFacts<TModel extends ProviderRequestRouteModel>(
   source: object,
   target: TModel,
 ): TModel {
-  return attachModelProviderMetadataOwners(target, getModelProviderMetadataOwners(source));
+  return attachModelProviderRequestRouteFacts(
+    target,
+    getModelProviderRequestRouteFacts(source)?.providerMetadataOwners,
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

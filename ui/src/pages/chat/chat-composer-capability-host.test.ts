@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  gatewayHelloForMethods,
+  sessionMutationGatewayHello,
+} from "../../test-helpers/gateway-methods.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
@@ -12,9 +16,7 @@ function createContext(configSnapshot: ConfigSnapshot | null): ApplicationContex
       snapshot: {
         client: {} as GatewayBrowserClient,
         phase: "connected",
-        hello: {
-          auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
-        },
+        hello: sessionMutationGatewayHello(["operator.admin", "operator.write"]),
       },
     },
     navigate: vi.fn(),
@@ -368,9 +370,7 @@ describe("ChatComposerCapabilityHost", () => {
     const notify = vi.fn();
     const host = new ChatComposerCapabilityHost(notify);
     const context = createContext({ runtimeConfig: {} });
-    context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.patch", "tools.effective"] },
-    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.patch", "tools.effective"]);
     let stateReads = 0;
     Object.defineProperty(context.sessions, "state", {
       configurable: true,

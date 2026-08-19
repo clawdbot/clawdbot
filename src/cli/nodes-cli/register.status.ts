@@ -231,8 +231,16 @@ function mergePairedNodesWithEffectiveNodes(
 
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
-    return parseNodeList(await callNodesGatewayCli("node.list", opts, {}));
-  } catch {
+    return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}));
+  } catch (error) {
+    // Best-effort enrichment may degrade to pairing-only rows, but never
+    // silently: without this notice the table looks authoritative while
+    // omitting connected/commands state. Stderr keeps --json output clean.
+    defaultRuntime.error(
+      getNodesTheme().muted(
+        `live node view unavailable (${formatErrorMessage(error)}); showing paired-only data`,
+      ),
+    );
     return null;
   }
 }
@@ -527,7 +535,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           // them under --connected printed "Pending: 0" while requests waited.
           const pendingRows = pending;
           const effectiveNodes = hasFilters
-            ? parseNodeList(await callNodesGatewayCli("node.list", opts, {}))
+            ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
           const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
           const filteredPaired = effectivePairedRows.filter((node) => {

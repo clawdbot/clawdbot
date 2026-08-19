@@ -344,10 +344,27 @@ describe("node host invoke", () => {
     fs.rmSync(path.dirname(payload.path), { recursive: true, force: true });
   });
 
-  it("returns a redacted exec approvals snapshot", async () => {
+  it.each([
+    { label: "when params are omitted", params: undefined, resolvedDefaults: undefined },
+    {
+      label: "when resolved defaults are not requested",
+      params: { includeResolvedDefaults: false },
+      resolvedDefaults: undefined,
+    },
+    {
+      label: "with resolved defaults when requested",
+      params: { includeResolvedDefaults: true },
+      resolvedDefaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    },
+  ])("returns a redacted exec approvals snapshot $label", async ({ params, resolvedDefaults }) => {
     execApprovalsStoreMock.hasEnsureResult = true;
     execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
-    const result = await invokeExecApprovals("system.execApprovals.get");
+    const result = await invokeExecApprovals("system.execApprovals.get", params);
     const payload = JSON.parse(result.payloadJSON ?? "{}") as ExecApprovalsSnapshot;
     expect(payload).toEqual({
       path: "/tmp/exec-approvals.json",
@@ -357,6 +374,7 @@ describe("node host invoke", () => {
         version: 1,
         socket: { path: "/tmp/exec-approvals.sock" },
       },
+      ...(resolvedDefaults ? { resolvedDefaults } : {}),
     });
   });
 
@@ -633,7 +651,7 @@ describe("node host invoke", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "keeps prepared allow-always coverage incomplete when any planned command is prompt-only",
+    "fails closed when a prepared command contains an unsafe shell pipeline",
     async () => {
       const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
       const skillBins: SkillBinsProvider = { current: async () => [] };
@@ -652,15 +670,19 @@ describe("node host invoke", () => {
         skillBins,
       );
 
-      const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
-      const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
-        allowAlwaysCoverage?: {
-          complete?: boolean;
-          patterns?: Array<{ pattern?: string }>;
-        };
-      };
-      expect(payload.allowAlwaysCoverage?.complete).toBe(false);
-      expect(payload.allowAlwaysCoverage?.patterns?.length).toBeGreaterThan(0);
+      expect(request).toHaveBeenCalledWith(
+        "node.invoke.result",
+        expect.objectContaining({
+          id: "invoke-prepare-partial",
+          nodeId: "node-1",
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          },
+        }),
+      );
     },
   );
 

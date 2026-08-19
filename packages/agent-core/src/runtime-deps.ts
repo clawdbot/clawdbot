@@ -34,6 +34,15 @@ export function resolveAgentCoreStreamFn(
   throw missingRuntimeDep("streamSimple");
 }
 
+/** Drain a host-decorated stream before reading its final assistant message. */
+export async function consumeAgentCoreStream(stream: ReturnType<StreamFn>) {
+  const response = await stream;
+  for await (const _ of response) {
+    // drain
+  }
+  return response.result();
+}
+
 /** Resolve the completion function used by non-streaming helper flows. */
 export function resolveAgentCoreCompleteFn(
   runtime: AgentCoreCompletionRuntimeDeps | undefined,

@@ -59,6 +59,7 @@ function renderHeaderActions(
       <button
         class="rail-header__action bp-icon"
         type="button"
+        data-new-tab-action
         title=${t("browser.openExternal")}
         aria-label=${t("browser.openExternal")}
         ?disabled=${!activeUrl}
@@ -91,6 +92,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         ? html`<button
             class="bp-icon"
             type="button"
+            data-new-tab-action
             title=${t("browser.newTab")}
             aria-label=${t("browser.newTab")}
             @click=${() => controller.beginNewTab()}
