@@ -365,6 +365,7 @@ async function runWorkboardDispatch(
     let implicitWorkspaceCwd: string | undefined;
     let runStarted = false;
     let launchIntentPersisted = false;
+    let workspaceMutation: { before: WorkboardCard; after: WorkboardCard } | undefined;
     const requestedWorkspace = card.metadata?.automation?.workspace;
     let workspaceAccess: WorkboardWorkspaceAccess;
     let targetWorkspace: string | undefined;
@@ -490,7 +491,16 @@ async function runWorkboardDispatch(
       }
       materializedWorkspace = materialized.workspace;
       if (materializedWorkspace) {
-        await params.store.update(card.id, { workspace: materializedWorkspace, workspaceAccess });
+        const workspaceBase = await params.store.get(card.id);
+        if (!workspaceBase) {
+          throw new Error(`card not found: ${card.id}`);
+        }
+        const materializedCard = await params.store.update(
+          card.id,
+          { workspace: materializedWorkspace, workspaceAccess },
+          { expectedUpdatedAt: workspaceBase.updatedAt },
+        );
+        workspaceMutation = { before: workspaceBase, after: materializedCard };
       }
       const launchBase = await params.store.get(card.id);
       if (!launchBase) {
@@ -592,9 +602,10 @@ async function runWorkboardDispatch(
             ownerId: card.id,
           })
           .catch(() => undefined);
-        const sourceWorkspace = card.metadata?.automation?.workspace;
-        if (sourceWorkspace) {
-          await params.store.update(card.id, { workspace: sourceWorkspace }).catch(() => undefined);
+        if (workspaceMutation) {
+          await params.store
+            .compensateWorkspaceMutation(workspaceMutation.before, workspaceMutation.after)
+            .catch(() => undefined);
         }
       }
       const message = formatErrorMessage(error);
