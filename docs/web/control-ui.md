@@ -106,9 +106,9 @@ On the first identified connection, the Control UI uploads existing browser-loca
 
 ## Personal identity
 
-Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional GitHub identity. Open **Settings → Profile → Identity** to update it. The profile follows the authenticated person across browsers and supplies attribution in shared sessions; clearing browser site data does not delete it.
+Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.
 
-Linking GitHub opts the profile into public commit co-author credit for agent sessions that person prompts. The row shows GitHub's public account avatar and link without replacing a custom OpenClaw avatar. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for the noreply privacy and eligibility rules.
+GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate, default-off toggle for future commits from shared sessions. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
 
 The assistant avatar override follows the same browser-local pattern: uploaded overrides overlay the gateway-resolved identity locally and never round-trip through `config.patch`. The shared `ui.assistant.avatar` config field is still available for non-UI clients that write the field directly.
 
@@ -697,13 +697,14 @@ See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
 ## Content security policy
 
-The Control UI ships a tight `img-src` policy: only **same-origin** assets, `data:` URLs, and locally generated `blob:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and never issue network fetches.
+The Control UI ships a tight `img-src` policy: **same-origin** assets, `data:` URLs, locally generated `blob:` URLs, and the fixed GitHub avatar and Gravatar hosts are allowed. Other remote `http(s)` and protocol-relative image URLs are rejected by the browser and never issue network fetches.
 
 In practice:
 
 - Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes the UI fetches and converts into local `blob:` URLs.
 - Inline `data:image/...` URLs still render.
 - Local `blob:` URLs created by the Control UI still render.
+- Verified GitHub account avatars render from `avatars.githubusercontent.com`; arbitrary avatar hosts remain blocked.
 - GitHub link preview avatars are fetched by the Gateway from GitHub's fixed avatar host and returned as bounded `data:` URLs; the operator browser never contacts the remote avatar host.
 - Link favicons are on by default. The authenticated Control UI requests them through the Gateway; the browser never contacts link destinations directly. The Gateway requests only each public hostname's HTTPS `/favicon.ico`, with strict DNS-pinned SSRF checks on the original URL and every redirect plus bounded time, bytes, concurrency, and image validation. Private, internal, and IP-literal destinations are rejected. This discloses linked hostnames and the Gateway's network address to those sites. Set `gateway.controlUi.automaticallyFetchFavicons: false` to prevent all favicon route requests and destination fetches.
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.

@@ -3442,17 +3442,16 @@ export const en: TranslationMap = {
       displayNameDescription: "Shown to other people using this gateway.",
       linkedEmails: "Linked emails",
       linkedEmailsDescription: "Email addresses connected to this profile.",
-      github: "GitHub",
-      githubDescription:
-        "Linking opts you into public GitHub co-author credit when you participate in agent sessions that create commits.",
-      githubUsername: "GitHub username",
-      githubPlaceholder: "octocat",
-      githubLink: "Link GitHub",
-      githubLinking: "Linking…",
-      githubChange: "Change",
-      githubDisconnect: "Disconnect",
-      githubPrivacy: "Commit credit uses GitHub's public noreply address, never a private email.",
-      githubOwnership: "Link only an account you control.",
+      githubAccount: "GitHub account",
+      githubAccountDescription: "Automatically verified from your GitHub-backed sign-in.",
+      githubVerified: "Verified from your GitHub-backed sign-in",
+      githubUnavailable: "Unavailable",
+      githubUnavailableDescription: "GitHub-backed sign-in is unavailable. Refresh to retry.",
+      gitCoauthor: "Git co-author credit",
+      gitCoauthorDescription:
+        "Adds this account's public GitHub noreply address to commits created from shared sessions. Turning it off affects future commits only.",
+      gitCoauthorUnavailable:
+        "Available after your GitHub-backed sign-in is verified. Refresh to retry.",
       avatarErrors: {
         invalid: "That image could not be processed.",
         sourceTooLarge: "Choose an image that is 10 MB or smaller.",

@@ -11,13 +11,12 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { mergeUserPreferences } from "./user-preferences.js";
+import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.js";
 import {
-  clearUserProfileGitHubIdentity,
-  mergeUserProfileGitHubIdentity,
+  applyVerifiedGitHubIdentity,
+  githubAuthenticationSubject,
+  prepareUserProfileGitHubMerge,
   selectUserProfileGitHubIdentities,
-  setUserProfileGitHubIdentity,
-  UserProfileGitHubIdentityConflictError,
 } from "./user-profile-github-identity.js";
 import {
   normalizeUserProfileAvatarMime,
@@ -68,7 +67,6 @@ type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
 
-export { UserProfileGitHubIdentityConflictError };
 export { UserProfileNotFoundError };
 
 type UserProfileListRow = Pick<
@@ -272,19 +270,39 @@ function ensureProfileForProviderIdentity(params: {
 }): UserProfile {
   const profileId = generateSecureUuid();
   const now = Date.now();
+  const subject =
+    params.provider === "github" ? githubAuthenticationSubject(params.subject) : params.subject;
   ensureUserProfilesSchema(params.options);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = userProfilesDb(db);
-      const existingIdentity = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("user_profile_identities")
-          .select("profile_id")
-          .where("provider", "=", params.provider)
-          .where("subject", "=", params.subject),
-      );
+      let existingQuery = kysely
+        .selectFrom("user_profile_identities")
+        .select(["profile_id", "subject"])
+        .where("provider", "=", params.provider);
+      existingQuery =
+        params.provider === "github"
+          ? existingQuery
+              .where((eb) =>
+                eb.or([
+                  eb("subject", "=", subject),
+                  eb.and([eb("subject", "=", params.subject), eb("canonical_login", "is", null)]),
+                ]),
+              )
+              .orderBy(sql`CASE WHEN subject = ${subject} THEN 0 ELSE 1 END`)
+          : existingQuery.where("subject", "=", subject);
+      const existingIdentity = executeSqliteQueryTakeFirstSync(db, existingQuery);
       if (existingIdentity) {
+        if (existingIdentity.subject !== subject) {
+          executeSqliteQuerySync(
+            db,
+            kysely
+              .updateTable("user_profile_identities")
+              .set({ subject })
+              .where("provider", "=", params.provider)
+              .where("subject", "=", existingIdentity.subject),
+          );
+        }
         return toUserProfile(requireResolvedUserProfileById(db, existingIdentity.profile_id));
       }
       const row: UserProfileRow = {
@@ -302,7 +320,7 @@ function ensureProfileForProviderIdentity(params: {
         db,
         kysely.insertInto("user_profile_identities").values({
           provider: params.provider,
-          subject: params.subject,
+          subject,
           profile_id: profileId,
           canonical_login: null,
           created_at: now,
@@ -312,6 +330,54 @@ function ensureProfileForProviderIdentity(params: {
     },
     params.options,
     { operationLabel: "user-profiles.ensure-identity" },
+  );
+}
+
+function mergeUserProfiles(
+  db: DatabaseSync,
+  sourceProfileId: string,
+  targetProfileId: string,
+  now: number,
+): void {
+  if (sourceProfileId === targetProfileId) {
+    return;
+  }
+  const kysely = userProfilesDb(db);
+  const sourceProfileIds = [
+    sourceProfileId,
+    ...executeSqliteQuerySync(
+      db,
+      kysely.selectFrom("user_profiles").select("id").where("merged_into", "=", sourceProfileId),
+    ).rows.map((row) => row.id),
+  ];
+  prepareUserProfileGitHubMerge(db, sourceProfileIds, targetProfileId);
+  for (const mergedProfileId of sourceProfileIds) {
+    mergeUserPreferences(db, mergedProfileId, targetProfileId);
+  }
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .updateTable("user_profile_emails")
+      .set({ profile_id: targetProfileId })
+      .where("profile_id", "in", sourceProfileIds),
+  );
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .updateTable("user_profile_identities")
+      .set({ profile_id: targetProfileId })
+      .where("profile_id", "in", sourceProfileIds),
+  );
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .updateTable("user_profiles")
+      .set({ merged_into: targetProfileId, updated_at: now })
+      .where("id", "in", sourceProfileIds),
+  );
+  executeSqliteQuerySync(
+    db,
+    kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", targetProfileId),
   );
 }
 
@@ -487,41 +553,7 @@ export function linkEmail(
         kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
       );
       if (remainingAliases.length === 0) {
-        const mergeSourceIds = [
-          existingAlias.profile_id,
-          ...executeSqliteQuerySync(
-            db,
-            kysely
-              .selectFrom("user_profiles")
-              .select("id")
-              .where("merged_into", "=", existingAlias.profile_id),
-          ).rows.map((row) => row.id),
-        ];
-        for (const sourceProfileId of mergeSourceIds) {
-          mergeUserPreferences(db, sourceProfileId, target.id);
-        }
-        mergeUserProfileGitHubIdentity(db, mergeSourceIds, target.id);
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("user_profile_identities")
-            .set({ profile_id: target.id })
-            .where("profile_id", "in", mergeSourceIds),
-        );
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("user_profiles")
-            .set({ merged_into: target.id, updated_at: now })
-            .where("id", "=", existingAlias.profile_id),
-        );
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("user_profiles")
-            .set({ merged_into: target.id, updated_at: now })
-            .where("merged_into", "=", existingAlias.profile_id),
-        );
+        mergeUserProfiles(db, existingAlias.profile_id, target.id, now);
       } else {
         executeSqliteQuerySync(
           db,
@@ -562,21 +594,35 @@ export function setDisplayName(
   );
 }
 
-export function setGitHubIdentity(
+export function syncGitHubIdentity(
   profileId: string,
   identity: { accountId: number; login: string },
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileListItem {
-  const canonicalProfileId = setUserProfileGitHubIdentity(profileId, identity, options);
-  return selectUserProfileListItemById(openOpenClawStateDatabase(options).db, canonicalProfileId);
-}
-
-export function clearGitHubIdentity(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): UserProfileListItem {
-  const canonicalProfileId = clearUserProfileGitHubIdentity(profileId, options);
-  return selectUserProfileListItemById(openOpenClawStateDatabase(options).db, canonicalProfileId);
+  ensureUserProfilesSchema(options);
+  ensureUserPreferencesSchema(options);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const now = Date.now();
+      const canonicalProfileId = applyVerifiedGitHubIdentity({
+        db,
+        profileId,
+        identity,
+        mergeProfiles: (sourceProfileId, targetProfileId) =>
+          mergeUserProfiles(db, sourceProfileId, targetProfileId, now),
+      });
+      executeSqliteQuerySync(
+        db,
+        userProfilesDb(db)
+          .updateTable("user_profiles")
+          .set({ updated_at: now })
+          .where("id", "=", canonicalProfileId),
+      );
+      return selectUserProfileListItemById(db, canonicalProfileId);
+    },
+    options,
+    { operationLabel: "user-profiles.sync-github-identity" },
+  );
 }
 
 /** Stores a bounded, allowlisted avatar without ever leaving the write transaction async. */

@@ -33,6 +33,7 @@ import {
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
+import { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
 import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
@@ -52,7 +53,6 @@ import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
-import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
@@ -191,10 +191,10 @@ export async function attachAuthenticatedGatewayConnect(
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
-  const authenticatedUserIsTailscaleProvider = Boolean(
-    authResult.tailscaleIdentity &&
-    classifyTailscaleLogin(authResult.tailscaleIdentity.login).kind === "provider",
-  );
+  const tailscaleLogin = authResult.tailscaleIdentity
+    ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
+    : undefined;
+  const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
   // Device pairing owns persistent access. Verified identity grants only shape
   // this connection, after device-less self-declared scopes have been cleared.
   const effectiveScopes = resolveEffectiveConnectionScopes({
@@ -244,6 +244,14 @@ export async function attachAuthenticatedGatewayConnect(
       );
     }
   }
+  const authenticatedGitHubIdentitySync = authenticatedUserProfile
+    ? createAuthenticatedGitHubIdentitySync({
+        profileId: authenticatedUserProfile.profileId,
+        authResult,
+        authConfig: context.configSnapshot.gateway?.auth,
+        requestHeaders: context.handler.upgradeReq.headers,
+      })
+    : undefined;
   const pluginSurfaceUrls: Record<string, string> = {};
   const pluginNodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
   const pendingPluginNodeCapabilities: Array<{
@@ -390,6 +398,7 @@ export async function attachAuthenticatedGatewayConnect(
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
+    ...(authenticatedGitHubIdentitySync ? { authenticatedGitHubIdentitySync } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
@@ -518,6 +527,11 @@ export async function attachAuthenticatedGatewayConnect(
       authenticatedUserProfile: nextClient.authenticatedUserProfile,
     });
 
+  const refreshAuthenticatedProfile = (profileId: string, updatedAt: number) => {
+    const display = getUserProfileDisplay(profileId);
+    buildRequestContext().refreshConnectedUserProfile?.({ ...display, updatedAt });
+  };
+
   if (presenceKey) {
     upsertPresence(presenceKey, {
       host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
@@ -612,6 +626,18 @@ export async function attachAuthenticatedGatewayConnect(
 
   await sendGatewayHello(context, state, pluginSurfaceUrls, authenticatedUserProfile?.profileId);
 
+  if (authenticatedGitHubIdentitySync) {
+    runDetachedConnectWork(
+      async () => {
+        const result = await authenticatedGitHubIdentitySync();
+        refreshAuthenticatedProfile(result.profileId, result.updatedAt);
+      },
+      (error) => {
+        logGateway.warn(`GitHub identity sync failed conn=${connId}: ${formatForLog(error)}`);
+      },
+    );
+  }
+
   const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
   const tailscaleProfileId = authenticatedUserProfile?.profileId;
   if (tailscaleProfileId && !authenticatedUserProfile?.hasAvatar && tailscaleProfilePic) {
@@ -621,25 +647,7 @@ export async function attachAuthenticatedGatewayConnect(
         if (!updated.avatarMime) {
           return;
         }
-        const display = getUserProfileDisplay(updated.id);
-        authenticatedUserProfile = {
-          profileId: display.id,
-          displayName: display.displayName,
-          avatarRevision: display.avatarRevision,
-          hasAvatar: display.hasAvatar,
-          updatedAt: updated.updatedAt,
-        };
-        nextClient.authenticatedUserProfile = authenticatedUserProfile;
-        if (isClosed() || !presenceKey) {
-          return;
-        }
-        upsertPresence(presenceKey, { user: currentAuthenticatedPresenceUser() });
-        const requestContext = buildRequestContext();
-        broadcastPresenceSnapshot({
-          broadcast: requestContext.broadcast,
-          incrementPresenceVersion: requestContext.incrementPresenceVersion,
-          getHealthVersion: requestContext.getHealthVersion,
-        });
+        refreshAuthenticatedProfile(updated.id, updated.updatedAt);
       },
       (error) =>
         logGateway.warn(`Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`),

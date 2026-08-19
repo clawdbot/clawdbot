@@ -5,8 +5,6 @@ import {
   validateUsersSelfResult,
   validateUsersSetAvatarResult,
   validateUsersSetDisplayNameResult,
-  validateUsersSetGitHubIdentityResult,
-  validateUsersClearGitHubIdentityResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { usersHandlers } from "./users.js";
 
@@ -14,16 +12,12 @@ const linkEmail = vi.hoisted(() => vi.fn());
 const listProfiles = vi.hoisted(() => vi.fn());
 const setAvatar = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
-const setGitHubIdentity = vi.hoisted(() => vi.fn());
-const clearGitHubIdentity = vi.hoisted(() => vi.fn());
-const resolveGitHubUserIdentity = vi.hoisted(() => vi.fn());
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
 const getUserProfileDisplay = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profiles.js", () => ({
-  clearGitHubIdentity,
   ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem,
@@ -32,12 +26,8 @@ vi.mock("../../state/user-profiles.js", () => ({
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
-  setGitHubIdentity,
-  UserProfileGitHubIdentityConflictError: class UserProfileGitHubIdentityConflictError extends Error {},
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
 }));
-
-vi.mock("../github-user-identity.js", () => ({ resolveGitHubUserIdentity }));
 
 async function runUsersHandler(
   method: keyof typeof usersHandlers,
@@ -80,9 +70,6 @@ describe("users gateway methods", () => {
     listProfiles.mockReset();
     setAvatar.mockReset();
     setDisplayName.mockReset();
-    setGitHubIdentity.mockReset();
-    clearGitHubIdentity.mockReset();
-    resolveGitHubUserIdentity.mockReset();
     getUserProfileDisplay.mockReturnValue({
       id: profile.id,
       displayName: profile.displayName,
@@ -134,6 +121,68 @@ describe("users gateway methods", () => {
 
     expect(respond).toHaveBeenCalledWith(true, { profile: { ...profile, emails: [] } });
     expect(ensureProfileForEmail).not.toHaveBeenCalled();
+  });
+
+  it("waits for the authenticated GitHub sync before returning users.self", async () => {
+    let finishSync: (() => void) | undefined;
+    const authenticatedGitHubIdentitySync = vi.fn(
+      async () =>
+        await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
+          finishSync = () => resolve({ profileId: profile.id, updatedAt: profile.updatedAt });
+        }),
+    );
+    const providerClient = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      authenticatedGitHubIdentitySync,
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: { scopes: ["operator.write"] },
+    };
+    resolveUserProfileId.mockReturnValue(profile.id);
+    getUserProfileListItem.mockReturnValue(profile);
+
+    const pending = runUsersHandler("users.self", {}, providerClient);
+    await Promise.resolve();
+
+    expect(authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
+    expect(getUserProfileListItem).not.toHaveBeenCalled();
+    finishSync?.();
+    const respond = await pending;
+    expect(respond).toHaveBeenCalledWith(true, { profile });
+  });
+
+  it("keeps users.self usable and retryable when GitHub lookup fails", async () => {
+    const authenticatedGitHubIdentitySync = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockResolvedValueOnce({ profileId: profile.id, updatedAt: profile.updatedAt });
+    const providerClient = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      authenticatedGitHubIdentitySync,
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: { scopes: ["operator.write"] },
+    };
+    resolveUserProfileId.mockReturnValue(profile.id);
+    getUserProfileListItem.mockReturnValue(profile);
+
+    expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(true, {
+      profile,
+    });
+    expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(true, {
+      profile,
+    });
+    expect(authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(2);
   });
 
   it("keeps generic proxy identities on the legacy profile fallback", async () => {
@@ -229,52 +278,6 @@ describe("users gateway methods", () => {
       hasAvatar: false,
       updatedAt: profile.updatedAt,
     });
-  });
-
-  it("sets and clears only the authenticated user's GitHub identity", async () => {
-    ensureProfileForEmail.mockReturnValue({ id: profile.id });
-    resolveUserProfileId.mockReturnValue(profile.id);
-    resolveGitHubUserIdentity.mockResolvedValue({ accountId: 583231, login: "octocat" });
-    const linked = {
-      ...profile,
-      githubIdentity: {
-        login: "octocat",
-        profileUrl: "https://github.com/octocat",
-        avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-      },
-    };
-    setGitHubIdentity.mockReturnValue(linked);
-    clearGitHubIdentity.mockReturnValue(profile);
-
-    const setResponse = await runUsersHandler(
-      "users.setGitHubIdentity",
-      { username: "octocat" },
-      selfClient,
-    );
-    const clearResponse = await runUsersHandler("users.clearGitHubIdentity", {}, selfClient);
-
-    expect(resolveGitHubUserIdentity).toHaveBeenCalledWith("octocat");
-    expect(setGitHubIdentity).toHaveBeenCalledWith(profile.id, {
-      accountId: 583231,
-      login: "octocat",
-    });
-    expect(validateUsersSetGitHubIdentityResult(setResponse.mock.calls[0]?.[1])).toBe(true);
-    expect(validateUsersClearGitHubIdentityResult(clearResponse.mock.calls[0]?.[1])).toBe(true);
-  });
-
-  it("rejects GitHub identity changes without an authenticated profile", async () => {
-    const anonymous = { connect: { scopes: ["operator.write"] } };
-    for (const [method, params] of [
-      ["users.setGitHubIdentity", { username: "octocat" }],
-      ["users.clearGitHubIdentity", {}],
-    ] as const) {
-      expect(await runUsersHandler(method, params, anonymous)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
-    }
-    expect(resolveGitHubUserIdentity).not.toHaveBeenCalled();
   });
 
   it("returns protocol-complete avatar mutations", async () => {

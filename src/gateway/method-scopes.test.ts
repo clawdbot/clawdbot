@@ -99,8 +99,6 @@ describe("method scope resolution", () => {
     ["projects.list", ["operator.read"]],
     ["users.prefs.get", ["operator.read"]],
     ["users.prefs.set", ["operator.write"]],
-    ["users.setGitHubIdentity", ["operator.write"]],
-    ["users.clearGitHubIdentity", ["operator.write"]],
     ["projects.register", ["operator.admin"]],
     ["projects.remove", ["operator.admin"]],
     ["projects.add", ["operator.write"]],

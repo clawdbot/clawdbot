@@ -37,7 +37,7 @@ export function prepareGitCoauthorAttribution(params: {
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "system" });
   const primaryEmail = primaryIdentity?.gitAuthor?.email?.trim().toLowerCase();
   const trailers = new Map<number, string>();
-  let unlinked = 0;
+  let withoutCredit = 0;
   let unresolved = 0;
   let primaryAuthor = 0;
   for (const profileId of snapshot.profileIds) {
@@ -47,7 +47,7 @@ export function prepareGitCoauthorAttribution(params: {
     }
     const identity = identities.get(profileId);
     if (!identity) {
-      unlinked += 1;
+      withoutCredit += 1;
       continue;
     }
     const noreplyEmail = `${identity.accountId}+${identity.login}@users.noreply.github.com`;
@@ -72,8 +72,8 @@ export function prepareGitCoauthorAttribution(params: {
     snapshot.incomplete
       ? "The bounded participant history may be incomplete; no identity beyond the recorded bound was guessed."
       : undefined,
-    unlinked > 0
-      ? `${unlinked} eligible profile participant(s) have no linked GitHub account and were omitted.`
+    withoutCredit > 0
+      ? `${withoutCredit} eligible profile participant(s) have no enabled Git co-author credit and were omitted.`
       : undefined,
     unresolved > 0
       ? `${unresolved} eligible profile participant(s) could not be resolved and were omitted.`
