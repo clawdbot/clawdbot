@@ -1939,8 +1939,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-local-dispatch",
       },
       timeoutMs: 120_000,
-      resolveGatewayContext,
     });
+    // Instance-bound dispatch owns context resolution, so the caller's resolver
+    // is deliberately not forwarded; asserting it here would only prove the mock.
+    expect(dispatchOptions).not.toHaveProperty("resolveGatewayContext");
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {
