@@ -101,6 +101,9 @@ export const en: TranslationMap = {
     logout: "Logout",
     skipToMainContent: "Skip to main content",
   },
+  focus: {
+    unsupported: "This focused view is not supported.",
+  },
   optionCard: {
     recommended: "Recommended",
     skip: "Skip for now",
@@ -920,7 +923,7 @@ export const en: TranslationMap = {
     emptyTitle: "No dashboards yet",
     emptyDescription: "Open a session and switch to the Dashboard face to add it here.",
     loadError: "Could not load dashboards: {error}",
-    openFullscreen: "Open full-screen dashboard",
+    openFocusMode: "Open dashboard in focus mode",
   },
   dashboardDocument: {
     close: "Close dashboard",
@@ -2176,7 +2179,7 @@ export const en: TranslationMap = {
     title: "Terminal",
     toggle: "Toggle terminal",
     open: "Open terminal",
-    openFullscreen: "Open full-screen terminal",
+    openWindow: "Open terminal in new window",
     hide: "Hide terminal",
     resize: "Resize terminal panel",
     newSession: "New terminal session",
@@ -2273,6 +2276,7 @@ export const en: TranslationMap = {
   },
   desktop: {
     title: "Desktop",
+    openWindow: "Open desktop in new window",
     unavailable: "Desktop viewing is unavailable for this connection.",
     toggle: "Toggle desktop panel",
     hide: "Hide desktop panel",

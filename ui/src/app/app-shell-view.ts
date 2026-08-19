@@ -682,6 +682,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${desktopPanelAvailable}
               .suppressed=${settingsTakeover}
+              .basePath=${context.basePath}
             ></openclaw-desktop-panel>
           `}
       <openclaw-custodian-panel

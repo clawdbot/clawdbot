@@ -662,7 +662,6 @@ export {
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
-  ProjectRecordSchema,
   ProjectRecentSchema,
   ProjectsListParamsSchema,
   ProjectsListResultSchema,
@@ -692,11 +691,6 @@ export {
   FsListDirParamsSchema,
   FsListDirResultSchema,
 } from "./schema-modules.js";
-export {
-  MIN_CLIENT_PROTOCOL_VERSION,
-  MIN_NODE_PROTOCOL_VERSION,
-  MIN_PROBE_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
-} from "./version.js";
+export * from "./version.js";
 export type * from "./schema-types.js";
 export type { SessionsPatchResult } from "./sessions-patch-result.js";

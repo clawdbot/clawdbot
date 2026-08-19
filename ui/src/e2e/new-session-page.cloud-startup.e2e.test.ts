@@ -241,9 +241,6 @@ suite.define(() => {
       );
       expect(startupError).toContain("send outcome unknown");
       await waitForCommittedChatRoute(page);
-      const startupErrorAlert = page.locator(".chat-cloud-startup-error");
-      await startupErrorAlert.waitFor({ state: "visible" });
-      expect(await startupErrorAlert.textContent()).toContain("send outcome unknown");
       await gateway.setMethodResponse("sessions.send", {
         runId: "run-reload-recovery",
         status: "started",

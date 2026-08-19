@@ -5,9 +5,9 @@
 // session. The browser runtime is dynamically imported on first open so it
 // never weighs down the initial Control UI bundle.
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import { terminalDocumentPath } from "../../app/terminal-document-mode.ts";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
@@ -72,7 +72,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   /** Configured Control UI mount prefix used by document links. */
   @property({ attribute: false }) basePath = "";
   /**
-   * Terminal-only document mode (`/terminal` or `?view=terminal`): fills the
+   * Focused terminal document mode (`/focus/terminal`): fills the
    * viewport, stays open while available, and omits dock chrome.
    */
   @property({ type: Boolean }) fullscreen = false;
@@ -369,7 +369,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private openFullscreen(): void {
-    openExternalUrlSafe(terminalDocumentPath(this.basePath));
+    const focusPath = buildControlUiFocusPath({ kind: "terminal" }, this.basePath);
+    if (focusPath) {
+      openExternalUrlSafe(focusPath);
+    }
   }
 
   resetTerminalSessionPicker(): void {

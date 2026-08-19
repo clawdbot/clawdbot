@@ -102,8 +102,9 @@ dispatch so authorization failures have one canonical structured response:
 - `environments.list` needs `operator.read`. Session placement methods derive
   their scope from the requested target before schema validation:
   `sessions.dispatch` needs `operator.write` for `deviceId` and
-  `operator.admin` for `profileId`; `sessions.move` needs `operator.write` for
-  Gateway or device targets and `operator.admin` for profile targets;
+  `operator.admin` for `profileId` or a target-less
+  `cloudWorkers.projectProfiles` lookup; `sessions.move` needs `operator.write`
+  for Gateway or device targets and `operator.admin` for profile targets;
   `sessions.reclaim` remains `operator.write`. Malformed dispatch params or a
   malformed move target use `operator.write` so the handler can return the
   precise schema error. All three methods retain session ownership,

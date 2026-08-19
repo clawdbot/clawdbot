@@ -14,6 +14,7 @@ import {
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
+import { normalizeLegacyTerminalViewLocation } from "./startup-settings.ts";
 
 // Startup progress (dynamic imports, gateway subscribe, router start) is not a
 // performance assertion, so these waits must not inherit vi.waitFor's 1s default:
@@ -27,6 +28,39 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe("normalizeLegacyTerminalViewLocation", () => {
+  it.each([
+    {
+      location: { pathname: "/", search: "?view=terminal&keep=yes", hash: "#pane" },
+      basePath: "",
+      expected: { pathname: "/focus/terminal", search: "?keep=yes", hash: "#pane" },
+    },
+    {
+      location: {
+        pathname: "/openclaw/",
+        search: "?keep=yes&view=terminal",
+        hash: "#pane",
+      },
+      basePath: "/openclaw",
+      expected: {
+        pathname: "/openclaw/focus/terminal",
+        search: "?keep=yes",
+        hash: "#pane",
+      },
+    },
+  ])("normalizes the released terminal query at $basePath", ({ location, basePath, expected }) => {
+    expect(normalizeLegacyTerminalViewLocation(location, basePath)).toEqual(expected);
+  });
+
+  it.each([
+    { pathname: "/", search: "?view=desktop", hash: "" },
+    { pathname: "/", search: "?view=dashboard", hash: "" },
+    { pathname: "/settings/appearance", search: "?view=terminal", hash: "" },
+  ])("does not normalize an unsupported legacy location $pathname$search", (location) => {
+    expect(normalizeLegacyTerminalViewLocation(location, "")).toBe(location);
+  });
+});
 
 describe("normalizeInitialApplicationLocation", () => {
   it("routes an opaque persisted key without aborting bootstrap", () => {
@@ -521,18 +555,136 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
-  it("keeps the terminal document route outside the application router", async () => {
+  it("keeps the focused terminal route outside the application router", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
-    window.history.replaceState({}, "", "/terminal");
+    window.history.replaceState({}, "", "/focus/terminal");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const routerStart = vi.spyOn(runtime.router, "start");
 
     try {
       await runtime.start();
 
-      expect(window.location.pathname).toBe("/terminal");
+      expect(window.location.pathname).toBe("/focus/terminal");
+      expect(runtime.focusLocation).toEqual({
+        status: "valid",
+        basePath: "",
+        target: { kind: "terminal" },
+      });
       expect(routerStart).not.toHaveBeenCalled();
+    } finally {
+      runtime.stop();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
+  it.each([
+    {
+      initialUrl: "/?view=terminal&keep=yes#pane",
+      expectedUrl: "/focus/terminal?keep=yes#pane",
+      basePath: "",
+    },
+    {
+      initialUrl: "/openclaw/?view=terminal&keep=yes#pane",
+      expectedUrl: "/openclaw/focus/terminal?keep=yes#pane",
+      basePath: "/openclaw",
+    },
+  ])(
+    "rewrites the released terminal query at the $basePath application boundary",
+    async ({ initialUrl, expectedUrl, basePath }) => {
+      const previousSettings = loadSettings();
+      const previousUrl = window.location.href;
+      window.history.replaceState({}, "", initialUrl);
+      const replaceState = vi.spyOn(window.history, "replaceState");
+      const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+      const routerStart = vi.spyOn(runtime.router, "start");
+
+      try {
+        expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
+          expectedUrl,
+        );
+        expect(runtime.focusLocation).toEqual({
+          status: "valid",
+          basePath,
+          target: { kind: "terminal" },
+        });
+
+        await runtime.start();
+
+        expect(routerStart).not.toHaveBeenCalled();
+        expect(replaceState).toHaveBeenCalledTimes(1);
+      } finally {
+        runtime.stop();
+        replaceState.mockRestore();
+        window.history.replaceState({}, "", previousUrl);
+        saveSettings(previousSettings);
+      }
+    },
+  );
+
+  it.each(["desktop", "dashboard"])(
+    "does not recognize the removed %s query presentation",
+    (view) => {
+      const previousSettings = loadSettings();
+      const previousUrl = window.location.href;
+      const initialUrl = `/?view=${view}&keep=yes#pane`;
+      window.history.replaceState({}, "", initialUrl);
+      const replaceState = vi.spyOn(window.history, "replaceState");
+      const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+
+      try {
+        expect(runtime.focusLocation).toBeNull();
+        expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
+          initialUrl,
+        );
+        expect(replaceState).not.toHaveBeenCalled();
+      } finally {
+        runtime.stop();
+        replaceState.mockRestore();
+        window.history.replaceState({}, "", previousUrl);
+        saveSettings(previousSettings);
+      }
+    },
+  );
+
+  it("strips startup credentials before rewriting the released terminal query", () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    window.history.replaceState({}, "", "/?view=terminal#token=startup-token&pane=1");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+
+    try {
+      expect(replaceState.mock.calls.map((call) => call[2])).toEqual([
+        "/?view=terminal#pane=1",
+        "/focus/terminal#pane=1",
+      ]);
+      expect(runtime.focusLocation).toEqual({
+        status: "valid",
+        basePath: "",
+        target: { kind: "terminal" },
+      });
+    } finally {
+      runtime.stop();
+      replaceState.mockRestore();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
+  it("does not recognize the terminal query outside the application root", () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    const initialUrl = "/settings/appearance?view=terminal&keep=yes#pane";
+    window.history.replaceState({}, "", initialUrl);
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+
+    try {
+      expect(runtime.focusLocation).toBeNull();
+      expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
+        initialUrl,
+      );
     } finally {
       runtime.stop();
       window.history.replaceState({}, "", previousUrl);
