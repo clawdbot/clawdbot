@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import { errors, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
 import {
   controlUiSessionPath,
@@ -90,9 +90,19 @@ export const SESSION_LIST_DEFAULTS = {
 type LocatorTextPoll = ReturnType<typeof expect.poll<Promise<string | null>>>;
 
 export function pollLocatorText(locator: Locator): LocatorTextPoll {
-  return expect.poll(() => locator.textContent({ timeout: LOCATOR_TEXT_READ_TIMEOUT_MS }), {
-    timeout: LOCATOR_TEXT_POLL_TIMEOUT_MS,
-  });
+  return expect.poll(
+    async () => {
+      try {
+        return await locator.textContent({ timeout: LOCATOR_TEXT_READ_TIMEOUT_MS });
+      } catch (error) {
+        if (error instanceof errors.TimeoutError) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    { timeout: LOCATOR_TEXT_POLL_TIMEOUT_MS },
+  );
 }
 
 export function createNewSessionPageE2eSuite() {
