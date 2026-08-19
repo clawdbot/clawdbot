@@ -11,7 +11,7 @@ import {
 
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 
-export type ContextEngineRuntimeQuarantine = {
+type ContextEngineRuntimeQuarantine = {
   engineId: string;
   owner?: string;
   operation: string;
