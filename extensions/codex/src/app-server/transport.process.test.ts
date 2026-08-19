@@ -171,7 +171,7 @@ process.stdin.on("end", () => process.exit(0));
     }
   });
 
-  it("revalidates reused identities and contains descendants discovered while quiescing", async () => {
+  it("revalidates and retains every identity proven while quiescing", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-identity-reuse-"));
     const rootPath = path.join(tempDir, "root.mjs");
     const sentinelPath = path.join(tempDir, "sentinel.mjs");
@@ -266,8 +266,9 @@ try {
   const oldSentinel = { ...sentinelIdentity, ppid: root.pid, state: "S", startedAt: "Mon Jan 1 00:00:00 2001" };
   const stoppedOldSentinel = { ...oldSentinel, state: "T" };
   const stoppedSentinel = { ...sentinelIdentity, state: "T" };
-  const snapshots = mode === "reuse"
-    ? [
+  const snapshots =
+    mode === "reuse"
+      ? [
         [rootIdentity, oldSentinel],
         [rootIdentity, oldSentinel],
         [stoppedRoot, oldSentinel],
@@ -275,13 +276,27 @@ try {
         [stoppedRoot, stoppedOldSentinel],
         [stoppedRoot, stoppedSentinel],
       ]
-    : [
+      : mode === "late"
+        ? [
         [rootIdentity],
         [rootIdentity],
         [stoppedRoot, sentinelIdentity],
         [stoppedRoot, sentinelIdentity],
         [stoppedRoot, stoppedSentinel],
-      ];
+          ]
+        : mode === "reparented"
+          ? [
+              [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+              [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+              [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+              [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+              [stoppedRoot, { ...stoppedSentinel, ppid: 1 }],
+            ]
+          : [
+              [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+              [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+              [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+            ];
   await fs.writeFile(counterPath, "0");
   await fs.writeFile(scenarioPath, JSON.stringify({ snapshots }));
   process.env.PATH = fakeBin + path.delimiter + (originalPath ?? "");
@@ -306,6 +321,8 @@ process.stdout.write(JSON.stringify(result));
       for (const [mode, sentinelSurvived] of [
         ["reuse", true],
         ["late", false],
+        ["reparented", false],
+        ["exhausted", false],
       ] as const) {
         const output = execFileSync(
           process.execPath,

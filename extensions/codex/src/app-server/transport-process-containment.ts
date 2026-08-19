@@ -94,10 +94,12 @@ function quiesceDescendants(
       }
     }
     if (allStopped) {
-      return descendants;
+      return [...provenByPid.values()];
     }
   }
-  return undefined;
+  // Bounded quiescence must not fail open. Kill every identity proven while it
+  // belonged to the stopped root, including processes that have since reparented.
+  return [...provenByPid.values()];
 }
 
 function readProcessSnapshot(): PosixProcess[] | undefined {
@@ -189,6 +191,8 @@ function signalSameRoot(root: PosixProcess, signal: NodeJS.Signals): boolean {
 }
 
 function signalSameProcess(expected: PosixProcess, signal: NodeJS.Signals): boolean {
+  // Portable Node POSIX signals are PID-based, so never retain numeric authority:
+  // take this final identity snapshot synchronously immediately before every signal.
   const current = readProcess(expected.pid);
   return Boolean(
     current && isSameLiveProcess(current, expected) && signalProcess(current.pid, signal),
