@@ -49,7 +49,7 @@ async function runMemoryEmbeddingCreate(params: {
   });
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent);
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
   const result = await createEmbeddingProvider({
     config: cfg,
     agentDir: resolveAgentDir(cfg, agentId),

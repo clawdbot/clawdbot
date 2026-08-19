@@ -124,7 +124,7 @@ async function runVideoGenerate(params: {
     commandName: "infer video.generate",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent);
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video.generate");
   const agentDir = resolveAgentDir(cfg, agentId);
   const result = await generateVideo({
     cfg,

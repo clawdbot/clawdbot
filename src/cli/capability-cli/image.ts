@@ -71,7 +71,7 @@ async function runImageGenerate(params: {
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent);
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
   const agentDir = resolveAgentDir(cfg, agentId);
   const inputImages =
     params.file && params.file.length > 0
@@ -152,7 +152,7 @@ async function runImageDescribe(params: {
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent);
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
   const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const prompt = normalizeOptionalString(params.prompt);

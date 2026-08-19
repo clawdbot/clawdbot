@@ -113,9 +113,6 @@ export function applyAgentModelDefaults(
   mutate: (config: OpenClawConfig) => OpenClawConfig,
 ): OpenClawConfig {
   const entry = resolveMutableAgentEntry(config, target.agentId);
-  if (!entry && config.agents?.ownership !== "explicit") {
-    return mutate(config);
-  }
   const projected = {
     ...config,
     agents: {
@@ -128,7 +125,19 @@ export function applyAgentModelDefaults(
       },
     },
   };
-  const updated = mutate(projected);
+  return projectAgentModelDefaults(config, target, mutate(projected));
+}
+
+/** Move a defaults-based model mutation onto one agent while preserving its other config changes. */
+export function projectAgentModelDefaults(
+  config: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  updated: OpenClawConfig,
+): OpenClawConfig {
+  const entry = resolveMutableAgentEntry(config, target.agentId);
+  if (!entry && config.agents?.ownership !== "explicit") {
+    return updated;
+  }
   const updatedDefaults = updated.agents?.defaults;
   const { model: _model, models: _models, modelPolicy: _modelPolicy, ...entryRest } = entry ?? {};
   const authoredEntryKey = Object.keys(config.agents?.entries ?? {}).find(
@@ -143,7 +152,7 @@ export function applyAgentModelDefaults(
       : {}),
   };
   return {
-    ...config,
+    ...updated,
     agents: {
       ...config.agents,
       entries: {
