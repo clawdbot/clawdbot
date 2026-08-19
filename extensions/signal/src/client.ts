@@ -39,7 +39,7 @@ const MAX_SIGNAL_SSE_EVENT_DATA_BYTES = 1_048_576;
 type SignalHttpResponse = {
   status: number;
   statusText: string;
-  text: string;
+  body: Buffer;
 };
 
 function createSignalSseAbortError(): Error {
@@ -116,7 +116,7 @@ function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
 }
 
-function requestSignalHttpText(
+function requestSignalHttpResponse(
   url: URL,
   options: {
     method: "GET" | "POST";
@@ -179,15 +179,11 @@ function requestSignalHttpText(
         });
         res.on("error", rejectOnce);
         res.on("end", () => {
-          try {
-            resolveOnce({
-              status: res.statusCode ?? 0,
-              statusText: res.statusMessage || "error",
-              text: new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)),
-            });
-          } catch (error) {
-            rejectOnce(error);
-          }
+          resolveOnce({
+            status: res.statusCode ?? 0,
+            statusText: res.statusMessage || "error",
+            body: Buffer.concat(chunks),
+          });
         });
       },
     );
@@ -214,23 +210,27 @@ export async function signalRpcRequest<T = unknown>(
     params,
     id,
   });
-  const res = await requestSignalHttpText(resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Content-Length": String(Buffer.byteLength(body)),
+  const res = await requestSignalHttpResponse(
+    resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": String(Buffer.byteLength(body)),
+      },
+      body,
+      timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      maxResponseBytes: opts.maxResponseBytes,
     },
-    body,
-    timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    maxResponseBytes: opts.maxResponseBytes,
-  });
+  );
   if (res.status === 201) {
     return undefined as T;
   }
-  if (!res.text) {
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(res.body);
+  if (!text) {
     throw new Error(`Signal RPC empty response (status ${res.status})`);
   }
-  const parsed = parseSignalRpcResponse<T>(res.text, res.status);
+  const parsed = parseSignalRpcResponse<T>(text, res.status);
   if (parsed.error) {
     const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
@@ -244,10 +244,14 @@ export async function signalCheck(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
-    const res = await requestSignalHttpText(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
-      method: "GET",
-      timeoutMs,
-    });
+    // Health checks intentionally inspect only HTTP status; JSON-RPC decodes at its consumer boundary.
+    const res = await requestSignalHttpResponse(
+      resolveSignalEndpointUrl(baseUrl, "/api/v1/check"),
+      {
+        method: "GET",
+        timeoutMs,
+      },
+    );
     if (res.status < 200 || res.status >= 300) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }

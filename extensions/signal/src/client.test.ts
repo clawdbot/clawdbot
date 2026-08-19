@@ -292,6 +292,15 @@ describe("signalCheck", () => {
     await expect(signalCheck(baseUrl)).resolves.toEqual({ ok: true, status: 204, error: null });
   });
 
+  it("keeps health checks status-only when the unused body is not valid UTF-8", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200);
+      res.end(Buffer.from([0xff]));
+    });
+
+    await expect(signalCheck(baseUrl)).resolves.toEqual({ ok: true, status: 200, error: null });
+  });
+
   it("preserves path-prefixed base URLs for health checks", async () => {
     const serverUrl = await withSignalServer((req, res) => {
       expect(req.method).toBe("GET");
