@@ -202,10 +202,12 @@ suite.define(() => {
       expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
       await projectTrigger.click();
       await project.getByText("Advanced", { exact: true }).click();
-      await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("main");
-      await project.getByLabel("Base branch").fill("release");
-      await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("release");
-      await project.getByLabel("Base branch").fill("main");
+      const baseBranch = project.getByLabel("Base branch");
+      await expect.poll(() => baseBranch.inputValue()).toBe("");
+      expect(await baseBranch.getAttribute("placeholder")).toBe("main");
+      await baseBranch.fill("release");
+      await expect.poll(() => baseBranch.inputValue()).toBe("release");
+      await baseBranch.fill("main");
       await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs target-repo to the cloud worker",
       );

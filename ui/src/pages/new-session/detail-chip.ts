@@ -41,7 +41,9 @@ export function renderWorktreeFields(params: {
         ?disabled=${params.submitting || params.pendingCloud}
         placeholder=${params.branchesLoading
           ? t("common.loading")
-          : (params.branches?.defaultBranch ?? t("newSession.baseBranch"))}
+          : (params.branches?.defaultBranch ??
+            params.branches?.headBranch ??
+            t("newSession.baseBranch"))}
         .value=${params.baseRef}
         @input=${(event: Event) =>
           params.onBaseRefInput((event.target as HTMLInputElement).value.trim())}

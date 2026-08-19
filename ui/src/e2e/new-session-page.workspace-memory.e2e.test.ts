@@ -693,8 +693,13 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
           .toBe(2);
-        expect((await gateway.getRequests("users.prefs.set")).at(-1)?.params).toMatchObject({
-          entries: { "new-session.v1:main": { model: "" } },
+        expect((await gateway.getRequests("users.prefs.set")).at(-1)?.params).toEqual({
+          entries: {
+            "new-session.v1:main": {
+              folder: PICKED,
+              worktree: true,
+            },
+          },
         });
         expect((await readMainPreference(page))?.model).toBe("anthropic/claude-sonnet-4-6");
         await gateway.resolveDeferred("users.prefs.set", { status: "ok" });

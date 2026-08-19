@@ -155,8 +155,7 @@ suite.define(() => {
         { locator: page.getByLabel("Crabbox binary"), value: "/opt/bin/crabbox" },
       ]);
       const saveButton = page.getByRole("button", { name: "Save" });
-      const configGetCount = (await gateway.getRequests("config.get")).length;
-      await gateway.deferNext("config.get");
+      const configGetCount = await gateway.deferNext("config.get");
       await gateway.emitGatewayEvent("config.changed", {
         path: "/tmp/openclaw.json",
         hash: "cloud-workers-2",

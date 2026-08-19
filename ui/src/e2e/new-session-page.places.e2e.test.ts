@@ -312,6 +312,9 @@ suite.define(() => {
       expect(await worktreeItem.isEnabled()).toBe(true);
       await worktreeItem.click();
       await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
+      const baseBranch = detailSelect.getByLabel("Base branch");
+      expect(await baseBranch.inputValue()).toBe("");
+      expect(await baseBranch.getAttribute("placeholder")).toBe("main");
       await page.keyboard.press("Escape");
       await expect.poll(() => detailTrigger.getAttribute("aria-expanded")).toBe("false");
       await expect
@@ -340,9 +343,9 @@ suite.define(() => {
         agentId: "main",
         message: "fix the flaky test",
         worktree: true,
-        worktreeBaseRef: "main",
         cwd: PICKED,
       });
+      expect(createRequest.params).not.toHaveProperty("worktreeBaseRef");
 
       await expect
         .poll(() => new URL(page.url()).pathname)
@@ -455,6 +458,9 @@ suite.define(() => {
         .locator("wa-popover.new-session-page__detail-popover")
         .getByRole("button", { name: "Worktree" })
         .click();
+      const baseBranch = page.getByLabel("Base branch");
+      expect(await baseBranch.inputValue()).toBe("");
+      expect(await baseBranch.getAttribute("placeholder")).toBe("main");
       await captureProjectUiProof(page, "project-selected.png");
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("inspect the project");
@@ -466,8 +472,8 @@ suite.define(() => {
         message: "inspect the project",
         projectId: "recorded-openclaw",
         worktree: true,
-        worktreeBaseRef: "main",
       });
+      expect(create.params).not.toHaveProperty("worktreeBaseRef");
       expect(create.params).not.toHaveProperty("cwd");
       expect(create.params).not.toHaveProperty("execNode");
     } finally {

@@ -255,7 +255,7 @@ async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branc
   }
 }
 
-async function resetFailedWorktreeAdd(
+async function cleanupFailedWorktreeAdd(
   repoRoot: string,
   worktreePath: string,
   branch: string,
@@ -284,7 +284,7 @@ async function resetFailedWorktreeAdd(
   await requireGit(repoRoot, ["worktree", "prune"]);
 }
 
-async function canResetFailedWorktreeAdd(
+async function canCleanupFailedWorktreeAdd(
   repoRoot: string,
   worktreePath: string,
   branch: string,
@@ -683,10 +683,8 @@ export class ManagedWorktreeService {
     const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
     params.commitGuard?.();
     await fs.mkdir(root, { recursive: true });
-    let gitBase = base.gitOperand;
-    let recordBase = base.recordRef;
     const runRepositorySetup = params.runSetupScript !== false;
-    const worktreeAddArgs = () => [
+    const worktreeAddArgs = [
       ...(runRepositorySetup ? [] : ["-c", `core.hooksPath=${os.devNull}`]),
       "worktree",
       "add",
@@ -694,17 +692,13 @@ export class ManagedWorktreeService {
       branch,
       "--",
       worktreePath,
-      gitBase,
+      base.gitOperand,
     ];
-    let added = await runGit(repository.repoRoot, worktreeAddArgs());
+    const added = await runGit(repository.repoRoot, worktreeAddArgs);
     if (added.code !== 0 && base.remote) {
-      if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
-        throw commandError("git worktree add", added);
+      if (await canCleanupFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added)) {
+        await cleanupFailedWorktreeAdd(repository.repoRoot, worktreePath, branch);
       }
-      await resetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch);
-      gitBase = "HEAD";
-      recordBase = "HEAD";
-      added = await runGit(repository.repoRoot, worktreeAddArgs());
     }
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
@@ -732,7 +726,7 @@ export class ManagedWorktreeService {
       repoRoot: repository.repoRoot,
       path: worktreePath,
       branch,
-      baseRef: recordBase,
+      baseRef: base.recordRef,
       ownerKind: params.ownerKind ?? "manual",
       ...(params.ownerId ? { ownerId: params.ownerId } : {}),
       createdAt,

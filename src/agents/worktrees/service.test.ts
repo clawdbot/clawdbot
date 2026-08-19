@@ -413,14 +413,7 @@ describe("ManagedWorktreeService", () => {
     expect(await git(created.path, "branch", "--show-current")).toBe("openclaw/concurrent");
   });
 
-  it("falls back to local HEAD when fetch fails", async () => {
-    await git(repo, "remote", "add", "origin", path.join(root, "missing.git"));
-    const created = await service.create({ repoRoot: repo, name: "offline" });
-    expect(created.baseRef).toBe("HEAD");
-    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
-  });
-
-  it("retries worktree add from local HEAD when the resolved remote base is stale", async () => {
+  it("does not replace a failed remote checkout with local HEAD", async () => {
     await addRemote(root, repo);
     const blob = await git(repo, "rev-parse", "HEAD:README.md");
     const tooLongForCheckout = "x".repeat(300);
@@ -431,9 +424,11 @@ describe("ManagedWorktreeService", () => {
     );
     const remoteCommit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "bad remote");
     await git(repo, "push", "--force", "origin", `${remoteCommit}:refs/heads/main`);
-    const created = await service.create({ repoRoot: repo, name: "stale-remote" });
-    expect(created.baseRef).toBe("HEAD");
-    expect(await git(created.path, "rev-parse", "HEAD")).toBe(await git(repo, "rev-parse", "HEAD"));
+    await expect(service.create({ repoRoot: repo, name: "stale-remote" })).rejects.toThrow(
+      "git worktree add",
+    );
+    expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
   });
 
   it("preserves a pre-existing branch when a managed name collides", async () => {

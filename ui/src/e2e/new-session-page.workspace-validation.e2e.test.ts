@@ -450,7 +450,9 @@ suite.define(() => {
       const detailSelect = page.locator("wa-popover.new-session-page__detail-popover");
       await page.locator("#new-session-detail-trigger").click();
       await detailSelect.getByRole("button", { name: "Worktree" }).click();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("beta");
+      const baseBranch = page.getByLabel("Base branch");
+      await expect.poll(() => baseBranch.inputValue()).toBe("");
+      expect(await baseBranch.getAttribute("placeholder")).toBe("beta");
       await page.keyboard.press("Escape");
 
       await gateway.resolveDeferred("fs.listDir", {

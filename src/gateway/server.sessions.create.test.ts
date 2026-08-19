@@ -2561,6 +2561,8 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   await execFileAsync("git", ["init", "--bare", origin]);
   await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", origin]);
   await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
+  await execFileAsync("git", ["-C", origin, "symbolic-ref", "HEAD", "refs/heads/main"]);
+  await execFileAsync("git", ["-C", workspace, "remote", "set-head", "origin", "-a"]);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace, model: { primary: "openai/current-model" } };
   testState.sessionConfig = { dmScope: "main" };

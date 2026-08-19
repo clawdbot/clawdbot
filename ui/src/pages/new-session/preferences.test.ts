@@ -21,7 +21,7 @@ describe("new-session browser preferences", () => {
       where: { kind: "cloud", id: "build-fleet" },
       projectId: "openclaw",
       worktree: true,
-      baseRef: "main",
+      baseRef: { ref: "main", repoRoot: "/workspace/project" },
       worktreeName: "picker-redesign",
       model: "openai/gpt-5.6-sol",
       thinkingLevel: "high",
@@ -33,7 +33,7 @@ describe("new-session browser preferences", () => {
       where: { kind: "cloud", id: "build-fleet" },
       projectId: "openclaw",
       worktree: true,
-      baseRef: "main",
+      baseRef: { ref: "main", repoRoot: "/workspace/project" },
       worktreeName: "picker-redesign",
       model: "openai/gpt-5.6-sol",
       thinkingLevel: "high",
@@ -68,6 +68,28 @@ describe("new-session browser preferences", () => {
       }),
     );
     expect(loadNewSessionPreference("ws://one.example", "main")).toBeNull();
+  });
+
+  it("drops legacy and incomplete base ref preferences", () => {
+    patchNewSessionPreference("ws://one.example", "main", { folder: "/workspace" });
+    const key = localStorage.key(0);
+    expect(key).not.toBeNull();
+    localStorage.setItem(
+      key ?? "",
+      JSON.stringify({
+        agents: {
+          main: { folder: "/workspace", baseRef: "legacy" },
+          research: { folder: "/research", baseRef: { ref: "release" } },
+        },
+      }),
+    );
+
+    expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({
+      folder: "/workspace",
+    });
+    expect(loadNewSessionPreference("ws://one.example", "research")).toEqual({
+      folder: "/research",
+    });
   });
 
   it("round-trips normalized browser preferences through identity keys", () => {

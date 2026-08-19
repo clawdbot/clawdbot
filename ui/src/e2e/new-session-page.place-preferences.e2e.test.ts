@@ -21,14 +21,17 @@ const REGISTERED_PROJECT = {
 };
 
 suite.define(() => {
-  it("restores three-chip defaults from local storage without a durable identity", async () => {
+  it.each([
+    ["a legacy base ref without repository identity", "release/local"],
+    ["a base ref bound to another repository", { ref: "release/local", repoRoot: "/srv/other" }],
+  ])("does not restore %s", async (_label, storedBaseRef) => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const appUrl = new URL(suite.server.baseUrl);
     const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
     const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
     await page.addInitScript(
-      ({ key, workspace }) => {
+      ({ key, workspace, storedBaseRef: persistedBaseRef }) => {
         localStorage.setItem(
           key,
           JSON.stringify({
@@ -39,14 +42,14 @@ suite.define(() => {
                 where: { kind: "local" },
                 projectId: "registered",
                 worktree: true,
-                baseRef: "release/local",
+                baseRef: persistedBaseRef,
                 worktreeName: "browser-task",
               },
             },
           }),
         );
       },
-      { key: storageKey, workspace: WORKSPACE },
+      { key: storageKey, workspace: WORKSPACE, storedBaseRef },
     );
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,
@@ -66,7 +69,8 @@ suite.define(() => {
       await pollLocatorText(project.locator(".new-session-page__trigger-label")).toBe("Registered");
       await expect.poll(() => detail.getAttribute("data-worktree")).toBe("true");
       await detail.click();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("release/local");
+      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("");
+      expect(await page.getByLabel("Base branch").getAttribute("placeholder")).toBe("main");
       await expect.poll(() => page.getByLabel("Worktree name").inputValue()).toBe("browser-task");
       expect(await gateway.getRequests("users.prefs.get")).toHaveLength(0);
       expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
@@ -110,7 +114,7 @@ suite.define(() => {
               where: { kind: "cloud", id: "aws" },
               projectId: "registered",
               worktree: true,
-              baseRef: "release/next",
+              baseRef: { ref: "release/next", repoRoot: REGISTERED_PROJECT.repoRoot },
               worktreeName: "identity-task",
             },
           },

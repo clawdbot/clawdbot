@@ -13,16 +13,25 @@ export type NewSessionWhere =
   | { kind: "node"; id: string }
   | { kind: "cloud"; id: string };
 
+type NewSessionBaseRefPreference = {
+  ref: string;
+  repoRoot: string;
+};
+
 export type NewSessionPreference = {
   workspace?: string;
   folder?: string;
   where?: NewSessionWhere;
   projectId?: string;
   worktree?: boolean;
-  baseRef?: string;
+  baseRef?: NewSessionBaseRefPreference;
   worktreeName?: string;
   model?: string;
   thinkingLevel?: string;
+};
+
+export type NewSessionPreferencePatch = Omit<NewSessionPreference, "baseRef"> & {
+  baseRef?: NewSessionBaseRefPreference | null;
 };
 
 type PersistedPreferences = {
@@ -41,7 +50,7 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
   const workspace = normalizeOptionalString(record.workspace);
   const folder = normalizeOptionalString(record.folder);
   const projectId = normalizeOptionalString(record.projectId);
-  const baseRef = normalizeOptionalString(record.baseRef);
+  const baseRef = normalizeBaseRef(record.baseRef);
   const worktreeName = normalizeOptionalString(record.worktreeName);
   const model = normalizeOptionalString(record.model);
   const thinkingLevel = normalizeOptionalString(record.thinkingLevel);
@@ -71,6 +80,15 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
     ...(model ? { model } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),
   };
+}
+
+function normalizeBaseRef(value: unknown): NewSessionBaseRefPreference | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const ref = normalizeOptionalString(value.ref);
+  const repoRoot = normalizeOptionalString(value.repoRoot);
+  return ref && repoRoot ? { ref, repoRoot } : undefined;
 }
 
 function normalizeWhere(value: unknown): NewSessionWhere | undefined {
@@ -150,6 +168,13 @@ export function decodeIdentityPreferences(
   );
 }
 
+export function mergeNewSessionPreference(
+  current: NewSessionPreference | null | undefined,
+  patch: NewSessionPreferencePatch,
+): NewSessionPreference | null {
+  return normalizePreference({ ...current, ...patch });
+}
+
 export function replaceBrowserPreference(
   gatewayUrl: string,
   agentId: string,
@@ -178,7 +203,7 @@ export function replaceBrowserPreference(
 export function patchNewSessionPreference(
   gatewayUrl: string,
   agentId: string,
-  patch: NewSessionPreference,
+  patch: NewSessionPreferencePatch,
 ): void {
   const storage = getSafeLocalStorage();
   const normalizedAgentId = normalizeAgentId(agentId);
@@ -187,7 +212,7 @@ export function patchNewSessionPreference(
   }
   const store = readStore(storage, gatewayUrl);
   const current = normalizePreference(store.agents?.[normalizedAgentId]) ?? {};
-  const next = normalizePreference({ ...current, ...patch });
+  const next = mergeNewSessionPreference(current, patch);
   if (!next) {
     return;
   }

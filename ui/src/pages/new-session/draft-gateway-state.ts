@@ -28,10 +28,12 @@ import {
   encodeIdentityPreferences,
   loadBrowserPreferences,
   loadNewSessionPreference,
+  mergeNewSessionPreference,
   patchNewSessionPreference,
   PREFS_MIGRATION_KEY,
   replaceBrowserPreference,
   type NewSessionPreference,
+  type NewSessionPreferencePatch,
 } from "./preferences.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
@@ -378,7 +380,7 @@ export class DraftGatewayState {
       : loadNewSessionPreference(this.gatewayUrlValue, agentId);
   }
 
-  persistPreference(agentIdValue: string, workspace: string, patch: NewSessionPreference) {
+  persistPreference(agentIdValue: string, workspace: string, patch: NewSessionPreferencePatch) {
     const snapshot = this.read();
     if (
       catalog.isTarget(snapshot.data) ||
@@ -405,7 +407,10 @@ export class DraftGatewayState {
         patchNewSessionPreference(gatewayUrl, agentId, nextPatch);
         return;
       }
-      const next = { ...this.identityPreferences[agentId], ...nextPatch };
+      const next = mergeNewSessionPreference(this.identityPreferences[agentId], nextPatch);
+      if (!next) {
+        return;
+      }
       try {
         const result = await client.request<UsersPrefsSetResult>("users.prefs.set", {
           entries: encodeIdentityPreferences({ [agentId]: next }),

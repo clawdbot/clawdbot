@@ -4,7 +4,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { DraftRepositoryState } from "./discovery.ts";
-import type { NewSessionPreference } from "./preferences.ts";
+import type { NewSessionPreference, NewSessionPreferencePatch } from "./preferences.ts";
 
 type DraftRepositorySnapshot = Readonly<{
   execNode: string;
@@ -19,18 +19,22 @@ type DraftRepositorySnapshot = Readonly<{
 
 type DraftRepositoryCallbacks = {
   requestUpdate: () => void;
-  persistPreference: (patch: NewSessionPreference) => void;
+  persistPreference: (patch: NewSessionPreferencePatch) => void;
 };
+
+type DraftBaseRefSelection =
+  | { kind: "automatic" }
+  | { kind: "explicit"; ref: string; repoRoot: string };
 
 export class DraftRepositoryController {
   private worktreeValue = false;
   private worktreeNameValue = "";
-  private baseRefValue = "";
+  private baseRefSelection: DraftBaseRefSelection = { kind: "automatic" };
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
   private requestToken = 0;
   private baseRefEditGeneration = 0;
   private preferredWorktreeRestore = false;
-  private preferredBaseRefRestore = "";
+  private preferredBaseRefRestore: DraftBaseRefSelection = { kind: "automatic" };
   private worktreeSelectedByUser = false;
   private detailsSelectedByUser = false;
 
@@ -48,7 +52,7 @@ export class DraftRepositoryController {
   }
 
   get baseRef(): string {
-    return this.baseRefValue;
+    return this.baseRefSelection.kind === "explicit" ? this.baseRefSelection.ref : "";
   }
 
   get repository(): DraftRepositoryState {
@@ -65,7 +69,10 @@ export class DraftRepositoryController {
 
   adoptPreference(preference: NewSessionPreference | null) {
     this.preferredWorktreeRestore = preference?.worktree === true;
-    this.preferredBaseRefRestore = preference?.baseRef ?? "";
+    this.preferredBaseRefRestore = preference?.baseRef
+      ? { kind: "explicit", ref: preference.baseRef.ref, repoRoot: preference.baseRef.repoRoot }
+      : { kind: "automatic" };
+    this.baseRefSelection = { kind: "automatic" };
     this.worktreeNameValue = preference?.worktreeName ?? "";
     this.worktreeSelectedByUser = false;
     this.detailsSelectedByUser = false;
@@ -76,10 +83,10 @@ export class DraftRepositoryController {
     this.baseRefEditGeneration += 1;
     this.worktreeValue = false;
     this.worktreeNameValue = "";
-    this.baseRefValue = "";
+    this.baseRefSelection = { kind: "automatic" };
     this.repositoryValue = { kind: "idle" };
     this.preferredWorktreeRestore = false;
-    this.preferredBaseRefRestore = "";
+    this.preferredBaseRefRestore = { kind: "automatic" };
     this.worktreeSelectedByUser = false;
     this.detailsSelectedByUser = false;
   }
@@ -87,7 +94,6 @@ export class DraftRepositoryController {
   invalidate() {
     this.requestToken += 1;
     this.repositoryValue = { kind: "idle" };
-    this.baseRefValue = "";
   }
 
   selectWorktree(value: boolean, clearName = true) {
@@ -130,10 +136,17 @@ export class DraftRepositoryController {
       return;
     }
     this.baseRefEditGeneration += 1;
-    this.baseRefValue = baseRef;
-    this.preferredBaseRefRestore = "";
+    this.baseRefSelection = baseRef
+      ? { kind: "explicit", ref: baseRef, repoRoot: this.selectedRepoRoot() }
+      : { kind: "automatic" };
+    this.preferredBaseRefRestore = { kind: "automatic" };
     this.detailsSelectedByUser = true;
-    this.callbacks.persistPreference({ baseRef });
+    this.callbacks.persistPreference({
+      baseRef:
+        this.baseRefSelection.kind === "explicit"
+          ? { ref: this.baseRefSelection.ref, repoRoot: this.baseRefSelection.repoRoot }
+          : null,
+    });
     this.callbacks.requestUpdate();
   }
 
@@ -169,10 +182,7 @@ export class DraftRepositoryController {
     if (this.read().execNode || this.repositoryValue.kind === "idle") {
       return false;
     }
-    const snapshot = this.read();
-    const repoRoot =
-      snapshot.selectedProject?.repoRoot ?? (snapshot.folder.trim() || snapshot.workspace);
-    return this.repositoryValue.repoRoot === repoRoot;
+    return this.repositoryValue.repoRoot === this.selectedRepoRoot();
   }
 
   load() {
@@ -182,23 +192,27 @@ export class DraftRepositoryController {
     const baseRefEditGeneration = this.baseRefEditGeneration;
     const snapshot = this.read();
     this.repositoryValue = { kind: "idle" };
-    this.baseRefValue = "";
     if (
       snapshot.remoteProjectSelected ||
       snapshot.execNode ||
       (snapshot.selectedProject && !snapshot.selectedProject.repoRoot)
     ) {
+      this.baseRefSelection = { kind: "automatic" };
       this.preferredWorktreeRestore = false;
       return;
     }
-    const repoRoot =
-      snapshot.selectedProject?.repoRoot ?? (snapshot.folder.trim() || snapshot.workspace);
+    const repoRoot = this.selectedRepoRoot();
+    if (this.baseRefSelection.kind === "explicit" && this.baseRefSelection.repoRoot !== repoRoot) {
+      this.baseRefSelection = { kind: "automatic" };
+    }
     const usesWorkspace = !snapshot.selectedProject && repoRoot === snapshot.workspace;
     if (!repoRoot) {
+      this.baseRefSelection = { kind: "automatic" };
       this.preferredWorktreeRestore = false;
       return;
     }
     if (usesWorkspace && !snapshot.workspaceGit) {
+      this.baseRefSelection = { kind: "automatic" };
       this.repositoryValue = { kind: "direct", repoRoot };
       const rejectedWorktree = !snapshot.cloudProfileId && (this.worktreeValue || restoreWorktree);
       if (!snapshot.cloudProfileId) {
@@ -257,11 +271,13 @@ export class DraftRepositoryController {
           this.worktreeValue = true;
         }
         this.preferredWorktreeRestore = false;
-        if (baseRefEditGeneration === this.baseRefEditGeneration) {
-          this.baseRefValue = restoreBaseRef || result.defaultBranch || result.headBranch || "";
-          if (restoreBaseRef) {
-            this.preferredBaseRefRestore = "";
-          }
+        if (
+          restoreBaseRef.kind === "explicit" &&
+          restoreBaseRef.repoRoot === repoRoot &&
+          baseRefEditGeneration === this.baseRefEditGeneration
+        ) {
+          this.baseRefSelection = restoreBaseRef;
+          this.preferredBaseRefRestore = { kind: "automatic" };
         }
         this.callbacks.requestUpdate();
       })
@@ -276,5 +292,10 @@ export class DraftRepositoryController {
         this.preferredWorktreeRestore = false;
         this.callbacks.requestUpdate();
       });
+  }
+
+  private selectedRepoRoot(): string {
+    const snapshot = this.read();
+    return snapshot.selectedProject?.repoRoot ?? (snapshot.folder.trim() || snapshot.workspace);
   }
 }

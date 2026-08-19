@@ -42,9 +42,9 @@ describe("Detail chip state", () => {
         state: { label: "Worktree" },
         worktree: true,
         worktreeAvailable: true,
-        branches: { repoRoot: "/repo", branches: [] },
+        branches: { repoRoot: "/repo", branches: [], headBranch: "main" },
         branchesLoading: false,
-        baseRef: "main",
+        baseRef: "",
         worktreeName: "",
         submitting: false,
         pendingCloud: false,
@@ -62,7 +62,12 @@ describe("Detail chip state", () => {
     );
 
     const worktree = container.querySelector<HTMLButtonElement>('[data-value="worktree"]');
+    const baseBranch = container.querySelector<HTMLInputElement>(
+      'input[list="new-session-branches"]',
+    );
     expect(worktree?.disabled).toBe(false);
+    expect(baseBranch?.value).toBe("");
+    expect(baseBranch?.placeholder).toBe("main");
     expect(container.textContent).toContain("Worktree name");
   });
 });

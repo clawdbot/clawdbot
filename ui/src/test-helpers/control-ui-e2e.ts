@@ -488,7 +488,7 @@ export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void
 export type MockGatewayControls = {
   closeLatest: (code?: number, reason?: string) => Promise<void>;
   deliverLatest: (frame: unknown) => Promise<void>;
-  deferNext: (method: string, match?: Record<string, unknown>) => Promise<void>;
+  deferNext: (method: string, match?: Record<string, unknown>) => Promise<number>;
   emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
   emitGatewayEvent: (event: string, payload?: unknown) => Promise<void>;
   getRequests: (method?: string) => Promise<MockGatewayRequest[]>;
@@ -985,7 +985,7 @@ function installControlUiMockGateway(
   type ExposedGateway = {
     closeLatest: (code?: number, reason?: string) => void;
     deliverLatest: (frame: unknown) => void;
-    deferNext: (method: string, match?: Record<string, unknown>) => void;
+    deferNext: (method: string, match?: Record<string, unknown>) => number;
     emit: (event: string, payload?: unknown) => void;
     findRequests: (method?: string) => BrowserRequest[];
     rejectDeferred: (
@@ -2200,7 +2200,9 @@ function installControlUiMockGateway(
       MockWebSocket.latest?.deliver(frame);
     },
     deferNext(method, match) {
+      const priorCount = requests.filter((request) => request.method === method).length;
       deferredMethods.push({ method, match });
+      return priorCount;
     },
     emit(event, payload) {
       MockWebSocket.latest?.deliver({
@@ -2458,19 +2460,19 @@ function createMockGatewayControls(
     },
     deliverLatest,
     async deferNext(method, match) {
-      await page.evaluate(
+      return await page.evaluate(
         ({ targetMethod, requestMatch }) => {
           const gateway = (
             window as Window & {
               openclawControlUiE2eGateway?: {
-                deferNext: (method: string, match?: Record<string, unknown>) => void;
+                deferNext: (method: string, match?: Record<string, unknown>) => number;
               };
             }
           ).openclawControlUiE2eGateway;
           if (!gateway) {
             throw new Error("Mock Gateway is not installed");
           }
-          gateway.deferNext(targetMethod, requestMatch);
+          return gateway.deferNext(targetMethod, requestMatch);
         },
         { targetMethod: method, requestMatch: match },
       );
