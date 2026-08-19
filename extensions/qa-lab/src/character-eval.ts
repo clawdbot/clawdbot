@@ -242,7 +242,7 @@ function formatDuration(ms: number) {
     return "unknown";
   }
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
-  return formatDurationCompact(roundedMs, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(roundedMs, { showYears: true, spaced: true }) ?? "0ms";
 }
 
 function logCharacterEvalProgress(

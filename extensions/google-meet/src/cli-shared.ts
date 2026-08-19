@@ -356,7 +356,7 @@ export function formatDuration(value: number | undefined): string {
     return "n/a";
   }
   const roundedMs = Math.max(0, Math.round(value / 1000) * 1000);
-  return formatDurationCompact(roundedMs, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(roundedMs, { showYears: true, spaced: true }) ?? "0ms";
 }
 
 export function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>): void {

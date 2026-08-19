@@ -23,7 +23,7 @@ export function formatIso(iso?: string) {
 
 export function formatDuration(ms: number): string {
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
-  return formatDurationCompact(Math.max(0, roundedMs), { spaced: true }) ?? "0ms";
+  return formatDurationCompact(Math.max(0, roundedMs), { showYears: true, spaced: true }) ?? "0ms";
 }
 
 export function esc(text: string) {
