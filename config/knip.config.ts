@@ -574,6 +574,7 @@ const config = {
         "src/index.ts!",
         "src/agent-id.ts!",
         "src/boolean-coercion.ts!",
+        "src/browser-error-runtime.ts!",
         "src/error-coercion.ts!",
         "src/expect.ts!",
         "src/json-coercion.ts!",

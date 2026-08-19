@@ -587,6 +587,26 @@ export function collectKnownSidebarSessionGroups(
   return [...catalog, ...new Set(discovered)];
 }
 
+/** Depth-first search across a projected session tree, including descendants.
+ *  Both callers ask "does any row match", so this short-circuits rather than
+ *  flattening: the answer usually resolves in the first few rows. */
+export function someSidebarSessionInTree(
+  roots: readonly SidebarRecentSession[],
+  predicate: (row: SidebarRecentSession) => boolean,
+): boolean {
+  const pending = [...roots];
+  while (pending.length > 0) {
+    const row = pending.pop();
+    if (row) {
+      if (predicate(row)) {
+        return true;
+      }
+      pending.push(...row.children);
+    }
+  }
+  return false;
+}
+
 export function findProjectedSidebarSession(input: {
   sessionKey: string;
   navigationState: SidebarSessionNavigationState;
@@ -645,23 +665,9 @@ export function applySidebarSessionOwnerFilter(input: {
   const ownerOptions = selfOwner
     ? [selfOwner, ...facetOwners.filter((owner) => owner.id !== selfOwner.id)]
     : facetOwners;
-  let hasParticipants = false;
-  if (ownerOptions.length < 2) {
-    const pending = [...input.projected];
-    let index = 0;
-    while (index < pending.length) {
-      const row = pending[index];
-      index += 1;
-      if (!row) {
-        continue;
-      }
-      if ((row.participantCount ?? 0) > 0) {
-        hasParticipants = true;
-        break;
-      }
-      pending.push(...row.children);
-    }
-  }
+  const hasParticipants =
+    ownerOptions.length < 2 &&
+    someSidebarSessionInTree(input.projected, (row) => (row.participantCount ?? 0) > 0);
   const ownershipVisible = ownerOptions.length >= 2 || hasParticipants;
   const activeOwnerId = ownershipVisible
     ? ownerOptions.some((owner) => owner.id === input.selectedOwnerId)

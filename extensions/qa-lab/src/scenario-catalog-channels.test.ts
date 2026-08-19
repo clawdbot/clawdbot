@@ -41,6 +41,7 @@ describe("qa scenario catalog channel contracts", () => {
       | undefined;
 
     expect(scenario.execution.channel).toBe("telegram");
+    expect(scenario.execution.channels).toEqual(["telegram"]);
     expect(config?.requiredProviderMode).toBe("mock-openai");
     expect(config?.requiredChannelDriver).toBe("crabline");
     const flow = JSON.stringify(requireFlowScenario(scenario).execution.flow);

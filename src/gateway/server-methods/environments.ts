@@ -92,7 +92,7 @@ function summarizeNodeEnvironment(
     label: node.displayName ?? node.nodeId,
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
-    sessionHost: node.connected === true && node.sessionHost === true,
+    sessionHost: node.sessionHost === true,
     ...(node.workerSlots ? { workerSlots: { ...node.workerSlots } } : {}),
     ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
     ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),

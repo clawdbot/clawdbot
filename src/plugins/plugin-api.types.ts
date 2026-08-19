@@ -230,7 +230,10 @@ export type OpenClawPluginApi = {
   registerGatewayMethod: (
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope },
+    opts?: {
+      scope?: OperatorScope;
+      profileAccess?: "independent" | "required";
+    },
   ) => void;
   /** Register a sandboxed board widget source kind owned by this plugin. */
   registerBoardWidgetContentKind: (definition: PluginBoardWidgetContentKind) => void;

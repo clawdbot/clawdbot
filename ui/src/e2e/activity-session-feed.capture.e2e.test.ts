@@ -35,6 +35,11 @@ suite.define(() => {
         ).getTime();
         const releaseKey = "agent:main:release-readiness";
         const designKey = "agent:main:design-review";
+        const gatewayHandoffKey = "agent:main:gateway-handoff";
+        const nightlyMaintenanceKey = "agent:main:nightly-maintenance";
+        const incidentNotesKey = "agent:main:incident-notes";
+        const automationKeys = [designKey, gatewayHandoffKey, nightlyMaintenanceKey];
+        const nonAutomationKeys = [releaseKey, incidentNotesKey];
         await installMockGateway(page, {
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
@@ -120,7 +125,7 @@ suite.define(() => {
                   updatedAt: now - 42 * 60_000,
                 },
                 {
-                  key: "agent:main:gateway-handoff",
+                  key: gatewayHandoffKey,
                   kind: "direct",
                   displayName: "Gateway handoff",
                   agentId: "main",
@@ -132,7 +137,7 @@ suite.define(() => {
                   updatedAt: now - 2 * 60 * 60_000,
                 },
                 {
-                  key: "agent:main:nightly-maintenance",
+                  key: nightlyMaintenanceKey,
                   kind: "direct",
                   displayName: "Nightly mock maintenance",
                   agentId: "main",
@@ -144,7 +149,7 @@ suite.define(() => {
                   updatedAt: now - 3 * 60 * 60_000,
                 },
                 {
-                  key: "agent:main:incident-notes",
+                  key: incidentNotesKey,
                   kind: "direct",
                   displayName: "Incident follow-up",
                   agentId: "main",
@@ -236,17 +241,33 @@ suite.define(() => {
           )
           .toBe(3);
         await page.keyboard.press("Escape");
-        const automationGroup = activityPage.locator("[data-activity-automation-group]");
-        const sessionRows = activityPage.locator("[data-activity-session]");
+        const activityFeed = activityPage.locator(".activity-feed");
+        const activitySession = (key: string) =>
+          activityFeed.locator(`[data-activity-session="${key}"]`);
+        const automationGroup = activityFeed.locator("[data-activity-automation-group]");
         await expect.poll(() => automationGroup.count()).toBe(1);
         await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("false");
-        await expect.poll(() => sessionRows.count()).toBe(2);
+        for (const key of nonAutomationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(1);
+        }
+        for (const key of automationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(0);
+        }
         await automationGroup.click();
-        await expect.poll(() => sessionRows.count()).toBe(5);
+        await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("true");
+        for (const key of automationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(1);
+        }
         await automationGroup.click();
-        await expect.poll(() => sessionRows.count()).toBe(2);
+        await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("false");
+        for (const key of automationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(0);
+        }
+        for (const key of nonAutomationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(1);
+        }
 
-        const liveRow = activityPage.locator(`[data-activity-session="${releaseKey}"]`);
+        const liveRow = activitySession(releaseKey);
         await expect.poll(() => liveRow.locator(".activity-feed__run-dot").count()).toBe(1);
         await expect
           .poll(() => liveRow.locator(".activity-feed__session-headline").textContent())

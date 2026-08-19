@@ -814,7 +814,8 @@ while true; do sleep 1; done
       // Windows verifies the executable owner and ACL chain through OS tooling before op starts.
       // Keep the synchronization bound above that preflight without weakening the kill deadline.
       await Promise.race([
-        waitForPath(descendantReady, process.platform === "win32" ? 15_000 : 5_000),
+        // Source-mode loading now includes the shared process runtime before op starts.
+        waitForPath(descendantReady, process.platform === "win32" ? 15_000 : 10_000),
         resultPromise.then((result) => {
           throw new Error(
             `Resolver exited before the descendant was ready: ${JSON.stringify(result)}`,

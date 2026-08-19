@@ -72,16 +72,19 @@ export function applySessionMessagePayload(
     { type: "messagePersisted", message, envelope: event },
     { scope, runActive },
   );
+  const steerTargetRunId = persistedSteerTargetRunId(message);
+  const currentRunId = state.chatRunId;
   if (
     incoming.role === "user" &&
     runActive === true &&
-    state.chatRunId &&
     incoming.runId &&
-    persistedSteerTargetRunId(message) === state.chatRunId &&
+    steerTargetRunId &&
+    (!currentRunId || currentRunId === steerTargetRunId || currentRunId === incoming.runId) &&
     projection.messages.length > previousMessageCount
   ) {
+    state.chatRunId = steerTargetRunId;
     rolloverChatStream(state, {
-      runId: state.chatRunId,
+      runId: steerTargetRunId,
       boundaryRunId: incoming.runId,
     });
   }

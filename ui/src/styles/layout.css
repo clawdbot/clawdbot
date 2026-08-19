@@ -1496,6 +1496,9 @@ body.update-dialog-open .sidebar-update-card__status {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
+  /* Left-only on purpose (#124879): the right 8px of .sidebar-sessions padding is
+     clearance so a classic (non-overlay) scrollbar cannot clip the selection pill.
+     Reclaim space inside the row instead of widening it, or that fix regresses. */
   margin-inline: -8px 0;
   /* Sessions are stateful app chrome, not navigation links. */
   cursor: var(--cursor-action);
@@ -1534,7 +1537,7 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-recent-sessions__group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-height: 28px;
   border-radius: var(--radius-md);
   transition:
@@ -2053,7 +2056,7 @@ body.update-dialog-open .sidebar-update-card__status {
   align-items: center;
   min-width: 0;
   min-height: 30px;
-  padding-right: 4px;
+  padding-right: 2px;
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -2090,7 +2093,7 @@ body.update-dialog-open .sidebar-update-card__status {
   gap: var(--sidebar-row-gap);
   flex: 1 1 auto;
   min-width: 0;
-  padding: 3px 4px 3px var(--sidebar-inset);
+  padding: 4px 2px 4px var(--sidebar-inset);
   color: inherit;
   cursor: var(--cursor-action);
   text-decoration: none;
@@ -2297,8 +2300,8 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-session--child .sidebar-recent-session__link {
-  padding-top: 3px;
-  padding-bottom: 3px;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 
 .sidebar-recent-sessions
@@ -3209,7 +3212,10 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   color: var(--accent);
 }
 
-/* Pinned sessions share the page-nav visual contract while retaining session actions. */
+/* Pinned sessions share the page-nav chrome (hover/active fill, muted glyphs and
+   meta) while retaining session actions. The title deliberately opts out and
+   keeps the list's --text: a session name is content in both zones, and pinning
+   a row must not make it read as dimmer than the same row further down. */
 .sidebar-zone-entry .sidebar-recent-session {
   position: relative;
   min-height: 32px;
@@ -3227,13 +3233,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-zone-entry .sidebar-recent-session__link {
   gap: 8px;
   min-height: 30px;
-  padding: 0;
-}
-
-.sidebar-zone-entry .sidebar-recent-session__name {
-  color: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 500;
+  padding: 3px 0;
 }
 
 .sidebar-zone-entry .sidebar-recent-session:hover {
@@ -4235,6 +4235,24 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   min-width: 0;
 }
 
+/* No-preview rows collapse to one line so the endcap rides beside the title. */
+.sidebar-recent-session--single-line .sidebar-recent-session__text {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sidebar-row-gap);
+}
+
+.sidebar-recent-session--single-line .sidebar-recent-session__name {
+  width: auto;
+  flex: 1 1 auto;
+}
+
+.sidebar-recent-session--single-line > .sidebar-recent-session__aside {
+  top: 0;
+  display: flex;
+  align-items: center;
+}
+
 .sidebar-recent-session__subtitle {
   flex: 1 1 0;
   min-width: 0;
@@ -4243,7 +4261,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   white-space: nowrap;
   font-size: var(--control-ui-text-xs);
   line-height: 18px;
-  color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
+  color: var(--muted);
 }
 
 .sidebar-recent-session__details-endcap {

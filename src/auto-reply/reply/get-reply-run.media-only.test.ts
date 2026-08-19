@@ -4343,6 +4343,22 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.fastMode).toBe("auto");
   });
 
+  it("keeps an operator-reviewed proposal revision isolated on the queued run", async () => {
+    const proposalRevision = {
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "revision-h1",
+    };
+    await runPrepared({
+      opts: { skillWorkshopProposalRevision: proposalRevision } as never,
+    });
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.skillWorkshopProposalRevision).toEqual(proposalRevision);
+    expect(call.followupRun.run.skillWorkshopProposalRevision).not.toBe(proposalRevision);
+  });
+
   it("carries system events into followupRun.prompt for deferred turns", async () => {
     // drainFormattedSystemEvents returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.

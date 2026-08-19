@@ -252,6 +252,33 @@ struct RootTabsPresentationTests {
         #expect(!IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: false, hasOperatorAdminScope: true))
     }
 
+    @Test func `skill workshop actions carry the reviewed revision hash`() throws {
+        let revisionHash = String(repeating: "a", count: 64)
+        let proposal = Self.skillWorkshopProposal(revisionHash: revisionHash)
+        let apply = try #require(IPadSkillProposalAction(kind: .apply, proposal: proposal))
+        let reject = try #require(IPadSkillProposalAction(kind: .reject, proposal: proposal))
+
+        for (action, method) in [
+            (apply, "skills.proposals.apply"),
+            (reject, "skills.proposals.reject"),
+        ] {
+            let encoded = try #require(
+                JSONSerialization.jsonObject(
+                    with: JSONEncoder().encode(action.params(agentID: "main"))) as? [String: Any])
+
+            #expect(action.method == method)
+            #expect(encoded["agentId"] as? String == "main")
+            #expect(encoded["proposalId"] as? String == proposal.id)
+            #expect(encoded["expectedRevisionHash"] as? String == revisionHash)
+        }
+    }
+
+    @Test func `skill workshop actions require an inspected revision hash`() {
+        #expect(IPadSkillProposalAction(
+            kind: .apply,
+            proposal: Self.skillWorkshopProposal(revisionHash: nil)) == nil)
+    }
+
     @Test func `skill workshop held filter includes quarantined and stale`() {
         #expect(IPadSkillWorkshopScreen.proposalStatusFilters.contains("held"))
         #expect(IPadSkillWorkshopScreen.proposalStatusMatchesFilter(status: "quarantined", filter: "held"))
@@ -1058,5 +1085,23 @@ struct RootTabsPresentationTests {
             payload: AnyCodable(["kind": AnyCodable("agentTurn")]),
             state: [:],
             lastrunstatus: AnyCodable(status))
+    }
+
+    private static func skillWorkshopProposal(revisionHash: String?) -> IPadSkillProposal {
+        IPadSkillProposal(
+            inspect: IPadSkillProposalInspectResponse(
+                record: IPadSkillProposalRecord(
+                    id: "proposal-1",
+                    status: "pending",
+                    title: "Reviewed proposal",
+                    description: "A reviewed Skill Workshop proposal.",
+                    updatedAt: "2026-08-18T12:00:00Z",
+                    target: IPadSkillProposalTarget(
+                        skillName: "reviewed-skill",
+                        skillKey: "reviewed-skill")),
+                revisionHash: revisionHash,
+                content: "# Reviewed skill",
+                supportFiles: nil),
+            previous: nil)
     }
 }

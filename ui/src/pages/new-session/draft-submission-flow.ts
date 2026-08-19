@@ -10,7 +10,10 @@ import { openTerminalSessionInTerminal } from "../../lib/sessions/catalog-termin
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
-import { deleteSessionPlacementDraft } from "../../lib/sessions/session-placement-startup.ts";
+import {
+  deleteSessionPlacementDraft,
+  sessionPlacementDispatchParams,
+} from "../../lib/sessions/session-placement-startup.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
@@ -46,7 +49,7 @@ import {
   resolveNewSessionSubmitBlock,
   type NewSessionSubmitBlock,
 } from "./submit-gates.ts";
-import { startNewSessionInTerminal } from "./terminal-start.ts";
+import { readNewSessionTerminalStartAccess, startNewSessionInTerminal } from "./terminal-start.ts";
 
 export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
@@ -156,7 +159,7 @@ export class DraftSubmissionFlow {
     }
   }
 
-  markPendingCloudUnavailable(outcome: SubmissionOutcomeReason) {
+  markPendingPlacementUnavailable(outcome: SubmissionOutcomeReason) {
     this.pendingPlacement.retryAllowed = false;
     this.submissionOutcomeUnknownValue = outcome;
     this.callbacks.requestUpdate();
@@ -191,6 +194,7 @@ export class DraftSubmissionFlow {
     return Boolean(
       context &&
       catalog.isTarget(data) &&
+      !this.placement().target &&
       data?.startTerminal &&
       context.config.current.cliAgentsEnabled === true &&
       isTerminalAvailable(
@@ -221,7 +225,6 @@ export class DraftSubmissionFlow {
       worktreeName: this.place.worktreeName,
       cwd: this.place.folder,
       workspace: this.place.workspacePath(),
-      execNode: this.place.execNode,
       catalogId: snapshot.data?.catalogId,
       category: this.gateway.resolvedGroupCategory(),
     });
@@ -245,13 +248,25 @@ export class DraftSubmissionFlow {
         method: "sessions.create",
         params: createParams,
       });
-      if (!createAccess.allowed || !this.placementForSubmission().cloudProfileId) {
+      if (!createAccess.allowed || !this.placement().target) {
         return createAccess;
       }
     }
+    const target = this.placement().target;
+    if (!target) {
+      return readSessionMethodAccess(gateway, {
+        method: "sessions.create",
+        params: createParams,
+      });
+    }
     return readSessionMethodAccess(gateway, {
       method: "sessions.dispatch",
-      requiredScope: "operator.write",
+      requiredScope: target.kind === "profile" ? "operator.admin" : "operator.write",
+      params: sessionPlacementDispatchParams({
+        key: this.pendingPlacement.sessionKey,
+        agentId: this.pendingPlacement.agentId || this.place.agentId,
+        target,
+      }),
     });
   }
 
@@ -290,8 +305,12 @@ export class DraftSubmissionFlow {
         submissionSnapshot: () => this.read(),
         requiresModelSetup: () => this.requiresModelSetup(),
         submissionAccess: () => this.submissionAccess(),
-        terminalStartAccess: () => this.terminalStartAccess(),
-        cloudProfileForSubmission: () => this.placementForSubmission().cloudProfileId,
+        terminalStartAccess: () =>
+          readNewSessionTerminalStartAccess(
+            this.read().context?.gateway.snapshot,
+            this.place.worktree,
+          ),
+        placementTargetForSubmission: () => this.placement().target,
         cloudDisabledReason: () => this.cloudDisabledReason(),
         cloudRuntimeUnsupportedReason: () => this.cloudRuntimeUnsupportedReason(),
       },
@@ -304,7 +323,7 @@ export class DraftSubmissionFlow {
     return requiresChatModelSetup({
       catalog:
         catalog.isTarget(this.read().data) ||
-        Boolean(this.place.cloudProfileId) ||
+        Boolean(this.place.cloudProfileId || this.place.deviceId) ||
         Boolean(this.pendingPlacement.sessionKey),
       connected: this.gateway.connected,
       agentsLoaded: this.read().context?.agents.state.agentsList !== null,
@@ -341,7 +360,7 @@ export class DraftSubmissionFlow {
     this.blockedSubmitGate = null;
     this.invalidate();
     this.submissionOutcomeUnknownValue = preservePendingPlacement
-      ? (this.submissionOutcomeUnknownValue ?? "cloud-interrupted")
+      ? (this.submissionOutcomeUnknownValue ?? "placement-interrupted")
       : null;
     this.visibilityValue = "normal";
     this.attachmentDraft.reset({ release: true });
@@ -429,7 +448,7 @@ export class DraftSubmissionFlow {
         }
         this.place.browser.recordRemoteProjectId(remoteProject.cloneUrl, project.id);
       }
-      const { target: placementTarget } = this.placementForSubmission();
+      const { target: placementTarget } = this.placement();
       const draftRetired = this.visibilityValue === "draft" && !this.canStartAsDraft();
       const createParams = this.buildDraftSessionCreateParams({
         message: placementTarget ? "" : message,
@@ -456,15 +475,15 @@ export class DraftSubmissionFlow {
         return;
       }
       if (placementTarget && !pendingPlacement && !placementCreateParams) {
-        this.error = t("newSession.cloudStartFailed", {
-          error: "cloud recovery storage is unavailable",
+        this.error = t("newSession.placementStartFailed", {
+          error: "placement recovery storage is unavailable",
         });
         return;
       }
       const submissionPlacementRecovery = placementTarget ? this.pendingPlacement.capture() : null;
       if (placementTarget && !submissionPlacementRecovery) {
-        this.error = t("newSession.cloudStartFailed", {
-          error: "cloud recovery storage is unavailable",
+        this.error = t("newSession.placementStartFailed", {
+          error: "placement recovery storage is unavailable",
         });
         return;
       }
@@ -507,7 +526,7 @@ export class DraftSubmissionFlow {
           if (cleanupError) {
             this.pendingPlacement.promoteToDispatching(result.key);
             this.pendingPlacement.retryAllowed = true;
-            this.error = t("newSession.cloudStartFailed", { error: cleanupError });
+            this.error = t("newSession.placementStartFailed", { error: cleanupError });
             this.callbacks.requestUpdate();
           } else {
             this.clearPendingPlacementRecovery();
@@ -520,16 +539,16 @@ export class DraftSubmissionFlow {
           ownsSubmissionRecovery()
         ) {
           if (!this.pendingPlacement.promoteToDispatching(result.key)) {
-            this.error = t("newSession.cloudStartFailed", {
-              error: "cloud recovery storage is unavailable",
+            this.error = t("newSession.placementStartFailed", {
+              error: "placement recovery storage is unavailable",
             });
             return;
           }
         }
         const recovery = this.pendingPlacement.capture();
         if (!recovery || recovery.phase === "creating") {
-          this.error = t("newSession.cloudStartFailed", {
-            error: "cloud recovery storage is unavailable",
+          this.error = t("newSession.placementStartFailed", {
+            error: "placement recovery storage is unavailable",
           });
           return;
         }
@@ -667,7 +686,6 @@ export class DraftSubmissionFlow {
           catalogId,
           agentId,
           cwd: this.place.folder.trim() || this.place.workspacePath(),
-          execNode: this.place.execNode,
           initialMessage,
           worktree: this.place.worktree,
           worktreeName: this.place.worktreeName,
@@ -703,24 +721,7 @@ export class DraftSubmissionFlow {
     this.composerTextarea.disconnect();
   }
 
-  private terminalStartAccess(): SessionMethodAccess {
-    const gateway = this.read().context?.gateway.snapshot;
-    const terminalAccess = readSessionMethodAccess(gateway, {
-      method: "sessions.catalog.startTerminal",
-      requiredScope: "operator.admin",
-    });
-    if (!terminalAccess.allowed || !this.place.worktree) {
-      return terminalAccess;
-    }
-    return readSessionMethodAccess(gateway, {
-      method: "worktrees.create",
-      requiredScope: "operator.admin",
-    });
-  }
-
-  private placementForSubmission() {
-    return resolveDraftSessionPlacement(this.pendingPlacement, this.place);
-  }
+  private placement = () => resolveDraftSessionPlacement(this.pendingPlacement, this.place);
 
   private cloudRuntimeUnsupportedReason(): string | undefined {
     const runtime = this.place.modelControl.resolveAgentRuntime({
@@ -734,9 +735,7 @@ export class DraftSubmissionFlow {
 
   private applyRecoveryDraft(recovery: SessionPlacementRecovery) {
     const projection = projectDraftSessionPlacementRecovery(recovery);
-    if (projection.cloudPlace) {
-      this.place.applyPendingCloud(projection.cloudPlace);
-    }
+    this.place.applyPendingPlacement(projection.placement);
     this.restoreDraftState(projection.draft);
   }
 }

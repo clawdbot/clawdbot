@@ -935,6 +935,45 @@ describe("mirrorCodexAppServerTranscript", () => {
     ).toHaveLength(1);
   });
 
+  it("preserves mirror identity across redaction from prompt append through final snapshot", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-redacted-identity-");
+    const config = { logging: { redactPatterns: [String.raw`^codex-app-server:.*$`] } };
+    const userMessage = attachCodexMirrorIdentity(
+      makeAgentUserMessage({
+        content: [{ type: "text", text: "client prompt" }],
+        timestamp: Date.now(),
+      }),
+      "turn-1:prompt",
+    );
+    const assistantMessage = attachCodexMirrorIdentity(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "final answer" }],
+        timestamp: Date.now() + 1,
+      }),
+      "turn-1:assistant",
+    );
+    const mirrorParams = {
+      ...target,
+      idempotencyScope: "codex-app-server:thread-1",
+      config,
+    };
+
+    await mirrorCodexAppServerTranscript({ ...mirrorParams, messages: [userMessage] });
+    const finalMirror = await mirrorCodexAppServerTranscript({
+      ...mirrorParams,
+      messages: [userMessage, assistantMessage],
+    });
+
+    expect(finalMirror.assistantMirrorIdentitiesOwned).toEqual(["turn-1:assistant"]);
+    expect(await readMirrorMessages(target)).toEqual([
+      { role: "user", text: "client prompt" },
+      { role: "assistant", text: "final answer" },
+    ]);
+    const raw = await readMirrorRaw(target);
+    expect(raw).toContain('"idempotencyKey":"codex-app-server:thread-1:turn-1:prompt"');
+    expect(raw).toContain('"idempotencyKey":"codex-app-server:thread-1:turn-1:assistant"');
+  });
+
   it("emits message-bearing updates for newly appended mirrored messages only", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-live-updates-");
     const userMessage = attachCodexMirrorIdentity(

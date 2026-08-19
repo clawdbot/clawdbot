@@ -1424,34 +1424,6 @@ function Write-NpmInstallFailureDetails {
     }
 }
 
-function Resolve-NpmLifecyclePathIdentity {
-    param(
-        [string]$Identity,
-        [string]$NpmCwd
-    )
-    $isAbsolute = (
-        [System.IO.Path]::IsPathRooted($Identity) -or
-        $Identity -match '^[A-Za-z]:[\\/]' -or
-        $Identity -match '^\\\\'
-    )
-    if (-not $isAbsolute -or [string]::IsNullOrWhiteSpace($NpmCwd)) {
-        return $Identity
-    }
-    $separator = [System.IO.Path]::DirectorySeparatorChar
-    $basePath = $NpmCwd.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + $separator
-    $baseUri = New-Object -TypeName System.Uri -ArgumentList $basePath
-    $targetUri = New-Object -TypeName System.Uri -ArgumentList $Identity
-    if (-not $baseUri.IsFile -or -not $targetUri.IsFile) {
-        return $Identity
-    }
-    $relative = [System.Uri]::UnescapeDataString($baseUri.MakeRelativeUri($targetUri).ToString())
-    $relative = $relative.Replace([char]'/', $separator)
-    if ($relative -ne "." -and $relative -ne ".." -and -not $relative.StartsWith("..$separator")) {
-        $relative = ".$separator$relative"
-    }
-    return $relative
-}
-
 function Get-NpmLifecycleAllowArgument {
     param(
         [string]$NpmCommand,
@@ -1462,45 +1434,33 @@ function Get-NpmLifecycleAllowArgument {
     if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -eq 0) {
         throw "Unable to determine npm version; no package changes were made."
     }
-    $version = $versionOutput[-1].ToString().Trim()
-    if ($version -notmatch '^[vV]?(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)([-+][0-9A-Za-z.-]+)?$') {
-        throw "Unable to determine npm version; no package changes were made."
+    $nodeCommand = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $kernel = @'
+const path = require("node:path");
+const [versionOutput, spec, cwd] = process.argv.slice(2);
+const version = versionOutput.trim().split(/\r?\n/).at(-1) ?? "";
+const parsed = version.match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
+const fail = (message) => { process.stderr.write(`${message}\n`); process.exit(1); };
+if (!parsed) fail("Unable to determine npm version; no package changes were made.");
+if (+parsed[1] < 12 && (+parsed[1] !== 11 || +parsed[2] < 16)) process.exit(0);
+const normalized = spec.trim();
+const unaliased = normalized.toLowerCase().startsWith("openclaw@") ? normalized.slice(9).trim() : normalized;
+const explicit = (value) => /\.(?:tgz|tar\.gz)$/i.test(value) || value.includes("://") || value.includes("#") || /^(?:file|github|git\+(?:ssh|https|http|file)|npm):/i.test(value);
+let identity = !normalized || explicit(normalized) || explicit(unaliased) || /^\.{1,2}(?:[\\/]|$)/.test(unaliased) || path.isAbsolute(normalized) || path.isAbsolute(unaliased) ? unaliased : "openclaw";
+if (/^npm:/i.test(identity)) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
+const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
+if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
+if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'.`);
+process.stdout.write(`--allow-scripts=${identity}\n`);
+'@
+    $kernelOutput = @($kernel | & $nodeCommand - $versionOutput[-1].ToString() $InstallSpec $NpmCwd 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw $kernelOutput[-1].ToString()
     }
-    $major = [int]$Matches["major"]
-    $minor = [int]$Matches["minor"]
-    if ($major -lt 12 -and ($major -ne 11 -or $minor -lt 16)) {
+    if ($kernelOutput.Count -eq 0) {
         return $null
     }
-    $identity = $InstallSpec.Trim()
-    if ($identity.StartsWith("openclaw@", [System.StringComparison]::OrdinalIgnoreCase)) {
-        $identity = $identity.Substring("openclaw@".Length)
-    }
-    if ($identity.StartsWith("npm:", [System.StringComparison]::OrdinalIgnoreCase)) {
-        $target = $identity.Substring("npm:".Length)
-        if ($target.StartsWith("@")) {
-            $slash = $target.IndexOf("/")
-            $versionAt = if ($slash -ge 0) { $target.IndexOf("@", $slash + 1) } else { -1 }
-            $identity = if ($versionAt -ge 0) { $target.Substring(0, $versionAt) } else { $target }
-        } else {
-            $versionAt = $target.IndexOf("@")
-            $identity = if ($versionAt -ge 0) { $target.Substring(0, $versionAt) } else { $target }
-        }
-    } elseif (
-        $identity -notmatch '^(https?|file|git\+|github:)' -and
-        $identity -notmatch '^[A-Za-z]:[\\/]' -and
-        $identity -notmatch '^\\\\' -and
-        $identity -notmatch '^\.\.?[\\/]' -and
-        $identity -notmatch '\.(tgz|tar\.gz)$'
-    ) {
-        $identity = "openclaw"
-    }
-    if ($identity -match '^/' -or $identity -match '^[A-Za-z]:[\\/]' -or $identity -match '^\\\\') {
-        $identity = Resolve-NpmLifecyclePathIdentity -Identity $identity -NpmCwd $NpmCwd
-    }
-    if ([string]::IsNullOrWhiteSpace($identity) -or $identity.Contains(",")) {
-        throw "npm cannot allow lifecycle scripts for install target '$InstallSpec'."
-    }
-    return "--allow-scripts=$identity"
+    return $kernelOutput[-1].ToString()
 }
 
 function Test-NpmLifecycleCompleted {

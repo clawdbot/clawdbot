@@ -184,6 +184,37 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
   });
 
+  it("collapses hidden previews to one line without hiding attention", async () => {
+    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+    setRows(sessionsHarness, [
+      {
+        key: sessionKey,
+        kind: "direct",
+        label: "Deploy",
+        updatedAt: 2,
+        agentStatus: { note: "Deploying to staging", expiresAt: Date.now() + 60_000 },
+      },
+    ]);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessionsHarness.sessions,
+    );
+
+    sidebar.sessionOrganizer.setSessionsShowPreview(false);
+    await sidebar.updateComplete;
+
+    const previewRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    expect(previewRow?.textContent).not.toContain("Deploying to staging");
+    expect(previewRow?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
+
+    setRows(sessionsHarness, [failedRow()]);
+    await sidebar.updateComplete;
+
+    const attentionRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    expect(attentionRow?.textContent).toContain("Run failed: Provider credits exhausted");
+    expect(attentionRow?.classList.contains("sidebar-recent-session--single-line")).toBe(false);
+  });
+
   it("does not render an expired agent declaration", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [

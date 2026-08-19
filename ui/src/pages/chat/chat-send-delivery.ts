@@ -381,15 +381,18 @@ async function sendQueuedChatMessage(
         });
         void loadChatHistory(host);
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
-        const adopted = host.chatRunId === ack.runId;
-        const adoptedStream = adopted && typeof host.chatStream === "string";
-        host.chatRunId = ack.runId;
-        if (!adopted) {
-          host.chatRunStartup = null;
-        }
-        if (!adoptedStream) {
-          host.chatStream = "";
-          host.chatStreamStartedAt = startedAt;
+        // A steer ACK identifies its client operation, not the active model run.
+        if (prepared.queueMode !== "steer" || !host.chatRunId) {
+          const adopted = host.chatRunId === ack.runId;
+          const adoptedStream = adopted && typeof host.chatStream === "string";
+          host.chatRunId = ack.runId;
+          if (!adopted) {
+            host.chatRunStartup = null;
+          }
+          if (!adoptedStream) {
+            host.chatStream = "";
+            host.chatStreamStartedAt = startedAt;
+          }
         }
       }
     }

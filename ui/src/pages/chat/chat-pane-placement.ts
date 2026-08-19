@@ -13,7 +13,7 @@ import { t } from "../../i18n/index.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { requestPlaceCatalog } from "../new-session/cloud-target.ts";
-import { readDraftNodes } from "../new-session/discovery.ts";
+import { projectDevicePlacements } from "../new-session/device-placement.ts";
 
 export function resolveChatPaneDesktopTarget(
   session: GatewaySessionRow | undefined,
@@ -80,14 +80,12 @@ export function resolveChatPanePlacement(params: {
   };
 }
 
-async function loadPlacementMoveCatalog(client: GatewayBrowserClient, includeNodes: boolean) {
-  const [catalog, nodesResult] = await Promise.all([
-    requestPlaceCatalog(client),
-    includeNodes
-      ? client.request<{ nodes?: unknown }>("node.list", {})
-      : Promise.resolve({ nodes: [] }),
-  ]);
-  return { profiles: catalog.profiles, nodes: readDraftNodes(nodesResult?.nodes) };
+async function loadPlacementMoveCatalog(client: GatewayBrowserClient, includeProfiles: boolean) {
+  const catalog = await requestPlaceCatalog(client);
+  return {
+    profiles: includeProfiles ? catalog.profiles : [],
+    devices: projectDevicePlacements(catalog.environments),
+  };
 }
 
 export async function moveChatPanePlacement(params: {
