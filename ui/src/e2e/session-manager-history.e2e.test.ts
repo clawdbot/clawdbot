@@ -105,6 +105,7 @@ suite.define(() => {
           agentId: "main",
           limit: 25,
           query: "deployment history",
+          resultMode: "messages",
           sessionKeys: [main.key, research.key],
         });
         await result.click();

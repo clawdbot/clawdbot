@@ -162,6 +162,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
       agentId: "main",
       limit: 25,
       query: "nebula launch",
+      resultMode: "messages",
       sessionKeys: ["agent:main:launch"],
     });
     await expect.poll(() => result.textContent()).toContain("Launch planning");
@@ -249,6 +250,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
       agentId: "main",
       limit: 25,
       query: "launch code",
+      resultMode: "messages",
       sessionKeys: [first.key, moved.key, missed.key],
     });
   });
