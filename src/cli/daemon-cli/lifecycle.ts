@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { createConfigIO } from "../../config/io.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -97,13 +98,10 @@ function formatRestartFailure(params: {
     };
   }
 
+  const elapsed = params.health.elapsedMs;
   const timeoutSeconds = Math.max(
     1,
-    Math.round(
-      params.health.elapsedMs === undefined
-        ? params.defaultTimeoutSeconds
-        : params.health.elapsedMs / 1000,
-    ),
+    Math.round(elapsed === undefined ? params.defaultTimeoutSeconds : elapsed / 1000),
   );
   return {
     statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
@@ -114,7 +112,13 @@ function formatRestartFailure(params: {
 async function resolveGatewayLifecycleContext(service = resolveGatewayService()) {
   const command = await service.readCommand(process.env).catch(() => null);
   const env = mergeGatewayServiceEnv(process.env, command);
-  const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
+  const config = await createConfigIO({
+    env,
+    pluginValidation: "skip",
+    suppressFutureVersionWarning: true,
+  })
+    .readBestEffortConfig()
+    .catch(() => undefined);
   const port = parsePortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
   return { port, env, command };
 }
@@ -212,7 +216,6 @@ async function stopGatewayWithoutServiceManager(
   // reporting the gateway as not running while it keeps serving.
   const pids = listenerPids.length > 0 ? listenerPids : lockOwnerPid ? [lockOwnerPid] : [];
   if (pids.length === 0) {
-    // Probe only the interfaces the selected service binds, not the caller's.
     const probeHosts = await resolveGatewayServiceProbeHosts(serviceContext ?? {});
     if ((await probePortUsage(port, probeHosts)) === "busy") {
       throw new Error(
@@ -236,13 +239,7 @@ async function stopGatewayWithoutServiceManager(
   };
 }
 
-async function resolveRestartListenerHealthWait(
-  restartIntent: GatewayRestartIntent | undefined,
-): Promise<{
-  attempts: number;
-  waitIndefinitelyForPreviousOwner: boolean;
-  timeoutSeconds: number;
-}> {
+async function resolveRestartListenerHealthWait(restartIntent: GatewayRestartIntent | undefined) {
   let drainTimeoutMs: number | undefined;
   if (restartIntent?.force) {
     drainTimeoutMs = 0;
