@@ -75,7 +75,10 @@ suite.define(() => {
         await session.waitFor();
         await session.hover();
         await session.locator("[data-session-menu]").click();
-        const menuSurface = session.locator("wa-dropdown.session-menu").locator('[part="menu"]');
+        const menuSurface = page.getByRole("menu", {
+          name: "Actions for Release notes",
+          exact: true,
+        });
         await menuSurface.waitFor({ state: "visible" });
         const menuTokens = await surfaceTokens(menuSurface);
 
