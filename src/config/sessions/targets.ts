@@ -1,11 +1,7 @@
 // Session store target discovery maps configured and on-disk agent stores to canonical targets.
 import fsSync from "node:fs";
 import path from "node:path";
-import {
-  listAgentEntries,
-  listAgentIds,
-  resolveAmbientOwnerAgentId,
-} from "../../agents/agent-scope.js";
+import { listAgentEntries, listAgentIds, resolveSoleAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -13,7 +9,10 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
-import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../legacy.default-agent-owner.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
@@ -651,7 +650,11 @@ export function resolveSessionStoreTargets(
     const defaultAgentId =
       requestedAgentId ??
       (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
-      resolveAmbientOwnerAgentId(cfg);
+      // Session-store selection enumerates agents: silently adopting the system
+      // agent would hide the other agents' sessions, so this stays explicit and
+      // offers --agent/--all-agents instead of the ambient owner chain.
+      tryResolveLegacyCompatibilityAgentId(cfg) ??
+      resolveSoleAgentId(cfg);
     const knownAgentIds = new Set(listAgentIds(cfg).map(normalizeAgentId));
     if (hasAgent && !knownAgentIds.has(defaultAgentId)) {
       throw new Error(
@@ -707,7 +710,9 @@ export function resolveSessionStoreTargets(
   }
   const defaultAgentId =
     (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
-    resolveAmbientOwnerAgentId(cfg);
+    // Explicit selection, not ambient ownership: see listConfiguredSessionStoreAgentIds.
+    tryResolveLegacyCompatibilityAgentId(cfg) ??
+    resolveSoleAgentId(cfg);
   return [
     {
       agentId: defaultAgentId,
