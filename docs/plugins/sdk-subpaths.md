@@ -8,9 +8,9 @@ title: "Plugin SDK subpaths"
 ---
 
 The plugin SDK contains narrow public subpaths and repository-only bundled
-helpers under `openclaw/plugin-sdk/`.
-This page catalogs every typed public subpath and labels selected private-local entries explicitly; it is not an inventory of every internal runtime helper.
-Three files define the boundary:
+helpers under `openclaw/plugin-sdk/`. This page catalogs every typed public
+subpath and labels selected private-local entries explicitly; it is not an
+inventory of every internal runtime helper. Four files define the boundary:
 
 - `scripts/lib/plugin-sdk-entrypoints.json`: the maintained entrypoint inventory
   the build compiles.
@@ -18,6 +18,8 @@ Three files define the boundary:
   excluded from the typed, documented SDK. Production entries remain available
   as JavaScript-only host runtime exports for separately published official
   plugins; test-only entries stay unexported.
+- `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`: public compatibility
+  subpaths retained only through their documented removal windows.
 - `scripts/lib/plugin-sdk-entries.mts`: derived public/private export metadata,
   supported bundled facades, and plugin-owned public surfaces.
 
