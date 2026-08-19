@@ -2835,6 +2835,22 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("routes package fixture assets to their owner test", () => {
+    const owner = "packages/ai/src/provider-transport-parity.test.ts";
+    const fixturePaths = [
+      "packages/ai/test/fixtures/provider-transport-parity/anthropic-success.snap.txt",
+      "packages/ai/test/fixtures/provider-transport-parity/anthropic-error.snap.txt",
+    ];
+    for (const fixturePath of fixturePaths) {
+      expectChangedTargets([fixturePath], [owner]);
+    }
+    expectChangedTargets(fixturePaths, [owner]);
+    expectSingleVitestRunPlan(
+      buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => fixturePaths),
+      { config: "test/vitest/vitest.unit.config.ts", forwardedArgs: [owner] },
+    );
+  });
+
   it.each([
     "test/vitest/vitest.agents-core.config.ts",
     "test/vitest/vitest.agents-embedded-agent.config.ts",
