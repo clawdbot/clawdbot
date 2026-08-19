@@ -87,6 +87,7 @@
   "model-ref-parse",
   "music-generation",
   "node-host",
+  "node-selection-runtime",
   "number-runtime",
   "outbound-echo-runtime",
   "outbound-media",

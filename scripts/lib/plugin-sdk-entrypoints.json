@@ -64,6 +64,7 @@
   "dedupe-runtime",
   "delivery-queue-runtime",
   "file-access-runtime",
+  "node-selection-runtime",
   "heartbeat-runtime",
   "expect-runtime",
   "number-runtime",

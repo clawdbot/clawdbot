@@ -130,6 +130,7 @@
     "!dist/plugin-sdk/music-generation.d.ts",
     "!dist/plugin-sdk/native-hook-relay-runtime.d.ts",
     "!dist/plugin-sdk/node-host.d.ts",
+    "!dist/plugin-sdk/node-selection-runtime.d.ts",
     "!dist/plugin-sdk/number-runtime.d.ts",
     "!dist/plugin-sdk/outbound-media.d.ts",
     "!dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
@@ -619,6 +620,9 @@
     },
     "./plugin-sdk/file-access-runtime": {
       "default": "./dist/plugin-sdk/file-access-runtime.js"
+    },
+    "./plugin-sdk/node-selection-runtime": {
+      "default": "./dist/plugin-sdk/node-selection-runtime.js"
     },
     "./plugin-sdk/heartbeat-runtime": {
       "default": "./dist/plugin-sdk/heartbeat-runtime.js"
