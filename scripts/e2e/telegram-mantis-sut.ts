@@ -582,6 +582,9 @@ export async function startMantisSut(params: {
 }): Promise<MantisSutRuntime> {
   const drained = await drainSutUpdates(params.sutToken);
   const config = writeSutConfig(params);
+  // The root wrapper relocates tempRoot into its bounded filesystem, then restores this
+  // exact path as a symlink before Docker starts. Keep controller and claim paths anchored
+  // here so live log reads, mock updates, stop, and destroy all share one runtime identity.
   const requestLog = path.join(config.tempRoot, "mock-openai-requests.ndjson");
   const mockLog = path.join(config.tempRoot, "mock-openai.log");
   const mockResponseControlDir = path.join(config.tempRoot, "mock-control");

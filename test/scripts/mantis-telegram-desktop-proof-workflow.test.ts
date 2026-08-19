@@ -840,6 +840,18 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).not.toContain('/bin/cp -a "$runtime_source/." "$safe_runtime/"');
     expect(wrapper).toContain('create_bounded_filesystem "${container_name}-fs" 10G');
     expect(wrapper).toContain('ln -s "$safe_runtime" "$runtime_source"');
+    expect(wrapper.indexOf('ln -s "$safe_runtime" "$runtime_source"')).toBeLessThan(
+      wrapper.indexOf(
+        "install -T -o mantis-sut -g mantis-sut -m 0600",
+        wrapper.indexOf('ln -s "$safe_runtime" "$runtime_source"'),
+      ),
+    );
+    expect(sutScript).toContain(
+      'const mockResponseControlDir = path.join(config.tempRoot, "mock-control")',
+    );
+    expect(sutScript).toContain(
+      'const requestLog = path.join(config.tempRoot, "mock-openai-requests.ndjson")',
+    );
     expect(wrapper).toContain("refusing to destroy a running SUT container");
     expect(wrapper).toContain('destroy_bounded_filesystem "$runtime_root"');
     expect(wrapper).toContain('create_runtime_claim "$container_name" "$runtime_source"');
