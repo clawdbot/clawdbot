@@ -60,7 +60,10 @@ import {
 } from "./settings.ts";
 import { createSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
-import { resolveApplicationStartupSettings } from "./startup-settings.ts";
+import {
+  normalizeLegacyTerminalViewLocation,
+  resolveApplicationStartupSettings,
+} from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
@@ -273,14 +276,21 @@ export function bootstrapApplication(
       saveSettings(startup.settings);
     }
   }
-  const basePath = resolveControlUiBasePath(
-    startup.location.pathname || globalThis.location?.pathname || "/",
+  const applicationLocation = normalizeLegacyTerminalViewLocation(
+    startup.location,
+    initialBasePath,
   );
-  const focusLocation = parseControlUiFocusLocation(startup.location, basePath);
+  if (applicationLocation !== startup.location) {
+    history.replace(applicationLocation);
+  }
+  const basePath = resolveControlUiBasePath(
+    applicationLocation.pathname || globalThis.location?.pathname || "/",
+  );
+  const focusLocation = parseControlUiFocusLocation(applicationLocation, basePath);
   const firstRunDefaultLanding =
     documentMode === null &&
     focusLocation === null &&
-    isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
+    isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
   const firstRunRedirectEnabled = firstRunDefaultLanding;
   const sessionPathBuilderReady =
     dependencies.sessionPathBuilderReady ??
@@ -307,11 +317,11 @@ export function bootstrapApplication(
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
-  const startupRouteId = routeIdFromPath(startup.location.pathname, basePath);
+  const startupRouteId = routeIdFromPath(applicationLocation.pathname, basePath);
   const releasedSessionQuery =
     (startupRouteId === "chat" || startupRouteId === "dashboard") &&
-    sessionRouteNamespaceFromPath(startup.location.pathname, basePath) === null &&
-    new URLSearchParams(startup.location.search).has("session");
+    sessionRouteNamespaceFromPath(applicationLocation.pathname, basePath) === null &&
+    new URLSearchParams(applicationLocation.search).has("session");
   const deferInitialLocationUntilGateway =
     documentMode === null &&
     !releasedSessionQuery &&
@@ -319,11 +329,11 @@ export function bootstrapApplication(
     !parseAgentSessionKey(settings.sessionKey);
   const initialLocationReady = (
     documentMode || focusLocation
-      ? Promise.resolve(startup.location)
+      ? Promise.resolve(applicationLocation)
       : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
           ([, location]) =>
             location.resolveInitialApplicationLocation({
-              location: startup.location,
+              location: applicationLocation,
               basePath,
               sessionKey: settings.sessionKey,
               gateway,
@@ -335,7 +345,7 @@ export function bootstrapApplication(
     // stop() aborts an eager unscoped-session lookup even when start() returns
     // at the lazy-chunk guard, so consume that teardown-only rejection here.
     if (startupLifecycle.signal.aborted) {
-      return startup.location;
+      return applicationLocation;
     }
     throw error;
   });

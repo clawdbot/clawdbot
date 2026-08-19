@@ -21,7 +21,11 @@ suite.define(() => {
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}dashboards`);
       await page.locator("openclaw-app-shell").waitFor();
-      await page.goto(`${suite.server.baseUrl}focus/terminal`);
+      await page.goto(`${suite.server.baseUrl}?view=terminal`);
+
+      await page.waitForURL(`${suite.server.baseUrl}focus/terminal`);
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+      expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
 
       await page
         .getByText("The terminal is not available on this gateway.", { exact: true })

@@ -178,6 +178,13 @@ permission, and capability checks of its normal or embedded surface. In
 particular, the terminal still requires `gateway.terminal.enabled` and an
 `operator.admin` connection.
 
+Stable releases previously emitted `/?view=terminal`. The Control UI accepts
+that form only at the application root (or `<basePath>/?view=terminal`) and
+immediately replaces it in browser history with `/focus/terminal` under the
+same base path, removing the legacy `view` parameter. New links must use
+`/focus/terminal`. The query form is not recognized on other application
+paths, and the removed desktop and dashboard query forms are not accepted.
+
 `/focus` and unsupported `/focus/*` targets show an error without the ordinary
 application shell. They do not open a normal application route.
 
@@ -262,11 +269,12 @@ These Gateway-served documents sit outside the application route table:
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
   never authorizes it; normal Gateway authentication still applies.
 
-Relative to the configured base path, the Gateway reserves exact `/focus` and
-every `/focus/*` path ahead of plugin HTTP routes. `GET` and `HEAD` serve the
-Control UI document. Other methods return `404`, and every method returns `404`
-when Control UI serving is disabled. Lookalikes such as `/focused` are not
-reserved.
+Registered exact and prefix plugin HTTP routes can own `/focus` and
+`/focus/*`. After plugin authentication and dispatch decline a request, the
+Gateway uses those paths as the Control UI focus fallback: unclaimed `GET` and
+`HEAD` requests serve the Control UI document, while other methods return
+`404`. Every unclaimed method returns `404` when Control UI serving is
+disabled. Lookalikes such as `/focused` are not part of the focus fallback.
 
 The approval namespace is reserved ahead of plugin HTTP routes for all HTTP
 methods. When Control UI serving is disabled, it returns `404` instead of

@@ -111,7 +111,7 @@ describe("Control UI focus locations", () => {
     "/terminal",
     "/desktop",
     "/focused/terminal",
-  ])("does not recognize removed or lookalike location %s", (pathname) => {
+  ])("does not parse query aliases or lookalike location %s", (pathname) => {
     expect(parseControlUiFocusLocation(pathname, "")).toBeNull();
   });
 
