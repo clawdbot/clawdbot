@@ -23,7 +23,7 @@ scenario:
   successCriteria:
     - Visible completion output reaches the originating QA DM exactly once.
     - Exact worker NO_REPLY stays private while required parent completion represents missing child output visibly exactly once.
-    - Empty output after a side effect remains a failed execution while its terminal representation is delivered exactly once.
+    - Empty output after a side effect settles as a blocked completion while its terminal representation is delivered exactly once.
     - Gateway restart does not replay prior terminal payloads or synthesize interruption notices for already-settled handoffs, and a post-restart completion is delivered exactly once.
     - Direct fallback strips protected internal metadata before one channel delivery.
   docsRefs:
@@ -265,8 +265,8 @@ flow:
               ref: emptyConversationId
             senderName: QA Empty Reply Operator
             text: "Subagent terminal reply QA check: empty. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP."
-        # Empty output after one side effect is an incomplete turn, but its
-        # failed execution still owns one visible terminal representation.
+        # Subagent lifecycle owns empty completion classification, while its
+        # blocked completion still owns one visible terminal representation.
         - call: waitForCondition
           saveAs: emptyTask
           args:
@@ -297,7 +297,7 @@ flow:
             message:
               expr: "`empty completion did not exercise native spawn/direct-fallback: ${JSON.stringify(emptyRequests)}`"
         - assert:
-            expr: "emptyTask.title === 'qa-terminal-empty' && emptyTask.status === 'failed' && emptyTask.deliveryStatus === 'delivered' && emptyTask.toolUseCount === 1 && emptyTask.lastToolName === 'write'"
+            expr: "emptyTask.title === 'qa-terminal-empty' && emptyTask.status === 'completed' && emptyTask.terminalOutcome === 'blocked' && emptyTask.deliveryStatus === 'delivered' && emptyTask.toolUseCount === 1 && emptyTask.lastToolName === 'write'"
             message:
               expr: "`empty completion execution and delivery did not settle independently; task=${JSON.stringify(emptyTask)}`"
         - set: appendEmptyVerdict
