@@ -379,6 +379,7 @@ async function createQaLabSuiteResultFixture(params?: {
     writeFile(
       summaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: scenarios.length,
           passed: scenarios.filter((scenario) => scenario.status === "pass").length,
@@ -571,6 +572,7 @@ describe("qa-lab server", () => {
     {
       label: "empty",
       summary: JSON.stringify({
+        run: { status: "completed" },
         counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
         scenarios: [],
       }),
