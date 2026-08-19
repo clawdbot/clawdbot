@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
   normalizeDailyIngestionState,
@@ -1306,18 +1307,20 @@ async function runLightDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const recentEntries = await filterLiveShortTermRecallEntries({
-    workspaceDir: params.workspaceDir,
-    entries: await filterFreshLightDreamingEntries({
+  const recentEntries = (
+    await filterLiveShortTermRecallEntries({
       workspaceDir: params.workspaceDir,
-      nowMs,
-      entries: filterRecallEntriesWithinLookback({
-        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+      entries: await filterFreshLightDreamingEntries({
+        workspaceDir: params.workspaceDir,
         nowMs,
-        lookbackDays: params.config.lookbackDays,
+        entries: filterRecallEntriesWithinLookback({
+          entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+          nowMs,
+          lookbackDays: params.config.lookbackDays,
+        }),
       }),
-    }),
-  });
+    })
+  ).filter((entry) => !isPromotionOriginBlocked(entry));
   const rankedEntries = dedupeEntries(
     recentEntries.toSorted((a, b) => {
       const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
@@ -1407,14 +1410,16 @@ async function runRemDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const allEntries = await filterLiveShortTermRecallEntries({
-    workspaceDir: params.workspaceDir,
-    entries: filterRecallEntriesWithinLookback({
-      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
-      nowMs,
-      lookbackDays: params.config.lookbackDays,
-    }),
-  });
+  const allEntries = (
+    await filterLiveShortTermRecallEntries({
+      workspaceDir: params.workspaceDir,
+      entries: filterRecallEntriesWithinLookback({
+        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+        nowMs,
+        lookbackDays: params.config.lookbackDays,
+      }),
+    })
+  ).filter((entry) => !isPromotionOriginBlocked(entry));
   // Prefer entries staged by light sleep so REM synthesises from the
   // sequential light→REM pipeline instead of rescanning the full store.
   const lightKeys = await readLightStagedKeys({

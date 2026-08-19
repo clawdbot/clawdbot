@@ -16,6 +16,8 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 type SubagentRunParams = {
   sessionKey: string;
   message: string;
+  /** Run with an exact empty tool surface. */
+  disableTools?: boolean;
   /** Add exact tools registered by the calling plugin to the worker's normal tool surface. */
   toolsAlsoAllow?: string[];
   provider?: string;

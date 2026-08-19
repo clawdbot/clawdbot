@@ -16,6 +16,7 @@ import type {
   MemoryPromptSectionParams,
   MemoryPromptSectionPreparer,
   MemoryPromptSupplementRegistration,
+  MemoryWriteProvenancePlan,
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
 import { requireActivePluginRegistry, resolveDirectPluginRegistrationOwner } from "./runtime.js";
@@ -33,6 +34,7 @@ export type {
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
   MemoryPromptSectionParams,
+  MemoryWriteProvenancePlan,
   PreparedMemoryPromptSection,
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
@@ -49,6 +51,7 @@ export function resolveMemoryCapabilityRegistration(
       Boolean(registration.capability.publicArtifacts) &&
       !registration.capability.promptBuilder &&
       !registration.capability.flushPlanResolver &&
+      !registration.capability.writeProvenance &&
       !registration.capability.runtime;
     effective = {
       pluginId: registration.pluginId,
@@ -255,6 +258,9 @@ export function resolveMemoryFlushPlan(params: {
   nowMs?: number;
 }): MemoryFlushPlan | null {
   return getMemoryCapability()?.capability.flushPlanResolver?.(params) ?? null;
+}
+export function resolveMemoryWriteProvenancePlan(): MemoryWriteProvenancePlan | null {
+  return getMemoryCapability()?.capability.writeProvenance ?? null;
 }
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return getMemoryCapability()?.capability.runtime;

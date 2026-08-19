@@ -6,6 +6,7 @@ import {
   resolveCronStyleNow,
   SILENT_REPLY_TOKEN,
   type MemoryFlushPlan,
+  type MemoryWriteProvenancePlan,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -117,44 +118,8 @@ function appendCurrentTimeLine(text: string, timeLine: string): string {
   return `${trimmed}\n${timeLine}`;
 }
 
-export function buildMemoryFlushPlan(
-  params: {
-    cfg?: OpenClawConfig;
-    nowMs?: number;
-  } = {},
-): MemoryFlushPlan | null {
-  const resolved = params;
-  const nowMs = resolveMemoryCoreNowMs(resolved.nowMs);
-  const cfg = resolved.cfg;
-  const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
-  if (defaults?.enabled === false) {
-    return null;
-  }
-
-  const softThresholdTokens =
-    normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
-  const forceFlushTranscriptBytes =
-    parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
-    DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
-  const reserveTokensFloor = DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
-
-  const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
-  const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
-  const relativePath = `memory/${dateStamp}.md`;
-
-  const promptBase = ensureNoReplyHint(ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_PROMPT));
-  const systemPrompt = ensureNoReplyHint(
-    ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT),
-  );
-
+export function buildMemoryWriteProvenancePlan(): MemoryWriteProvenancePlan {
   return {
-    softThresholdTokens,
-    forceFlushTranscriptBytes,
-    reserveTokensFloor,
-    model: defaults?.model?.trim() || undefined,
-    prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
-    systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
-    relativePath,
     recordWriteProvenance: async (write) => {
       const writtenPath = normalizeAgentMemoryPath(write.relativePath);
       if (!writtenPath) {
@@ -213,5 +178,47 @@ export function buildMemoryFlushPlan(
         key: normalized,
       });
     },
+  };
+}
+
+export function buildMemoryFlushPlan(
+  params: {
+    cfg?: OpenClawConfig;
+    nowMs?: number;
+  } = {},
+): MemoryFlushPlan | null {
+  const resolved = params;
+  const nowMs = resolveMemoryCoreNowMs(resolved.nowMs);
+  const cfg = resolved.cfg;
+  const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
+  if (defaults?.enabled === false) {
+    return null;
+  }
+
+  const softThresholdTokens =
+    normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+  const forceFlushTranscriptBytes =
+    parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
+    DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
+  const reserveTokensFloor = DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
+
+  const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
+  const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
+  const relativePath = `memory/${dateStamp}.md`;
+
+  const promptBase = ensureNoReplyHint(ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_PROMPT));
+  const systemPrompt = ensureNoReplyHint(
+    ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT),
+  );
+
+  return {
+    softThresholdTokens,
+    forceFlushTranscriptBytes,
+    reserveTokensFloor,
+    model: defaults?.model?.trim() || undefined,
+    prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
+    systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
+    relativePath,
+    ...buildMemoryWriteProvenancePlan(),
   };
 }

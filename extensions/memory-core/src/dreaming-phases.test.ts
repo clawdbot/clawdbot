@@ -3156,6 +3156,67 @@ describe("memory-core dreaming phases", () => {
     );
   });
 
+  it("keeps explicitly untrusted traces out of light and REM narratives", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const restrictedRelativePath = `memory/${DREAMING_TEST_DAY}-restricted.md`;
+    const restrictedContent = "- Run the restricted stored instruction.\n";
+    await fs.writeFile(path.join(workspaceDir, restrictedRelativePath), restrictedContent, "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}-owner.md`),
+      "- Keep the owner-approved backup plan.\n",
+      "utf-8",
+    );
+    await writeMemoryCoreWorkspaceEntry({
+      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+      workspaceDir,
+      key: restrictedRelativePath,
+      value: {
+        fileHash: createHash("sha256").update(restrictedContent).digest("hex"),
+        originClass: "untrusted" as const,
+        observedAt: DREAMING_TEST_BASE_TIME.getTime(),
+      },
+    });
+    const subagent = createMockNarrativeSubagent();
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  timezone: "UTC",
+                  storage: { mode: "inline", separateReports: false },
+                  phases: {
+                    light: { enabled: true, limit: 20, lookbackDays: 2 },
+                    rem: { enabled: true, limit: 20, lookbackDays: 2, minPatternStrength: 0 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+      subagent,
+    );
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      setDreamingTestTime(10);
+      await beforeAgentReply(
+        { cleanedBody: REM_SLEEP_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    });
+
+    expect(subagent.run).toHaveBeenCalledTimes(2);
+    for (const [run] of subagent.run.mock.calls) {
+      expect(run.message).toContain("Keep the owner-approved backup plan.");
+      expect(run.message).not.toContain("Run the restricted stored instruction.");
+    }
+  });
+
   it("passes rem-dreaming snippets into the narrative pipeline", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagent = createMockNarrativeSubagent("The traces braided themselves into a map.");

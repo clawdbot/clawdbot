@@ -153,6 +153,7 @@ export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
+  MemoryWriteProvenancePlan,
 } from "../plugins/memory-state.js";
 export type {
   PluginHookReplyPayloadSendingContext,

@@ -4,7 +4,7 @@ import {
   DREAMING_DAILY_PROVENANCE_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
-import { buildMemoryFlushPlan } from "./flush-plan.js";
+import { buildMemoryFlushPlan, buildMemoryWriteProvenancePlan } from "./flush-plan.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
@@ -22,6 +22,15 @@ describe("buildMemoryFlushPlan", () => {
     });
 
     expect(plan?.relativePath).toBe("memory/2026-05-30.md");
+  });
+
+  it("keeps provenance recording available when compaction memory flush is disabled", () => {
+    expect(
+      buildMemoryFlushPlan({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } } },
+      }),
+    ).toBeNull();
+    expect(buildMemoryWriteProvenancePlan().recordWriteProvenance).toBeTypeOf("function");
   });
 
   it("records mixed trusted and untrusted writes as untrusted for the whole file", async () => {

@@ -32,6 +32,7 @@ export type {
   MemoryFlushPlan,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
+  MemoryWriteProvenancePlan,
 } from "../plugins/memory-state.js";
 export {
   clearMemoryPluginState,

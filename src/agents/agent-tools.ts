@@ -23,7 +23,7 @@ import type {
   PluginHookChannelContext,
   PluginHookToolRequesterContext,
 } from "../plugins/hook-types.js";
-import { resolveMemoryFlushPlan } from "../plugins/memory-state.js";
+import { resolveMemoryWriteProvenancePlan } from "../plugins/memory-state.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -523,7 +523,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     : createMemoryWriteProvenanceObserver({
         mutationRoot: sandboxRoot ?? workspaceRoot,
         workspaceDir: workspaceRoot,
-        plan: resolveMemoryFlushPlan({ cfg: options?.config }) ?? {},
+        plan: resolveMemoryWriteProvenancePlan() ?? {},
         resolveOriginClass: () =>
           options?.senderIsOwner === false || options?.isTurnTainted?.() === true
             ? "untrusted"
