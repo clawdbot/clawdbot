@@ -319,6 +319,7 @@ describe("tool display details", () => {
     const doubleBracketFunction = "function check [[ -n x ]]";
     const arithmeticFunction = "function bump (( n++ )) && pnpm test";
     const subshellFunction = "function sub() (echo one; echo two)";
+    const keywordSubshellFunction = "function worker (echo one; echo two)";
     const posixConditionalFunction = "plain() if true; then echo ok; fi";
     const negatedDoubleBracket = "! [[ -f a && -f b ]] && pnpm test";
     const timedArithmetic = "time (( n++ )) && pnpm test";
@@ -355,6 +356,7 @@ describe("tool display details", () => {
       doubleBracketFunction,
       arithmeticFunction,
       subshellFunction,
+      keywordSubshellFunction,
       posixConditionalFunction,
       negatedDoubleBracket,
       timedArithmetic,
@@ -420,7 +422,6 @@ describe("tool display details", () => {
     for (const command of [
       "function f{ echo one; echo two; }",
       "function f {not-a-body; echo two; }",
-      "function worker (echo one; echo two)",
       "printf x >& select",
       "printf x &> select",
       "printf x >| select",
