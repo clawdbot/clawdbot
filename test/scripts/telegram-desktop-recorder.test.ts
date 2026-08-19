@@ -19,6 +19,7 @@ import {
   renderWaitForMainWindow,
   startRecorder,
   stopRecorder,
+  viewRecorder,
   writeRecorderSession,
 } from "../../scripts/e2e/telegram-desktop-recorder.ts";
 
@@ -37,6 +38,7 @@ function testSession(): RecorderSession {
     keepBox: false,
     leaseId: "cbx_test123",
     leaseOwned: true,
+    imageSource: "telegram-desktop=7.0.9",
     provider: "aws",
     recordFps: 24,
     remotePaths: {
@@ -80,7 +82,7 @@ describe("Telegram Desktop recorder CLI", () => {
       leaseId: undefined,
       messageId: undefined,
       outputDir: ".artifacts/telegram",
-      provider: "aws",
+      provider: "docker",
       recordFps: 24,
       ttl: "2h",
       userDriver: ["uv", "run", "driver.py", "--json"],
@@ -140,7 +142,7 @@ describe("Telegram Desktop recorder CLI", () => {
         "--provider",
         "hetzner",
       ]),
-    ).toThrow("--provider must be aws");
+    ).toThrow("--provider must be aws or docker");
     expect(() =>
       parseRecorderArgs([
         "start",
@@ -156,21 +158,114 @@ describe("Telegram Desktop recorder CLI", () => {
 });
 
 describe("Telegram Desktop recorder remote contract", () => {
-  it("leases the catalog-only Telegram variant image, never the generic desktop default", async () => {
+  it.each([
+    {
+      expectedArgs: [
+        "warmup",
+        "--provider",
+        "docker",
+        "--target",
+        "linux",
+        "--desktop",
+        "--class",
+        "standard",
+        "--idle-timeout",
+        "1h",
+        "--ttl",
+        "2h",
+      ],
+      expectedImageEnv: "openclaw-telegram-desktop:7.0.9",
+      provider: "docker" as const,
+    },
+    {
+      expectedArgs: [
+        "warmup",
+        "--provider",
+        "aws",
+        "--target",
+        "linux",
+        "--desktop",
+        "--image-sdk",
+        "telegram-desktop=7.0.9",
+        "--class",
+        "standard",
+        "--idle-timeout",
+        "1h",
+        "--ttl",
+        "2h",
+      ],
+      expectedImageEnv: undefined,
+      provider: "aws" as const,
+    },
+  ])(
+    "leases the $provider Telegram image without changing the generic default",
+    async (testCase) => {
+      const root = makeTempDir();
+      const calls: Array<{ args: string[]; command: string; env?: NodeJS.ProcessEnv }> = [];
+      const mockedRun: RunCommand = async (params) => {
+        calls.push({ args: params.args, command: params.command, env: params.env });
+        if (params.command === "docker") {
+          return { stderr: "", stdout: "[]" };
+        }
+        if (params.args[0] === "warmup") {
+          return { stderr: "", stdout: "leased cbx_0a1b2c slug=quiet-crab" };
+        }
+        return { stderr: "", stdout: "" };
+      };
+      const operations = {
+        createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+        createMotionPreview: vi.fn(async () => ({})),
+        inspectCrabbox: vi.fn(async () => {
+          throw new Error("stop after warmup");
+        }),
+        runCommand: mockedRun,
+        scpFromRemote: vi.fn(async () => undefined),
+        sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+      } satisfies RecorderOperations;
+
+      await expect(
+        startRecorder(
+          root,
+          {
+            command: "start",
+            chat: "-1001234567890",
+            crabboxClass: "standard",
+            idleTimeout: "1h",
+            json: false,
+            outputDir: "out",
+            provider: testCase.provider,
+            recordFps: 24,
+            ttl: "2h",
+            userDriver: ["python3", "driver.py"],
+          },
+          operations,
+        ),
+      ).rejects.toThrow("stop after warmup");
+
+      const warmup = calls.find((call) => call.args[0] === "warmup");
+      expect(warmup?.args).toEqual(testCase.expectedArgs);
+      expect(warmup?.env?.CRABBOX_LOCAL_CONTAINER_IMAGE).toBe(testCase.expectedImageEnv);
+      expect(warmup?.args.includes("--image-sdk")).toBe(testCase.provider === "aws");
+      expect(calls).toContainEqual({
+        args: ["stop", "--provider", testCase.provider, "cbx_0a1b2c"],
+        command: "crabbox",
+        env: undefined,
+      });
+    },
+  );
+
+  it("fails before warmup when the local Telegram image is missing", async () => {
     const root = makeTempDir();
     const calls: Array<{ args: string[]; command: string }> = [];
     const mockedRun: RunCommand = async (params) => {
       calls.push({ args: params.args, command: params.command });
-      if (params.args[0] === "warmup") {
-        return { stderr: "", stdout: "leased cbx_0a1b2c slug=quiet-crab" };
-      }
-      return { stderr: "", stdout: "" };
+      throw new Error("No such image");
     };
     const operations = {
       createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
       createMotionPreview: vi.fn(async () => ({})),
       inspectCrabbox: vi.fn(async () => {
-        throw new Error("stop after warmup");
+        throw new Error("must not inspect");
       }),
       runCommand: mockedRun,
       scpFromRemote: vi.fn(async () => undefined),
@@ -187,37 +282,23 @@ describe("Telegram Desktop recorder remote contract", () => {
           idleTimeout: "1h",
           json: false,
           outputDir: "out",
-          provider: "aws",
+          provider: "docker",
           recordFps: 24,
           ttl: "2h",
           userDriver: ["python3", "driver.py"],
         },
         operations,
       ),
-    ).rejects.toThrow("stop after warmup");
-
-    const warmup = calls.find((call) => call.args[0] === "warmup");
-    expect(warmup?.args).toEqual([
-      "warmup",
-      "--provider",
-      "aws",
-      "--target",
-      "linux",
-      "--desktop",
-      "--image-sdk",
-      "telegram-desktop=7.0.9",
-      "--class",
-      "standard",
-      "--idle-timeout",
-      "1h",
-      "--ttl",
-      "2h",
+    ).rejects.toThrow(
+      "Local Telegram Desktop image openclaw-telegram-desktop:7.0.9 is missing. Run bash scripts/mantis/build-telegram-desktop-image.sh first.",
+    );
+    expect(calls).toEqual([
+      {
+        args: ["image", "inspect", "openclaw-telegram-desktop:7.0.9"],
+        command: "docker",
+      },
     ]);
-    // Failure after leasing must not leak the variant box.
-    expect(calls).toContainEqual({
-      args: ["stop", "--provider", "aws", "cbx_0a1b2c"],
-      command: "crabbox",
-    });
+    expect(operations.inspectCrabbox).not.toHaveBeenCalled();
   });
 
   it("renders only golden-image desktop operations", () => {
@@ -373,6 +454,52 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     expect(stopped.keepBox).toBe(true);
     expect(calls.some((call) => call.args.includes("terminate-session"))).toBe(false);
     expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
+  });
+
+  it("uses the recorded provider for view, inspect, and owned-lease stop", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    writeRecorderSession(sessionPath, {
+      ...testSession(),
+      imageSource: "openclaw-telegram-desktop:7.0.9",
+      provider: "docker",
+    });
+    const calls: Array<{ args: string[]; command: string }> = [];
+    const mockedRun: RunCommand = async (params) => {
+      calls.push({ args: params.args, command: params.command });
+      return { stderr: "", stdout: JSON.stringify({ ok: true }) };
+    };
+    const inspectCrabbox = vi.fn(async () => ({
+      sshHost: "host",
+      sshKey: "/tmp/key",
+      sshPort: "22",
+      sshUser: "user",
+    }));
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox,
+      runCommand: mockedRun,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    await viewRecorder(root, { command: "view", messageId: "42", sessionPath }, operations);
+    await stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations);
+
+    expect(inspectCrabbox).toHaveBeenCalledTimes(2);
+    expect(inspectCrabbox).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ provider: "docker" }),
+    );
+    expect(inspectCrabbox).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ provider: "docker" }),
+    );
+    expect(calls).toContainEqual({
+      args: ["stop", "--provider", "docker", "cbx_test123"],
+      command: "crabbox",
+    });
   });
 
   it("still stops Crabbox and reports failure when local session termination fails", async () => {

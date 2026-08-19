@@ -28,6 +28,9 @@ import {
   parseRecorderArgs,
   readRecorderSession,
   recorderUsageText,
+  TELEGRAM_DESKTOP_AWS_IMAGE,
+  TELEGRAM_DESKTOP_DOCKER_IMAGE,
+  TELEGRAM_DESKTOP_VERSION,
   type RecorderProvider,
   type RecorderSession,
   type ScreenshotOptions,
@@ -48,11 +51,6 @@ export {
 
 const REMOTE_ROOT = "/tmp/openclaw-telegram-desktop-recorder";
 const TELEGRAM_BINARY = "/opt/Telegram/Telegram";
-// Crabbox variant image baked with CRABBOX_LINUX_TELEGRAM_DESKTOP=1 and promoted
-// catalog-only; the generic desktop image never carries the client, so the lease
-// must ask for it or Crabbox fails before leasing.
-const TELEGRAM_DESKTOP_VERSION = "7.0.9";
-const TELEGRAM_IMAGE_SDK = `telegram-desktop=${TELEGRAM_DESKTOP_VERSION}`;
 const TELEGRAM_WORKDIR = `${REMOTE_ROOT}/desktop`;
 const DEFAULT_PREVIEW_FPS = 24;
 const DEFAULT_PREVIEW_WIDTH = 1920;
@@ -280,6 +278,21 @@ async function terminateDesktopSession(params: {
   z.object({ ok: z.literal(true) }).parse(JSON.parse(result.stdout));
 }
 
+async function assertLocalTelegramImage(params: { cwd: string; run: RunCommand }): Promise<void> {
+  try {
+    await params.run({
+      args: ["image", "inspect", TELEGRAM_DESKTOP_DOCKER_IMAGE],
+      command: "docker",
+      cwd: params.cwd,
+    });
+  } catch (error) {
+    throw new Error(
+      `Local Telegram Desktop image ${TELEGRAM_DESKTOP_DOCKER_IMAGE} is missing. Run bash scripts/mantis/build-telegram-desktop-image.sh first.`,
+      { cause: error },
+    );
+  }
+}
+
 export async function startRecorder(
   cwd: string,
   opts: StartOptions,
@@ -293,16 +306,23 @@ export async function startRecorder(
   let desktopSessionId: string | undefined;
   try {
     if (!leaseId) {
+      if (opts.provider === "docker") {
+        await assertLocalTelegramImage({ cwd, run: operations.runCommand });
+      }
       const warmup = await operations.runCommand({
         args: createDesktopCrabboxWarmupArgs({
           crabboxClass: opts.crabboxClass,
           idleTimeout: opts.idleTimeout,
-          imageSdk: TELEGRAM_IMAGE_SDK,
+          imageSdk: opts.provider === "aws" ? TELEGRAM_DESKTOP_AWS_IMAGE : undefined,
           provider: opts.provider,
           ttl: opts.ttl,
         }),
         command: crabboxBin,
         cwd,
+        env:
+          opts.provider === "docker"
+            ? { ...process.env, CRABBOX_LOCAL_CONTAINER_IMAGE: TELEGRAM_DESKTOP_DOCKER_IMAGE }
+            : undefined,
         stdio: "inherit",
       });
       leaseId = extractCrabboxLeaseId(`${warmup.stdout}\n${warmup.stderr}`);
@@ -358,19 +378,30 @@ export async function startRecorder(
       inspect,
       run: operations.runCommand,
     });
-    const session: RecorderSession = {
+    const sessionBase: Omit<RecorderSession, "imageSource" | "provider"> = {
       chat: opts.chat,
       desktopSessionId,
       keepBox: false,
       leaseId,
       leaseOwned,
-      provider: opts.provider,
       recordFps: opts.recordFps,
       remotePaths,
       schemaVersion: 1,
       startedAt: new Date().toISOString(),
       userDriver: opts.userDriver,
     };
+    const session: RecorderSession =
+      opts.provider === "docker"
+        ? {
+            ...sessionBase,
+            imageSource: TELEGRAM_DESKTOP_DOCKER_IMAGE,
+            provider: opts.provider,
+          }
+        : {
+            ...sessionBase,
+            imageSource: TELEGRAM_DESKTOP_AWS_IMAGE,
+            provider: opts.provider,
+          };
     const sessionPath = path.join(outputDir, "recorder.json");
     writeRecorderSession(sessionPath, session);
     return { session, sessionPath };

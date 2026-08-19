@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import { z } from "zod";
 
-const recorderSessionSchema = z.object({
+export const TELEGRAM_DESKTOP_VERSION = "7.0.9";
+export const TELEGRAM_DESKTOP_AWS_IMAGE = "telegram-desktop=7.0.9";
+export const TELEGRAM_DESKTOP_DOCKER_IMAGE = "openclaw-telegram-desktop:7.0.9";
+
+const recorderSessionBaseSchema = z.object({
   artifacts: z.record(z.string(), z.string()).optional(),
   chat: z.string().regex(/^-100\d+$/u),
   cleanupErrors: z.array(z.string()).optional(),
@@ -10,8 +14,6 @@ const recorderSessionSchema = z.object({
   leaseId: z.string().min(1),
   /** False when `--lease-id` borrowed an existing box: the recorder never stops it. */
   leaseOwned: z.boolean(),
-  // Only an AWS AMI variant is published (scripts/mantis/bake-telegram-desktop-image.sh).
-  provider: z.literal("aws"),
   recordFps: z.number().int().positive(),
   remotePaths: z.object({
     desktopLog: z.string(),
@@ -25,6 +27,17 @@ const recorderSessionSchema = z.object({
   stoppedAt: z.string().optional(),
   userDriver: z.array(z.string()).min(1),
 });
+
+const recorderSessionSchema = z.discriminatedUnion("provider", [
+  recorderSessionBaseSchema.extend({
+    imageSource: z.literal(TELEGRAM_DESKTOP_AWS_IMAGE),
+    provider: z.literal("aws"),
+  }),
+  recorderSessionBaseSchema.extend({
+    imageSource: z.literal(TELEGRAM_DESKTOP_DOCKER_IMAGE),
+    provider: z.literal("docker"),
+  }),
+]);
 
 export type RecorderSession = z.infer<typeof recorderSessionSchema>;
 export type RecorderProvider = RecorderSession["provider"];
@@ -80,7 +93,7 @@ export function recorderUsageText(): string {
     "  pnpm qa:telegram-desktop-recorder status --session <recorder.json>",
     "",
     "Start options:",
-    "  --provider aws            Crabbox provider (only aws publishes the Telegram variant image).",
+    "  --provider aws|docker     Crabbox provider. Default: docker.",
     "  --lease-id <cbx…>        Reuse an existing desktop lease.",
     "  --class <name>            Crabbox class. Default: standard.",
     "  --ttl <duration>          Lease TTL. Default: 2h.",
@@ -191,12 +204,13 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     // recorder appends `confirm-qr …` / `terminate-session …`. No quoting: driver
     // paths are our own tooling and never contain spaces.
     const userDriver = requiredString(values, "--user-driver").split(/\s+/u);
-    const provider = values.get("--provider") ?? "aws";
-    if (provider !== "aws") {
-      throw new Error(
-        "--provider must be aws: the Telegram Desktop variant image is published only as an AWS AMI.",
-      );
+    const parsedProvider = z
+      .enum(["aws", "docker"])
+      .safeParse(values.get("--provider") ?? "docker");
+    if (!parsedProvider.success) {
+      throw new Error("--provider must be aws or docker.");
     }
+    const provider = parsedProvider.data;
     const leaseId = values.get("--lease-id");
     if (leaseId && !/^cbx_[A-Za-z0-9_-]+$/u.test(leaseId)) {
       throw new Error("--lease-id must be a cbx lease id.");

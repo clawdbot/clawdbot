@@ -225,9 +225,16 @@ and logs, build motion GIFs, terminate the Telegram Desktop authorization, and
 release the Crabbox lease. Add `--keep-box` only when the lease must remain
 available for WebVNC inspection.
 
-The recorder leases the Crabbox Telegram variant image
-(`--image-sdk telegram-desktop=7.0.9`; the generic desktop image never carries
-the client). OpenClaw bakes and publishes that catalog-only variant with
+The recorder defaults to Crabbox's local Docker desktop path. Build the pinned
+image once, then run `start` without coordinator access:
+
+```bash
+bash scripts/mantis/build-telegram-desktop-image.sh
+```
+
+Use `--provider aws` for CI after the catalog-only Telegram variant is
+promoted. That path selects `--image-sdk telegram-desktop=7.0.9`; the generic
+desktop image never carries the client. OpenClaw bakes and publishes it with
 `scripts/mantis/bake-telegram-desktop-image.sh --run`, run by a Crabbox
 coordinator admin from their own `crabbox` login (image creation and promotion
 are admin-only) on a clean checkout of a reviewed `main` commit — never from a
