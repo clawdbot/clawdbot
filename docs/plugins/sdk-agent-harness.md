@@ -384,6 +384,14 @@ binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
+When trajectory capture has a valid host-owned session target,
+`params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
+and `flush()` operations. The host adds session attribution, bounds and redacts
+event data, and persists it through the canonical trajectory store. Treat the
+capability as optional, send only structured non-secret facts, and await
+`flush()` before the attempt settles; do not infer storage paths or create a
+plugin-side fallback when the capability is absent.
+
 New harnesses should implement `AgentHarnessV2` and type prepared attempts as
 `AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and
 `AgentHarnessSideQuestionParamsV2`; those contracts require

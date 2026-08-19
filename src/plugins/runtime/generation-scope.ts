@@ -21,7 +21,6 @@ export function withPluginRuntimeGenerationScope<T>(
     config: OpenClawConfig;
     metadataSnapshot: PluginMetadataSnapshot;
     pluginRegistry?: PluginRegistry;
-    workspaceDir?: string;
   },
   run: () => T,
 ): T {
@@ -34,7 +33,10 @@ export function withPluginRuntimeGenerationScope<T>(
       ),
     {
       config: generation.config,
-      ...(generation.workspaceDir ? { workspaceDir: generation.workspaceDir } : {}),
+      trustConfigIdentity: true,
+      ...(generation.metadataSnapshot.workspaceDir
+        ? { workspaceDir: generation.metadataSnapshot.workspaceDir }
+        : {}),
     },
   );
 }

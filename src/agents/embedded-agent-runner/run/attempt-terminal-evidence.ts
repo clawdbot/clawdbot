@@ -53,6 +53,7 @@ type TerminalAttemptState = Pick<
   | "didSendDeterministicApprovalPrompt"
   | "heartbeatToolResponse"
   | "lastToolError"
+  | "lastToolRecovery"
   | "toolMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
@@ -80,6 +81,7 @@ export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean 
     attempt.didSendDeterministicApprovalPrompt ||
     attempt.heartbeatToolResponse ||
     attempt.lastToolError ||
+    attempt.lastToolRecovery ||
     attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
     attempt.toolAudioAsVoice ||
     attempt.toolTrustedLocalMedia ||

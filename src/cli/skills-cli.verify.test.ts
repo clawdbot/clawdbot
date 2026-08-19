@@ -80,9 +80,12 @@ vi.mock("../infra/clawhub-artifacts.js", () => ({
   downloadClawHubSkillArchive: mocks.noopAsync,
 }));
 
-vi.mock("../infra/clawhub-client.js", () => ({
+vi.mock("../infra/clawhub-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-client.js")>()),
   resolveClawHubBaseUrl: (baseUrl?: string) => mocks.resolveClawHubBaseUrlMock(baseUrl),
 }));
+
+const { ClawHubRequestError } = await import("../infra/clawhub-client.js");
 
 describe("skills verify CLI", () => {
   let workspaceDir: string;
@@ -296,6 +299,80 @@ describe("skills verify CLI", () => {
       },
     });
     expect(mocks.runtimeErrors).toStrictEqual([]);
+  });
+
+  it.each([
+    { name: "implicit JSON", outputArgs: [], human: false },
+    { name: "explicit JSON", outputArgs: ["--json"], human: false },
+    { name: "human card mode", outputArgs: ["--card"], human: true },
+  ])("maps missing skills to a domain error in $name", async ({ outputArgs, human }) => {
+    const remoteBody = "remote-controlled not-found detail";
+    mocks.fetchClawHubSkillVerificationMock.mockRejectedValueOnce(
+      new ClawHubRequestError({
+        path: "/api/v1/skills/nonexistent-skill-xyz/verify",
+        status: 404,
+        body: remoteBody,
+      }),
+    );
+
+    await expect(
+      runCommand(["skills", "verify", "nonexistent-skill-xyz", ...outputArgs]),
+    ).rejects.toThrow("__exit__:1");
+
+    const message =
+      'Skill "nonexistent-skill-xyz" not found. Run `openclaw skills list` to see available skills.';
+    if (human) {
+      expect(mocks.runtimeStdout).toStrictEqual([]);
+      expect(mocks.runtimeErrors).toStrictEqual([message]);
+    } else {
+      expect(JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}")).toEqual({
+        ok: false,
+        error: { type: "cli_error", message },
+      });
+      expect(mocks.runtimeErrors).toStrictEqual([]);
+    }
+    expect([...mocks.runtimeStdout, ...mocks.runtimeErrors].join("\n")).not.toMatch(
+      /\/api\/v1\/|\(404\)|remote-controlled/u,
+    );
+  });
+
+  it.each([
+    {
+      status: 401,
+      expected:
+        'ClawHub authentication failed while verifying skill "nonexistent-skill-xyz". Authenticate with ClawHub and try again.',
+    },
+    {
+      status: 429,
+      expected:
+        'ClawHub rate limit reached while verifying skill "nonexistent-skill-xyz". Wait and try again later.',
+    },
+    {
+      status: 503,
+      expected:
+        'ClawHub is temporarily unavailable while verifying skill "nonexistent-skill-xyz". Try again later.',
+    },
+  ])("keeps HTTP $status distinct from missing skills", async ({ status, expected }) => {
+    const remoteBody = `remote-controlled ${status} detail`;
+    mocks.fetchClawHubSkillVerificationMock.mockRejectedValueOnce(
+      new ClawHubRequestError({
+        path: "/api/v1/skills/nonexistent-skill-xyz/verify",
+        status,
+        body: remoteBody,
+      }),
+    );
+
+    await expect(runCommand(["skills", "verify", "nonexistent-skill-xyz"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    const payload = JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}") as {
+      error?: { message?: string };
+    };
+    expect(payload.error?.message).toBe(expected);
+    expect(payload.error?.message).not.toContain("not found");
+    expect(payload.error?.message).not.toContain(remoteBody);
+    expect(payload.error?.message).not.toContain("/api/v1/");
   });
 
   it("verifies an installed skills.sh skill by slug without a version selector", async () => {

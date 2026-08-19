@@ -33,6 +33,7 @@ const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
 const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
+const DEPLOYMENT_MANIFEST = "deployment.json";
 const GENERATED_PLUGIN_ASSET_BUNDLE = "extensions/demo/src/host/assets/view.bundle.js";
 const GENERATED_PLUGIN_ASSET_BUNDLE_HASH = "extensions/demo/src/host/assets/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
@@ -191,6 +192,18 @@ function statusCommandSpawn() {
   return [process.execPath, "openclaw.mjs", "status"];
 }
 
+function gatewayStatusCommandSpawn() {
+  return [
+    process.execPath,
+    "openclaw.mjs",
+    "gateway",
+    "status",
+    "--deep",
+    "--require-rpc",
+    "--json",
+  ];
+}
+
 function resolvePath(tmp: string, relativePath: string) {
   return path.join(tmp, relativePath);
 }
@@ -276,6 +289,12 @@ async function setupStampedProject(
   });
 }
 
+async function writeImmutableDeploymentManifest(tmp: string): Promise<void> {
+  await writeProjectFiles(tmp, {
+    [DEPLOYMENT_MANIFEST]: `${JSON.stringify({ kind: "git", sourceHead: "a".repeat(40) })}\n`,
+  });
+}
+
 function createSpawnRecorder(
   options: {
     gitHead?: string;
@@ -356,6 +375,7 @@ type RunCommandParams = {
   args?: string[];
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  stderr?: NodeJS.WriteStream;
   env?: Record<string, string>;
   runRuntimePostBuild?: (params?: {
     cwd?: string;
@@ -1120,6 +1140,74 @@ describe("run-node script", () => {
     expect(spawnCalls).toEqual([statusCommandSpawn()]);
     expect(runRuntimePostBuild).not.toHaveBeenCalled();
   });
+
+  it("runs current immutable deployment artifacts without refreshing them", async ({ tmp }) => {
+    await setupStampedProject(tmp, {
+      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+      oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+    });
+    await writeImmutableDeploymentManifest(tmp);
+
+    const runRuntimePostBuild = vi.fn();
+    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+    const exitCode = await runStatusCommand({
+      tmp,
+      args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
+      spawn,
+      spawnSync,
+      runRuntimePostBuild,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(spawnCalls).toEqual([gatewayStatusCommandSpawn()]);
+    expect(runRuntimePostBuild).not.toHaveBeenCalled();
+  });
+
+  for (const { label, missingPath, expectedReason } of [
+    {
+      label: "build output",
+      missingPath: BUILD_STAMP,
+      expectedReason: "build stamp missing",
+    },
+    {
+      label: "runtime postbuild output",
+      missingPath: DIST_OPENCLAW_ALIAS_PACKAGE,
+      expectedReason: "required runtime postbuild output missing",
+    },
+  ]) {
+    it(`refuses to regenerate missing ${label} in an immutable deployment`, async ({ tmp }) => {
+      await setupStampedProject(tmp, {
+        files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+      });
+      await writeImmutableDeploymentManifest(tmp);
+      await fs.rm(resolvePath(tmp, missingPath));
+
+      const stderrChunks: string[] = [];
+      const stderr = {
+        write: (chunk: string | Buffer) => {
+          stderrChunks.push(String(chunk));
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+      const exitCode = await runStatusCommand({
+        tmp,
+        args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
+        spawn,
+        spawnSync,
+        stderr,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(spawnCalls).toEqual([]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+      expect(stderrChunks.join("")).toContain(expectedReason);
+      expect(stderrChunks.join("")).toContain("node openclaw.mjs");
+    });
+  }
 
   it("restages runtime artifacts when runtime metadata is dirty", async ({ tmp }) => {
     await setupStampedProject(tmp, {

@@ -1033,6 +1033,134 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("projects explicit outbound MCP media without retaining echoed image bytes", async () => {
+    const echoedBase64 = "private-echoed-base64";
+    const mediaUrls = [
+      "https://example.test/one.png",
+      "https://example.test/two.png",
+      "https://example.test/three.png",
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureKey = input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "";
+      for (const [index, mediaUrl] of mediaUrls.entries()) {
+        const captureHandle = markMcpLoopbackToolCallStarted({
+          captureKey,
+          toolName: "image_generate",
+          args: { prompt: `image ${index + 1}` },
+        });
+        if (!captureHandle) {
+          throw new Error("Expected outbound media capture");
+        }
+        recordMcpLoopbackToolCallResult({
+          captureHandle,
+          toolName: "image_generate",
+          args: { prompt: `image ${index + 1}` },
+          result: {
+            content: [
+              {
+                type: "image",
+                data: echoedBase64,
+                mimeType: "image/png",
+              },
+            ],
+            details: { media: { mediaUrls: [mediaUrl] } },
+          },
+          outcome: "completed",
+        });
+        markMcpLoopbackToolCallFinished(captureHandle);
+      }
+      for (const [toolName, media] of [
+        ["image", { mediaUrls: ["/tmp/private.png"], outbound: false }],
+        ["untrusted_tool", { mediaUrls: ["/tmp/untrusted.png"] }],
+      ] as const) {
+        const captureHandle = markMcpLoopbackToolCallStarted({
+          captureKey,
+          toolName,
+          args: {},
+        });
+        if (!captureHandle) {
+          throw new Error("Expected private media capture");
+        }
+        recordMcpLoopbackToolCallResult({
+          captureHandle,
+          toolName,
+          args: {},
+          result: {
+            content: [{ type: "image", data: echoedBase64, mimeType: "image/png" }],
+            details: { media },
+          },
+          outcome: "completed",
+        });
+        markMcpLoopbackToolCallFinished(captureHandle);
+      }
+      return makeManagedRun({ stdout: "done" });
+    });
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:outbound-media",
+      runId: "run-outbound-media",
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([
+      {
+        text: "done",
+        mediaUrls,
+        mediaUrl: mediaUrls[0],
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(echoedBase64);
+    expect(JSON.stringify(result)).not.toContain("/tmp/private.png");
+    expect(JSON.stringify(result)).not.toContain("/tmp/untrusted.png");
+  });
+
+  it("deduplicates a CLI Markdown image selected from structured tool media", async () => {
+    const mediaUrl = "/root/.openclaw/media/tool-image-generation/our-agent-soviet-meme.png";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "image_generate",
+        args: { prompt: "our agent" },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected outbound media capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "image_generate",
+        args: { prompt: "our agent" },
+        result: {
+          content: [{ type: "text", text: "Image generated" }],
+          details: { media: { mediaUrls: [mediaUrl], trustedLocalMedia: true } },
+        },
+        outcome: "completed",
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return makeManagedRun({
+        stdout: `Our agent.\n\n![Our Agent meme](${mediaUrl})`,
+      });
+    });
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:markdown-tool-media",
+      runId: "run-markdown-tool-media",
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Our agent.",
+        mediaUrls: [mediaUrl],
+        mediaUrl,
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
   it("surfaces a CLI failure after a delivered progress reply", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1212,6 +1340,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent before failure" },
           },
@@ -1312,6 +1445,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent through source reply" },
           },
@@ -1375,6 +1513,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "visible source reply" },
           },
@@ -3077,6 +3220,7 @@ describe("runCliAgent reliability", () => {
       expect(result.payloads).toEqual([{ text: "hello from cli" }]);
       expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
         assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: "cli-assistant:run-persist-cli",
       });
       expect(onUserMessagePersisted).toHaveBeenCalledOnce();
       expect(onUserMessagePersisted).toHaveBeenCalledWith(

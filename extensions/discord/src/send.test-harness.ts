@@ -26,11 +26,7 @@ type DiscordLoopbackRequest = {
   path: string | undefined;
 };
 
-export type MockCallSource = {
-  mock: {
-    calls: ArrayLike<ReadonlyArray<unknown>>;
-  };
-};
+export type MockCallSource = Pick<MockFn, "mock">;
 
 const requireRecord = createRequireRecord("object", "expected-label");
 

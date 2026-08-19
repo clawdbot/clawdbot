@@ -5,8 +5,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
+  resolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -119,9 +118,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   const config = params.config ?? getRuntimeConfig();
   const explicitOrDefaultAgentId =
     params.agentId ??
-    (params.agentDir === undefined
-      ? (tryResolveLegacyCompatibilityAgentId(config) ?? resolveDefaultAgentId(config))
-      : undefined);
+    (params.agentDir === undefined ? resolveAmbientOwnerAgentId(config) : undefined);
   const agentDir =
     params.agentDir ?? resolveAgentDir(config, explicitOrDefaultAgentId as string, params.env);
   const matchingAgentIds =

@@ -78,4 +78,109 @@ struct GatewayProtocolGeneratedModelsTests {
         #expect(result.projects.isEmpty)
         #expect(result.observedprojects == nil)
     }
+
+    @Test
+    func `session move models preserve exact source and closed targets`() throws {
+        let params = try JSONDecoder().decode(
+            SessionsMoveParams.self,
+            from: Data(
+                #"{"key":"agent:main:move","expected":{"generation":4,"environmentId":"environment-1","ownerEpoch":7},"target":{"kind":"profile","profileId":"development"}}"#
+                    .utf8))
+
+        #expect(params.expected.generation == 4)
+        #expect(params.expected.environmentid == "environment-1")
+        #expect(params.expected.ownerepoch == 7)
+        guard case let .profile(profile) = params.target else {
+            Issue.record("Expected the generated profile move target")
+            return
+        }
+        #expect(profile.profileid == "development")
+
+        let gateway = try JSONDecoder().decode(
+            SessionMoveTarget.self,
+            from: Data(#"{"kind":"gateway"}"#.utf8))
+        let device = try JSONDecoder().decode(
+            SessionMoveTarget.self,
+            from: Data(#"{"kind":"device","deviceId":"device-1"}"#.utf8))
+        guard case .gateway = gateway, case let .device(deviceTarget) = device else {
+            Issue.record("Expected generated gateway and device move targets")
+            return
+        }
+        #expect(deviceTarget.deviceid == "device-1")
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(
+                SessionMoveTarget.self,
+                from: Data(#"{"kind":"other"}"#.utf8))
+        }
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(
+                SessionMoveTarget.self,
+                from: Data(#"{"kind":"gateway","profileId":"development"}"#.utf8))
+        }
+    }
+
+    @Test(arguments: [
+        (
+            #"{"scope":"system","agentId":"main","mode":"managed","secretName":"github-setup-11111111111111111111111111111111"}"#,
+            "system",
+            true),
+        (
+            #"{"scope":"agent","agentId":"main","mode":"managed","secretName":"github-setup-22222222222222222222222222222222","gitAuthor":{"name":"Agent"}}"#,
+            "agent",
+            true),
+        (#"{"scope":"system","agentId":"main","mode":"inherit"}"#, "system", false),
+        (#"{"scope":"agent","agentId":"main","mode":"inherit"}"#, "agent", false),
+    ])
+    func `GitHub configure requests round trip every scope and mode`(
+        json: String,
+        expectedScope: String,
+        expectedManaged: Bool) throws
+    {
+        let params = try JSONDecoder().decode(
+            ToolsGitHubConfigureParams.self,
+            from: Data(json.utf8))
+
+        switch params {
+        case let .managed(payload):
+            #expect(expectedManaged)
+            #expect(payload.scope.value as? String == expectedScope)
+            #expect(payload.agentid == "main")
+            #expect(payload.secretname.hasPrefix("github-setup-"))
+        case let .inherit(payload):
+            #expect(!expectedManaged)
+            #expect(payload.scope.value as? String == expectedScope)
+            #expect(payload.agentid == "main")
+        }
+
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+        #expect(encoded["scope"] as? String == expectedScope)
+        #expect(encoded["mode"] as? String == (expectedManaged ? "managed" : "inherit"))
+    }
+
+    @Test(arguments: [
+        (#"{"requestId":"request-1","status":"requested","message":"Accepted."}"#, "requested"),
+        (#"{"requestId":"request-1","status":"publishing","message":"Publishing."}"#, "publishing"),
+        (#"{"requestId":"request-1","status":"published","url":"https://github.com/openclaw/openclaw/pull/1","repository":"openclaw/openclaw","branch":"openclaw/task","headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, "published"),
+        (#"{"requestId":"request-1","status":"failed","code":"push_rejected","message":"Failed.","nextAction":"Check access."}"#, "failed"),
+    ])
+    func `GitHub publication results round trip as a typed union`(
+        json: String,
+        expectedStatus: String) throws
+    {
+        let result = try JSONDecoder().decode(
+            SessionGitHubPublicationResult.self,
+            from: Data(json.utf8))
+        switch result {
+        case .requested: #expect(expectedStatus == "requested")
+        case .publishing: #expect(expectedStatus == "publishing")
+        case .published: #expect(expectedStatus == "published")
+        case .failed: #expect(expectedStatus == "failed")
+        }
+
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any])
+        #expect(encoded["status"] as? String == expectedStatus)
+    }
 }

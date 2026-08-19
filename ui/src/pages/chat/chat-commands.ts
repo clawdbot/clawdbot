@@ -3,6 +3,7 @@ import type { CommandsListResult } from "../../../../packages/gateway-protocol/s
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   buildFallbackSlashCommands,
@@ -200,17 +201,6 @@ function getRemoteSlashCommandCache(
   return cache;
 }
 
-function storeRemoteSlashCommands(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-  commands: SlashCommandDef[],
-) {
-  getRemoteSlashCommandCache(client).set(remoteSlashCommandCacheKey(agentId), {
-    commands,
-    expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
-  });
-}
-
 async function requestRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
@@ -226,7 +216,10 @@ async function requestRemoteSlashCommands(
       return buildFallbackSlashCommands();
     }
     const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
-    storeRemoteSlashCommands(client, agentId, commands);
+    getRemoteSlashCommandCache(client).set(remoteSlashCommandCacheKey(agentId), {
+      commands,
+      expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
+    });
     return commands;
   } catch {
     return fallback ?? buildFallbackSlashCommands();
@@ -237,6 +230,12 @@ function loadRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
 ): Promise<SlashCommandDef[]> {
+  const metadata = peekChatMetadata(client, agentId);
+  // Store-held metadata carries app-level invalidation on config changes and logical reconnects,
+  // so no TTL applies here. The cache below owns only commands.list-derived entries.
+  if (Array.isArray(metadata?.commands)) {
+    return Promise.resolve(buildSlashCommandsFromEntries(getRemoteCommandEntries(metadata)));
+  }
   const cache = getRemoteSlashCommandCache(client);
   const key = remoteSlashCommandCacheKey(agentId);
   const cached = cache.get(key);
@@ -269,11 +268,7 @@ export function applyRemoteSlashCommandsResult(params: {
   if (!Array.isArray(params.result?.commands)) {
     return false;
   }
-  const agentId = params.agentId?.trim();
   const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(params.result));
-  if (params.client) {
-    storeRemoteSlashCommands(params.client, agentId, commands);
-  }
   refreshSeq += 1;
   replaceSlashCommands(commands);
   return true;

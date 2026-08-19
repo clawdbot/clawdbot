@@ -15,6 +15,7 @@ import {
   resolveIMessageApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import type { IMessagePayload } from "./monitor/types.js";
+import { getOptionalIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const resolverMocks = vi.hoisted(() => ({
@@ -38,9 +39,15 @@ function registerIMessageApprovalReactionTarget(
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolveApprovalOverGateway,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
-  isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-}));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
+  };
+});
 
 function requireExecApprovalMetadata(payload: ReplyPayload): Record<string, unknown> {
   const value = payload.channelData?.execApproval;
@@ -589,6 +596,40 @@ describe("iMessage approval reactions", () => {
         conversation: expect.objectContaining({ chatId: 42, chatGuid: "iMessage;+;restart" }),
       }),
     ]);
+  });
+
+  it("rejects persisted targets containing an invalid approval decision", async () => {
+    installIMessageStateRuntimeForTest();
+    clearIMessageApprovalReactionTargetsForTest();
+    const store = getOptionalIMessageRuntime()?.state.openKeyedStore({
+      namespace: "imessage.approval-reactions",
+      maxEntries: 1000,
+      defaultTtlMs: 24 * 60 * 60 * 1000,
+    });
+    if (!store) {
+      throw new Error("Expected iMessage approval reaction state store");
+    }
+    await store.register(
+      "default:handle:+15551230000:corrupt-message",
+      {
+        version: 1,
+        target: {
+          approvalId: "exec-corrupt",
+          approvalKind: "exec",
+          allowedDecisions: ["allow-once", "invalid"],
+        },
+      },
+      { ttlMs: 60_000 },
+    );
+
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "corrupt-message",
+        reactionKey: "👍",
+      }),
+    ).resolves.toBeNull();
   });
 
   it("resolves a registered group reaction target keyed by chat_guid", async () => {

@@ -13,7 +13,7 @@ import { tryReadJsonSync } from "../infra/json-files.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
+import { hashJson, hashStableJson } from "./installed-plugin-index-hash.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
   resolveInstalledPluginIndexInstallOwner,
@@ -137,7 +137,7 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
   }
   // The immutable installed inventory owns freshness; lifecycle clears publish
   // a replacement instead of polling manifests or package paths on hot reads.
-  const fingerprint = hashJson({
+  const fingerprint = hashStableJson({
     version: index.version,
     hostContractVersion: index.hostContractVersion,
     compatRegistryVersion: index.compatRegistryVersion,
@@ -145,7 +145,19 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
-    plugins: index.plugins.map(({ doctorContractFile: _doctorContractFile, ...plugin }) => plugin),
+    plugins: index.plugins.map(
+      ({ doctorContractFile: _doctorContractFile, packageBuild, ...plugin }) => ({
+        ...plugin,
+        ...(packageBuild
+          ? {
+              packageBuild:
+                packageBuild.bundledDist === undefined
+                  ? {}
+                  : { bundledDist: packageBuild.bundledDist },
+            }
+          : {}),
+      }),
+    ),
   });
   if (isDeepFrozenJsonLike(index)) {
     installedManifestRegistryIndexFingerprintCache.set(index, fingerprint);

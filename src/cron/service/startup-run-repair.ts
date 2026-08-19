@@ -1,5 +1,6 @@
 /** Repairs interrupted and finalized cron runs while the service starts. */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
@@ -162,6 +163,13 @@ export function restoreFinalizedStartupRun(params: {
     job,
     {
       ...entry,
+      completionStatus:
+        entry.completionStatus ??
+        resolveCronCompletionStatus({
+          status: entry.status,
+          delivered: entry.delivered,
+          deliveryStatus: entry.deliveryStatus,
+        }),
       startedAt,
       endedAt,
     },

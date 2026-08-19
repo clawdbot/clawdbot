@@ -143,7 +143,16 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists(sessionId)).toBe(false);
   });
 
-  it("removes counted archives before evicting searchable history", async () => {
+  it.each([
+    {
+      archiveName: "already-extracted.jsonl.deleted.2026-01-01T00-00-00.000Z",
+      kind: "deleted transcript archive",
+    },
+    {
+      archiveName: `legacy-compact.jsonl.bak.2026-01-01T00-00-00.000Z.${"a".repeat(32)}.zst`,
+      kind: "legacy compact backup",
+    },
+  ])("removes a $kind before evicting searchable history", async ({ archiveName }) => {
     await createHistoricalTranscript({
       content: "keep searchable history",
       nextSessionId: "archive-live",
@@ -152,10 +161,7 @@ describe("SQLite historical session disk budget", () => {
       updatedAt: 1,
     });
     database().walMaintenance.checkpoint();
-    const oldArchive = path.join(
-      tempDir,
-      "already-extracted.jsonl.deleted.2026-01-01T00-00-00.000Z",
-    );
+    const oldArchive = path.join(tempDir, archiveName);
     fs.writeFileSync(oldArchive, Buffer.alloc(256 * 1024));
     const before = await measureSessionPhysicalDiskUsage(storePath);
 

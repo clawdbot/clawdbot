@@ -545,7 +545,12 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
     case "plugin-uninstall":
       return `uninstall plugin ${operation.pluginId}`;
     case "create-agent":
-      return `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`;
+      return [
+        `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`,
+        operation.requesterAgentId ? `requested by agent ${operation.requesterAgentId}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(", ");
     case "gateway-start":
       return "start the Gateway";
     case "gateway-stop":

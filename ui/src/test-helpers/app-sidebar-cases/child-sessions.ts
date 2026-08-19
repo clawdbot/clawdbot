@@ -12,7 +12,7 @@ import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar agent chip", () => {
-  it("loads and expands child sessions inline without root session controls", async () => {
+  it("loads and expands child sessions with menus but without root placement controls", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:parent"]);
     harness.list.mockResolvedValue({
@@ -98,7 +98,10 @@ describe("AppSidebar agent chip", () => {
       expect.stringContaining("Check tests"),
     ]);
     expect(childRows.every((row) => row.getAttribute("draggable") === "false")).toBe(true);
-    expect(childRows.every((row) => row.querySelector(".session-row-actions") === null)).toBe(true);
+    expect(childRows.every((row) => row.querySelector("[data-session-menu]") !== null)).toBe(true);
+    expect(childRows.every((row) => row.querySelector("[data-sidebar-session-pin]") === null)).toBe(
+      true,
+    );
     expect(childRows.every((row) => row.querySelector(".session-row-state") === null)).toBe(true);
     expect(childRows.every((row) => row.querySelector(".sidebar-session-indicator") !== null)).toBe(
       true,

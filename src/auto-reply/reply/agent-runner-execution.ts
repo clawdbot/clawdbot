@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
-import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import type {
+  AdmittedRunContext,
+  PreparedAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
@@ -22,6 +25,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -35,6 +39,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -75,6 +83,7 @@ import {
   isReplyOperationRestartAbort,
   isReplyOperationUserAbort,
 } from "./reply-operation-abort.js";
+import { markReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
 type InternalFollowupRun = FollowupRun & {
@@ -117,6 +126,7 @@ async function executeAgentTurnInternalWithRetryState(
   overloadRetryState: OverloadRetryState,
   commitMcpAppModelContext: () => void,
   preparedRunAdmission: PreparedAgentRunAdmission,
+  admittedRunContext: { current?: AdmittedRunContext },
 ): Promise<AgentTurnInternalResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -244,7 +254,10 @@ async function executeAgentTurnInternalWithRetryState(
       return;
     }
     didNotifyAgentRunStart = true;
-    params.opts?.onAgentRunStart?.(runId);
+    if (params.replyOperation) {
+      markReplyOperationExecutionStarted(params.replyOperation);
+    }
+    params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
   };
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
@@ -365,6 +378,9 @@ async function executeAgentTurnInternalWithRetryState(
       terminalRunFailed = cycle.terminalRunFailed;
       break;
     } catch (err) {
+      if (isAgentRunRestartAbortReason(err)) {
+        throw err;
+      }
       if (err instanceof LiveSessionModelSwitchError) {
         liveModelSwitchRetries += 1;
       }
@@ -513,6 +529,10 @@ async function executeAgentTurnInternal(
     completed: false,
   };
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  const admittedRunContext: { current?: AdmittedRunContext } = {};
+  const gatewayContextResolver =
+    readChannelContextGatewayContextResolver(params.sessionCtx) ??
+    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const preparedRunAdmission = prepareChannelRunAdmission({
     cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
     runId,
@@ -520,6 +540,10 @@ async function executeAgentTurnInternal(
     ingressKind: "channel",
     boundary: "auto-reply.agent-runner",
     evidence: params.followupRun.channelAdmissionEvidence,
+    onAdmitted: (context) => {
+      bindGatewayContextResolver(context, gatewayContextResolver);
+      admittedRunContext.current = context;
+    },
   });
   try {
     return await executeAgentTurnInternalWithRetryState(
@@ -528,6 +552,7 @@ async function executeAgentTurnInternal(
       overloadRetryState,
       commitMcpAppModelContext,
       preparedRunAdmission,
+      admittedRunContext,
     );
   } finally {
     preparedRunAdmission.close();

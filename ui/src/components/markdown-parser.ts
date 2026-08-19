@@ -3,11 +3,7 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import {
-  formatGitHubItemReference,
-  isGitHubItemRootPath,
-  parseGitHubItemPath,
-} from "./github-link-target.ts";
+import { decodeGitHubPathSegment, parseGitHubItemPath } from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -21,6 +17,8 @@ import {
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
+import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
+import { installMarkdownTables } from "./markdown-tables.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
@@ -58,6 +56,25 @@ type MarkdownFileLinkDecoration = {
   applyLabel: (label: string) => void;
 };
 
+const PROGRESS_HTML_RE = /^(?:<progress(?:\s[^<>]*)?>\s*(?:<\/progress>)?|<\/progress>)$/iu;
+
+function renderRawMarkdownHtml(
+  tokens: readonly Token[],
+  index: number,
+  env: Partial<MarkdownRenderEnv> | undefined,
+  block: boolean,
+): string {
+  const token = tokens[index];
+  if (!token) {
+    return "";
+  }
+  const content = token.content;
+  if (env?.progressBars) {
+    return PROGRESS_HTML_RE.test(content.trim()) ? content : "";
+  }
+  return escapeMarkdownHtml(content) + (block ? "\n" : "");
+}
+
 /** Visible text of the link opened at `openIndex`, used to tell an authored
  *  label apart from one that merely repeats the reference. */
 function linkLabelText(children: readonly Token[], openIndex: number): string {
@@ -91,6 +108,26 @@ function parseWebLinkHref(href: string): URL | null {
   return url.protocol === "https:" || url.protocol === "http:" ? url : null;
 }
 
+function formatGitHubLinkLabel(url: URL): string {
+  const segments = url.pathname.split("/").filter(Boolean);
+  const item = parseGitHubItemPath(url);
+  if (item) {
+    return segments.length === 4 && !url.search && !url.hash ? `#${item.number}` : url.href;
+  }
+  if (segments.length === 2) {
+    return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
+  }
+  if (segments[2] === "blob" && segments.length > 4) {
+    const filename = decodeGitHubPathSegment(segments.at(-1) ?? "");
+    if (filename) {
+      return filename;
+    }
+  }
+  const fallbackSegments = segments.length > 2 ? segments.slice(2) : segments;
+  const path = fallbackSegments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
+  return ["github.com", ...path].join("/");
+}
+
 function isFileLinkBoundaryBefore(value: string, index: number): boolean {
   const char = value[index - 1];
   return char === undefined || /\s/.test(char) || "([{<\"'`".includes(char);
@@ -114,6 +151,7 @@ export function createMarkdownParser(): MarkdownIt {
   markdownParser.enable("strikethrough");
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
   installMarkdownDetails(markdownParser);
+  installMarkdownTables(markdownParser);
 
   // Disable fuzzy link detection to prevent bare filenames like "README.md"
   // from being auto-linked as "http://README.md". URLs with explicit protocol
@@ -473,6 +511,8 @@ export function createMarkdownParser(): MarkdownIt {
     }
   });
 
+  installMarkdownSessionLinks(markdownParser, SESSION_LINK_SCAN_RE);
+
   // Classify web anchors for presentation; runs after linkify so bare URLs are
   // already anchors. The GitHub mark skips links whose only content is an image
   // (badges/shields), where a mark beside a mark reads as noise. Code spans and
@@ -496,12 +536,8 @@ export function createMarkdownParser(): MarkdownIt {
         const generatedUrlLabel = open.markup === "linkify" || open.markup === "autolink";
         const host = url.hostname.toLowerCase();
         const githubLink = host === "github.com" || host === "www.github.com";
-        const itemTarget = githubLink ? parseGitHubItemPath(url) : null;
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
-        }
-        if (!githubLink) {
-          continue;
         }
         let labelToken: Token | null = null;
         for (let cursor = index + 1; cursor < children.length; cursor++) {
@@ -513,13 +549,22 @@ export function createMarkdownParser(): MarkdownIt {
             (token.type === "text" || token.type === "code_inline") &&
             token.content.trim() !== ""
           ) {
-            open.attrJoin("class", GITHUB_LINK_CLASS);
             labelToken = token;
             break;
           }
         }
-        if (generatedUrlLabel && itemTarget && labelToken && isGitHubItemRootPath(url)) {
-          labelToken.content = formatGitHubItemReference(itemTarget);
+        if (githubLink && labelToken) {
+          open.attrJoin("class", GITHUB_LINK_CLASS);
+        }
+        if (githubLink && generatedUrlLabel && labelToken) {
+          labelToken.content = formatGitHubLinkLabel(url);
+          open.attrSet("title", href ?? url.href);
+        }
+        if (!githubLink && labelToken && state.env.linkFavicons) {
+          const favicon = new state.Token("link_favicon", "img", 0);
+          favicon.meta = { hostname: host };
+          children.splice(index + 1, 0, favicon);
+          index += 1;
         }
       }
     }
@@ -546,33 +591,41 @@ export function createMarkdownParser(): MarkdownIt {
     }
   });
 
-  // Override html_block and html_inline to escape raw HTML (#13937).
+  // Override html_block and html_inline to escape raw HTML (#13937). Progress-card
+  // rendering strips non-progress HTML instead of exposing escaped tag text.
   // Exception: html_inline tokens marked by a trusted plugin (meta.taskListPlugin)
   // are allowed through — they are generated by our own plugin pipeline, not user input,
   // and DOMPurify provides the final safety net regardless.
   // Renderer rules degrade to empty output on impossible token misses instead of
   // throwing mid-render; markdown input is untrusted and the chat view must not crash.
-  markdownParser.renderer.rules.html_block = (tokens, index) => {
-    const token = tokens[index];
-    return token ? escapeMarkdownHtml(token.content) + "\n" : "";
-  };
-  markdownParser.renderer.rules.html_inline = (tokens, index) => {
+  markdownParser.renderer.rules.html_block = (tokens, index, _options, env) =>
+    renderRawMarkdownHtml(tokens, index, env, true);
+  markdownParser.renderer.rules.html_inline = (tokens, index, _options, env) => {
     const token = tokens[index];
     return token?.meta?.taskListPlugin === true
       ? token.content
-      : escapeMarkdownHtml(token?.content ?? "");
+      : renderRawMarkdownHtml(tokens, index, env, false);
+  };
+  markdownParser.renderer.rules.link_favicon = (tokens, index) => {
+    const hostname: unknown = tokens[index]?.meta?.hostname;
+    return typeof hostname === "string"
+      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeMarkdownHtml(hostname)}" alt="" role="presentation">`
+      : "";
   };
   markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {
     const rendered = defaultCodeInlineRenderer(tokens, index, options, env, self);
     const target = tokens[index]?.meta?.fileLink as MarkdownFileLinkMeta | undefined;
-    if (!target) {
-      return rendered;
+    if (target) {
+      const lineAttribute =
+        target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
+      const titleAttribute =
+        target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
+      return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
     }
-    const lineAttribute =
-      target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
-    const titleAttribute =
-      target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
-    return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
+    const sessionKey: unknown = tokens[index]?.meta?.sessionLink?.sessionKey;
+    return typeof sessionKey === "string"
+      ? `<a class="markdown-session-link" role="link" tabindex="0" data-session-key="${escapeMarkdownHtml(sessionKey)}">${rendered}</a>`
+      : rendered;
   };
 
   // Message rendering allows inline data images and explicit open-only placeholders
@@ -602,7 +655,7 @@ export function createMarkdownParser(): MarkdownIt {
       (env as Partial<MarkdownRenderEnv> | undefined)?.mode === "document",
   });
 
-  // Override fenced code blocks with copy button + JSON collapse
+  // Fenced and indented blocks share one interaction and overflow surface.
   markdownParser.renderer.rules.fence = (tokens, index, _options, env) => {
     const token = tokens[index];
     if (!token) {

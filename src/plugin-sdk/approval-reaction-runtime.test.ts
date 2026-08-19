@@ -7,6 +7,7 @@ import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   APPROVAL_REACTION_BINDINGS,
   buildApprovalPendingPromptPayload,
+  buildApprovalReactionDeliveredBindingMarker,
   buildApprovalReactionPendingContentForRequest,
   buildApprovalReactionPromptPayloadForRequest,
   buildApprovalReactionHint,
@@ -117,9 +118,13 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       presentation,
       channelData: {
         execApproval: metadata,
-        privateBinding: { version: 1, ...metadata },
+        privateBinding: buildApprovalReactionDeliveredBindingMarker({
+          ...metadata,
+          allowedDecisions: [...metadata.allowedDecisions],
+        }),
       },
     };
+    expect(payload.channelData.privateBinding).toEqual({ version: 1, ...metadata });
     expect(readApprovalReactionPresentationBinding({ payload })).toMatchObject(metadata);
     expect(
       readApprovalReactionDeliveredBinding({

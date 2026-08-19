@@ -7,7 +7,7 @@ import type {
 } from "../../api/types.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 
-export const MODEL_SETUP_DETECT_TIMEOUT_MS = 20_000;
+export const MODEL_SETUP_DETECT_TIMEOUT_MS = 40_000;
 export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 30_000;
 const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
 const MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS = 480_000;

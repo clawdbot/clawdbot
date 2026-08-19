@@ -13,6 +13,7 @@ import {
 } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshotMetadata,
@@ -181,9 +182,11 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-  const sourceConfig = structuredClone(params.config);
-  const assignmentSourceConfig = structuredClone(params.assignmentConfig ?? params.config);
-  const resolvedConfig = structuredClone(assignmentSourceConfig);
+  const sourceConfig = cloneConfigWithResolutionFacts(params.config);
+  const assignmentSourceConfig = cloneConfigWithResolutionFacts(
+    params.assignmentConfig ?? params.config,
+  );
+  const resolvedConfig = cloneConfigWithResolutionFacts(assignmentSourceConfig);
   const includeConfigRefs = params.includeConfigRefs ?? true;
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
   let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];

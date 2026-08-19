@@ -3,13 +3,14 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 type ProviderRequestPolicyConfigMockResult = {
   allowPrivateNetwork: boolean;
-  privateNetworkExplicitlyDenied?: boolean;
+  trustConfiguredBaseUrlOrigin?: boolean;
   policy?: {
     endpointClass?: string;
   };
@@ -94,7 +95,7 @@ vi.mock("./provider-local-service.js", () => ({
 
 vi.mock("./provider-request-config.js", () => ({
   buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
-  getModelProviderMetadataOwners: vi.fn(() => undefined),
+  getModelProviderRequestRouteFacts: vi.fn(() => undefined),
   getModelProviderRequestTransport: vi.fn(() => undefined),
   mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
@@ -797,6 +798,7 @@ describe("buildGuardedModelFetch", () => {
   it("trusts exact configured custom provider hosts without broad private-network opt-in", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
     const model = makeProviderModelFixture<"openai-completions">({
@@ -820,6 +822,7 @@ describe("buildGuardedModelFetch", () => {
   it("trusts exact configured HTTPS custom provider origins", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
     const model = makeProviderModelFixture<"openai-completions">({
@@ -841,7 +844,7 @@ describe("buildGuardedModelFetch", () => {
   it("keeps explicit private-network denial ahead of configured custom origin trust", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
-      privateNetworkExplicitlyDenied: true,
+      trustConfiguredBaseUrlOrigin: false,
       policy: { endpointClass: "custom" },
     });
     const model = makeProviderModelFixture<"openai-completions">({
@@ -861,6 +864,7 @@ describe("buildGuardedModelFetch", () => {
   it("trusts exact configured local provider origins", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "local" },
     });
     const model = makeProviderModelFixture<"openai-completions">({
@@ -877,6 +881,71 @@ describe("buildGuardedModelFetch", () => {
     expect(policy).toEqual({
       allowedOrigins: ["http://127.0.0.1:1234"],
     });
+  });
+
+  it("does not add exact-origin trust for local-use NAT64 provider literals", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "nat64-lab",
+      api: "openai-completions",
+      baseUrl: "http://[64:ff9b:1::8.8.8.8]:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://[64:ff9b:1::8.8.8.8]:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toBeUndefined();
+  });
+
+  it("uses only explicit private-network opt-in for local-use NAT64 provider literals", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: true,
+      trustConfiguredBaseUrlOrigin: true,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "nat64-lab",
+      api: "openai-completions",
+      baseUrl: "http://[64:ff9b:1::8.8.8.8]:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://[64:ff9b:1::8.8.8.8]:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = latestGuardedFetchParams().policy;
+    expect(policy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("explains the explicit opt-in when a local-use NAT64 provider literal is blocked", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
+      policy: { endpointClass: "custom" },
+    });
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
+    );
+    const model = {
+      id: "qwen3:32b",
+      provider: "nat64-lab",
+      api: "openai-completions",
+      baseUrl: "http://[64:ff9b:1::8.8.8.8]:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+
+    await expect(
+      fetcher("http://[64:ff9b:1::8.8.8.8]:1234/v1/chat/completions", { method: "POST" }),
+    ).rejects.toThrow(
+      "models.providers.nat64-lab.request.allowPrivateNetwork=true only for an operator-controlled endpoint",
+    );
   });
 
   it("does not trust a configured provider host on a different port", async () => {
@@ -1015,6 +1084,7 @@ describe("buildGuardedModelFetch", () => {
   it("merges explicit private-network opt-in into the provider-host policies", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: true,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
     const model = makeProviderModelFixture<"ollama">({

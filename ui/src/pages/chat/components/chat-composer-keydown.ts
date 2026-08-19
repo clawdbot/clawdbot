@@ -1,11 +1,7 @@
 import type { ChatSendShortcut } from "../../../app/settings.ts";
+import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret, scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
-import { steerableQueuedMessage } from "./chat-composer-queue.ts";
-import {
-  getActiveSkillMenuOptionId,
-  resetSkillMenuState,
-  selectSkillMention,
-} from "./chat-composer-skill-menu.ts";
+import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
 import {
   getActiveSlashMenuOptionId,
   resetSlashMenuState,
@@ -18,12 +14,14 @@ import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types
 type ComposerKeyDownDeps = {
   state: ChatComposerState;
   props: ChatComposerProps;
+  skillMenuHost: SkillMenuHost;
   requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
   commitDraft: (draft: string) => void;
   syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
   showAbortableUi: boolean;
+  steerNowEnabled: boolean;
 };
 
 function handleComposerMenuKeyDown<T>(
@@ -34,37 +32,23 @@ function handleComposerMenuKeyDown<T>(
   requestUpdate: () => void,
   onSelect: (item: T, submit: boolean) => void,
   scrollActive: (state: ChatComposerState, paneId: string) => void,
-  menu: "slash" | "skill" = "slash",
 ): boolean {
   if (event.key === "Escape") {
     event.preventDefault();
-    if (menu === "skill") {
-      resetSkillMenuState(state);
-    } else {
-      state.slashMenuOpen = false;
-      resetSlashMenuState(state);
-    }
+    state.slashMenuOpen = false;
+    resetSlashMenuState(state);
     requestUpdate();
     return true;
   }
   if (items.length === 0) {
-    if (
-      menu === "skill" &&
-      state.skillCommandRefreshPending &&
-      ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key)
-    ) {
-      event.preventDefault();
-      return true;
-    }
     return false;
   }
-  const indexKey = menu === "skill" ? "skillMenuIndex" : "slashMenuIndex";
   switch (event.key) {
     case "ArrowDown":
     case "ArrowUp": {
       event.preventDefault();
       const offset = event.key === "ArrowDown" ? 1 : items.length - 1;
-      state[indexKey] = (state[indexKey] + offset) % items.length;
+      state.slashMenuIndex = (state.slashMenuIndex + offset) % items.length;
       requestUpdate();
       scrollActive(state, paneId);
       return true;
@@ -72,7 +56,7 @@ function handleComposerMenuKeyDown<T>(
     case "Tab":
     case "Enter": {
       event.preventDefault();
-      const item = items[state[indexKey]];
+      const item = items[state.slashMenuIndex];
       if (item !== undefined) {
         onSelect(item, event.key === "Enter");
       }
@@ -86,12 +70,14 @@ function handleComposerMenuKeyDown<T>(
 export function createComposerKeyDownHandler({
   state,
   props,
+  skillMenuHost,
   requestUpdate,
   sendShortcut,
   canSubmitDraft,
   commitDraft,
   syncDraftAfterSend,
   showAbortableUi,
+  steerNowEnabled,
 }: ComposerKeyDownDeps): (event: KeyboardEvent) => void {
   return (event) => {
     // The handler only ever binds to the composer textarea; narrowing here
@@ -104,22 +90,8 @@ export function createComposerKeyDownHandler({
       return;
     }
 
-    if (props.connected && state.skillMenuOpen) {
-      if (
-        handleComposerMenuKeyDown(
-          event,
-          state,
-          state.skillCommandRefreshPending ? [] : state.skillMenuItems,
-          props.paneId,
-          requestUpdate,
-          (command) => selectSkillMention(command, props, requestUpdate),
-          (menuState, paneId) =>
-            scrollActiveMenuOptionIntoView(getActiveSkillMenuOptionId(menuState, paneId)),
-          "skill",
-        )
-      ) {
-        return;
-      }
+    if (props.connected && handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate)) {
+      return;
     }
 
     if (
@@ -233,16 +205,9 @@ export function createComposerKeyDownHandler({
       }
       event.preventDefault();
       commitDraft(target.value);
-      const steerImmediately =
-        sendShortcut === "enter" &&
-        showAbortableUi &&
-        props.followUpMode === "queue" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey &&
-        hasComposedContent;
+      const steerImmediately = steerNowEnabled && (event.metaKey || event.ctrlKey) && !event.altKey;
       if (steerImmediately) {
-        props.onSend({ followUpMode: "steer" });
+        props.onSend("steer");
       } else {
         props.onSend();
       }

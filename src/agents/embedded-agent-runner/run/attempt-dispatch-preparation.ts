@@ -58,6 +58,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const {
     workspaceResolution,
     workspaceDir,
+    bootstrapWorkspaceDir,
     isCanonicalWorkspace,
     agentDir,
     resolvedSessionKey,
@@ -212,6 +213,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       sessionKey: resolvedSessionKey,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,
+      bootstrapWorkspaceDir,
       isCanonicalWorkspace,
       agentDir,
       preparedModelRuntime: runInput.preparedModelRuntime,

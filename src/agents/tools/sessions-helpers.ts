@@ -66,6 +66,7 @@ export type GatewaySessionListRow = {
   };
   spawnedBy?: string;
   label?: string;
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -115,6 +116,7 @@ export type SessionListRow = {
   kind: SessionKind;
   channel: string;
   label?: string;
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -134,7 +136,9 @@ export type SessionListRow = {
 
 /** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
+  agentId?: string;
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
@@ -144,6 +148,7 @@ export function resolveSessionToolContext(opts?: {
     ...resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: opts?.agentSessionKey,
+      requesterAgentId: opts?.requesterAgentIdOverride ?? opts?.agentId,
       sandboxed: opts?.sandboxed,
     }),
   };

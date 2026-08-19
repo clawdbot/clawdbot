@@ -13,7 +13,7 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
-import type { SessionToolOverrides } from "../../../config/sessions/types.js";
+import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
@@ -169,6 +169,8 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Host-prepared proof that the exact session can request Gateway publication. */
+  githubPublicationAvailable?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
@@ -194,6 +196,8 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
   /** Restrict Skill Workshop to one atomic collection reconciliation. */
   skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
+  /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
+  skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -207,8 +211,12 @@ export type RunEmbeddedAgentParams = {
   /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
   sessionFile?: string;
   workspaceDir: string;
+  /** Canonical agent workspace used for bootstrap files when execution runs elsewhere. */
+  bootstrapWorkspaceDir?: string;
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  sessionRoot?: string;
   agentDir?: string;
   /**
    * Run config consumed by core paths (model selection, tools, plugin
@@ -237,6 +245,8 @@ export type RunEmbeddedAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /** Vision capability resolved by the run owner from its prepared model catalog. */
+  modelHasVision?: boolean;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
@@ -289,7 +299,14 @@ export type RunEmbeddedAgentParams = {
   bootstrapPromptWarningSignature?: string;
   execOverrides?: Pick<
     ExecToolDefaults,
-    "host" | "security" | "ask" | "node" | "nodeCwd" | "notifyOnExit" | "notifyOnExitEmptySuccess"
+    | "host"
+    | "mode"
+    | "security"
+    | "ask"
+    | "node"
+    | "nodeCwd"
+    | "notifyOnExit"
+    | "notifyOnExitEmptySuccess"
   >;
   bashElevated?: ExecElevatedDefaults;
   /** Trusted approved-exec runtime prompt span awaiting the resolved attempt cap. */

@@ -217,6 +217,8 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     sessionIdUsed: settledAttempt.sessionIdUsed,
     sessionFileUsed: settledAttempt.sessionFileUsed,
     ...(input.agentHarnessId ? { agentHarnessId: input.agentHarnessId } : {}),
+    contextTokens: settledAttempt.contextTokens,
+    contextTokensSource: settledAttempt.contextTokensSource,
     authBindingFingerprint: settledAttempt.authBindingFingerprint,
     runtimeArtifact: settledAttempt.runtimeArtifact,
     systemPromptReport: settledAttempt.systemPromptReport,

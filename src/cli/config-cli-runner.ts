@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { replaceConfigFile } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
@@ -35,6 +36,7 @@ import {
   unsetAtPath,
 } from "./config-cli-path.js";
 import {
+  assertStrictConfigForMutation,
   collectDryRunRefs,
   collectDryRunResolvabilityErrors,
   collectDryRunSchemaErrors,
@@ -42,7 +44,7 @@ import {
   collectPluginIntegrationProviderErrors,
   dedupeDryRunErrors,
   formatDryRunFailureMessage,
-  loadValidConfig,
+  loadValidConfigForWrite,
   selectDryRunRefsForResolution,
 } from "./config-cli-validation.js";
 import { checkTouchedTextModelRefs } from "./config-model-validation.js";
@@ -291,7 +293,8 @@ export async function runConfigOperations(params: {
   if (autoManagedTargets.length > 0) {
     throw new Error(formatAutoManagedMetaError(autoManagedTargets));
   }
-  const snapshot = await loadValidConfig(runtime);
+  const mutationStart = await loadValidConfigForWrite(runtime);
+  const { snapshot } = mutationStart;
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(
@@ -339,7 +342,6 @@ export async function runConfigOperations(params: {
     config: nextConfig,
     operations,
   });
-
   if (options.dryRun) {
     const hasJsonMode = operations.some(({ inputMode }) => inputMode === "json");
     const hasBuilderMode = operations.some(({ inputMode }) => inputMode === "builder");
@@ -368,7 +370,12 @@ export async function runConfigOperations(params: {
     }
     errors.push(...pluginIntegrationErrors);
     if (requiresFullSchemaValidation) {
-      errors.push(...collectDryRunSchemaErrors(nextConfig));
+      errors.push(
+        ...collectDryRunSchemaErrors(
+          nextConfig,
+          mutationStart.writeOptions.basePluginMetadataSnapshot,
+        ),
+      );
     }
     if (checksRefs) {
       errors.push(
@@ -451,6 +458,14 @@ export async function runConfigOperations(params: {
       ].join("\n"),
     );
   }
+  if (params.successMode === "set" && isDeepStrictEqual(currentConfig, nextConfig)) {
+    assertStrictConfigForMutation(
+      nextConfig,
+      mutationStart.writeOptions.basePluginMetadataSnapshot,
+    );
+    runtime.log(info("No change"));
+    return;
+  }
   const modelRefCheck = await checkTouchedTextModelRefs({
     config: nextConfig,
     previousConfig: currentConfig,
@@ -463,8 +478,10 @@ export async function runConfigOperations(params: {
 
   await replaceConfigFile({
     nextConfig,
+    snapshot,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     writeOptions: {
+      ...mutationStart.writeOptions,
       auditOrigin: "cli",
       ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
       ...(normalizedExplicitSetPaths.length > 0

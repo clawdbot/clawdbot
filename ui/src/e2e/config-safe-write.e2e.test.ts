@@ -240,10 +240,12 @@ suite.define(() => {
 }
 `;
         await rawEditor.fill(rawDraft);
+        const rawSave = page.getByRole("button", { name: "Save", exact: true });
+        await expect.poll(() => rawSave.isEnabled()).toBe(true);
         await capture(page, "02-raw-draft.png");
 
         const setRequestsBeforeRawSave = (await gateway.getRequests("config.set")).length;
-        await page.getByRole("button", { name: "Save", exact: true }).click();
+        await rawSave.click();
         await expect
           .poll(async () => (await gateway.getRequests("config.set")).length)
           .toBe(setRequestsBeforeRawSave + 1);

@@ -491,7 +491,7 @@ describe("delivery producer lease integration", () => {
     vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
     const tmpDir = fixtures.tmpDir();
     const deliveryIntentId = "cron-direct-delivery:v1:expire-owner-after-dispatch";
-    const auditEvents: unknown[] = [];
+    const auditEvents: Array<{ outcome: string }> = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     let blocked: Awaited<ReturnType<typeof startBlockedProviderStableDelivery>> | undefined;
     try {
@@ -519,7 +519,7 @@ describe("delivery producer lease integration", () => {
 
       expect(blocked.sendText).toHaveBeenCalledOnce();
       expect(blocked.onDeliveryResult).not.toHaveBeenCalled();
-      expect(auditEvents).toEqual([]);
+      expect(auditEvents.map((event) => event.outcome)).toEqual(["queued", "platform_started"]);
       expect(
         getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
       ).toBe("pending");

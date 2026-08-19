@@ -18,10 +18,11 @@ import {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-protocol/version";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { WebSocket } from "ws";
 import {
   isSensitiveUrlQueryParamName,
-  normalizeFingerprint,
+  normalizeTlsFingerprint,
   normalizeGatewayErrorText,
 } from "./client-address-utils.js";
 import {
@@ -116,7 +117,7 @@ const DEFAULT_HOST_DEPS: Required<GatewayClientHostDeps> = {
   logDebug: () => {},
   logError: () => {},
   redactForLog: (message) => message,
-  normalizeTlsFingerprint: normalizeFingerprint,
+  normalizeTlsFingerprint,
 };
 
 function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayClientHostDeps> {
@@ -237,6 +238,8 @@ export function isGatewayConnectAssemblyError(value: unknown): value is Error {
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
   origin?: string;
+  /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
+  edgeAuthHeaders?: Readonly<Record<string, string>>;
   connectChallengeTimeoutMs?: number;
   /**
    * Server-side pre-auth handshake budget. Config-derived local clients use
@@ -281,6 +284,8 @@ export type GatewayClientOptions = {
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
+  /** Report retryable startup closes for clients that present connection progress. */
+  notifyOnStartupRetry?: boolean;
   onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
@@ -493,6 +498,16 @@ export class GatewayClient {
 
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
+    const configuredEdgeAuthHeaders = this.opts.edgeAuthHeaders;
+    const edgeAuthHeaders =
+      configuredEdgeAuthHeaders && Object.keys(configuredEdgeAuthHeaders).length > 0
+        ? configuredEdgeAuthHeaders
+        : undefined;
+    if (edgeAuthHeaders && new URL(url).protocol !== "wss:") {
+      throw new GatewayWebSocketTransportConfigurationError(
+        "edge auth headers require a wss:// Gateway URL",
+      );
+    }
     // Block plaintext before device-token lookup. Credentials may be loaded from
     // host storage later in sendConnect(), and chat payloads are sensitive too.
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
@@ -510,6 +525,12 @@ export class GatewayClient {
         maxPayload: 25 * 1024 * 1024,
         handshakeTimeout: handshakeTimeoutMs,
         ...(this.opts.origin ? { origin: this.opts.origin } : {}),
+        ...(edgeAuthHeaders
+          ? {
+              followRedirects: false,
+              headers: edgeAuthHeaders,
+            }
+          : {}),
       },
     });
     this.deps.beforeConnect();
@@ -557,6 +578,12 @@ export class GatewayClient {
     ws.on("unexpected-response", (request: ClientRequest, response: IncomingMessage) => {
       void readUpgradeErrorBody(response).then((body) => {
         const statusCode = response.statusCode;
+        const rawLocation = response.headers.location;
+        const location = rawLocation
+          ? redactSensitiveUrlLikeString(
+              Array.isArray(rawLocation) ? (rawLocation[0] ?? "") : rawLocation,
+            )
+          : undefined;
         const message = `gateway rejected websocket upgrade (HTTP ${statusCode ?? "unknown"})${body ? `: ${body}` : ""}`;
         upgradeError = new GatewayClientRequestError({
           code: "UNAVAILABLE",
@@ -565,6 +592,7 @@ export class GatewayClient {
           details: {
             reason: "websocket-upgrade-rejected",
             ...(statusCode === undefined ? {} : { httpStatus: statusCode }),
+            ...(location ? { location } : {}),
           },
         });
         handlers.error(upgradeError);
@@ -1060,7 +1088,7 @@ export class GatewayClient {
     if (context.code === 1013 && context.connectFailure?.reconnectDelayMs !== undefined) {
       return {
         retry: true,
-        notify: false,
+        notify: this.opts.notifyOnStartupRetry === true,
         reconnectDelayMs: context.connectFailure.reconnectDelayMs,
       };
     }

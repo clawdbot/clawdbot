@@ -375,7 +375,15 @@ describe("renderAgents", () => {
             "local/unlisted-model": { alias: "My local model" },
           },
         },
-        entries: { alpha: {}, beta: {} },
+        entries: {
+          alpha: {
+            models: {
+              "local/unlisted-model": { alias: "Alpha local model" },
+              "google/gemini-3-flash-preview": { alias: "Alpha Flash" },
+            },
+          },
+          beta: {},
+        },
       },
     };
 
@@ -429,7 +437,10 @@ describe("renderAgents", () => {
     expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
     expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
     expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
-    expect(options.get("local/unlisted-model")).toBe("My local model (local/unlisted-model)");
+    expect(options.get("local/unlisted-model")).toBe("Alpha local model (local/unlisted-model)");
+    expect(options.get("google/gemini-3-flash-preview")).toBe(
+      "Alpha Flash (google/gemini-3-flash-preview)",
+    );
   });
 
   it.each([

@@ -19,6 +19,9 @@
     "tools": ["intent", "memory_get", "memory_search"]
   },
   "toolMetadata": {
+    "intent": {
+      "profiles": ["coding", "messaging"]
+    },
     "memory_get": {
       "replaySafe": true
     }

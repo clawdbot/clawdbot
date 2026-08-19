@@ -386,6 +386,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     emitWarnings: true,
   });
 
+  const { prepareTailscaleConfigMigration } = await import("./doctor-tailscale.js");
+  applyConfigMutation(
+    await prepareTailscaleConfigMigration({
+      cfg: state.candidate,
+      env: process.env,
+    }),
+    {
+      fixHint: `Run "${doctorFixCommand}" to apply safe Tailscale configuration migrations.`,
+      emitWarnings: true,
+    },
+  );
+
   const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
   const retiredPhoneControlCleanup = await prepareRetiredPhoneControlCleanup({
     cfg: state.candidate,

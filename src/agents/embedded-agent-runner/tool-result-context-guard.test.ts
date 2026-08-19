@@ -972,7 +972,7 @@ describe("installContextEngineLoopHook", () => {
     );
   });
 
-  it("repairs same-reference ownsCompaction assembled loop views", async () => {
+  it("repairs successful in-place ownsCompaction assembled loop views", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();
     installContextEngineLoopHook({
@@ -991,7 +991,10 @@ describe("installContextEngineLoopHook", () => {
       firstResultText: "r",
     });
 
-    expect(recordMockArg(engine.assemble).messages).toBe(withNew);
+    const assembledInput = recordMockArg(engine.assemble).messages as AgentMessage[];
+    expect(assembledInput).not.toBe(withNew);
+    expect(assembledInput).toEqual(withNew);
+    expect(assembledInput[0]).toBe(withNew[0]);
     expect(transformed).not.toBe(withNew);
     expect(transformed).toEqual([expect.objectContaining({ role: "user", content: "first" })]);
     expect((transformed as AgentMessage[]).some((message) => message.role === "toolResult")).toBe(
@@ -1021,7 +1024,9 @@ describe("installContextEngineLoopHook", () => {
     expect(await callTransform(agent, secondSource)).toBe(secondSource);
 
     const retry = await callTransform(agent, secondSource);
-    expect(retry).toBe(secondSource);
+    expect(retry).not.toBe(secondSource);
+    expect(retry).toEqual(secondSource);
+    expect((retry as AgentMessage[])[0]).toBe(secondSource[0]);
     expect(retry).not.toBe(compactedView);
     expect(engine.assemble).toHaveBeenCalledTimes(3);
   });
@@ -1075,7 +1080,10 @@ describe("installContextEngineLoopHook", () => {
     expect(await callTransform(agent, source)).toBe(compactedView);
 
     const resetSource = [makeUser("reset"), makeToolResult("call_3", "r3"), makeUser("fresh")];
-    expect(await callTransform(agent, resetSource)).toBe(resetSource);
+    const transformed = await callTransform(agent, resetSource);
+    expect(transformed).not.toBe(resetSource);
+    expect(transformed).toEqual(resetSource);
+    expect((transformed as AgentMessage[])[0]).toBe(resetSource[0]);
   });
 
   it("returns the assembled view when the engine rewrites content without changing count", async () => {
@@ -1095,14 +1103,16 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(rewrittenView);
   });
 
-  it("returns the source when the engine returns the same array reference", async () => {
+  it("adopts the working array when the engine returns it in place", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();
     installHook(agent, engine);
 
     const { transformed, withNew } = await callAfterInitialToolResult(agent);
 
-    expect(transformed).toBe(withNew);
+    expect(transformed).not.toBe(withNew);
+    expect(transformed).toEqual(withNew);
+    expect((transformed as AgentMessage[])[0]).toBe(withNew[0]);
   });
 
   it("does not mutate the source messages array", async () => {
@@ -1194,10 +1204,14 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(withNew);
   });
 
-  it("falls through to source messages when engine.assemble throws", async () => {
+  it("preserves source messages when engine.assemble mutates then throws", async () => {
     const agent = makeGuardableAgent();
+    let preassemblyMessages: AgentMessage[] = [];
     const engine = makeMockEngine({
-      assemble: async () => {
+      assemble: async ({ messages }) => {
+        preassemblyMessages = messages.slice();
+        messages.reverse();
+        messages.pop();
         throw new Error("engine assemble boom");
       },
     });
@@ -1206,6 +1220,10 @@ describe("installContextEngineLoopHook", () => {
     const { transformed, withNew } = await callAfterInitialToolResult(agent);
 
     expect(transformed).toBe(withNew);
+    expect(withNew).toEqual(preassemblyMessages);
+    for (const [index, message] of withNew.entries()) {
+      expect(message).toBe(preassemblyMessages[index]);
+    }
   });
 
   it("invokes any pre-existing transformContext before the engine sees messages", async () => {

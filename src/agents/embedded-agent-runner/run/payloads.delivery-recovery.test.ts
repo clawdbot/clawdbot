@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads delivery recovery", () => {
@@ -13,6 +14,10 @@ describe("buildEmbeddedRunPayloads delivery recovery", () => {
           audioAsVoice: true,
           replyToCurrent: true,
           replyToId: "message-7",
+          tts: {
+            tagged: true,
+            text: "Recovered speech",
+          },
         },
       } as AssistantMessage,
     });
@@ -25,6 +30,10 @@ describe("buildEmbeddedRunPayloads delivery recovery", () => {
         replyToId: "message-7",
       }),
     ]);
+    expect(getReplyPayloadMetadata(payloads[0]!)?.tts).toEqual({
+      tagged: true,
+      text: "Recovered speech",
+    });
   });
 
   it("does not recover delivery facts by parsing a pre-upgrade assistant", () => {

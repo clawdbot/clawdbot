@@ -1,7 +1,4 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
@@ -160,31 +157,37 @@ describe("plugin metadata snapshot", () => {
     expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
-  it("reuses workspace-independent lifecycle metadata for a new workspace", () => {
+  it("cold-loads the requested workspace instead of reusing a different lifecycle graph", () => {
     const config = {};
     const sourceWorkspace = "/workspace/source";
     const targetWorkspace = "/workspace/target";
-    const index = makeIndex();
-    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    index.workspaceDir = sourceWorkspace;
+    const staleIndex = makeIndex("stale");
+    staleIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    staleIndex.workspaceDir = sourceWorkspace;
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source: "provided",
-      snapshot: index,
+      snapshot: staleIndex,
       diagnostics: [],
     });
-    const source = loadPluginMetadataSnapshot({
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("stale"));
+    const stale = loadPluginMetadataSnapshot({
       config,
       env: {},
-      index,
+      index: staleIndex,
       workspaceDir: sourceWorkspace,
     });
-    setCurrentPluginMetadataSnapshot(source, {
-      config,
-      env: {},
-      workspaceDir: sourceWorkspace,
+    setCurrentPluginMetadataSnapshot(stale, { config, env: {}, workspaceDir: sourceWorkspace });
+
+    // Convergence replaced the persisted inventory; a fresh load now sees a different graph.
+    const freshIndex = makeIndex("fresh");
+    freshIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    freshIndex.workspaceDir = targetWorkspace;
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "provided",
+      snapshot: freshIndex,
+      diagnostics: [],
     });
-    loadPluginRegistrySnapshotWithMetadata.mockClear();
-    loadPluginManifestRegistryForInstalledIndex.mockClear();
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("fresh"));
 
     const resolved = resolvePluginMetadataSnapshot({
       config,
@@ -192,29 +195,11 @@ describe("plugin metadata snapshot", () => {
       workspaceDir: targetWorkspace,
     });
 
-    expect(resolved).not.toBe(source);
-    expect(resolved.workspaceDir).toBe(targetWorkspace);
-    expect(resolved.index.workspaceDir).toBe(targetWorkspace);
-    expect(resolved.plugins).toBe(source.plugins);
-    expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-
-    resolvePluginMetadataSnapshot({
-      config,
-      env: {},
-      workspaceDir: targetWorkspace,
-      workspacePluginRootPresent: true,
-    });
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
-
-    const pluginWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-workspace-"));
-    try {
-      fs.mkdirSync(path.join(pluginWorkspace, ".openclaw", "extensions"), { recursive: true });
-      resolvePluginMetadataSnapshot({ config, env: {}, workspaceDir: pluginWorkspace });
-      expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
-    } finally {
-      fs.rmSync(pluginWorkspace, { force: true, recursive: true });
-    }
+    expect(resolved.index.plugins.map((plugin) => plugin.pluginId)).toEqual(["fresh"]);
+    expect(resolved.configFingerprint).toBe(
+      loadPluginMetadataSnapshot({ config, env: {}, workspaceDir: targetWorkspace })
+        .configFingerprint,
+    );
   });
 
   it("rewalks collection-bearing manifest graphs after prototype mutation", () => {

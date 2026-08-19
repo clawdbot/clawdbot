@@ -52,10 +52,7 @@ describe("worker turn launcher terminal results", () => {
           }),
         );
         createWorkerSessionPlacementGate(placements).updateAckCursors({
-          sessionId: SESSION_ID,
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runId: "run-reconcile-tunnel-loss",
+          claim: request.turnClaim,
           transcriptSeq: 2,
           liveSeq: 1,
         });
@@ -187,10 +184,7 @@ describe("worker turn launcher terminal results", () => {
             }),
           );
           createWorkerSessionPlacementGate(placements).updateAckCursors({
-            sessionId: SESSION_ID,
-            environmentId: ENVIRONMENT_ID,
-            ownerEpoch: OWNER_EPOCH,
-            runId: "run-worker-usage",
+            claim: request.turnClaim,
             transcriptSeq: 2,
             liveSeq: 1,
           });

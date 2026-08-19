@@ -127,6 +127,17 @@ function holdInvoke() {
 }
 
 describe("node-host worker manifest", () => {
+  it("allows environment-managed processes to force worker hosting without durable config", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: false } } },
+      env: { PATH: "/usr/bin" },
+      enableWorkerRuns: true,
+      forceWorkerRuns: true,
+    });
+
+    expect(prepared.workerHostingEnabled).toBe(true);
+  });
+
   it("keeps local consent separate from connection metadata", async () => {
     const prepared = await prepareNodeHostRuntime({
       config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },

@@ -290,6 +290,7 @@ function collectConfiguredTargetRefPaths(params: {
 function classifyConfiguredTargetRefs(params: {
   config: OpenClawConfig;
   configuredTargetRefPaths: Set<string>;
+  agentId?: string;
   forcedActivePaths?: ReadonlySet<string>;
   optionalActivePaths?: ReadonlySet<string>;
 }): {
@@ -311,6 +312,7 @@ function classifyConfiguredTargetRefs(params: {
   commandSecretGatewayDeps.collectConfigAssignments({
     config: structuredClone(params.config),
     context,
+    agentId: params.agentId,
   });
 
   const activePaths = new Set(context.assignments.map((assignment) => assignment.path));
@@ -463,6 +465,7 @@ async function resolveCommandSecretRefsWithoutGateway(params: {
   config: OpenClawConfig;
   commandName: string;
   targetIds: Set<string>;
+  agentId?: string;
   preflightDiagnostics: string[];
   mode: CommandSecretResolutionMode;
   allowedPaths?: ReadonlySet<string>;
@@ -475,6 +478,7 @@ async function resolveCommandSecretRefsWithoutGateway(params: {
     config: params.config,
     commandName: params.commandName,
     targetIds: params.targetIds,
+    agentId: params.agentId,
     preflightDiagnostics: params.preflightDiagnostics,
     mode: params.mode,
     allowedPaths: params.allowedPaths,
@@ -541,6 +545,7 @@ async function resolveCommandSecretRefsLocally(params: {
   config: OpenClawConfig;
   commandName: string;
   targetIds: Set<string>;
+  agentId?: string;
   preflightDiagnostics: string[];
   mode: CommandSecretResolutionMode;
   allowedPaths?: ReadonlySet<string>;
@@ -564,6 +569,7 @@ async function resolveCommandSecretRefsLocally(params: {
   commandSecretGatewayDeps.collectConfigAssignments({
     config: structuredClone(params.config),
     context,
+    agentId: params.agentId,
   });
   if (
     targetsRuntimeWebResolution({
@@ -828,6 +834,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   config: OpenClawConfig;
   commandName: string;
   targetIds: Set<string>;
+  agentId?: string;
   mode?: CommandSecretResolutionModeInput;
   allowedPaths?: ReadonlySet<string>;
   forcedActivePaths?: ReadonlySet<string>;
@@ -856,6 +863,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   const preflight = classifyConfiguredTargetRefs({
     config: params.config,
     configuredTargetRefPaths,
+    agentId: params.agentId,
     forcedActivePaths: params.forcedActivePaths,
     optionalActivePaths: params.optionalActivePaths,
   });
@@ -875,6 +883,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       config: params.config,
       commandName: params.commandName,
       targetIds: params.targetIds,
+      agentId: params.agentId,
       preflightDiagnostics: preflight.diagnostics,
       mode,
       allowedPaths: params.allowedPaths,
@@ -902,6 +911,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         config: params.config,
         commandName: params.commandName,
         targetIds: params.targetIds,
+        agentId: params.agentId,
         preflightDiagnostics: preflight.diagnostics,
         mode,
         allowedPaths: params.allowedPaths,
@@ -1039,6 +1049,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         config: params.config,
         commandName: params.commandName,
         targetIds: params.targetIds,
+        agentId: params.agentId,
         preflightDiagnostics: [],
         mode,
         allowedPaths: new Set(analyzed.unresolved.map((entry) => entry.path)),

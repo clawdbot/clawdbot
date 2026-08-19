@@ -14,6 +14,7 @@ import {
 import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
 import {
   SHORT_TERM_LOCK_STALE_MS,
+  deleteShortTermLockEntryIfCurrent,
   isProcessLikelyAlive,
   parseLockOwnerPid,
   readPhaseSignalStore,
@@ -186,7 +187,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   if (lockEntry && Date.now() - lockEntry.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
     const ownerPid = parseLockOwnerPid(lockEntry.owner);
     if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
-      removedStaleLock = await lockStore.delete(lockKey);
+      removedStaleLock = await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry);
     }
   }
 

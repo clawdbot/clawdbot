@@ -2,6 +2,10 @@
 
 export { addGatewayClientOptions, callGatewayFromCli } from "../cli/gateway-rpc.js";
 export type { GatewayRpcOpts } from "../cli/gateway-rpc.js";
+export { isGatewayClientRequestError, isGatewayTransportError } from "../gateway/call.js";
+// Plugin CLIs echo gateway URLs/close reasons into operator-visible errors;
+// they must use the canonical redactor so URL userinfo/tokens never print.
+export { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 export { isLoopbackHost } from "../gateway/net.js";
 export async function resolveAdvertisedLanHost(): Promise<string | null> {
   const runtime = await import("../infra/advertised-lan-host.js");

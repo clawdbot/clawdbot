@@ -46,11 +46,14 @@ export function resolveModelCatalogScope(params: {
 export function resolveModelWorkspaceDir(
   cfg: OpenClawConfig | undefined,
   explicitWorkspaceDir: string | undefined,
+  agentId?: string,
 ): string | undefined {
   if (explicitWorkspaceDir !== undefined || !cfg) {
     return explicitWorkspaceDir;
   }
-  return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  // The caller may already own an authorized agent; reuse it instead of
+  // re-resolving a default, which throws on multi-agent configs.
+  return resolveAgentWorkspaceDir(cfg, agentId ?? resolveDefaultAgentId(cfg));
 }
 
 /**

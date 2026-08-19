@@ -193,6 +193,7 @@ describe("gateway connect pairing exemptions", () => {
       nextConfig: {
         gateway: {
           auth,
+          tailscale: { mode: "serve" },
           controlUi: { allowedOrigins: [tailscaleOrigin] },
         },
       },
@@ -210,7 +211,11 @@ describe("gateway connect pairing exemptions", () => {
     let ws: Awaited<ReturnType<typeof openTailscaleWs>> | undefined;
 
     try {
-      ws = await openTailscaleWs(started.port, { origin: tailscaleOrigin });
+      const tailscaleEndpoint = started.server.getTailscaleIngressEndpoint();
+      if (!tailscaleEndpoint) {
+        throw new Error("expected managed Tailscale listener");
+      }
+      ws = await openTailscaleWs(tailscaleEndpoint, { origin: tailscaleOrigin });
       const response = await connectReq(ws, {
         skipDefaultAuth: true,
         prePairDevice: false,

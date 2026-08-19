@@ -176,13 +176,12 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const hasFlags = hasExplicitOptions(command, [
+        const hasAutomationFlags = hasExplicitOptions(command, [
           "workspace",
           "model",
           "agentDir",
           "bind",
           "nonInteractive",
-          "json",
         ]);
         const agentsAddCommand = await loadAgentsAddCommand();
         await agentsAddCommand(
@@ -196,7 +195,7 @@ export function registerAgentsCommands(program: Command): void {
             json: Boolean(opts.json),
           },
           runtime,
-          { hasFlags },
+          { hasAutomationFlags },
         );
       });
     });

@@ -529,7 +529,7 @@ defineDiscordVoiceTests(
         if (channelId === "1002") {
           backupFetches += 1;
           if (backupFetches > 1) {
-            return null;
+            throw new Error("followed channel unavailable");
           }
         }
         return {
@@ -749,6 +749,25 @@ defineDiscordVoiceTests(
 
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
       expectConnectedStatus(manager, "1001");
+    });
+
+    it("does not rejoin an empty occupancy-managed target after the bot is moved", async () => {
+      const manager = createManager(
+        makeVoiceConfig({
+          autoJoin: [{ guildId: "g1", channelId: "1001", whenOccupied: true }],
+          allowedChannels: [{ guildId: "g1", channelId: "1001" }],
+        }),
+        undefined,
+        {},
+        "default",
+        "bot-user",
+      );
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      await updateVoiceState(manager, "bot-user", "1002");
+
+      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+      expect(manager.status()).toEqual([]);
     });
 
     it("skips destroying stale tracked voice connections that are already destroyed", async () => {

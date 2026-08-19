@@ -4,12 +4,12 @@ import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import {
   TEST_TLS_CERT_PEM as CERT_PEM,
   TEST_TLS_KEY_PEM as KEY_PEM,
 } from "../../../test/helpers/tls-fixture.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { normalizeFingerprint } from "./fingerprint.js";
 
 const { durabilityTestState, resolveSystemBinMock, runExecMock } = vi.hoisted(() => ({
   durabilityTestState: {
@@ -108,7 +108,7 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.keyPath).toBe(keyPath);
     expect(result.caPath).toBe(caPath);
     expect(result.fingerprintSha256).toBe(
-      normalizeFingerprint(new X509Certificate(CERT_PEM).fingerprint256 ?? ""),
+      normalizeTlsFingerprint(new X509Certificate(CERT_PEM).fingerprint256 ?? ""),
     );
     expect(result.tlsOptions?.cert).toBe(CERT_PEM);
     expect(result.tlsOptions?.key).toBe(KEY_PEM);

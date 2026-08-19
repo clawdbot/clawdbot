@@ -6,7 +6,6 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { testing } from "../../scripts/write-cli-startup-metadata.ts";
 import { waitForPidFile } from "../helpers/process-wait.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -42,8 +41,6 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
     ["extensions/browser/src/cli/browser-cli.ts", "export const browserHelp = 'browser';\n"],
     ["extensions/canvas/cli-metadata.ts", "export const canvasMetadata = 'canvas';\n"],
     ["extensions/canvas/index.ts", "export const canvasEntry = 'canvas';\n"],
-    ["extensions/canvas/src/a2ui-jsonl.ts", "export const a2uiJsonl = 'canvas';\n"],
-    ["extensions/canvas/src/cli-helpers.ts", "export const canvasHelpers = 'canvas';\n"],
     ["extensions/canvas/src/cli.ts", "export const canvasCliHelp = 'canvas';\n"],
     ["src/cli/banner.ts", "export const banner = 'openclaw';\n"],
     [
@@ -84,10 +81,6 @@ function processIsAlive(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
-}
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
 }
 
 function createSpawnTextChild() {
@@ -563,59 +556,6 @@ describe("write-cli-startup-metadata", () => {
       }
     },
   );
-
-  it("signals Windows command help render process trees with taskkill", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    testing.signalCliStartupMetadataProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-
-    testing.signalCliStartupMetadataProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows command help render process trees when graceful taskkill fails", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    testing.signalCliStartupMetadataProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
-  });
 
   it.runIf(process.platform !== "win32")(
     "kills descendant processes when command help rendering times out",

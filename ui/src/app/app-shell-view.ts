@@ -7,10 +7,15 @@ import type {
   SidebarWorkboardSnapshot,
 } from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
-import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
+import { renderLazyElementModal } from "../components/lazy-view-error.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import {
+  renderLazySettingsSidebar,
+  type SettingsSidebarModule,
+} from "../components/settings-sidebar-lazy.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -24,10 +29,14 @@ import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gate
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { readScopeUpgradeAvailability } from "./device-scope-upgrade.ts";
 import {
-  ensureOptionalElementForHost,
+  hasDismissedScopeUpgradeBanner,
+  readScopeUpgradeAvailability,
+} from "./device-scope-upgrade.ts";
+import {
+  DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
+  type LazyCustomElementRequestController,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
@@ -43,7 +52,6 @@ import {
 } from "./settings.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
-const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const EMPTY_SESSION_HAS_DRAFT = () => false;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -60,10 +68,13 @@ function renderScopeUpgradeBanner(
   snapshot: ApplicationContext["gateway"]["snapshot"],
 ) {
   const state = readScopeUpgradeAvailability(snapshot);
-  if (state.phase === "hidden") {
+  if (
+    state.phase === "hidden" ||
+    (state.phase === "guidance" && hasDismissedScopeUpgradeBanner())
+  ) {
     return nothing;
   }
-  void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
+  host.lazyCustomElements.preload(SCOPE_UPGRADE_BANNER_ELEMENT);
   if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
     return html`<openclaw-device-scope-upgrade-banner
       .props=${{
@@ -89,6 +100,7 @@ export interface ShellViewHost {
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
+  readonly lazyCustomElements: LazyCustomElementRequestController;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
   readonly navigationSidebar: HTMLElement;
@@ -96,13 +108,17 @@ export interface ShellViewHost {
   readonly outboxStoreRuntime: OutboxStoreRuntime | null;
   readonly routeState: ShellRouteState;
   readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
+  readonly settingsSidebarRenderer: SettingsSidebarModule["renderSettingsSidebar"] | null;
+  readonly settingsSidebarLoadFailed: boolean;
   readonly settingsSearchQuery: string;
   readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
   readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
   readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
   readonly devicePairSetupLoadFailed: boolean;
   loadDevicePairSetupRenderer(): void;
+  loadSettingsSidebarRenderer(): void;
   retryDevicePairSetupRenderer(): void;
+  retrySettingsSidebarRenderer(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
@@ -224,14 +240,13 @@ export function renderApplicationShell(host: ShellViewHost) {
   const storedDraftScopeKeys = outboxStoreRuntime
     ? outboxStoreRuntime.listStoredDraftScopes(outboxScopeHost)
     : null;
-  const outboxCountForSession = outboxStoreRuntime
+  const outboxAttentionCountForSession = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        return (
-          storedOutboxes?.countsByScope.get(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) ?? 0
-        );
+        const scopeKey = outboxStoreRuntime.storedChatOutboxScopeKey(scope);
+        return storedOutboxes?.attentionCountsByScope.get(scopeKey) ?? 0;
       }
-    : EMPTY_OUTBOX_COUNT_FOR_SESSION;
+    : () => 0;
   const hasSessionDraft = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -272,7 +287,8 @@ export function renderApplicationShell(host: ShellViewHost) {
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =
-    gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
+    // Scope-aware to match the store: admin-only, never advertisement alone.
+    canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
   const activeRoute = host.routeState.routeId ?? "chat";
   // Chat has an offline outbox, New Session keeps a local draft, and Appearance
   // persists local preference intent for replay. Their server actions are
@@ -300,6 +316,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     uiHints: runtimeConfig.configUiHints,
     identityAvailable: Boolean(gatewaySnapshot.selfUser),
     basePath: context.basePath,
+    canAdmin: operatorAccess.canAdmin,
   });
   const onboarding = host.onboardingMode;
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
@@ -353,7 +370,8 @@ export function renderApplicationShell(host: ShellViewHost) {
   const uiSettings = loadSettings();
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
-  const chatLikeRoute = isSessionRouteId(activeRoute) || activeRoute === "new-session";
+  const sessionRoute = isSessionRouteId(activeRoute);
+  const chatLikeRoute = sessionRoute || activeRoute === "new-session";
   const custodianRoute = activeRoute === "custodian";
   if (!settingsTakeover) {
     Object.assign(host.navigationSidebar, {
@@ -366,7 +384,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
-      outboxCountForSession,
+      outboxAttentionCountForSession,
       hasSessionDraft,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
@@ -396,6 +414,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
       onRefresh: () => host.refreshControlUi(),
       onHoldUpdate: () => context.overlays.holdUpdate(),
+      onReviewUpdate: () => host.navigate("updates"),
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
@@ -409,7 +428,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     });
   }
   const navigationContent = settingsTakeover
-    ? renderSettingsSidebar({
+    ? renderLazySettingsSidebar(host, {
         basePath: context.basePath,
         activeRouteId: activeRoute,
         activePathname: host.routeState.location?.pathname ?? "",
@@ -432,6 +451,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
         onRefresh: () => host.refreshControlUi(),
         onHoldUpdate: () => context.overlays.holdUpdate(),
+        onReviewUpdate: () => host.navigate("updates"),
         searchQuery: host.settingsSearchQuery,
         searchBlockMatches: settingsSearchBlocks,
         onExit: () => host.exitSettings(),
@@ -457,17 +477,22 @@ export function renderApplicationShell(host: ShellViewHost) {
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
         },
+        canAdmin: operatorAccess.canAdmin,
       })
     : host.navigationSidebar;
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
   // and the upgraded panels catch the first toggle instead of dropping the event.
   return html`
+    ${renderLazyElementModal(host.lazyCustomElements)}
     ${isOptionalElementDefined(host.commandPaletteElement)
       ? html`<openclaw-command-palette
           .onNavigate=${(routeId: RouteId) => host.navigate(routeId)}
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
           .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
         ></openclaw-command-palette>`
+      : nothing}
+    ${isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)
+      ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
       : nothing}
     <div
       class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
@@ -498,10 +523,8 @@ export function renderApplicationShell(host: ShellViewHost) {
           `
         : nothing}
       <openclaw-app-topbar
-        .basePath=${context.basePath}
-        .searchDisabled=${false}
+        .resourceBasePath=${context.resourceBasePath}
         .navDrawerOpen=${navDrawerOpen}
-        .onboarding=${onboarding}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
@@ -548,6 +571,19 @@ export function renderApplicationShell(host: ShellViewHost) {
                   ${icons.search}
                 </button>
               </openclaw-tooltip>
+              ${navCollapsed && custodianPanelAvailable
+                ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
+                    <button
+                      type="button"
+                      class="shell-chrome-controls__button shell-chrome-controls__custodian"
+                      aria-label=${t("nav.askOpenClaw")}
+                      @click=${() =>
+                        window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
+                    >
+                      ${icons.lobster}
+                    </button>
+                  </openclaw-tooltip>`
+                : nothing}
             </div>
           `
         : nothing}
@@ -603,6 +639,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           refreshRequired: overlaySnapshot.controlUiRefreshRequired,
           onRefresh: () => host.refreshControlUi(),
           onHoldUpdate: () => context.overlays.holdUpdate(),
+          onReviewUpdate: () => host.navigate("updates"),
         })}
         ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
           ? html`<div class="connection-action-block" role="status" aria-live="polite">
@@ -622,12 +659,12 @@ export function renderApplicationShell(host: ShellViewHost) {
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
         .agentId=${selectedAgentId}
+        .sessionKey=${sessionRoute ? host.activeSessionKey : null}
         .suppressed=${settingsTakeover}
-        .sessionBottomOnly=${isSessionRouteId(activeRoute)}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
-      ${isSessionRouteId(activeRoute)
+      ${sessionRoute
         ? nothing
         : html`
             <openclaw-browser-panel
@@ -635,7 +672,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${browserPanelAvailable}
               .suppressed=${settingsTakeover}
-              .basePath=${context.basePath}
+              .resourceBasePath=${context.resourceBasePath}
               .authToken=${resolveControlUiAuthToken({
                 hello: gatewaySnapshot.hello,
                 settings: { token: context.gateway.connection.token },
@@ -647,6 +684,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${desktopPanelAvailable}
               .suppressed=${settingsTakeover}
+              .basePath=${context.basePath}
             ></openclaw-desktop-panel>
           `}
       <openclaw-custodian-panel
@@ -659,6 +697,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             .props=${{
               queue: overlaySnapshot.approvalQueue,
               busy: overlaySnapshot.approvalBusy,
+              canGrant: overlaySnapshot.approvalCanGrant,
               errors: overlaySnapshot.approvalErrors,
               nowMs: overlaySnapshot.approvalNowMs,
               onDecision: (

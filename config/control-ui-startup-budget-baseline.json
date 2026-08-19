@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 335452,
-  "reason": "chat delivery failures surface globally: toast + session-display naming joins startup chat path",
-  "updatedAt": "2026-08-16"
+  "startupJsGzipBytes": 345578,
+  "reason": "GitHub publication controls: lazy request chunk and branch-row state",
+  "updatedAt": "2026-08-19"
 }

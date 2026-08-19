@@ -3,7 +3,11 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
@@ -17,6 +21,7 @@ import {
   normalizeMessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
+import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
@@ -165,9 +170,12 @@ export async function buildMessagePayload(params: {
       ? undefined
       : normalizeOutboundLocation(rawLocation);
   const caption = readToolStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
+  const voiceText = readToolStringParam(actionParams, "voiceText");
+  const voiceProvider = readToolStringParam(actionParams, "voiceProvider");
+  const voiceId = readToolStringParam(actionParams, "voiceId");
   let message =
     readToolStringParam(actionParams, "message", {
-      required: !hasMediaHint && !hasPresentation && !hasInteractive && !location,
+      required: !hasMediaHint && !hasPresentation && !hasInteractive && !location && !voiceText,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -225,6 +233,7 @@ export async function buildMessagePayload(params: {
   const hasLocationConflict = Boolean(
     location &&
     (message.trim() ||
+      voiceText ||
       hasBuffer ||
       mergedMediaUrls.length > 0 ||
       hasPresentation ||
@@ -263,6 +272,7 @@ export async function buildMessagePayload(params: {
 
   const mediaUrl = readToolStringParam(actionParams, "media", { trim: false });
   if (
+    !voiceText &&
     !hasReplyPayloadContent({
       text: message,
       mediaUrl,
@@ -305,20 +315,40 @@ export async function buildMessagePayload(params: {
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
+  const payload: ReplyPayload = {
+    text: message,
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
+    ...(asVoice ? { audioAsVoice: true } : {}),
+    ...(asVideoNote ? { videoAsNote: true } : {}),
+    ...(location ? { location } : {}),
+    ...(presentation ? { presentation } : {}),
+    ...(interactive ? { interactive } : {}),
+    ...(delivery ? { delivery } : {}),
+    ...(channelData ? { channelData } : {}),
+  };
+  const ttsFacts: AssistantDeliveryTtsFacts | undefined =
+    voiceText || voiceProvider || voiceId
+      ? {
+          tagged: true as const,
+          ...(voiceText ? { text: voiceText } : {}),
+          ...(voiceProvider || voiceId
+            ? {
+                directives: [
+                  {
+                    ...(voiceProvider ? { provider: voiceProvider.toLowerCase() } : {}),
+                    values: voiceId ? { voiceid: voiceId } : {},
+                  },
+                ],
+              }
+            : {}),
+        }
+      : undefined;
   return {
     message,
-    payload: {
-      text: message,
-      ...(mediaUrl ? { mediaUrl } : {}),
-      ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
-      ...(asVoice ? { audioAsVoice: true } : {}),
-      ...(asVideoNote ? { videoAsNote: true } : {}),
-      ...(location ? { location } : {}),
-      ...(presentation ? { presentation } : {}),
-      ...(interactive ? { interactive } : {}),
-      ...(delivery ? { delivery } : {}),
-      ...(channelData ? { channelData } : {}),
-    },
+    payload: ttsFacts
+      ? setReplyPayloadMetadata(payload, { tts: ttsFacts, ttsExplicit: true })
+      : payload,
     ...(mediaUrl ? { mediaUrl } : {}),
     ...(mirrorMediaUrls ? { mediaUrls: mirrorMediaUrls } : {}),
     asVoice,
@@ -387,7 +417,10 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendPayload = {
       ...sendPayload,
       message: prefixedMessage,
-      payload: { ...sendPayload.payload, text: prefixedMessage },
+      payload: copyReplyPayloadMetadata(sendPayload.payload, {
+        ...sendPayload.payload,
+        text: prefixedMessage,
+      }),
     };
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
@@ -443,6 +476,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload);
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
+  delete params.voiceText;
+  delete params.voiceProvider;
+  delete params.voiceId;
   throwIfAborted(abortSignal);
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg,
@@ -543,6 +579,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       accountId: accountId ?? undefined,
       conversationType: outboundRoute?.chatType,
       sessionId: input.sessionId,
+      runId: input.runId,
+      executionIdentityToken: input.executionIdentityToken,
       inboundEventKind: input.inboundEventKind,
       gateway,
       toolContext: input.toolContext,

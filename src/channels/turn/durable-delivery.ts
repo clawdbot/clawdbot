@@ -1,5 +1,6 @@
 // Durable final-reply delivery for inbound channel turns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -17,7 +18,10 @@ import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
 } from "../message/send.js";
-import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
+import {
+  createChannelDeliveryResultFromReceipt,
+  createChannelPartialDeliveryError,
+} from "./delivery-result.js";
 import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
 
 /** Options controlling durable final delivery for inbound channel replies. */
@@ -39,6 +43,7 @@ export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptio
   ctxPayload: FinalizedMsgContext;
   payload: ReplyPayload;
   info: ChannelDeliveryInfo;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
 };
 
 /** Outcome of attempting durable final delivery for an inbound reply payload. */
@@ -129,22 +134,18 @@ export function throwIfDurableInboundReplyDeliveryFailed(
   result: DurableInboundReplyDeliveryResult,
 ): void {
   if (result.status === "failed") {
-    throw result.sentBeforeError === true
-      ? markDurableInboundReplyDeliveryErrorVisible(result.error)
-      : result.error;
+    throw result.error;
   }
 }
 
-function markDurableInboundReplyDeliveryErrorVisible(error: unknown): unknown {
-  // Partial durable sends must suppress duplicate fallback delivery while still surfacing failure.
-  if (typeof error === "object" && error !== null && Object.isExtensible(error)) {
-    Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
-    return error;
-  }
-
-  const visibleError = new Error("visible durable reply delivery failed", { cause: error });
-  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
-  return visibleError;
+function resolveAcceptedVisibleContent(
+  results: readonly { meta?: Record<string, unknown> }[],
+): string | undefined {
+  const content = results
+    .map((result) => result.meta?.visibleText)
+    .filter((value): value is string => typeof value === "string")
+    .join("");
+  return content || undefined;
 }
 
 /** Delivers final inbound replies through the durable message-send context when supported. */
@@ -214,6 +215,12 @@ export async function deliverInboundReplyWithMessageSendContextCore(
     to,
     accountId: params.accountId,
     payloads: [params.payload],
+    ...(params.executionIdentityToken
+      ? {
+          runId: params.executionIdentityToken.runId,
+          executionIdentityToken: params.executionIdentityToken,
+        }
+      : {}),
     threadId,
     replyToId,
     replyToMode: params.replyToMode,
@@ -233,9 +240,21 @@ export async function deliverInboundReplyWithMessageSendContextCore(
     return { status: "failed" as const, error: send.error };
   }
   if (send.status === "partial_failed") {
+    const content = resolveAcceptedVisibleContent(send.results);
+    const delivery = createChannelDeliveryResultFromReceipt({
+      receipt: send.receipt,
+      threadId: stringifyThreadId(threadId),
+      ...(replyToId ? { replyToId } : {}),
+      visibleReplySent: true,
+      ...(content ? { content } : {}),
+      ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
+    });
     return {
       status: "failed" as const,
-      error: markDurableInboundReplyDeliveryErrorVisible(send.error),
+      error: createChannelPartialDeliveryError(send.error, {
+        ...delivery,
+        visibleReplySent: true,
+      }),
       sentBeforeError: true,
     };
   }

@@ -30,6 +30,8 @@ type CurrentPluginMetadataSnapshotOptions = {
   config?: OpenClawConfig;
   compatibleConfigs?: readonly OpenClawConfig[];
   env?: NodeJS.ProcessEnv;
+  /** Only immutable runtime generations may trust identity across policy drift. */
+  trustConfigIdentity?: boolean;
   workspaceDir?: string;
 };
 
@@ -61,6 +63,7 @@ type PluginMetadataSnapshotCandidate = {
   compatiblePolicyHashes?: readonly string[];
   compatibleConfigFingerprints?: readonly string[];
   hasConfigIdentity?: (config: OpenClawConfig) => boolean;
+  immutableRuntimeGeneration?: boolean;
 };
 
 type ScopedPluginMetadataSnapshot = PluginMetadataSnapshotCandidate & {
@@ -279,9 +282,14 @@ export function withPluginMetadataSnapshotScope<T>(
     : snapshot.configFingerprint;
   const configIdentities = new WeakSet<OpenClawConfig>();
   if (options.config) {
-    // The closure owner already paired this exact config with its immutable generation.
-    // Recomputing policy compatibility here makes nested hot paths discard prepared facts.
-    configIdentities.add(options.config);
+    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config);
+    if (
+      options.trustConfigIdentity === true ||
+      policyHash === snapshot.policyHash ||
+      compatiblePolicyHashes?.includes(policyHash)
+    ) {
+      configIdentities.add(options.config);
+    }
   }
   for (const config of options.compatibleConfigs ?? []) {
     configIdentities.add(config);
@@ -293,6 +301,7 @@ export function withPluginMetadataSnapshotScope<T>(
       compatiblePolicyHashes,
       compatibleConfigFingerprints,
       hasConfigIdentity: (config) => configIdentities.has(config),
+      immutableRuntimeGeneration: options.trustConfigIdentity === true,
       parent: scopedPluginMetadataSnapshot.getStore(),
     },
     run,
@@ -325,6 +334,11 @@ function resolveCompatiblePluginMetadataSnapshot(
     params.allowScopedSnapshot !== true
   ) {
     return undefined;
+  }
+  // Immutable runtime generations already selected their executable plugin graph. Nested config
+  // and workspace projections are run data, not authority to reopen lifecycle-owned discovery.
+  if (candidate.immutableRuntimeGeneration) {
+    return snapshot;
   }
   const requestedWorkspaceDir =
     params.workspaceDir ??
@@ -389,6 +403,17 @@ function resolveCompatiblePluginMetadataSnapshot(
     }
   }
   return snapshot;
+}
+
+export function isCurrentPluginMetadataSnapshotRuntimeGeneration(
+  snapshot: PluginMetadataSnapshot,
+): boolean {
+  for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+    if (scoped.snapshot === snapshot && scoped.immutableRuntimeGeneration === true) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function getCurrentPluginMetadataSnapshot(

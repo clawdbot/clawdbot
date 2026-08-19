@@ -993,6 +993,15 @@ printf 'status=%s\\n' "$status"
     );
   });
 
+  it("copies the launcher version contract into root Docker build and runtime stages", () => {
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+
+    expect(dockerfile).toContain("COPY node-version.mjs ./");
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .",
+    );
+  });
+
   it("exports the Playwright browser cache installed by the root Dockerfile", () => {
     const dockerfile = readFileSync("Dockerfile", "utf8");
 

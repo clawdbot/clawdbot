@@ -317,14 +317,20 @@ describe("registerSetupCommand", () => {
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
-    expect(lastWizardOptions()?.tailscaleResetOnExit).toBeUndefined();
+    expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
-  it("forwards explicit --no-tailscale-reset-on-exit", async () => {
+  it("accepts retired --no-tailscale-reset-on-exit as a no-op", async () => {
     await runCli(["setup", "--no-tailscale-reset-on-exit"]);
 
-    expect(lastWizardOptions()?.tailscaleResetOnExit).toBe(false);
+    expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
+  });
+
+  it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
+    await runCli(["setup", "--tailscale-reset-on-exit"]);
+
+    expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("runs baseline setup command when --baseline is set", async () => {
@@ -437,7 +443,6 @@ describe("registerSetupCommand", () => {
       "--skip-search",
       "--skip-skills",
       "--skip-bootstrap",
-      "--tailscale-reset-on-exit",
       "--node-manager",
       "pnpm",
       "--json",
@@ -456,7 +461,6 @@ describe("registerSetupCommand", () => {
       skipSearch: true,
       skipSkills: true,
       skipBootstrap: true,
-      tailscaleResetOnExit: true,
       nodeManager: "pnpm",
       json: true,
     });

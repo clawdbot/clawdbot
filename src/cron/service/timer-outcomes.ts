@@ -1,5 +1,6 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -7,11 +8,7 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
-import {
-  failureNotificationDeliveryFromJobState,
-  maybeEmitFailureAlert,
-  resolveFailureAlert,
-} from "./failure-alerts.js";
+import { maybeEmitFailureAlert, resolveFailureAlert } from "./failure-alerts.js";
 import {
   computeJobNextRunAtMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
@@ -19,14 +16,15 @@ import {
   isJobEnabled,
   recordScheduleComputeError,
 } from "./jobs-scheduling.js";
-import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
-import { tryFinishCronTaskRun, tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
   type CronJobRunResult,
   type CronTriggerEvalOutcome,
   MIN_REFIRE_GAP_MS,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
+import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
 import {
   applyTriggerEvaluationState,
   applyTriggerRunResult,
@@ -123,18 +121,16 @@ export function applyJobResult(
       "cron: job run returned error status",
     );
   }
-  const deliveryState = resolveDeliveryState({
-    job,
-    runStatus: result.status,
-    delivered: result.delivered,
-    deliveryAttempted: result.deliveryAttempted,
-    // A successful run keeps `error` empty but may carry a dedicated
-    // `deliveryError` when post-run delivery failed (#94058/#95419); prefer it
-    // so `lastDeliveryError` is populated without conflating it with a
-    // run-level failure. Error runs fall back to the run error as before.
-    error: result.deliveryError ?? result.error,
-    globalFailureDestination: state.deps.cronConfig?.failureAlert,
-  });
+  const deliveryState =
+    result.deliveryState ??
+    resolveDeliveryState({
+      job,
+      runStatus: result.status,
+      delivered: result.delivered,
+      deliveryAttempted: result.deliveryAttempted,
+      error: result.deliveryError ?? result.error,
+      globalFailureDestination: state.deps.cronConfig?.failureAlert,
+    });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
   job.state.lastDeliveryError =
@@ -159,6 +155,7 @@ export function applyJobResult(
       status: "error",
       error: result.error,
       errorReason: job.state.lastErrorReason,
+      failureNotificationDetail: result.failureNotificationDetail,
       runAtMs: result.startedAt,
       consecutiveCount: job.state.consecutiveErrors,
       ...(opts?.replayFailureAlertAtMs !== undefined
@@ -206,7 +203,9 @@ export function applyJobResult(
     isOneShotSchedule &&
     !preserveOneShotSchedule &&
     job.deleteAfterRun === true &&
-    result.status === "ok";
+    (result.completionStatus ??
+      resolveAdmittedCronCompletionStatus(job, result.status, deliveryState.status)) ===
+      "succeeded";
   const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
 
   if (!ownsSchedule) {
@@ -332,7 +331,7 @@ export function applyJobResult(
         deferredNotifications: opts?.deferredNotifications,
       })
     ) {
-      // Keep this after the ownership and force-preserve gates: those paths
+      // Keep this after the ownership and immediate-preserve gates: those paths
       // restore schedule state and would otherwise silently undo the disable.
       state.deps.log.error(
         {
@@ -563,7 +562,7 @@ export function applyTriggerNoFireResult(
   job: CronJob,
   result: { startedAt: number; endedAt: number; triggerEval: CronTriggerEvalOutcome },
   opts?: {
-    scheduleMode?: "advance" | "force-preserve" | "stale-preserve";
+    scheduleMode?: "advance" | "immediate-preserve" | "stale-preserve";
     triggerOwnership?: CronTriggerOwnership;
     deferredNotifications?: DeferredCronNotifications;
   },
@@ -582,13 +581,13 @@ export function applyTriggerNoFireResult(
     job.state.lastFailureAlertAtMs = undefined;
     applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
   }
-  if (opts?.scheduleMode === "force-preserve" || opts?.scheduleMode === "stale-preserve") {
+  if (opts?.scheduleMode === "immediate-preserve" || opts?.scheduleMode === "stale-preserve") {
     job.state.nextRunAtMs = previousNextRunAtMs;
     job.state.pacedNextRunAtMs = previousPacedNextRunAtMs;
     // A stale wake preserves the operator's complete schedule; only an actual
     // force run may create the marker that exempts its slot from repair.
     job.state.forcePreservedNextRunAtMs =
-      opts.scheduleMode === "force-preserve"
+      opts.scheduleMode === "immediate-preserve"
         ? previousNextRunAtMs
         : previousForcePreservedNextRunAtMs;
     return;
@@ -730,54 +729,4 @@ function emitCronOutcomeForJob(
   }
   recordCronOutcomeForJob(state, job, result);
   emitCronOutcomeEventForJob(state, job, result);
-}
-
-function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: number) {
-  return {
-    jobId: job.id,
-    action: "finished",
-    job,
-    status: result.status,
-    error: result.error,
-    summary: result.summary,
-    diagnostics: result.diagnostics,
-    delivered: job.state.lastDelivered,
-    deliveryStatus: job.state.lastDeliveryStatus,
-    deliveryError: job.state.lastDeliveryError,
-    failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-    delivery: result.delivery,
-    sessionId: result.sessionId,
-    sessionKey: result.sessionKey,
-    runAtMs,
-    durationMs: job.state.lastDurationMs,
-    nextRunAtMs: job.state.nextRunAtMs,
-    ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
-    model: result.model,
-    provider: result.provider,
-    usage: result.usage,
-  } as const;
-}
-
-export function recordCronOutcomeForJob(
-  state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-): void {
-  const event = cronOutcomeEvent(job, result, result.startedAt);
-  tryFinishCronTaskRun(state, {
-    taskRunId: result.taskRunId,
-    job,
-    event,
-    errorClassification: result.errorClassification,
-    ...(result.scriptStateChanged === true ? { scriptResult: result } : {}),
-    ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
-  });
-}
-
-export function emitCronOutcomeEventForJob(
-  state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-): void {
-  emit(state, cronOutcomeEvent(job, result, result.startedAt));
 }

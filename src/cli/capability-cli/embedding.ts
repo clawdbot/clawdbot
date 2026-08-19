@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { createEmbeddingProvider } from "../../plugin-sdk/memory-core-bundled-runtime.js";
@@ -40,6 +40,7 @@ async function runMemoryEmbeddingCreate(params: {
   texts: string[];
   provider?: string;
   model?: string;
+  agent?: string;
 }) {
   const modelRef = requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
@@ -48,9 +49,10 @@ async function runMemoryEmbeddingCreate(params: {
   });
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
   const result = await createEmbeddingProvider({
     config: cfg,
-    agentDir: resolveAgentDir(cfg, resolveDefaultAgentId(cfg)),
+    agentDir: resolveAgentDir(cfg, agentId),
     provider: requestedProvider,
     fallback: "none",
     model: modelRef?.model ?? "",
@@ -108,6 +110,10 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
     .requiredOption("--text <text>", "Input text", collectOption, [])
     .option("--provider <id>", "Provider id")
     .option("--model <provider/model>", "Model override")
+    .option(
+      "--agent <id>",
+      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -115,6 +121,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
           texts: opts.text as string[],
           provider: opts.provider as string | undefined,
           model: opts.model as string | undefined,
+          agent: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });

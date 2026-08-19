@@ -4,6 +4,7 @@ import type { SessionVisibility } from "../../../packages/gateway-protocol/src/s
 import type {
   SessionObserverDigest,
   SessionCreatedActor,
+  SessionOwner,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -61,6 +62,9 @@ export type SidebarRecentSession = {
   displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
+  owner?: SessionOwner;
+  participants?: SessionCreatedActor[];
+  participantCount?: number;
   archivedBy?: SessionCreatedActor;
   label: string;
   /**
@@ -86,6 +90,7 @@ export type SidebarRecentSession = {
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
+  channelAvatarUrl?: string;
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
@@ -99,7 +104,7 @@ export type SidebarRecentSession = {
   cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
-  outboxCount?: number;
+  outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
   lastMessagePreview?: string;
@@ -223,6 +228,7 @@ export function sidebarSessionStateId(key: string): string {
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:catalog-grouping";
+const SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY = "openclaw:sidebar:sessions:show-preview";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY = "openclaw:sidebar:sessions:show-system";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
@@ -266,6 +272,10 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY) === "true";
 }
 
+export function loadStoredSidebarSessionsShowPreview(): boolean {
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY) !== "false";
+}
+
 export function loadStoredSidebarSessionsShowSystem(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY) === "true";
 }
@@ -286,8 +296,8 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   try {
     const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
     if (raw == null) {
-      // First run: the Coding zone starts collapsed so dev sessions stay muted
-      // until the user opts in; expanding persists an empty entry for "work".
+      // First run: Coding stays muted while Online preserves its expanded
+      // default until the user explicitly collapses it.
       return new Set(["work"]);
     }
     const parsed: unknown = JSON.parse(raw);
@@ -326,6 +336,10 @@ export function storeSidebarCatalogGrouping(value: CatalogProjectGrouping) {
 
 export function storeSidebarSessionsShowCron(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
+}
+
+export function storeSidebarSessionsShowPreview(show: boolean) {
+  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY, String(show));
 }
 
 export function storeSidebarSessionsShowSystem(show: boolean) {
@@ -392,10 +406,10 @@ export function setStoredSessionCatalogHidden(catalogId: string, hidden: boolean
 export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
-  { mode: "people", labelKey: "sessionsView.people" },
+  { mode: "people", labelKey: "sessionsView.owners" },
 ] as const satisfies ReadonlyArray<{
   mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.people";
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.owners";
 }>;
 
 export const SIDEBAR_SESSION_STATUS_OPTIONS = [

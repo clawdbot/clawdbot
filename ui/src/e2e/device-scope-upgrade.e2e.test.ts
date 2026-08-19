@@ -241,6 +241,21 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     const statusChip = page.getByRole("button", { name: "Show limited access details" });
     await statusChip.waitFor();
     expect(await statusChip.getAttribute("aria-expanded")).toBe("false");
+    await waitForLayoutSettled(page, ".content, .scope-upgrade-chip-row");
+    const chipInset = await statusChip.evaluate((chip) => {
+      const content = document.querySelector<HTMLElement>(".content");
+      if (!content) {
+        throw new Error("Missing content around limited-access status chip");
+      }
+      const contentBox = content.getBoundingClientRect();
+      const chipBox = chip.getBoundingClientRect();
+      return {
+        right: contentBox.right - chipBox.right,
+        top: chipBox.top - contentBox.top,
+      };
+    });
+    await captureProof(page, "collapsed.png");
+    expect(chipInset).toEqual({ right: 20, top: 8 });
     expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
       0,
     );
@@ -300,7 +315,12 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
       await page.getByRole("button", { name: "Collapse limited access banner" }).click();
-      await page.getByRole("button", { name: "Show limited access details" }).waitFor();
+      expect(await page.getByRole("button", { name: "Show limited access details" }).count()).toBe(
+        0,
+      );
+      await page.reload();
+      await page.locator("openclaw-app-shell").waitFor();
+      expect(await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).count()).toBe(0);
     },
   );
 

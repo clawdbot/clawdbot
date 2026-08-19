@@ -67,6 +67,8 @@ describe("device worker placement dispatch", () => {
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
       { profileId: request.profileId, ...request.inheritedProfile },
       expect.stringMatching(/^session-dispatch:/u),
+      undefined,
+      REQUEST.executionMode,
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
@@ -126,7 +128,7 @@ describe("device worker placement dispatch", () => {
       sessionId: REQUEST.sessionId,
     });
     harness.placements.seedActive(harness.attached.ownerEpoch);
-    harness.markEnvironmentProviderId("device");
+    harness.markEnvironmentNodeDeviceId("offline-device");
     harness.log.length = 0;
 
     await harness.service.reconcile();

@@ -1,3 +1,4 @@
+import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { SessionsListResult } from "../../../api/types.ts";
@@ -8,7 +9,6 @@ import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
-import type { ChatSendOptions } from "../chat-send-contract.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
@@ -20,18 +20,23 @@ import type {
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
+import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachments.ts";
 import type {
   ChatComposerPlusMenuProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
+import type { SkillMenuState } from "./chat-composer-skill-menu.ts";
+import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
 
-/** One shape for the queued-message edit state and its two actions. */
+/** One shape for queued-row edit state and actions. */
 export type ChatQueuedEditProps = {
-  /** Id of the row the composer currently owns, or null when composing fresh. */
+  /** Id of the row with an inline draft, or null when no row is being edited. */
   editingId: string | null;
+  editingText?: string;
   onEdit?: (id: string) => void;
+  onEditChange?: (text: string) => void;
+  onEditSubmit?: () => void;
   onCancel: () => void;
 };
 
@@ -80,7 +85,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
-  planStatus?: PlanStatus | null;
+  progressCard?: ProgressCard | null;
+  onDismissProgressCard?: (card: ProgressCard) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
   stream: string | null;
@@ -114,13 +120,13 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   suggestionComposer?: boolean;
-  typingActors?: readonly { id: string; label: string }[];
   onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
+  permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: (options?: ChatSendOptions) => void;
+  onSend: (followUpModeOverride?: "steer") => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
@@ -133,7 +139,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, toIndex: number) => void;
   queuedEdit?: ChatQueuedEditProps;
-  onNewSession: () => void;
   onClearReply?: () => void;
   onGoalCommand?: (command: string) => void;
   onGatewayQuestionChange?: () => void;
@@ -151,13 +156,7 @@ type ComposingDraft = {
   value: string;
 };
 
-type SkillMenuTarget = {
-  start: number;
-  end: number;
-  query: string;
-};
-
-export type ChatComposerState = {
+export type ChatComposerState = SkillMenuState & {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
   slashMenuIndex: number;
@@ -165,13 +164,6 @@ export type ChatComposerState = {
   slashMenuCommand: SlashCommandDef | null;
   slashMenuArgItems: string[];
   slashCommandRefreshPending: boolean;
-  skillMenuOpen: boolean;
-  skillMenuItems: SlashCommandDef[];
-  skillMenuIndex: number;
-  skillMenuTarget: SkillMenuTarget | null;
-  skillCommandRefreshPending: boolean;
-  skillCommandRefreshGeneration: number;
-  skillCommandRefreshTargetStart: number | null;
   composerComposing: boolean;
   composingDraft: ComposingDraft | null;
   composerInputIntentKey: string | null;

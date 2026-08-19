@@ -12,10 +12,10 @@ import type {
   SessionMembersListResult,
   SessionVisibility,
 } from "../../api/types.ts";
-import { hasMultiplePresenceIdentities } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasMultiplePresenceIdentities } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
@@ -31,6 +31,7 @@ import {
 import { resetSessionCompanion } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
 import {
   canManageChatSessionSharing,
   type ChatSessionSharingState,
@@ -683,6 +684,22 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       }, 2_500),
     );
     this.requestUpdate();
+  }
+
+  protected clearTypingActorForSessionMessage(payload: unknown): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    if (
+      clearTypingActorForSessionMessage(payload, this.typingActors, this.typingTimers, {
+        agentsList: this.context.agents.state.agentsList,
+        hello: this.context.gateway.snapshot.hello,
+        sessionKey: state.sessionKey,
+      })
+    ) {
+      this.requestUpdate();
+    }
   }
 
   protected typingActorViews(): { id: string; label: string }[] {

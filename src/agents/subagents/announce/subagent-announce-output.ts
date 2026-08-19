@@ -188,10 +188,20 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         previousAssistantCalledYield = true;
         continue;
       }
+      const toolCallCount = countAssistantToolCalls(message);
+      if (toolCallCount > 0) {
+        // Any assistant tool call proves this was an intermediate turn. Do not
+        // retain commentary from this message or an earlier assistant message
+        // as the run's final result if execution ends before the next reply.
+        snapshot.latestAssistantText = undefined;
+        snapshot.latestSilentText = undefined;
+        snapshot.latestToolCallCount = (snapshot.latestToolCallCount ?? 0) + toolCallCount;
+        snapshot.waitingForContinuation = false;
+        previousAssistantCalledYield = false;
+        continue;
+      }
       const text = extractSubagentAssistantText(message).trim();
       if (!text) {
-        snapshot.latestToolCallCount =
-          (snapshot.latestToolCallCount ?? 0) + countAssistantToolCalls(message);
         snapshot.waitingForContinuation = false;
         previousAssistantCalledYield = false;
         continue;

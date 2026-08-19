@@ -2464,7 +2464,7 @@ describe("deliverOutboundPayloads", () => {
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
     const sendMatrix = vi.fn().mockResolvedValue({
       messageId: "platform-message-1",
-      roomId: "!room:example",
+      target: { kind: "room", id: "!room:example" },
     });
 
     try {
@@ -2490,8 +2490,8 @@ describe("deliverOutboundPayloads", () => {
       unsubscribe();
     }
 
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.outcome)).toEqual(["queued", "platform_started", "sent"]);
+    expect(events[2]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:0",
       kind: "message",
       action: "message.outbound.finished",
@@ -2513,7 +2513,7 @@ describe("deliverOutboundPayloads", () => {
       conversationId: "!room:example",
       messageId: "platform-message-1",
     });
-    expect(typeof events[0]?.durationMs).toBe("number");
+    expect(typeof events[2]?.durationMs).toBe("number");
     expect(JSON.stringify(events)).not.toContain("secret delivery body");
     expect(JSON.stringify(events)).not.toContain("secret-session-key");
   });
@@ -2536,9 +2536,14 @@ describe("deliverOutboundPayloads", () => {
     }
 
     expect(sendMatrix).toHaveBeenCalledTimes(1);
-    expect(events).toHaveLength(2);
-    expect(events.map((event) => event.outcome)).toEqual(["suppressed", "sent"]);
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.outcome)).toEqual([
+      "queued",
+      "queued",
+      "platform_started",
+      "suppressed",
+      "sent",
+    ]);
+    expect(events[3]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:0",
       status: "blocked",
       actorType: "system",
@@ -2547,8 +2552,8 @@ describe("deliverOutboundPayloads", () => {
       reasonCode: "no_visible_payload",
       resultCount: 0,
     });
-    expect(events[0]).not.toHaveProperty("deliveryKind");
-    expect(events[1]).toMatchObject({
+    expect(events[3]).not.toHaveProperty("deliveryKind");
+    expect(events[4]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:1",
       status: "succeeded",
       outcome: "sent",
@@ -3695,6 +3700,66 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
+  it("runs partial after-delivery bookkeeping once with rendered payload and accepted target", async () => {
+    const platformError = new Error("second formatted chunk failed");
+    const firstResult = {
+      channel: "line" as const,
+      messageId: "fmt-1",
+      meta: { visibleText: "native formatted prefix" },
+    };
+    const afterDeliverPayload = vi.fn(async () => {
+      throw new Error("observer failed");
+    });
+    const onError = vi.fn();
+    setTestOutbound(
+      {
+        renderPresentation: ({ payload }) => ({ ...payload, text: "native formatted prefix" }),
+        sendFormattedText: async (ctx) => {
+          await ctx.onDeliveryResult?.(firstResult);
+          throw platformError;
+        },
+        sendText: async () => firstResult,
+        adoptTargetFromDelivery: ({ result }) =>
+          result.messageId === "fmt-1" ? { threadId: "thread-from-platform" } : null,
+        afterDeliverPayload,
+      },
+      "line",
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [
+        {
+          text: "fallback",
+          presentation: { blocks: [{ type: "context", text: "native" }] },
+        },
+      ],
+      bestEffort: true,
+      skipQueue: true,
+      onError,
+    });
+
+    expect(results).toEqual([firstResult]);
+    expect(afterDeliverPayload).toHaveBeenCalledOnce();
+    expect(afterDeliverPayload).toHaveBeenCalledWith({
+      cfg: {},
+      target: {
+        channel: "line",
+        to: "U123",
+        accountId: undefined,
+        threadId: "thread-from-platform",
+      },
+      payload: { text: "native formatted prefix" },
+      results: [firstResult],
+    });
+    expect(onError).toHaveBeenCalledWith(
+      platformError,
+      expect.objectContaining({ text: "native formatted prefix" }),
+    );
+  });
+
   it("preserves repeated platform identities across separate adapter invocations", async () => {
     const sendFormattedText = vi.fn(
       async (ctx: {
@@ -4511,8 +4576,8 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ content: "secret body", success: false }),
       expect.objectContaining({ channelId: "matrix" }),
     );
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.outcome)).toEqual(["queued", "platform_started", "failed"]);
+    expect(events[2]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:0",
       outcome: "failed",
       failureStage: "platform_send",

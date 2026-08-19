@@ -17,10 +17,6 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
 };
 
-export type ChatSendOptions = {
-  followUpMode?: ControlUiFollowUpMode;
-};
-
 export type ChatHost = ChatInputHistoryState &
   ChatScrollHost &
   ToolStreamHost &
@@ -39,7 +35,7 @@ export type ChatHost = ChatInputHistoryState &
     chatStreamStartedAt: number | null;
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
-    /** Set while a queued row is held out of the queue inside the composer. */
+    /** Pane-local row draft while a queued message remains held in the outbox. */
     chatQueuedEdit?: QueuedMessageEdit | null;
     /** Active leaf of the history snapshot currently rendered by this pane. */
     chatDisplayedLeafEntryId?: string | null;

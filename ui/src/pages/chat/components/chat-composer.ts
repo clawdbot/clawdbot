@@ -13,6 +13,7 @@ import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
+  paneDomId,
   preserveComposerFocusOnPrimaryAction,
   replaceComposerPopoverAnchor,
   scheduleTextareaHeightAdjustment,
@@ -23,13 +24,13 @@ import {
   getActiveSkillMenuOptionLabel,
   isSkillMenuVisible,
   resetSkillMenuState,
+  type SkillMenuHost,
   updateSkillMenu,
 } from "./chat-composer-skill-menu.ts";
 import {
   getActiveSlashMenuOptionId,
   getActiveSlashMenuOptionLabel,
   isSlashMenuVisible,
-  paneDomId,
   updateSlashMenu,
 } from "./chat-composer-slash-menu.ts";
 import {
@@ -136,7 +137,19 @@ export function renderChatComposer(props: ChatComposerProps) {
           ? t("chat.composer.runDone")
           : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const skillMenuHost: SkillMenuHost = {
+    paneId: props.paneId,
+    getDraft: () => state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft,
+    commitDraft: (next) => commitComposerDraft(props, next),
+    getTextarea: () => state.composerTextarea,
+    refreshCommands: props.onSlashIntent,
+  };
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
+  const steerNowEnabled =
+    props.connected &&
+    sendShortcut === "enter" &&
+    showAbortableUi &&
+    props.followUpMode === "queue";
   const gatewayQuestionPrompts =
     props.gatewayQuestionPrompts?.filter(
       (prompt) =>
@@ -209,12 +222,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   state.questionTakeoverActive = questionTakeoverActive;
   const showComposer = !questionTakeoverActive;
 
-  const placeholder =
-    !canCompose && props.disabledReason
-      ? props.disabledReason
-      : hasVisualAttachments
-        ? t("chat.composer.placeholderWithAttachments")
-        : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
+  const placeholder = hasVisualAttachments
+    ? t("chat.composer.placeholderWithAttachments")
+    : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.
@@ -246,27 +256,21 @@ export function renderChatComposer(props: ChatComposerProps) {
   const handleKeyDown = createComposerKeyDownHandler({
     state,
     props,
+    skillMenuHost,
     requestUpdate,
     sendShortcut,
     canSubmitDraft,
     commitDraft: (draft) => commitComposerDraft(props, draft),
     syncDraftAfterSend: syncComposerDraftAfterSend,
     showAbortableUi,
+    steerNowEnabled,
   });
 
   const syncComposerValue = (target: HTMLTextAreaElement) => {
     adjustTextareaHeight(target);
     commitComposerDraft(props, target.value);
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
-    updateSkillMenu(
-      target.value,
-      target.selectionStart,
-      requestUpdate,
-      props,
-      {},
-      () => target.value,
-      () => target.selectionStart,
-    );
+    updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
     requestUpdate();
   };
   const handleBeforeInput = (event: InputEvent) => {
@@ -301,15 +305,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleSelect = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
-    updateSkillMenu(
-      target.value,
-      target.selectionStart,
-      requestUpdate,
-      props,
-      {},
-      () => target.value,
-      () => target.selectionStart,
-    );
+    updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
     state.composerComposing = false;
@@ -492,7 +488,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),
     isBusy,
     followUpMode: props.followUpMode,
-    sendShortcut,
+    steerNowEnabled,
     suggestionComposer: props.suggestionComposer,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
@@ -504,7 +500,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
     onSend: handleSend,
-    onStoreDraft: () => {},
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
@@ -561,6 +556,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     mirrorCameraPreview,
     slashMenuVisible,
     skillMenuVisible,
+    skillMenuHost,
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,

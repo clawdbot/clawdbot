@@ -19,6 +19,7 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
+type MutableAgentEntry = AgentEntry | AgentEntriesConfig[string];
 type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
 export type ListedAgentEntry = {
   entry: AgentEntry;
@@ -249,7 +250,24 @@ export function resolveSystemAgentTargetAgentId(
   );
 }
 
-/** @deprecated Use resolveSoleAgentId; accepts raw shipped markers only for input compatibility. */
+/** Resolves the ambient system owner: shipped legacy default first, then the system-agent target. */
+export function tryResolveAmbientOwnerAgentId(cfg: OpenClawConfig): string | undefined {
+  return tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveSystemAgentTargetAgentId(cfg);
+}
+
+/** Ambient owner for surfaces that must fail loudly rather than act on the wrong agent. */
+export function resolveAmbientOwnerAgentId(
+  cfg: OpenClawConfig,
+  context?: AgentSelectionContext,
+): string {
+  return tryResolveAmbientOwnerAgentId(cfg) ?? resolveSoleAgentId(cfg, context);
+}
+
+/**
+ * @deprecated Ambient system work uses resolveAmbientOwnerAgentId so the configured
+ * system agent is honored; explicit-selection surfaces use resolveSoleAgentId. This
+ * accepts raw shipped markers only for input compatibility.
+ */
 export function resolveDefaultAgentId(
   cfg: OpenClawConfig,
   context?: AgentSelectionContext,
@@ -271,7 +289,7 @@ export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEn
 export function resolveMutableAgentEntry(
   cfg: OpenClawConfig,
   agentId: string,
-): Pick<AgentEntry, "model"> | undefined {
+): MutableAgentEntry | undefined {
   const id = normalizeAgentId(agentId);
   const roster = readAgentRosterProperty(cfg);
   if (roster?.kind === "entries" && roster.value && typeof roster.value === "object") {
@@ -420,9 +438,5 @@ export function resolveDefaultAgentDir(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return resolveAgentDir(
-    cfg,
-    tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg),
-    env,
-  );
+  return resolveAgentDir(cfg, resolveAmbientOwnerAgentId(cfg), env);
 }

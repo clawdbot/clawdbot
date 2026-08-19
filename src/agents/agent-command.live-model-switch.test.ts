@@ -64,6 +64,16 @@ const state = vi.hoisted(() => ({
   persistAcpTurnTranscriptMock: vi.fn(),
   appendExactAssistantMessageMock: vi.fn(),
   runCliTurnCompactionLifecycleMock: vi.fn(),
+  runMemoryFlushIfNeededMock: vi.fn(
+    async ({
+      sessionEntry,
+    }: {
+      sessionEntry?: SessionEntry;
+    }): Promise<{ sessionEntry?: SessionEntry; outcome: "skipped" | "failed" }> => ({
+      sessionEntry,
+      outcome: "skipped",
+    }),
+  ),
   resolveAcpAgentPolicyErrorMock: vi.fn(),
   resolveAcpDispatchPolicyErrorMock: vi.fn(),
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
@@ -102,6 +112,9 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
+  manifestMetadataSnapshot: { plugins: [] },
+  resolvePluginMetadataSnapshotMock: vi.fn(),
+  listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
   loadProviderScopedThinkingCatalogMock: vi.fn(
     async (_params: unknown): Promise<ModelCatalogSnapshot["entries"] | undefined> => undefined,
   ),
@@ -130,6 +143,16 @@ const state = vi.hoisted(() => ({
   trajectoryRecorderParamsMock: vi.fn(),
   enqueueExecutionIdentityContextAtAdmissionMock: vi.fn(),
 }));
+
+vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
+  return {
+    ...actual,
+    ensureSessionDiffBaseline: vi.fn(
+      async (params: Parameters<typeof actual.ensureSessionDiffBaseline>[0]) => params.entry,
+    ),
+  };
+});
 
 vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
@@ -193,6 +216,11 @@ vi.mock("./command/delivery.runtime.js", () => ({
 vi.mock("./command/cli-compaction.js", () => ({
   runCliTurnCompactionLifecycle: (...args: unknown[]) =>
     state.runCliTurnCompactionLifecycleMock(...args),
+}));
+
+vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
+  runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
+    state.runMemoryFlushIfNeededMock(params),
 }));
 
 vi.mock("./command/run-context.js", () => ({
@@ -349,10 +377,20 @@ vi.mock("./agent-runtime-config.js", () => {
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: () => false,
-  resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+    state.resolvePluginMetadataSnapshotMock(...args),
+}));
+
+vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
+  expandExplicitSkillReferences: ({ text }: { text: string }) => ({ body: text, skills: [] }),
+  hasSkillReferenceCandidate: () => true,
+  listSkillCommandsForWorkspace: (params: unknown) =>
+    state.listSkillCommandsForWorkspaceMock(params),
+  resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 
 vi.mock("../config/runtime-snapshot.js", () => ({
+  getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
 }));
@@ -701,11 +739,13 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
 let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
+let prepareAgentCommandExecution: typeof import("./command/prepare.js").prepareAgentCommandExecution;
 
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
   agentCommand ??= mod.agentCommand;
   agentCommandFromSystem ??= mod.agentCommandFromSystem;
+  ({ prepareAgentCommandExecution } = await import("./command/prepare.js"));
 });
 
 type FallbackRunnerParams = {
@@ -924,6 +964,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.resolvePluginMetadataSnapshotMock.mockReturnValue(state.manifestMetadataSnapshot);
     state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
     state.loadFullModelCatalogMock.mockClear();
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
@@ -1092,6 +1133,25 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("uses Gateway command metadata without resolving the agent workspace", async () => {
+    const pluginGeneration = {
+      pluginMetadataSnapshot: state.manifestMetadataSnapshot,
+    } as never;
+
+    const prepared = await prepareAgentCommandExecution(
+      { message: "/demo", to: "+1234567890" },
+      {} as never,
+      { config: {}, pluginGeneration },
+    );
+
+    expect(prepared.manifestMetadataSnapshot).toBe(state.manifestMetadataSnapshot);
+    expect(prepared.commandRuntimeContext?.pluginGeneration).toBe(pluginGeneration);
+    expect(state.listSkillCommandsForWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot: state.manifestMetadataSnapshot }),
+    );
+    expect(state.resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("retries with the switched provider/model when LiveSessionModelSwitchError is thrown", async () => {
@@ -1554,6 +1614,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         message: "hello",
         to: "+1234567890",
         abortSignal: controller.signal,
+        runtimePluginToolGrant: { pluginId: "owner-tools", toolNames: ["owner-only"] },
       }),
     ).rejects.toThrow("agent run aborted for restart");
 
@@ -1572,6 +1633,115 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       ]),
     );
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["restart abort", "agent run aborted for restart"],
+    ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
+  ] as const)(
+    "does not start memory maintenance when %s closes after persistence",
+    async (mode, error) => {
+      setupSingleAttemptFallback();
+      setupStoredSession();
+      const controller = new AbortController();
+      const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+        typeof makeSuccessResult
+      > & { meta: Record<string, unknown> };
+      result.meta.executionTrace = {
+        runner: "cli",
+        fallbackUsed: false,
+        winnerProvider: "openai",
+        winnerModel: "gpt-5.4",
+      };
+      state.runAgentAttemptMock.mockResolvedValue(result);
+      state.persistCliTurnTranscriptMock.mockImplementationOnce(
+        async (params: { sessionEntry?: SessionEntry }) => {
+          if (mode === "restart abort") {
+            controller.abort(createAgentRunRestartAbortError());
+          } else {
+            state.assertLifecycleCurrentMock.mockImplementationOnce(() => {
+              throw new Error(error);
+            });
+          }
+          return { kind: "persisted", sessionEntry: params.sessionEntry };
+        },
+      );
+
+      await expect(
+        agentCommand({
+          message: "hello",
+          to: "+1234567890",
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toThrow(error);
+
+      expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledOnce();
+      expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+      expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+      expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["restart abort", "agent run aborted for restart"],
+    ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
+  ] as const)("stops finalization when memory maintenance sees a %s", async (mode, error) => {
+    setupSingleAttemptFallback();
+    const { store } = setupStoredSession({
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+    });
+    const controller = new AbortController();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & { meta: Record<string, unknown> };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+      if (mode === "restart abort") {
+        controller.abort(createAgentRunRestartAbortError());
+      } else {
+        state.assertLifecycleCurrentMock.mockImplementationOnce(() => {
+          throw new Error(error);
+        });
+      }
+      return { sessionEntry: params.sessionEntry, outcome: "failed" as const };
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        to: "+1234567890",
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toThrow(error);
+
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
+    const flushParams = state.runMemoryFlushIfNeededMock.mock.calls[0]?.[0] as
+      | { followupRun?: { run?: Record<string, unknown> } }
+      | undefined;
+    const flushRun = flushParams?.followupRun?.run;
+    expect(flushRun).toBeDefined();
+    expect(flushRun).toMatchObject({
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
+    });
+    for (const field of [
+      "runtimePluginToolGrant",
+      "scheduledToolPolicy",
+      "trustedInternalHandoff",
+      "bashElevated",
+    ]) {
+      expect(flushRun).not.toHaveProperty(field);
+    }
+    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+    expect(store["agent:main:main"]?.pendingFinalDelivery).toBeUndefined();
   });
 
   it("preserves restart ownership when an aborted ACP turn resolves normally", async () => {
@@ -1904,7 +2074,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           models: {
             "anthropic/default-model": {},
             "anthropic/stale-fallback-model": {},
-            "google/gemini-3-pro": {},
+            "google/user-model": {},
           },
         },
       },
@@ -1929,17 +2099,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         ...sessionEntry,
         updatedAt: 2,
         providerOverride: "google",
-        modelOverride: "gemini-3-pro",
+        modelOverride: "user-model",
         modelOverrideSource: "user",
       };
     });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("google", "gemini-3-pro"));
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("google", "user-model"));
 
     await runBasicAgentCommand();
 
     const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
     expect(fallbackParams.provider).toBe("google");
-    expect(fallbackParams.model).toBe("gemini-3-pro");
+    expect(fallbackParams.model).toBe("user-model");
   });
 
   it("probes the channel primary when a session is pinned to an auto fallback", async () => {
@@ -2131,6 +2301,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
   });
@@ -2172,6 +2343,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(findPersistedTranscriptRepair()).toEqual([
       expect.objectContaining({ text: "ok", provider: "openai", model: "gpt-5.4" }),
     ]);
+    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
   });
 
   it("does not queue repair for a final owned by another transcript writer", async () => {
@@ -3568,6 +3740,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     if (allowlisted) {
       expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
+      expect(state.loadManifestModelCatalogMock).toHaveBeenCalledWith(
+        expect.objectContaining({ metadataSnapshot: state.manifestMetadataSnapshot }),
+      );
     }
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
