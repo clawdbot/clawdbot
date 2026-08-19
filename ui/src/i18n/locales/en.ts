@@ -4219,12 +4219,25 @@ export const en: TranslationMap = {
     },
   },
   attention: {
+    custodianAlertAria: "Ask OpenClaw, {count} undismissed alert",
+    custodianAlertsAria: "Ask OpenClaw, {count} undismissed alerts",
     cronErrorUnknown: "Unknown error",
     cronFailed: "{count} automation(s) failed",
     cronOverdue: "{count} automation(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",
     pendingApproval: "{count} pending approval",
     pendingApprovals: "{count} pending approvals",
+    alerts: {
+      updateQuestion:
+        "These are the available update facts:\n{facts}\nSummarize what is new and whether anything needs my attention before updating.",
+      cronFailedQuestion:
+        "These automations failed:\n{facts}\nExplain why they failed and how to fix them.",
+      cronOverdueFact: "{job}: {duration} late",
+      cronOverdueQuestion:
+        "These automations are overdue:\n{facts}\nExplain why they have not run and how to fix them.",
+      modelAuthExpiredQuestion:
+        "These model-provider credentials need attention:\n{facts}\nExplain what expired and how to re-authenticate them.",
+    },
   },
   approvalHistory: {
     description:
@@ -5340,7 +5353,6 @@ export const en: TranslationMap = {
     commandPaletteTitle: "Search or jump to… (⌘K)",
     openCommandPalette: "Open command palette",
     updating: "Updating…",
-    dismissUpdateBanner: "Dismiss update banner",
     actions: {
       copyAsMarkdown: "Copy as markdown",
       dismissError: "Dismiss error",

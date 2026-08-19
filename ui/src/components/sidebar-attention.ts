@@ -4,7 +4,7 @@
 // they have to visit.
 import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
-import { html, nothing } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
@@ -12,10 +12,12 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
   addDismissal,
   dismissalStoreKey,
@@ -37,6 +39,11 @@ const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 // slow lifecycle-owned interval keeps the chips from going permanently stale.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
 
+export type SidebarAttentionSummary = {
+  count: number;
+  severity: "error" | "warning" | null;
+};
+
 class SidebarAttention extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
@@ -47,6 +54,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) onOpenApprovals?: () => void;
+  @property({ attribute: false }) onSummaryChange?: (summary: SidebarAttentionSummary) => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedGateway: ApplicationContext["gateway"] | null = null;
@@ -57,6 +65,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+  private lastSummary: SidebarAttentionSummary | null = null;
 
   private readonly loadTask = new Task(this, {
     autoRun: false,
@@ -239,13 +248,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     if (!this.dismissedScope) {
       return;
     }
-    const items = buildSidebarAttentionItems({
-      cronJobs: this.cronJobs,
-      modelAuthStatus: this.modelAuthStatus,
-      modelAuthAgentId: this.modelAuthAgentId,
-      approvalQueue: this.context?.overlays.snapshot.approvalQueue ?? [],
-      now: Date.now(),
-    });
+    const items = this.buildItems();
     const stored = loadDismissals(this.dismissedScope);
     const pruned = pruneDismissals(stored, items);
     if (pruned !== stored) {
@@ -261,25 +264,68 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.dismissed = addDismissal(this.dismissedScope, item.kind, item.signature);
   }
 
-  private open(item: SidebarAttentionItem) {
+  private async open(item: SidebarAttentionItem) {
     if (item.action.kind === "openApprovals") {
       this.onOpenApprovals?.();
       return;
     }
-    this.onNavigate?.(item.action.routeId);
+    if (item.action.kind === "navigate") {
+      this.onNavigate?.(item.action.routeId);
+      return;
+    }
+    const { custodianSessionStore } = await import("../pages/custodian/custodian-session-store.ts");
+    custodianSessionStore.presentAlert(item.action.alert);
+    const snapshot = this.context?.gateway.snapshot;
+    if (canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
+      window.dispatchEvent(
+        new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
+      );
+    } else {
+      (this.onNavigate ?? ((routeId) => this.context?.navigate(routeId)))("custodian");
+    }
   }
 
-  override render() {
-    if (this.context?.gateway.snapshot.phase !== "connected") {
-      return nothing;
-    }
-    const items = buildSidebarAttentionItems({
+  private buildItems(): SidebarAttentionItem[] {
+    const overlays = this.context?.overlays.snapshot;
+    return buildSidebarAttentionItems({
       cronJobs: this.cronJobs,
       modelAuthStatus: this.modelAuthStatus,
       modelAuthAgentId: this.modelAuthAgentId,
-      approvalQueue: this.context.overlays.snapshot.approvalQueue,
+      approvalQueue: overlays?.approvalQueue ?? [],
+      updateAvailable: overlays?.updateAvailable ?? null,
+      updateSchedule: overlays?.updateSchedule ?? null,
+      updateStatusBanner: overlays?.updateStatusBanner ?? null,
       now: Date.now(),
-    }).filter((item) => this.dismissed[item.kind] !== item.signature);
+    });
+  }
+
+  private currentItems(): SidebarAttentionItem[] {
+    return this.context?.gateway.snapshot.phase === "connected"
+      ? this.buildItems().filter((item) => this.dismissed[item.kind] !== item.signature)
+      : [];
+  }
+
+  override updated(changed: PropertyValues<this>) {
+    super.updated(changed);
+    const items = this.currentItems();
+    const summary: SidebarAttentionSummary = {
+      count: items.length,
+      severity: items.some((item) => item.severity === "error")
+        ? "error"
+        : items.length > 0
+          ? "warning"
+          : null,
+    };
+    const changedSummary =
+      this.lastSummary?.count !== summary.count || this.lastSummary?.severity !== summary.severity;
+    if (this.onSummaryChange && changedSummary) {
+      this.lastSummary = summary;
+      this.onSummaryChange(summary);
+    }
+  }
+
+  override render() {
+    const items = this.currentItems();
     if (items.length === 0) {
       return nothing;
     }
@@ -287,17 +333,24 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       <div class="sidebar-attention" role="status">
         ${items.map(
           (item) => html`
-            <div class="sidebar-attention__item sidebar-attention__item--${item.severity}">
-              <openclaw-tooltip .content=${item.detail ?? item.label}>
+            <div
+              class="sidebar-attention__item sidebar-attention__item--${item.severity}"
+              data-attention-kind=${item.kind}
+            >
+              <openclaw-tooltip
+                .content=${item.action.kind === "askCustodian"
+                  ? [item.label, ...item.action.alert.facts].join("\n")
+                  : item.label}
+              >
                 <button
                   type="button"
                   class="sidebar-attention__open"
-                  @click=${() => this.open(item)}
+                  aria-label=${item.label}
+                  @click=${() => void this.open(item)}
                 >
                   <span class="sidebar-attention__icon" aria-hidden="true"
                     >${icons[item.icon]}</span
                   >
-                  <span class="sidebar-attention__label">${item.label}</span>
                 </button>
               </openclaw-tooltip>
               <openclaw-tooltip .content=${t("common.dismiss")}>

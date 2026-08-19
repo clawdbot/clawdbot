@@ -4074,7 +4074,6 @@ ui/src/components/settings-ui.ts	7
 ui/src/components/sidebar-agent-card.ts	1
 ui/src/components/sidebar-attention-dismissals.ts	1
 ui/src/components/sidebar-attention.ts	4
-ui/src/components/sidebar-update-card.ts	1
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-session-controller.ts	1

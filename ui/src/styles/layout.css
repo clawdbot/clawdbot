@@ -1010,6 +1010,19 @@ openclaw-settings-save-indicator {
   height: 18px;
 }
 
+.sidebar-footer-bar__custodian-glyph {
+  position: relative;
+  display: inline-flex;
+}
+
+.sidebar-footer-bar__custodian-badge--warning {
+  color: var(--warn);
+}
+
+.sidebar-footer-bar__custodian-badge--error {
+  color: var(--danger);
+}
+
 .sidebar-shell__body {
   min-height: 0;
   flex: 1;
@@ -1032,58 +1045,74 @@ openclaw-settings-save-indicator {
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-/* Ambient health chips (failed cron, expiring model auth) above the footer bar. */
+/* Ambient alert icons above the footer bar. */
 .sidebar-attention {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 6px;
   margin: 0 8px 10px;
 }
 
 .sidebar-attention__item {
+  position: relative;
   display: flex;
   align-items: center;
-  width: 100%;
+  width: 32px;
+  height: 32px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-hover);
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
 }
 
-/* Navigate + dismiss are sibling buttons inside the pill (buttons can't nest);
-   the open button carries the click padding so the whole pill stays a target. */
 .sidebar-attention__open {
   display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
+  width: 100%;
+  height: 100%;
   align-items: center;
-  gap: 8px;
-  padding: 6px 0 6px 8px;
+  justify-content: center;
+  padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
-  font: inherit;
-  text-align: left;
   cursor: var(--cursor-action);
 }
 
 .sidebar-attention__dismiss {
-  display: inline-flex;
-  flex: 0 0 auto;
+  position: absolute;
+  z-index: 1;
+  top: -6px;
+  right: -6px;
+  display: flex;
+  width: 18px;
+  height: 18px;
   align-items: center;
   justify-content: center;
-  padding: 6px 8px 6px 6px;
-  border: 0;
-  background: transparent;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
   color: var(--muted);
   cursor: var(--cursor-action);
-  opacity: 0.6;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.85);
+  transition:
+    opacity var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
 }
 
-.sidebar-attention__dismiss:hover {
-  color: var(--text);
+.sidebar-attention__item:hover .sidebar-attention__dismiss,
+.sidebar-attention__item:focus-within .sidebar-attention__dismiss,
+.sidebar-attention__dismiss:focus-visible {
   opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.sidebar-attention__dismiss:hover,
+.sidebar-attention__dismiss:focus-visible {
+  color: var(--text);
 }
 
 .sidebar-attention__dismiss svg {
@@ -1098,12 +1127,12 @@ openclaw-settings-save-indicator {
 
 .sidebar-attention__item--warning {
   border-color: var(--warn-subtle);
-  background: rgba(234, 179, 8, 0.06);
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
 }
 
 .sidebar-attention__item--error {
   border-color: var(--danger-subtle);
-  background: rgba(239, 68, 68, 0.06);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
 }
 
 .sidebar-attention__item:hover {
@@ -1132,11 +1161,8 @@ openclaw-settings-save-indicator {
   stroke-linejoin: round;
 }
 
-.sidebar-attention__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.sidebar-attention--floating .sidebar-attention {
+  margin: 12px 16px 0;
 }
 
 .sidebar-update-card {
@@ -1189,7 +1215,7 @@ html.openclaw-native-macos
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 34px 4px 8px;
+  padding: 4px 8px;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
@@ -1208,8 +1234,7 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__action:focus-visible,
-.sidebar-update-card__hold:focus-visible,
-.sidebar-update-card__dismiss:focus-visible {
+.sidebar-update-card__hold:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
   outline-offset: 1px;
 }
@@ -1309,18 +1334,10 @@ body.update-dialog-open .sidebar-update-card__status {
   background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
 
-.sidebar-update-card__action--undismissable {
-  padding-right: 8px;
-}
-
-.sidebar-update-card__icon,
-.sidebar-update-card__dismiss {
+.sidebar-update-card__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-.sidebar-update-card__icon {
   width: 24px;
   height: 24px;
   flex: 0 0 auto;
@@ -1360,28 +1377,7 @@ body.update-dialog-open .sidebar-update-card__status {
   white-space: nowrap;
 }
 
-.sidebar-update-card__dismiss {
-  position: absolute;
-  top: 50%;
-  right: 5px;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-}
-
-.sidebar-update-card__dismiss:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.sidebar-update-card__icon svg,
-.sidebar-update-card__dismiss svg {
+.sidebar-update-card__icon svg {
   width: 16px;
   height: 16px;
   stroke: currentColor;

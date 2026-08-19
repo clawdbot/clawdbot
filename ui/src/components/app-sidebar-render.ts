@@ -45,12 +45,14 @@ import {
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
+import type { SidebarAttentionSummary } from "./sidebar-attention.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   activeWorkboardBoardId: string;
   offline: boolean;
+  attentionSummary: SidebarAttentionSummary;
   onOpenApprovals?: () => void;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
@@ -366,6 +368,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     : gateway
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
+  const attentionCount = host.attentionSummary.count;
+  const custodianLabel = attentionCount
+    ? t(attentionCount === 1 ? "attention.custodianAlertAria" : "attention.custodianAlertsAria", {
+        count: String(attentionCount),
+      })
+    : t("nav.askOpenClaw");
   return html`
     <div class="sidebar-footer-bar">
       <openclaw-tooltip .content=${selfLabel}>
@@ -419,14 +427,23 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
         </button>
       </openclaw-tooltip>
       ${custodianPanelAvailable
-        ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
+        ? html`<openclaw-tooltip .content=${custodianLabel}>
             <button
               type="button"
               class="sidebar-brand__icon sidebar-footer-bar__custodian"
-              aria-label=${t("nav.askOpenClaw")}
+              aria-label=${custodianLabel}
               @click=${() => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
             >
-              ${icons.lobster}
+              <span class="sidebar-footer-bar__custodian-glyph">
+                ${icons.lobster}
+                ${attentionCount
+                  ? html`<span
+                      class="session-glyph__badge sidebar-footer-bar__custodian-badge sidebar-footer-bar__custodian-badge--${host
+                        .attentionSummary.severity}"
+                      aria-hidden="true"
+                    ></span>`
+                  : nothing}
+              </span>
             </button>
           </openclaw-tooltip>`
         : nothing}
@@ -531,5 +548,6 @@ export function renderAppSidebarAttention(host: AppSidebarRenderHost) {
   return html`<openclaw-sidebar-attention
     .onNavigate=${(routeId: NavigationRouteId) => host.onNavigate?.(routeId)}
     .onOpenApprovals=${() => host.onOpenApprovals?.()}
+    .onSummaryChange=${(summary: SidebarAttentionSummary) => (host.attentionSummary = summary)}
   ></openclaw-sidebar-attention>`;
 }

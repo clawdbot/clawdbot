@@ -20,6 +20,7 @@ import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
+import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
@@ -119,6 +120,13 @@ class CustodianSurface extends OpenClawLightDomElement {
   override render() {
     const store = this.store;
     const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.resourceBasePath);
+    const alertCard = store.alert
+      ? renderCustodianAlertCard({
+          alert: store.alert,
+          context: this.context,
+          onDismiss: () => store.dismissAlert(),
+        })
+      : nothing;
     if (store.setupRequired) {
       const unavailable = store.setupIssue === "unavailable";
       return html`
@@ -127,6 +135,7 @@ class CustodianSurface extends OpenClawLightDomElement {
             ? "custodian-surface--panel"
             : ""}"
         >
+          ${alertCard}
           <div class="custodian__setup-state" role="alert">
             <openclaw-mascot mood="idle" .size=${this.compact ? 72 : 96}></openclaw-mascot>
             <h2>
@@ -176,6 +185,7 @@ class CustodianSurface extends OpenClawLightDomElement {
             handleMarkdownTableInteraction(event);
           }}
         >
+          ${alertCard}
           ${this.channelOnboardingError
             ? eventNudgeState.renderCustodianChannelOnboardingError({
                 retrying: this.channelOnboardingRetrying,
