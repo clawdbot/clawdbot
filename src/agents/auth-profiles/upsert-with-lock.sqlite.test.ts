@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -18,6 +18,8 @@ import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js
 import type { ApiKeyCredential } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 function apiKey(key: string): ApiKeyCredential {
   return { type: "api_key", provider: "openai", key };
 }
@@ -27,7 +29,7 @@ function profile(profileId: string, key: string) {
 }
 
 async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-batch-"));
+  const root = tempDirs.make("openclaw-auth-batch-");
   const agentDir = path.join(root, "agents", "work", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
   try {
@@ -38,7 +40,6 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
   } finally {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
