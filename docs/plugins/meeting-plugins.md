@@ -1,5 +1,6 @@
 ---
 summary: "Choose and configure Google Meet, Microsoft Teams, or Zoom meeting participation"
+doc-schema-version: 1
 read_when:
   - You want an OpenClaw agent to join a video meeting
   - You are choosing between the Google Meet, Microsoft Teams meetings, and Zoom meetings plugins

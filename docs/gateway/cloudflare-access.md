@@ -13,7 +13,7 @@ Access authenticate every request before it reaches OpenClaw. The Gateway keeps
 needed; `cloudflared` dials out from the host.
 
 This is one supported remote-access topology alongside [Tailscale](/gateway/tailscale)
-and an [SSH tunnel](/gateway/remote#ssh-tunnel-cli--tools). Choose it when you want a
+and an [SSH tunnel](/gateway/remote). Choose it when you want a
 stable public HTTPS URL and identity-provider SSO in front of the Control UI.
 
 ## Before you begin
@@ -97,7 +97,7 @@ Access protects every route on the hostname, including the ones nodes use. Pick 
 - **Exempt the self-authenticating routes.** Allow `/j/*` and `/__openclaw__/worker`
   without Access identity, and keep WebSocket upgrade enabled on the worker route. Both
   enforce their own short-lived credentials, so they do not depend on Access. See
-  [Nodes](/nodes#edge-routing).
+  [Nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
 - **Use an Access service token.** Add a Service Auth policy and give the node
   `gateway.cloudflareAccess.clientId` / `clientSecret`. See [Node CLI](/cli/node).
 

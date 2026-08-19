@@ -89,6 +89,10 @@
       "destination": "/gateway/external-apps"
     },
     {
+      "source": "/reference/wizard",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
       "source": "/reference/maturity-scorecard",
       "destination": "/maturity/scorecard"
     },
@@ -1979,7 +1983,6 @@
                 "group": "Technical reference",
                 "pages": [
                   "agent-runtime-architecture",
-                  "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
                   "reference/openclaw-ai",
