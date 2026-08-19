@@ -242,6 +242,8 @@ describe("accountFollowupTurn", () => {
     }
     result.result.meta.agentMeta = {
       sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-4o",
       agentHarnessId: "codex",
     };
 
