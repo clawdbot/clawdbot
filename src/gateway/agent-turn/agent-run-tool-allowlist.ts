@@ -9,6 +9,9 @@ export function resolveAgentRunToolAllowlist(params: {
   if (!restored || !handoff) {
     return restored ?? handoff;
   }
+  if (restored.length === 0) {
+    return [];
+  }
   return handoff.filter((name) =>
     isToolAllowedByPolicyNameWithoutAliases(name, { allow: restored }),
   );

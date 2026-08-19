@@ -26,4 +26,13 @@ describe("resolveAgentRunToolAllowlist", () => {
       }),
     ).toEqual(["read", "write", "apply_patch"]);
   });
+
+  it("preserves an explicit deny-all Cron cap", () => {
+    expect(
+      resolveAgentRunToolAllowlist({
+        restoredCronToolsAllow: [],
+        sessionHandoffToolsAllow: ["read", "exec"],
+      }),
+    ).toEqual([]);
+  });
 });

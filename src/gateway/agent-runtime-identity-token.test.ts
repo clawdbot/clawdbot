@@ -412,6 +412,46 @@ describe("agent runtime identity token", () => {
     await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toBeUndefined();
   });
 
+  it("rejects a verified session handoff when admission occurs after its TTL", async () => {
+    useTempHome();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const runtimeToken = await importRuntimeTokenModule();
+    const sessionHandoff = await import("./agent-runtime-session-handoff.js");
+    const run = operationalRun("run-expired-handoff");
+    const handoff = sessionHandoff.createAgentRuntimeSessionHandoff({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      delegatedAuthority: run.delegatedAuthority,
+      context: {
+        inheritedToolPolicy: { version: 1, allow: ["read"], deny: [] },
+        requester: {},
+      },
+      target: {
+        sessionKey: "agent:helper:main",
+        idempotencyKey: "expired-handoff-request",
+      },
+    });
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      sessionHandoffId: handoff?.id,
+    });
+    const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+
+    nowSpy.mockReturnValue(61_000);
+    expect(
+      identity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(identity, {
+          sessionKey: "agent:helper:main",
+          idempotencyKey: "expired-handoff-request",
+        }),
+    ).toBeUndefined();
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toBeUndefined();
+    nowSpy.mockRestore();
+  });
+
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

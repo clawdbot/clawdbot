@@ -112,11 +112,17 @@ export function createAgentRuntimeOneShotHandoffRegistry<Payload, Target>(option
       return Object.freeze({
         payload: handoff.payload,
         consume: (target: Target) => {
+          if (handoffs.get(params.id) !== handoff) {
+            return undefined;
+          }
           if (
-            handoffs.get(params.id) !== handoff ||
-            !options.sameTarget(handoff.target, target) ||
+            handoff.expiresAtMs <= Date.now() ||
             !validateAgentRunDelegatedAuthority(handoff.owner.delegatedAuthority)
           ) {
+            handoffs.delete(params.id);
+            return undefined;
+          }
+          if (!options.sameTarget(handoff.target, target)) {
             return undefined;
           }
           // Authentication may reconnect before admission. Delete only at this
