@@ -568,16 +568,16 @@ describe("normalizeInitialApplicationLocation", () => {
       lastActiveSessionKey: "agent:main:main",
     });
     document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, "");
-    window.history.replaceState({}, "", "/focus/new");
+    window.history.replaceState({}, "", "/__openclaw__/new");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
 
     try {
       await runtime.start();
 
-      expect(runtime.context.basePath).toBe("/focus");
+      expect(runtime.context.basePath).toBe("/__openclaw__");
       expect(runtime.context.resourceBasePath).toBe("");
       expect(runtime.router.getState().matches[0]?.routeId).toBe("new-session");
-      expect(window.location.pathname).toBe("/focus/new");
+      expect(window.location.pathname).toBe("/__openclaw__/new");
     } finally {
       runtime.stop();
       saveSettings(previousSettings);

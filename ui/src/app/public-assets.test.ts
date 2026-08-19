@@ -37,7 +37,7 @@ describe("inferControlUiPublicAssetPath", () => {
     expect(
       inferControlUiPublicAssetPath("favicon.svg", {
         resourceBasePath: "",
-        pathname: "/focus/new",
+        pathname: "/__openclaw__/new",
       }),
     ).toBe("/favicon.svg");
   });

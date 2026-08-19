@@ -1583,7 +1583,7 @@ describe("handleControlUiHttpRequest", () => {
     },
     {
       name: "root-mounted application namespace routes",
-      requestPath: "/focus/new",
+      requestPath: "/__openclaw__/new",
       basePath: undefined,
       expectedResourceBasePath: "",
     },
@@ -1653,9 +1653,7 @@ describe("handleControlUiHttpRequest", () => {
             body.matchAll(/(?:src|href)="([^" ]*\/assets\/[^" ]+)"/g),
           ).flatMap((match) => (match[1] ? [match[1]] : []));
           expect(new Set(emittedAssetUrls)).toEqual(
-            new Set(
-              emittedAssets.map(([asset]) => `${expectedResourceBasePath}/assets/${asset}`),
-            ),
+            new Set(emittedAssets.map(([asset]) => `${expectedResourceBasePath}/assets/${asset}`)),
           );
           for (const url of emittedAssetUrls) {
             const emittedAsset = emittedAssets.find(([asset]) => url.endsWith(`/${asset}`));

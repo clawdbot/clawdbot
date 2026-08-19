@@ -10,8 +10,8 @@ describe("Control UI route and resource bases", () => {
   it("keeps a root resource mount separate from an inferred route namespace", () => {
     document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, "");
 
-    expect(resolveControlUiBasePath("/focus/new")).toBe("/focus");
-    expect(resolveControlUiResourceBasePath("/focus/new")).toBe("");
+    expect(resolveControlUiBasePath("/__openclaw__/new")).toBe("/__openclaw__");
+    expect(resolveControlUiResourceBasePath("/__openclaw__/new")).toBe("");
   });
 
   it("uses a configured Gateway mount for both routes and resources", () => {
