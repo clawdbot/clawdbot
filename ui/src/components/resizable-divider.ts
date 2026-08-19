@@ -4,6 +4,8 @@ import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
+const DRAG_END_EVENTS = ["pointerup", "pointercancel", "blur"] as const;
+
 /**
  * An accessible draggable divider for resizable split views.
  * Dispatches 'resize' events with { splitRatio: number } detail.
@@ -17,7 +19,6 @@ class ResizableDivider extends OpenClawLitElement {
   @property({ attribute: false }) measureRatio?: () => number;
   @property({ attribute: false }) measureSize?: () => number;
 
-  private isDragging = false;
   private startPosition = 0;
   private startRatio = 0;
   private activePointerId: number | null = null;
@@ -141,22 +142,21 @@ class ResizableDivider extends OpenClawLitElement {
     if (e.button !== 0) {
       return;
     }
-    this.isDragging = true;
     this.startPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
     this.startRatio = this.currentRatio();
     this.classList.add("dragging");
     this.capturePointer(e.pointerId);
 
     window.addEventListener("pointermove", this.handlePointerMove);
-    window.addEventListener("pointerup", this.stopDragging);
-    window.addEventListener("pointercancel", this.stopDragging);
-    window.addEventListener("blur", this.stopDragging);
+    for (const type of DRAG_END_EVENTS) {
+      window.addEventListener(type, this.stopDragging);
+    }
 
     e.preventDefault();
   };
 
   private handlePointerMove = (e: PointerEvent) => {
-    if (!this.isDragging) {
+    if (this.activePointerId === null) {
       return;
     }
 
@@ -217,17 +217,16 @@ class ResizableDivider extends OpenClawLitElement {
   };
 
   private stopDragging = () => {
-    if (!this.isDragging) {
+    if (this.activePointerId === null) {
       return;
     }
-    this.isDragging = false;
     this.classList.remove("dragging");
     this.releaseActivePointer();
 
     window.removeEventListener("pointermove", this.handlePointerMove);
-    window.removeEventListener("pointerup", this.stopDragging);
-    window.removeEventListener("pointercancel", this.stopDragging);
-    window.removeEventListener("blur", this.stopDragging);
+    for (const type of DRAG_END_EVENTS) {
+      window.removeEventListener(type, this.stopDragging);
+    }
   };
 
   private emitResize(nextRatio: number) {
@@ -263,11 +262,11 @@ class ResizableDivider extends OpenClawLitElement {
   }
 
   private capturePointer(pointerId: number) {
+    this.activePointerId = pointerId;
     if (typeof this.setPointerCapture !== "function") {
       return;
     }
     this.setPointerCapture(pointerId);
-    this.activePointerId = pointerId;
   }
 
   private releaseActivePointer() {
