@@ -8,42 +8,23 @@ type WindowWithControlUiBasePath = Window &
   };
 
 function readControlUiResourceBasePath(): string | null {
-  if (typeof window !== "undefined") {
-    const windowValue = (window as WindowWithControlUiBasePath)[
-      "__OPENCLAW_CONTROL_UI_BASE_PATH__"
-    ];
-    if (typeof windowValue === "string") {
-      return normalizeBasePath(windowValue);
-    }
-  }
-  if (typeof document !== "undefined") {
-    const documentValue = document.documentElement.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
-    if (documentValue !== null) {
-      return normalizeBasePath(documentValue);
-    }
-  }
-  return null;
-}
-
-/** Route mount used by the application router and navigation URLs. */
-export function resolveControlUiBasePath(pathname: string): string {
-  return resolveControlUiPaths(pathname).basePath;
-}
-
-/** Gateway HTTP mount used by config, media, icons, avatars, and static assets. */
-export function resolveControlUiResourceBasePath(pathname: string): string {
-  return resolveControlUiPaths(pathname).resourceBasePath;
+  const windowValue =
+    typeof window === "undefined"
+      ? undefined
+      : (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
+  const value =
+    typeof windowValue === "string"
+      ? windowValue
+      : typeof document === "undefined"
+        ? null
+        : document.documentElement.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
+  return value === null ? null : normalizeBasePath(value);
 }
 
 export function resolveControlUiPaths(pathname: string) {
   const resourceBasePath = readControlUiResourceBasePath();
-  const inferredBasePath = resourceBasePath
-    ? resourceBasePath
-    : inferBasePathFromPathname(pathname);
-  return {
-    basePath: inferredBasePath,
-    resourceBasePath: resourceBasePath ?? inferredBasePath,
-  };
+  const basePath = resourceBasePath || inferBasePathFromPathname(pathname);
+  return [basePath, resourceBasePath ?? basePath] as const;
 }
 
 function readLocation(): RouteLocation {

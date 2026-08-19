@@ -1,6 +1,6 @@
 // Control UI module implements public assets behavior.
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
-import { resolveControlUiResourceBasePath } from "./browser.ts";
+import { resolveControlUiPaths } from "./browser.ts";
 
 type ControlUiPublicAsset =
   | "apple-touch-icon.png"
@@ -31,7 +31,7 @@ export function inferControlUiPublicAssetPath(
   const resourceBasePath =
     params?.resourceBasePath ??
     (params?.pathname === undefined
-      ? resolveControlUiResourceBasePath(currentPathname())
+      ? resolveControlUiPaths(currentPathname())[1]
       : inferBasePathFromPathname(params.pathname));
   return controlUiPublicAssetPath(asset, resourceBasePath);
 }

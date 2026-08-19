@@ -252,10 +252,10 @@ export function bootstrapApplication(
 ): ApplicationRuntime {
   const history = createBrowserHistory();
   const startupLocation = history.location();
-  const { basePath: initialBasePath } = resolveControlUiPaths(
+  const [basePath, resourceBasePath] = resolveControlUiPaths(
     startupLocation.pathname || globalThis.location?.pathname || "/",
   );
-  const documentMode = resolveApprovalDocumentMode(startupLocation.pathname, initialBasePath);
+  const documentMode = resolveApprovalDocumentMode(startupLocation.pathname, basePath);
   const persistedSettings = loadSettings();
   const initialSettings = documentMode
     ? resolvePageGatewaySettings(persistedSettings)
@@ -276,16 +276,10 @@ export function bootstrapApplication(
       saveSettings(startup.settings);
     }
   }
-  const applicationLocation = normalizeLegacyTerminalViewLocation(
-    startup.location,
-    initialBasePath,
-  );
+  const applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
   if (applicationLocation !== startup.location) {
     history.replace(applicationLocation);
   }
-  const { basePath, resourceBasePath } = resolveControlUiPaths(
-    applicationLocation.pathname || globalThis.location?.pathname || "/",
-  );
   const focusLocation = parseControlUiFocusLocation(applicationLocation, basePath);
   const firstRunDefaultLanding =
     documentMode === null &&
