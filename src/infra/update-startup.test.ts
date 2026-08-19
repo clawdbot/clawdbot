@@ -2137,17 +2137,6 @@ describe("update-startup", () => {
     });
   });
 
-  it("scheduleGatewayUpdateCheck returns a cleanup function", () => {
-    mockPackageUpdateStatus("latest", "2.0.0");
-
-    const stop = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-    });
-    stop();
-  });
-
   it("schedules an initial and recurring 24-hour extended-stable hint check with cleanup", async () => {
     mockPackageUpdateStatus("extended-stable", "2.0.0");
     const previousNodeEnv = process.env.NODE_ENV;

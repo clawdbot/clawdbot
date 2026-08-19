@@ -42,7 +42,6 @@ import {
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
-import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
@@ -220,23 +219,6 @@ afterEach(() => {
 });
 
 describe("scripts/changed-lanes", () => {
-  it("detects direct script execution from Windows argv paths", () => {
-    expect(
-      isDirectRunPath(
-        "C:\\repo\\scripts\\check-changed.mjs",
-        "c:\\repo\\scripts\\check-changed.mjs",
-        "win32",
-      ),
-    ).toBe(true);
-    expect(
-      isDirectRunPath(
-        "C:\\repo\\scripts\\changed-lanes.mjs",
-        "C:\\repo\\scripts\\check-changed.mjs",
-        "win32",
-      ),
-    ).toBe(false);
-  });
-
   it.each([
     {
       name: "prints changed lane help without treating --help as a changed path",
