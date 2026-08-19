@@ -2,6 +2,7 @@
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveMutableAgentEntry,
   resolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
@@ -74,15 +75,15 @@ export function applyOnboardingPrimaryModel(
     (key) => normalizeAgentId(key) === target.agentId,
   );
   const entry = authoredEntryKey ? config.agents?.entries?.[authoredEntryKey] : undefined;
-  if (entry?.model === undefined) {
+  if (entry?.model === undefined && config.agents?.ownership !== "explicit") {
     return applyPrimaryModel(config, model);
   }
 
   const primary = normalizeAgentModelRefForConfig(model);
-  const fallbackValues = resolveAgentModelFallbackValues(entry.model).map((fallback) =>
+  const fallbackValues = resolveAgentModelFallbackValues(entry?.model).map((fallback) =>
     normalizeAgentModelRefForConfig(fallback),
   );
-  const models = normalizeAgentModelMapForConfig(entry.models ?? {});
+  const models = normalizeAgentModelMapForConfig(entry?.models ?? {});
   return {
     ...config,
     agents: {
@@ -100,6 +101,51 @@ export function applyOnboardingPrimaryModel(
             [primary]: models[primary] ?? {},
           },
         },
+      },
+    },
+  };
+}
+
+/** Apply a model-default mutation to one agent without flattening it globally. */
+export function applyAgentModelDefaults(
+  config: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  mutate: (config: OpenClawConfig) => OpenClawConfig,
+): OpenClawConfig {
+  const entry = resolveMutableAgentEntry(config, target.agentId);
+  if (!entry && config.agents?.ownership !== "explicit") {
+    return mutate(config);
+  }
+  const projected = {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: {
+        ...config.agents?.defaults,
+        ...(entry?.model !== undefined ? { model: entry.model } : {}),
+        ...(entry?.models !== undefined ? { models: entry.models } : {}),
+        ...(entry?.modelPolicy !== undefined ? { modelPolicy: entry.modelPolicy } : {}),
+      },
+    },
+  };
+  const updated = mutate(projected);
+  const updatedDefaults = updated.agents?.defaults;
+  const { model: _model, models: _models, modelPolicy: _modelPolicy, ...entryRest } = entry ?? {};
+  const nextEntry = {
+    ...entryRest,
+    ...(updatedDefaults?.model !== undefined ? { model: updatedDefaults.model } : {}),
+    ...(updatedDefaults?.models !== undefined ? { models: updatedDefaults.models } : {}),
+    ...(updatedDefaults?.modelPolicy !== undefined
+      ? { modelPolicy: updatedDefaults.modelPolicy }
+      : {}),
+  };
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      entries: {
+        ...config.agents?.entries,
+        [target.agentId]: nextEntry,
       },
     },
   };

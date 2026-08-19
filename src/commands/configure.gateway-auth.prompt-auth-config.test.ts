@@ -501,7 +501,6 @@ describe("promptAuthConfig", () => {
 
     expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
     expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
-    expect(mocks.applyPrimaryModel).toHaveBeenCalledWith(expect.any(Object), "openai/gpt-5.5");
     expect(result.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.3-codex"],
@@ -751,5 +750,30 @@ describe("promptAuthConfig", () => {
     expect(mocks.promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(mocks.applyAuthChoice).toHaveBeenCalledTimes(2);
     expect(mocks.promptModelAllowlist).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes model policy to the explicit configure target instead of global defaults", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("skip");
+    mocks.promptDefaultModel.mockResolvedValue({ model: "openai/gpt-5.5" });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: ["openai/gpt-5.5"] });
+
+    const result = await promptAuthConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { main: {}, ops: {} },
+        },
+      },
+      makeRuntime(),
+      noopPrompter,
+      { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+    );
+
+    expect(result.agents?.entries?.ops?.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(result.agents?.entries?.ops?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
+    expect(result.agents?.defaults?.model).toBeUndefined();
+    expect(result.agents?.defaults?.modelPolicy).toBeUndefined();
   });
 });

@@ -8,6 +8,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   applyOnboardingPrimaryModel,
+  applyAgentModelDefaults,
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
   resolveSystemAgentOnboardingTarget,
@@ -69,6 +70,41 @@ describe("onboarding agent target", () => {
       agentId: "main",
       workspaceDir: "/srv/main",
     });
+  });
+
+  it("keeps explicit agent model mutations on the system-agent entry", () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { model: { primary: "openai/global" } },
+        entries: {
+          main: {},
+          ops: { model: { primary: "openai/old" } },
+        },
+      },
+    };
+    const target = resolveSystemAgentOnboardingTarget({
+      ...config,
+      agents: {
+        ...config.agents,
+        defaults: { systemAgent: { agentId: "ops" } },
+      },
+    });
+
+    const updated = applyAgentModelDefaults(config, target, (projected) => ({
+      ...projected,
+      agents: {
+        ...projected.agents,
+        defaults: {
+          ...projected.agents?.defaults,
+          model: { primary: "openai/new" },
+        },
+      },
+    }));
+
+    expect(updated.agents?.entries?.ops?.model).toEqual({ primary: "openai/new" });
+    expect(updated.agents?.defaults?.model).toEqual({ primary: "openai/global" });
+    expect(updated.agents?.entries?.main?.model).toBeUndefined();
   });
 
   it("provisions the configured default agent workspace and sessions", async () => {

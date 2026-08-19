@@ -1,6 +1,5 @@
 // Configure wizard model/auth selection and gateway auth config helpers.
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
@@ -11,11 +10,16 @@ import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-c
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
-  applyPrimaryModel,
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
 import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-catalog.js";
+import {
+  applyAgentModelDefaults,
+  applyOnboardingPrimaryModel,
+  resolveOnboardingAgentTarget,
+} from "./onboard-agent-target.js";
+import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 import { randomToken } from "./random-token.js";
 
@@ -203,6 +207,7 @@ export async function promptAuthConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
+  target: OnboardingAgentTarget = resolveOnboardingAgentTarget(cfg),
 ): Promise<OpenClawConfig> {
   let next = cfg;
   let authChoice = "skip";
@@ -210,7 +215,7 @@ export async function promptAuthConfig(
   while (true) {
     authChoice = await promptAuthChoiceGrouped({
       prompter,
-      store: ensureAuthProfileStore(undefined, {
+      store: ensureAuthProfileStore(target.agentDir, {
         allowKeychainPrompt: false,
       }),
       includeSkip: true,
@@ -241,14 +246,16 @@ export async function promptAuthConfig(
         loadCatalog: true,
         browseCatalogOnDemand: true,
         preferredProvider,
-        workspaceDir: resolveDefaultAgentWorkspaceDir(),
+        agentId: target.agentId,
+        agentDir: target.agentDir,
+        workspaceDir: target.workspaceDir,
         runtime,
       });
       if (modelSelection.config) {
         next = modelSelection.config;
       }
       if (modelSelection.model) {
-        next = applyPrimaryModel(next, modelSelection.model);
+        next = applyOnboardingPrimaryModel(next, target, modelSelection.model);
         preferredProvider = resolveProviderFromModelRef(modelSelection.model) ?? preferredProvider;
       }
       break;
@@ -260,6 +267,8 @@ export async function promptAuthConfig(
       config: next,
       prompter,
       runtime,
+      agentId: target.agentId,
+      agentDir: target.agentDir,
       setDefaultModel: true,
       preserveExistingDefaultModel: true,
     });
@@ -279,7 +288,7 @@ export async function promptAuthConfig(
     const modelPrompt = await resolveProviderChoiceModelPrompt({
       authChoice,
       config: next,
-      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      workspaceDir: target.workspaceDir,
       env: process.env,
     });
     const promptProvider =
@@ -297,7 +306,7 @@ export async function promptAuthConfig(
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
-      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      workspaceDir: target.workspaceDir,
       env: process.env,
       allowedKeys: modelPrompt?.allowedKeys,
       initialSelections: modelPrompt?.initialSelections,
@@ -307,19 +316,23 @@ export async function promptAuthConfig(
       loadCatalog: shouldLoadModelCatalog,
     });
     if (allowlistSelection.models) {
+      const selectedModels = allowlistSelection.models;
       const canonicalPrimary = resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
         next,
-        allowlistSelection.models,
+        selectedModels,
       );
       if (canonicalPrimary) {
-        next = applyPrimaryModel(next, canonicalPrimary);
+        next = applyOnboardingPrimaryModel(next, target, canonicalPrimary);
       }
-      next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {
-        scopeKeys: allowlistSelection.scopeKeys,
-      });
-      next = applyModelAllowlist(next, allowlistSelection.models, {
-        scopeKeys: allowlistSelection.scopeKeys,
-      });
+      next = applyAgentModelDefaults(next, target, (projected) =>
+        applyModelAllowlist(
+          applyModelFallbacksFromSelection(projected, selectedModels, {
+            scopeKeys: allowlistSelection.scopeKeys,
+          }),
+          selectedModels,
+          { scopeKeys: allowlistSelection.scopeKeys },
+        ),
+      );
     }
   }
 
