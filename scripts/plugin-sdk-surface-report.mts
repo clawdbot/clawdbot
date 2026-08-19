@@ -302,7 +302,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     runtimes render the same guidance instead of diverging prompt copies.
       // +1: shared harness visible-source-reply guidance.
       // +1: typed guarded-fetch redirect error for direct-only plugin delivery.
-      4336,
+      // -1: remove the test-only channel activity reset export.
+      4335,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -388,7 +389,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shared delegation policy (mode resolver + section builder) so harness
       //     runtimes render the same guidance instead of diverging prompt copies.
       // +1: shared harness visible-source-reply guidance.
-      2578,
+      // -1: remove the test-only channel activity reset export.
+      2577,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
