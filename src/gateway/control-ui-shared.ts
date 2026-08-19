@@ -2,21 +2,10 @@
 
 /** Normalizes a Control UI base path to either "" or a leading-slash path without trailing slash. */
 export function normalizeControlUiBasePath(basePath?: string | null): string {
-  if (!basePath) {
+  const value = basePath?.trim() ?? "";
+  if (!value || value === "/") {
     return "";
   }
-  let normalized = basePath.trim();
-  if (!normalized) {
-    return "";
-  }
-  if (!normalized.startsWith("/")) {
-    normalized = `/${normalized}`;
-  }
-  if (normalized === "/") {
-    return "";
-  }
-  if (normalized.endsWith("/")) {
-    normalized = normalized.slice(0, -1);
-  }
-  return normalized;
+  const withSlash = value.startsWith("/") ? value : `/${value}`;
+  return withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
 }

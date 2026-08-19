@@ -1,8 +1,4 @@
-import {
-  buildControlUiRootAssetPath,
-  isControlUiRootPublicAsset,
-  type ControlUiRootPublicAsset,
-} from "../../../src/gateway/control-ui-contract.js";
+import type { ControlUiRootPublicAsset } from "../../../src/gateway/control-ui-root-assets.js";
 // Control UI module implements public assets behavior.
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "./browser.ts";
@@ -17,11 +13,7 @@ export function controlUiPublicAssetPath(
   asset: ControlUiPublicAsset,
   resourceBasePath: string | null | undefined,
 ): string {
-  const base = normalizeBasePath(resourceBasePath ?? "");
-  if (isControlUiRootPublicAsset(asset)) {
-    return buildControlUiRootAssetPath(base, asset);
-  }
-  return base ? `${base}/${asset}` : `/${asset}`;
+  return `${normalizeBasePath(resourceBasePath ?? "")}/${asset}`;
 }
 
 export function inferControlUiPublicAssetPath(

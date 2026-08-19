@@ -2,7 +2,7 @@ import {
   isRetryableGatewayStartupUnavailableError,
   readControlUiBuildMismatchId,
 } from "@openclaw/gateway-client/browser";
-import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-contract.js";
+import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 // Control UI module owns the application gateway store: the reactive
 // snapshot around GatewayBrowserClient consumed by the app shell.
 import type { EventLogEntry } from "../api/event-log.ts";

@@ -1,4 +1,4 @@
-import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-contract.js";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 
 const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml", "image/x-icon"]);

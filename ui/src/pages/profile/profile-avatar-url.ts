@@ -1,5 +1,5 @@
 import { normalizeRouteBasePath } from "@openclaw/uirouter";
-import { buildControlUiUserAvatarPath } from "../../../../src/gateway/control-ui-contract.js";
+import { buildControlUiUserAvatarPath } from "../../../../src/gateway/control-ui-user-avatar-route.js";
 
 export function userProfileAvatarUrl(
   gatewayUrl: string,

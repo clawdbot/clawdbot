@@ -1,6 +1,6 @@
 // Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
-import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-contract.js";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import {
@@ -23,7 +23,8 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import { resolveAvatarImageUrl, resolveAvatarInitials } from "../../lib/identity-avatar.ts";
+import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
