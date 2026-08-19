@@ -805,6 +805,7 @@ const config = {
       "cli.ts!",
       "web/index.html!",
       "web/src/app.ts!",
+      "web/src/error-runtime.browser.ts!",
       "web/src/main.ts!",
       "web/vite.config.ts!",
       // Imported directly from the GitHub Actions smoke-plan script.
