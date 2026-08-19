@@ -5,6 +5,8 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
+import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
+import type { CronRunLogEntry } from "../../cron/run-log-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sleep } from "../../utils/sleep.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
@@ -32,9 +34,10 @@ type CronRunCommandResult = {
   runId?: string;
 };
 
-type CronRunLogEntryResult = {
-  status?: "ok" | "error" | "skipped";
-};
+type CronRunLogEntryResult = Pick<
+  CronRunLogEntry,
+  "status" | "completionStatus" | "delivered" | "deliveryStatus"
+>;
 
 function parseCronRunWaitDuration(raw: unknown, label: string): number {
   const input =
@@ -264,8 +267,22 @@ export function registerCronSimpleCommands(cron: Command) {
               timeoutMs: waitTimeoutMs,
               pollIntervalMs,
             });
-            printCronJson({ ...res, completed: true, status: run.status, run });
-            defaultRuntime.exit(run.status === "ok" ? 0 : 1);
+            const completionStatus =
+              run.completionStatus ??
+              resolveCronCompletionStatus({
+                status: run.status,
+                delivered: run.delivered,
+                deliveryStatus: run.deliveryStatus,
+              });
+            const completedRun = { ...run, completionStatus };
+            printCronJson({
+              ...res,
+              completed: true,
+              status: run.status,
+              completionStatus,
+              run: completedRun,
+            });
+            defaultRuntime.exit(completionStatus === "succeeded" ? 0 : 1);
             return;
           }
           printCronJson(res);

@@ -135,6 +135,14 @@ openclaw-session-owner-chip {
   transition: transform var(--duration-fast) ease;
 }
 
+.channel-avatar {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
 .session-glyph__emoji {
   font-size: 15px;
   line-height: 1;
@@ -833,10 +841,10 @@ openclaw-session-progress-hovercard-provider {
   width: min(440px, calc(100vw - 24px));
   min-height: 112px;
   padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 88%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--overlay-shadow);
   color: var(--text);
   font-family: var(--font-body);
   /* Interactive by design: hover intent and text selection both need the card to
@@ -1112,7 +1120,8 @@ openclaw-session-progress-hovercard-provider {
 
 .field input,
 .field textarea,
-.field select {
+.field select,
+.input {
   border: 1px solid var(--input);
   background: var(--card);
   border-radius: var(--radius-md);
@@ -1125,21 +1134,25 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .field input:not([type="checkbox"]):not([type="radio"]),
-.field select {
+.field select,
+input.input:not([type="checkbox"]):not([type="radio"]),
+select.input {
   height: 38px;
 }
 
 @media (hover: none) and (pointer: coarse) {
   .field input,
   .field textarea,
-  .field select {
+  .field select,
+  .input {
     font-size: 16px;
   }
 }
 
 .field input:focus-visible,
 .field textarea:focus-visible,
-.field select:focus-visible {
+.field select:focus-visible,
+.input:focus-visible {
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
 }
@@ -1665,7 +1678,9 @@ openclaw-session-progress-hovercard-provider {
   color: var(--muted);
 }
 
-.lazy-view-error__action {
+.lazy-view-error__actions {
+  display: flex;
+  gap: 8px;
   margin-top: 8px;
 }
 
@@ -3724,10 +3739,10 @@ td.data-table-key-col {
   max-height: 320px;
   overflow-y: auto;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   color: var(--text);
 }
 

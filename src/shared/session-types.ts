@@ -23,6 +23,7 @@ export type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
   cloudPlacementSupported?: boolean;
+  devicePlacementSupported?: boolean;
   source:
     | "env"
     | "agent"

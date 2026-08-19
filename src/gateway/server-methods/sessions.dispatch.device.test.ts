@@ -123,6 +123,7 @@ describe("sessions.dispatch device targets", () => {
         },
       }),
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,

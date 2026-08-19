@@ -7,6 +7,40 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   createSessionEvidenceResolver: vi.fn(),
   resolveSessionEvidence: vi.fn(),
 }));
+const moveDestinationMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+  resolveExecutionMode: vi.fn(() => "remote-exec"),
+  resolveSessionRuntime: vi.fn(() => "codex"),
+  resolveSessionTarget: vi.fn(() => ({
+    config: {},
+    entry: {},
+    target: { agentId: "main", canonicalKey: "agent:main:move-source" },
+  })),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return { ...actual, getRuntimeConfig: moveDestinationMocks.getRuntimeConfig };
+});
+
+vi.mock("./server-worker-placement-session-target.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./server-worker-placement-session-target.js")>();
+  return {
+    ...actual,
+    resolveWorkerPlacementSessionTarget: moveDestinationMocks.resolveSessionTarget,
+  };
+});
+
+vi.mock("./worker-environments/placement-session-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./worker-environments/placement-session-runtime.js")>();
+  return {
+    ...actual,
+    resolveWorkerPlacementExecutionMode: moveDestinationMocks.resolveExecutionMode,
+    resolveWorkerPlacementSessionRuntime: moveDestinationMocks.resolveSessionRuntime,
+  };
+});
 
 vi.mock("./worker-environments/placement-dispatch.js", async (importOriginal) => {
   const actual =
@@ -31,6 +65,7 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
 });
 
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import { createWorkerPlacementMoveService } from "./worker-environments/placement-move-service.js";
 
 describe("worker placement startup health lifetime", () => {
   it("samples disk on schedule while reconciliation is stuck and drains both on stop", async () => {
@@ -66,6 +101,7 @@ describe("worker placement startup health lifetime", () => {
     const warn = vi.fn();
     const runtime = createGatewayWorkerPlacementRuntime({
       placements: {
+        workspaceResultInstanceId: () => "gateway-test",
         get: () => undefined,
         list: () => [],
         retireSessionPlacement: vi.fn(),
@@ -156,6 +192,7 @@ describe("worker placement startup health lifetime", () => {
     };
     const runtime = createGatewayWorkerPlacementRuntime({
       placements: {
+        workspaceResultInstanceId: () => "gateway-test",
         get: () => placement,
         list: () => [placement],
         retireSessionPlacement: vi.fn(),
@@ -222,6 +259,7 @@ describe("worker placement startup health lifetime", () => {
     };
     const runtime = createGatewayWorkerPlacementRuntime({
       placements: {
+        workspaceResultInstanceId: () => "gateway-test",
         get: () => undefined,
         list: () => [],
         retireSessionPlacement: vi.fn(),
@@ -249,5 +287,68 @@ describe("worker placement startup health lifetime", () => {
     await expect(sidecar.stop()).resolves.toBeUndefined();
 
     expect(environments.stop).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("worker placement move destination", () => {
+  it("rejects a remote-exec paired-device move before reclaiming the active source", async () => {
+    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+      read: vi.fn(),
+      version: vi.fn(() => 0),
+      sweep: vi.fn().mockResolvedValue(undefined),
+    });
+    runtimeFactoryMocks.createDispatch.mockReturnValue({
+      dispatch: vi.fn(),
+      forceDestroyEnvironment: vi.fn(),
+      move: vi.fn(),
+      reclaim: vi.fn(),
+      reconcile: vi.fn(),
+      reconcileActive: vi.fn(),
+    });
+    createGatewayWorkerPlacementRuntime({
+      placements: { workspaceResultInstanceId: () => "gateway-test" } as never,
+      environments: {} as never,
+      gatewayNamespace: "gateway-test",
+      revokeSessionAuthority: vi.fn(),
+      warn: vi.fn(),
+    });
+    const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as
+      | {
+          resolveMoveDestination: Parameters<
+            typeof createWorkerPlacementMoveService
+          >[0]["resolveDestination"];
+        }
+      | undefined;
+    if (!dispatchOptions) {
+      throw new Error("worker placement dispatch options were not captured");
+    }
+    const runMoveBarrier = vi.fn(async () => {
+      throw new Error("source placement barrier started");
+    });
+    const reclaimSource = vi.fn();
+    const dispatch = vi.fn();
+    const moves = createWorkerPlacementMoveService({
+      placements: { getPlacementMove: () => undefined } as never,
+      environments: { get: () => undefined },
+      runMoveBarrier,
+      dispatch,
+      reclaimSource,
+      resolveDestination: dispatchOptions.resolveMoveDestination,
+    });
+
+    await expect(
+      moves.move({
+        sessionId: "session-move-source",
+        sessionKey: "agent:main:move-source",
+        agentId: "main",
+        source: { generation: 4, environmentId: "environment-source", ownerEpoch: 2 },
+        target: { kind: "device", deviceId: "paired-build-mac" },
+      }),
+    ).rejects.toThrow(
+      'runtime codex cannot move to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or move to an SSH-backed cloud worker provider',
+    );
+    expect(runMoveBarrier).not.toHaveBeenCalled();
+    expect(reclaimSource).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

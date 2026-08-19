@@ -457,6 +457,8 @@ describe("sessionsCommand", () => {
         global: {
           sessionId: "telegram-global",
           updatedAt: Date.now() - 60_000,
+          modelProvider: "claude-cli",
+          model: "opus",
           delivery: normalizeSessionDeliveryState({
             origin: {
               provider: "telegram",
@@ -475,20 +477,29 @@ describe("sessionsCommand", () => {
       agents: {
         ownership: "explicit",
         defaults: {
-          model: { primary: "test:opus" },
-          models: { "test:opus": {} },
+          model: { primary: "anthropic/opus" },
+          models: { "anthropic/opus": {} },
           sessionStore: { agentId: "ops" },
         },
-        entries: { ops: {}, research: {} },
+        entries: {
+          ops: { models: { "custom/opus": {} } },
+          research: {},
+        },
       },
     }));
 
     const payload = await runSessionsJson<{
-      sessions?: Array<{ agentId?: string; key: string; runtimePolicySessionKey?: string }>;
+      sessions?: Array<{
+        agentId?: string;
+        key: string;
+        modelProvider?: string;
+        runtimePolicySessionKey?: string;
+      }>;
     }>(sessionsCommand, store, { active: "10" });
 
     expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
       agentId: "ops",
+      modelProvider: "custom",
       runtimePolicySessionKey: "agent:ops:telegram:default:direct:42",
     });
   });

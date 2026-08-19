@@ -169,6 +169,8 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Host-prepared proof that the exact session can request Gateway publication. */
+  githubPublicationAvailable?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
@@ -194,6 +196,8 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
   /** Restrict Skill Workshop to one atomic collection reconciliation. */
   skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
+  /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
+  skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */

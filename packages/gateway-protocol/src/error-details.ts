@@ -4,16 +4,19 @@ export * from "./system-agent-error-details.js";
 export {
   ErrorCodes,
   GatewayErrorDetailCodes,
+  buildSkillProposalRevisionChangedErrorDetails,
   isMcpAppViewExpiredError,
   readCronJobNotFoundError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
+  readSkillProposalRevisionChangedError,
 } from "./gateway-error-details.js";
 export type {
   CronJobNotFoundErrorDetails,
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
+  SkillProposalRevisionChangedErrorDetails,
   UserPrefsLimitExceededErrorDetails,
   ProjectCloneErrorDetails,
   ProjectCloneFailureCause,
@@ -25,6 +28,7 @@ export {
   MissingScopeErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
+  SkillProposalRevisionChangedErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
   buildMissingScopeErrorDetails,
   errorShape,

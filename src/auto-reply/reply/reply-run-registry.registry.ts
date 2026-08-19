@@ -7,10 +7,12 @@ import {
 } from "../../infra/agent-events.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyMessageInjectionTargetOperation,
-  type ReplyMessageInjectionTarget,
+  replyRunInterruptTargetOperation,
   type ReplyOperation,
   type ReplyOperationPhase,
+  type ReplyRunInterruptTarget,
   type ReplyRunRegistry,
 } from "./reply-run-registry.contracts.js";
 import { resolveReplyMessageInjectionRejection } from "./reply-run-registry.message-injection.js";
@@ -108,22 +110,6 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return replyRunState.activeRunsByKey.has(normalizedSessionKey);
   },
-  resolveMessageInjectionTarget({ sessionKey, expectedRunId }) {
-    const operation = this.get(sessionKey);
-    const resolved = resolveReplyMessageInjectionRejection({
-      operation,
-      expectedRunId,
-    });
-    if (!("injection" in resolved)) {
-      return undefined;
-    }
-    const target: ReplyMessageInjectionTarget = {
-      [replyMessageInjectionTargetOperation]: operation!,
-      identity: normalizeOptionalString(expectedRunId) ? "run" : "operation",
-      ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
-    };
-    return target;
-  },
   resolveCurrentMessageInjectionTarget(sessionKey) {
     const operation = this.get(sessionKey);
     const resolved = resolveReplyMessageInjectionRejection({
@@ -134,9 +120,12 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return {
       [replyMessageInjectionTargetOperation]: operation,
-      identity: "operation",
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
     };
+  },
+  resolveCurrentInterruptTarget(sessionKey) {
+    const operation = this.get(sessionKey);
+    return operation ? { [replyRunInterruptTargetOperation]: operation } : undefined;
   },
   abort(sessionKey) {
     const operation = this.get(sessionKey);
@@ -201,6 +190,17 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return replyRunState.activeSessionIdsByKey.get(normalizedSessionKey);
   },
 };
+
+/** Abort and await only the captured operation; a same-key successor is never rediscovered. */
+export async function interruptReplyRunTarget(
+  target: ReplyRunInterruptTarget,
+  timeoutMs = REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+): Promise<{ aborted: boolean; settled: boolean }> {
+  const operation = target[replyRunInterruptTargetOperation];
+  const aborted = operation.abortByUser();
+  const settled = await waitForReplyOperationOwnerSettlement(operation, timeoutMs);
+  return { aborted, settled };
+}
 
 export function resolveActiveReplyRunSessionId(sessionKey: string): string | undefined {
   return replyRunRegistry.resolveSessionId(sessionKey);

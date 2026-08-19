@@ -81,6 +81,7 @@ import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 import type {
   SessionInfo,
   SessionScope,
+  TuiHistoryRunOutcome,
   TuiOptions,
   TuiResult,
   TuiStateAccess,
@@ -804,7 +805,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   let lastActivityStatus = "idle";
   let invalidateSessionRunOwnership: () => void = () => undefined;
   let notifySessionChanged: () => void = () => undefined;
-  let retireHistoryAbsentRun: (_runId: string) => void = () => undefined;
+  let reconcileReconnectRun: (_outcome: TuiHistoryRunOutcome) => void = () => undefined;
 
   const state: TuiStateAccess & {
     sessionGeneration: number;
@@ -1072,11 +1073,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     const remembered = await readTuiLastSessionKey({
       scopeKey: buildLastSessionScopeKeyFor(),
     });
-    if (
-      expectedConnectionGeneration !== connectionGeneration ||
-      !state.isConnected ||
-      exitRequested
-    ) {
+    if (expectedConnectionGeneration !== connectionGeneration || exitRequested) {
       return;
     }
     const rememberedSelection = remembered ? resolveSessionSelection(remembered) : null;
@@ -1094,17 +1091,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       .listSessions({
         limit: TUI_SESSION_LOOKUP_LIMIT,
         search: rememberedKey,
-        includeGlobal: false,
+        includeGlobal: rememberedKey === "global",
         includeUnknown: false,
         agentId: state.currentAgentId,
       })
       .catch(() => null);
-    if (
-      !sessions ||
-      expectedConnectionGeneration !== connectionGeneration ||
-      !state.isConnected ||
-      exitRequested
-    ) {
+    if (!sessions || expectedConnectionGeneration !== connectionGeneration || exitRequested) {
       return;
     }
     // An abandoned connection must leave restoration eligible for the next handshake.
@@ -1448,17 +1440,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setSession,
     abortActive,
   } = sessionActions;
-  const loadHistory = async (options?: { retireMissingReconnectRun?: boolean }) => {
+  const loadHistory = async (reconcileReconnect = false) => {
     const activeRunAtStart = state.activeChatRunId;
     const result = await loadHistorySnapshot();
     if (result.loaded) {
-      if (
-        options?.retireMissingReconnectRun === true &&
-        activeRunAtStart &&
-        !result.inFlightRunId &&
-        activeRunAtStart === state.activeChatRunId
-      ) {
-        retireHistoryAbsentRun(activeRunAtStart);
+      if (reconcileReconnect && activeRunAtStart && activeRunAtStart === state.activeChatRunId) {
+        reconcileReconnectRun(result.runOutcome);
       }
       restoreConnectionNotices();
       tui.requestRender();
@@ -1510,7 +1497,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     forgetLocalBtwRunId: localBtwRunIds.forget,
     clearLocalBtwRunIds: localBtwRunIds.clear,
   });
-  retireHistoryAbsentRun = () => reconnectStreamingWatchdog(null);
+  reconcileReconnectRun = reconnectStreamingWatchdog;
   invalidateSessionRunOwnership = () => {
     disposeEventHandlers();
     state.activeChatRunId = null;
@@ -1750,15 +1737,10 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     const connectedGeneration = ++connectionGeneration;
-    const ownsConnection = () =>
-      connectedGeneration === connectionGeneration && state.isConnected && !exitRequested;
-    state.isConnected = true;
+    const ownsConnection = () => connectedGeneration === connectionGeneration && !exitRequested;
+    state.isConnected = false;
     remediationShown = false;
-    const reconnected = connectionLineage.connect();
-    if (reconnected) {
-      reconnectStreamingWatchdog();
-    }
-    setConnectionStatus(isLocalMode ? "local ready" : "connected");
+    setConnectionStatus("subscribing to session events");
     // A reconnect may already have restored a live run's busy status. Only
     // claim the status line when startup owns it, then release that exact state.
     if (!isTuiBusyActivityStatus(state.activityStatus)) {
@@ -1793,6 +1775,10 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       if (!ownsConnection()) {
         return;
       }
+      const reconnected = connectionLineage.connect();
+      if (reconnected) {
+        reconnectStreamingWatchdog();
+      }
       await refreshAgents();
       if (!ownsConnection()) {
         return;
@@ -1825,10 +1811,11 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       if (!ownsConnection()) {
         return;
       }
-      await loadHistory({ retireMissingReconnectRun: reconnected });
+      await loadHistory(reconnected);
       if (!ownsConnection()) {
         return;
       }
+      state.isConnected = true;
       if (state.activityStatus === "starting up") {
         setActivityStatus("idle");
       }

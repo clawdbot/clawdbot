@@ -23,6 +23,7 @@ import {
 import { resolveAgentRestartRecoveryExecutionIdentityAdmission } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import * as gatewaySessionUtils from "../../gateway/session-utils.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -41,9 +42,13 @@ import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
+  GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
   interruptSessionWorkAdmissions,
@@ -57,6 +62,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
@@ -1039,6 +1045,89 @@ describe("main-session-restart-recovery", () => {
               ?.source === "segment",
         ),
     ).toHaveLength(2);
+  });
+
+  it("resumes a drain-marked turn that settles normally before the replacement starts", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const runId = "drain-overlap-run";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await writeStore(sessionsDir, {
+      [sessionKey]: runningSessionEntry("main-session"),
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "finish the admitted work after the restart" },
+    ]);
+
+    const rootAdmission = tryBeginGatewayRootWorkAdmission();
+    expect(rootAdmission).not.toBeNull();
+    await rootAdmission?.run(async () => {
+      await expect(
+        markRestartAbortedMainSessions({
+          stateDir: tmpDir,
+          sessionKeys: [sessionKey],
+          sessionIds: ["main-session"],
+          activeRuns: [{ runId, lifecycleGeneration, sessionKey, sessionId: "main-session" }],
+          reason: "gateway restart drain",
+        }),
+      ).resolves.toEqual({ marked: 1, skipped: 0 });
+      markGatewayRestartDraining();
+      await expect(
+        runWithGatewayIndependentRootWorkAdmission(async () => undefined),
+      ).rejects.toBeInstanceOf(GatewayDrainingError);
+      await writeTranscript(sessionsDir, "main-session", [
+        {
+          role: "toolResult",
+          toolName: "sessions_spawn",
+          isError: true,
+          content: [{ type: "text", text: "Gateway restart admission is closed." }],
+        },
+        makeAssistantTextMessage("The Gateway is restarting; retry after it comes back."),
+      ]);
+      await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+        await persistGatewaySessionLifecycleEvent({
+          sessionKey,
+          agentId: "main",
+          event: {
+            ts: Date.now(),
+            sessionId: "main-session",
+            runId,
+            lifecycleGeneration,
+            data: { phase: "end", stopReason: "stop" },
+          },
+        });
+      });
+    });
+    rootAdmission?.release();
+
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })?.restartRecoveryRuns).toBeUndefined();
+
+    resetGatewayWorkAdmission();
+    rotateAgentEventLifecycleGeneration();
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      delayMs: 0,
+      getConfig: () => ({}),
+      maxRetries: 1,
+      stateDir: tmpDir,
+    });
+    await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+    await recovery.stop();
+
+    expect(gatewayParams()).toMatchObject({
+      expectedExistingSessionId: "main-session",
+      inputProvenance: {
+        kind: "internal_system",
+        sourceSessionKey: sessionKey,
+        sourceTool: "main_session_restart_recovery",
+      },
+      sessionKey,
+    });
+    expect(gatewayParams().idempotencyKey).not.toBe(runId);
   });
 
   it.each([

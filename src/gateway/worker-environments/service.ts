@@ -1,5 +1,5 @@
 import type {
-  WorkerAdmissionHandshake,
+  WorkerGitHubPublishParams,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
   WorkerSessionToolResult,
@@ -8,18 +8,10 @@ import type {
   WorkerTranscriptCommitResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.js";
-import type { SecretRef } from "../../config/types.secrets.js";
 import { withTimeout } from "../../infra/fs-safe.js";
+import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import type {
-  WorkerExecutionMode,
-  WorkerNodeEnrollment,
-  WorkerProfile,
-  WorkerProvider,
-  WorkerSshEndpoint,
-  WorkerSshIdentity,
-} from "../../plugins/types.js";
+import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { WorkerConnectionIdentity } from "./admission.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
@@ -33,13 +25,14 @@ import {
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
+import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
+import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
-  WorkerEnvironmentStore,
   WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -70,34 +63,12 @@ class WorkerEnvironmentServiceError extends Error {
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
 
-type WorkerEnvironmentServiceOptions = {
-  store: WorkerEnvironmentStore;
-  getConfig: () => OpenClawConfig;
-  resolveProvider: (providerId: string) => WorkerProvider | undefined;
-  prepareInstallation: (
-    install: WorkerInstallationArtifact["install"],
-  ) => Promise<WorkerInstallationArtifact>;
-  bootstrapWorker: (params: {
-    operationId: string;
-    sshEndpoint: WorkerSshEndpoint;
-    installation: WorkerInstallationArtifact;
-    resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
-    signal: AbortSignal;
-  }) => Promise<WorkerAdmissionHandshake>;
-  resolveSshIdentity?: (params: {
-    provider: WorkerProvider;
-    leaseId: string;
-    profile: WorkerProfile;
-    keyRef: SecretRef;
-  }) => Promise<WorkerSshIdentity>;
-  ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
-  prepareNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<WorkerNodeEnrollment>;
-  retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;
+type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
+  nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
   stopNodeWorkerBundleTransfers?: () => void;
   reconcileIntervalMs?: number;
-  providerCallTimeoutMs?: number;
   bootstrapCallTimeoutMs?: number;
   workerCredentialTtlMs?: number;
   generateWorkerCredential?: (bytes: number) => string;
@@ -130,6 +101,12 @@ type WorkerEnvironmentServiceOptions = {
           toolName: "sessions_send";
           request: WorkerSessionsSendParams;
           signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "github_publish";
+          request: WorkerGitHubPublishParams;
+          signal?: AbortSignal;
         },
   ) => Promise<WorkerSessionToolResult>;
 };
@@ -142,12 +119,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const activeOperations = new Set<Promise<unknown>>();
   const now = options.now ?? Date.now;
   const tunnelLifecycle =
-    options.tunnelManager || options.nodeTunnelManager
+    options.tunnelManager || options.nodeTunnelManager || options.nodeDesktopCarrier
       ? {
           stop: async (environmentId: string, ownerEpoch?: number) => {
             await Promise.all([
               options.tunnelManager?.stop(environmentId, ownerEpoch),
               options.nodeTunnelManager?.stop(environmentId, ownerEpoch),
+              options.nodeDesktopCarrier?.stop(environmentId, ownerEpoch),
             ]);
           },
         }
@@ -308,6 +286,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareCurrentBundle: async () => await options.prepareInstallation("bundle"),
     tunnelManager: options.tunnelManager,
     nodeTunnelManager: options.nodeTunnelManager,
+    nodeDesktopCarrier: options.nodeDesktopCarrier,
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
     inState,
@@ -355,7 +334,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           ),
       );
     await runTasksWithConcurrency({ tasks, limit: 8 });
-    store.pruneTerminalEnvironments();
+    try {
+      store.pruneTerminalEnvironments();
+    } catch (error) {
+      // Pruning is opportunistic and retries on the next sweep; lock contention must not
+      // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
+      if (!isSqliteLockError(error)) {
+        throw error;
+      }
+    }
   };
 
   const reconcileOnce = () => {

@@ -36,7 +36,7 @@ import {
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import { validateConfigObjectRaw } from "./validation-core.js";
+import { collectHeartbeatOwnerWarnings, validateConfigObjectRaw } from "./validation-core.js";
 import { withConfigIssuePath } from "./validation-issues.js";
 import {
   collectExplicitPluginReferences,
@@ -228,6 +228,7 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
+  warnings.push(...collectHeartbeatOwnerWarnings(config));
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 

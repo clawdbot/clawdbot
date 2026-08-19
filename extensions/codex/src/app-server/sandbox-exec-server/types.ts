@@ -2,10 +2,10 @@
  * Shared protocol and runtime state types for the Codex sandbox exec-server
  * WebSocket bridge.
  */
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import type { WebSocketServer } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
+import type { SandboxChildOwner } from "./sandbox-child.js";
 
 /** Minimal JSON-RPC request shape accepted by the sandbox exec-server. */
 export type JsonRpcRequest = {
@@ -70,11 +70,9 @@ export type ManagedProcess = {
   failure: string | null;
   tty: boolean;
   pipeStdin: boolean;
-  abortController: AbortController;
-  child: ChildProcessWithoutNullStreams | null;
-  finalizeToken?: unknown;
-  finalizeExec?: NonNullable<SandboxContext["backend"]>["finalizeExec"];
-  finalized: boolean;
+  terminationRequested: boolean;
+  child: SandboxChildOwner | null;
+  startPromise?: Promise<void>;
   evictionTimer?: ReturnType<typeof setTimeout>;
   waiters: Array<() => void>;
   emitNotification: (method: string, params: JsonObject) => void;
@@ -90,4 +88,6 @@ export type OpenClawExecServer = {
   url: string;
   sandbox: SandboxContext;
   server: WebSocketServer;
+  children: Set<SandboxChildOwner>;
+  cleanupTasks: Set<Promise<void>>;
 };

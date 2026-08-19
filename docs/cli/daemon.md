@@ -29,8 +29,10 @@ openclaw daemon uninstall
 | `install`   | `--port`, `--runtime <node>`, `--token`, `--wrapper <path>`, `--force`, `--json`                 |
 | `uninstall` | `--json`                                                                                         |
 | `start`     | `--json`                                                                                         |
-| `stop`      | `--json`, `--disable` (launchd only: persistently suppress KeepAlive/RunAtLoad until next start) |
+| `stop`      | `--force`, `--json`, `--disable` (launchd only: suppress KeepAlive/RunAtLoad until next start)   |
 | `restart`   | `--force`, `--safe`, `--skip-deferral`, `--wait <duration>`, `--json`                            |
+
+`--json` is accepted before or after every subcommand (for example, `daemon --json status` and `daemon status --json`).
 
 - `status`: shows service install state (launchd/systemd/schtasks) and probes Gateway health.
 - `install`: installs the service; `--force` reinstalls/overwrites an existing install.

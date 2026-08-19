@@ -12,10 +12,17 @@ extension OpenClawChatViewModel {
             return
         }
         self.latestAppliedRunSnapshotRequestID = request.id
-        if let activeRunIDs = payload.sessionInfo?.activeRunIds {
-            self.updateActiveSessionRunIDs(activeRunIDs)
-        } else if payload.sessionInfo?.hasActiveRun == false {
-            self.updateActiveSessionRunIDs([])
+        if let sessionInfo = payload.sessionInfo {
+            if let index = self.sessions.firstIndex(where: {
+                self.matchesCurrentSessionKey(incoming: $0.key, current: request.session.key)
+            }) {
+                var updated = self.sessions
+                updated[index].hasActiveRun = sessionInfo.hasActiveRun
+                updated[index].activeRunIds = sessionInfo.activeRunIds
+                self.sessions = updated
+            } else {
+                self.updateActiveSessionRunIDs(sessionInfo.activeRunIds ?? [])
+            }
         }
         guard let snapshot = payload.inFlightRun,
               let runId = Self.normalizedRunID(snapshot.runId),

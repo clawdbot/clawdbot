@@ -77,14 +77,9 @@ function interactiveOwner(): {
     scrollLeft: { configurable: true, value: 0, writable: true },
     scrollWidth: { configurable: true, value: 300 },
   });
+  owner.addEventListener("click", handleMarkdownTableInteraction);
   enhanceMarkdownTables(owner);
   return { owner, shell, viewport };
-}
-
-function markdownTableInteractionEvent(target: Element): Event {
-  const event = new MouseEvent("click", { bubbles: true });
-  Object.defineProperty(event, "target", { value: target });
-  return event;
 }
 
 describe("Markdown table interactions", () => {
@@ -174,8 +169,7 @@ describe("Markdown table interactions", () => {
     vi.useFakeTimers();
     const { owner } = interactiveOwner();
     const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
-
-    handleMarkdownTableInteraction(markdownTableInteractionEvent(copy));
+    copy.click();
 
     expect(writeText).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
     await vi.advanceTimersByTimeAsync(0);
@@ -190,8 +184,7 @@ describe("Markdown table interactions", () => {
     const { owner } = interactiveOwner();
     const expand = owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!;
     expand.focus();
-
-    handleMarkdownTableInteraction(markdownTableInteractionEvent(expand));
+    expand.click();
 
     const dialog = document.querySelector<HTMLDialogElement>(".markdown-table-dialog")!;
     expect(dialog.hasAttribute("open")).toBe(true);
@@ -212,10 +205,7 @@ describe("Markdown table interactions", () => {
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
     expect(document.activeElement).toBe(expand);
 
-    // Reopen through the handler like every other interaction here: the file
-    // runs in the isolated lane, so no shared-graph document listener exists
-    // to service a raw click().
-    handleMarkdownTableInteraction(markdownTableInteractionEvent(expand));
+    expand.click();
     const reopenedDialog = document.querySelector<HTMLDialogElement>(".markdown-table-dialog")!;
 
     reopenedDialog.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();

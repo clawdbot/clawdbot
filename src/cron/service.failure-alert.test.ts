@@ -658,7 +658,8 @@ describe("CronService failure alerts", () => {
           throw new Error("expected failure alert text");
         }
         expect(alertText).toBe(
-          'Automation "gateway restart" skipped 2 times\nCheck automation history for details.',
+          'Automation "gateway restart" skipped 2 times\n' +
+            "Check automation history for details.",
         );
 
         const skippedJob = cron.getJob(job.id);
@@ -746,18 +747,34 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("does not reclassify permanent local script errors in failure alerts", async () => {
+  it.each([
+    {
+      name: "command exit",
+      detail: { kind: "command-exit" as const, exitCode: 23 },
+      expected: "Cause: command exited with code 23",
+    },
+    {
+      name: "script failure",
+      detail: {
+        kind: "script-failure" as const,
+        source: "payload" as const,
+        code: "tool_budget_exceeded" as const,
+      },
+      expected: "Cause: automation script exceeded its tool budget",
+    },
+  ])("renders a closed $name fact in threshold alerts", async ({ detail, expected }) => {
     await withFailureAlertCron(
       {
         failureAlert: { enabled: true, after: 1 },
         runResult: {
           status: "error",
-          error: "cron script failed after a tool side effect: request timed out",
+          error: "TOKEN=opaque /private/path command --secret provider body stack",
           errorClassification: { kind: "permanent" },
+          failureNotificationDetail: detail,
         },
       },
       async ({ cron, sendCronFailureAlert, addJob }) => {
-        const job = await addJob("permanent script alert", {
+        const job = await addJob("closed detail alert", {
           payload: { kind: "agentTurn", message: "ping" },
           delivery: createTelegramDelivery(),
         });
@@ -765,21 +782,24 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         expect(alertCallArg(sendCronFailureAlert).text).toBe(
-          'Automation "permanent script alert" failed 1 times\n' +
-            "Check automation history for details.",
+          `Automation "closed detail alert" failed 1 times\n${expected}`,
         );
       },
     );
   });
 
-  it("keeps skipped alert text unchanged when the skip reason looks classifiable", async () => {
+  it("keeps arbitrary permanent errors generic without a closed detail", async () => {
     await withFailureAlertCron(
       {
-        failureAlert: { enabled: true, after: 1, includeSkipped: true },
-        runResult: { status: "skipped", error: "cron: job execution timed out" },
+        failureAlert: { enabled: true, after: 1 },
+        runResult: {
+          status: "error",
+          error: "TOKEN=opaque /private/path command --secret provider body stack",
+          errorClassification: { kind: "permanent" },
+        },
       },
       async ({ cron, sendCronFailureAlert, addJob }) => {
-        const job = await addJob("skipped timeout", {
+        const job = await addJob("permanent failure", {
           payload: { kind: "agentTurn", message: "ping" },
           delivery: createTelegramDelivery(),
         });
@@ -788,7 +808,7 @@ describe("CronService failure alerts", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         const alertText = alertCallArg(sendCronFailureAlert).text;
         expect(alertText).toBe(
-          'Automation "skipped timeout" skipped 1 times\n' +
+          'Automation "permanent failure" failed 1 times\n' +
             "Check automation history for details.",
         );
       },

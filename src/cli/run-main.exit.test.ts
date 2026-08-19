@@ -8,6 +8,7 @@ import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
@@ -3245,18 +3246,20 @@ describe("runCli exit behavior", () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const previousRawConsole = loggingState.rawConsole;
-    const previousOverrideSettings = loggingState.overrideSettings;
+    const previousOverrideSettings = loggingState.overrideSettings as Parameters<
+      typeof setLoggerOverride
+    >[0];
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((
       value: string | Uint8Array,
     ) => {
       stdout.push(String(value));
       return true;
     }) as typeof process.stdout.write);
-    loggingState.overrideSettings = {
+    setLoggerOverride({
       level: "silent",
       consoleLevel: "info",
       consoleStyle: "compact",
-    };
+    });
     loggingState.rawConsole = {
       log: (value) => stdout.push(String(value)),
       info: (value) => stdout.push(String(value)),
@@ -3282,7 +3285,7 @@ describe("runCli exit behavior", () => {
     } finally {
       stdoutWrite.mockRestore();
       loggingState.rawConsole = previousRawConsole;
-      loggingState.overrideSettings = previousOverrideSettings;
+      setLoggerOverride(previousOverrideSettings);
       loggingState.forceConsoleToStderr = false;
       loggingState.earlyConsoleRoutingRestore = null;
     }
@@ -4095,6 +4098,48 @@ describe("runCli exit behavior", () => {
       local: true,
       forceProcessExitOnReturn: true,
     });
+  });
+
+  it("starts the local TUI when any explicit-roster agent has inference configured", async () => {
+    primeBareRootConfig({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          alpha: { model: "openai/gpt-5.6-luna" },
+          beta: { model: "openai/gpt-5.6-sol" },
+        },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "unreachable",
+      detail: "offline",
+    });
+
+    await runBareCli();
+
+    expect(runTuiMock).toHaveBeenCalledWith({
+      deliver: false,
+      local: true,
+      forceProcessExitOnReturn: true,
+    });
+  });
+
+  it("routes an explicit roster with no configured inference to onboarding", async () => {
+    primeBareRootConfig({
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: {}, beta: {} },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "unreachable",
+      detail: "offline",
+    });
+
+    await runBareCli();
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(runTuiMock).not.toHaveBeenCalled();
   });
 
   it.each([

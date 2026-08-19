@@ -1434,17 +1434,6 @@
       ]
     },
     {
-      "id": "native.android.5b8201964dde6f85",
-      "source": "Active on this phone",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.ccd226a2c0e85242",
       "source": "Active task list is at its limit",
       "surface": "android",
@@ -2822,17 +2811,6 @@
       ]
     },
     {
-      "id": "native.android.b62482f58e031dc3",
-      "source": "Bridge",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.eb2895729924f303",
       "source": "Brining",
       "surface": "android",
@@ -3086,43 +3064,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.866ba9a5bb1a7f78",
-      "source": "Canvas",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        },
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.5af14aa58bca179d",
-      "source": "Canvas Status",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.44a4fb62733e24c6",
-      "source": "Canvas output needs an active gateway connection.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
         }
       ]
     },
@@ -3632,17 +3573,6 @@
       ]
     },
     {
-      "id": "native.android.182fd214002b29fd",
-      "source": "Close Canvas",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.9e3c928c58928895",
       "source": "Close image preview",
       "surface": "android",
@@ -3927,17 +3857,6 @@
       ]
     },
     {
-      "id": "native.android.f8d28df6a1df6381",
-      "source": "Connect the gateway",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.c295f12117ba7386",
       "source": "Connect the gateway to browse workspace files.",
       "surface": "android",
@@ -4210,17 +4129,6 @@
       ]
     },
     {
-      "id": "native.android.ec9908b9ab6cfb7b",
-      "source": "Connect to load your agents",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.8aba779b768f9497",
       "source": "Connect to your Gateway",
       "surface": "android",
@@ -4378,17 +4286,6 @@
       ]
     },
     {
-      "id": "native.android.02bdbe53eaafab28",
-      "source": "Connected to $gatewayLabel",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.f81d190c1511e44a",
       "source": "Connecting",
       "surface": "android",
@@ -4456,10 +4353,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeForegroundService.kt"
-        },
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
         },
         {
           "kind": "ui-call",
@@ -5312,17 +5205,6 @@
       ]
     },
     {
-      "id": "native.android.6ba7183d09548c7a",
-      "source": "Current screen output and interactive app surface.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.b8a8f25579564d21",
       "source": "Current session",
       "surface": "android",
@@ -5446,10 +5328,6 @@
       "source": "Default agent",
       "surface": "android",
       "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        },
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt"
@@ -6517,17 +6395,6 @@
       ]
     },
     {
-      "id": "native.android.a1baf41e20e30419",
-      "source": "Failed to request restore. Tap to retry.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.1062364401943984",
       "source": "Failed — $it",
       "surface": "android",
@@ -6815,10 +6682,6 @@
       "source": "Gateway",
       "surface": "android",
       "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        },
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt"
@@ -7351,17 +7214,6 @@
       ]
     },
     {
-      "id": "native.android.0257c2760551e7a0",
-      "source": "Gateway session in progress",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.1fe19418fbbcd7aa",
       "source": "Gateway status, phone node readiness, and recent log stream.",
       "surface": "android",
@@ -7694,17 +7546,6 @@
       ]
     },
     {
-      "id": "native.android.ef14e6a42656428f",
-      "source": "Home canvas",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.46e7f94e1f9784bd",
       "source": "Host",
       "surface": "android",
@@ -7790,17 +7631,6 @@
         {
           "kind": "resource-string",
           "path": "apps/android/wear/src/main/res/values/strings.xml"
-        }
-      ]
-    },
-    {
-      "id": "native.android.7258ce613d19f304",
-      "source": "If the gateway is reachable, reconnect should complete without intervention.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
         }
       ]
     },
@@ -8479,17 +8309,6 @@
       ]
     },
     {
-      "id": "native.android.da02288f33f35aaa",
-      "source": "Live page",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.96c78912cf0124e0",
       "source": "Live transcript",
       "surface": "android",
@@ -8701,10 +8520,6 @@
       "source": "Main",
       "surface": "android",
       "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        },
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
@@ -9721,17 +9536,6 @@
       ]
     },
     {
-      "id": "native.android.4dacf7dcc6d48f88",
-      "source": "No canvas update yet. Tap to retry.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.d8115083618341f7",
       "source": "No channels",
       "surface": "android",
@@ -10287,17 +10091,6 @@
       ]
     },
     {
-      "id": "native.android.cc49ac364268f663",
-      "source": "Node offline. Reconnect and retry.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.f1e946108f81769e",
       "source": "Nodes",
       "surface": "android",
@@ -10719,10 +10512,6 @@
         },
         {
           "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        },
-        {
-          "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt"
         },
         {
@@ -10888,10 +10677,6 @@
       "sites": [
         {
           "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        },
-        {
-          "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt"
         },
         {
@@ -11030,17 +10815,6 @@
         {
           "kind": "resource-string",
           "path": "apps/android/wear/src/main/res/values/strings.xml"
-        }
-      ]
-    },
-    {
-      "id": "native.android.4a0022fb1c008b0d",
-      "source": "Open Screen",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
         }
       ]
     },
@@ -11203,17 +10977,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.abc9911c021e13cb",
-      "source": "Open the current Canvas surface to inspect or interact with it.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
         }
       ]
     },
@@ -11538,17 +11301,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.b73f7afaed5e0a0d",
-      "source": "OpenClaw is syncing back up",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
         }
       ]
     },
@@ -11891,17 +11643,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.44c3c35d0c823ff2",
-      "source": "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
         }
       ]
     },
@@ -13131,14 +12872,6 @@
         },
         {
           "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        },
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        },
-        {
-          "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ChannelsSettingsScreen.kt"
         },
         {
@@ -13396,10 +13129,6 @@
       "sites": [
         {
           "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        },
-        {
-          "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
         }
       ]
@@ -13445,17 +13174,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SystemAgentSettingsScreen.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.94a87a408a998f5b",
-      "source": "Reconnecting",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
         }
       ]
     },
@@ -13551,17 +13269,6 @@
       ]
     },
     {
-      "id": "native.android.fbe6cca48fc3c648",
-      "source": "Refresh Screen",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.28322842224d1259",
       "source": "Refresh background tasks",
       "surface": "android",
@@ -13599,10 +13306,6 @@
       "source": "Refreshing",
       "surface": "android",
       "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        },
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ChannelsSettingsScreen.kt"
@@ -14014,17 +13717,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SystemAgentSettingsScreen.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.9d5a067d783c42b6",
-      "source": "Restore canvas now for session=$sessionKey source=$source. If existing A2UI state exists, replay it immediately. If not, create and render a compact mobile-friendly dashboard in Canvas.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-named-argument-concatenated",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
         }
       ]
     },
@@ -14622,28 +14314,6 @@
       ]
     },
     {
-      "id": "native.android.f3090cbb8f561d55",
-      "source": "Screen surface",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.2034fd6620e681f5",
-      "source": "Screen surface ready",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.cbf9a102a28066d1",
       "source": "Script",
       "surface": "android",
@@ -15003,17 +14673,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.401c3f75ad88d7c4",
-      "source": "Selected on this phone",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
         }
       ]
     },
@@ -15601,17 +15260,6 @@
       ]
     },
     {
-      "id": "native.android.41e12872a460ce83",
-      "source": "Show screen-sharing debug state.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.59c0981a6bba60dd",
       "source": "Showing ${visibleApps.size} of ${apps.size}. Refine search for more.",
       "surface": "android",
@@ -16128,17 +15776,6 @@
       ]
     },
     {
-      "id": "native.android.bfed07d0a38974f2",
-      "source": "Standby",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.0a047512bbbf8a70",
       "source": "Start Chat",
       "surface": "android",
@@ -16508,17 +16145,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.0ede4a4211dbe0ed",
-      "source": "Surface",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt"
         }
       ]
     },
@@ -17047,28 +16673,6 @@
       ]
     },
     {
-      "id": "native.android.f465630c9d0e3e7d",
-      "source": "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.ad658d20177609a1",
-      "source": "The overview refreshes on reconnect and when this screen opens.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.773b10f8ee342bf4",
       "source": "The result for $slug is unknown. Reconnect, refresh Skills, then retry; the Gateway safely joins a matching install that is still running.",
       "surface": "android",
@@ -17345,17 +16949,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.baa142039556e0ee",
-      "source": "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
         }
       ]
     },
@@ -18743,10 +18336,6 @@
       "sites": [
         {
           "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        },
-        {
-          "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt"
         }
       ]
@@ -18759,17 +18348,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.be9350e46b23487b",
-      "source": "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
         }
       ]
     },
@@ -18997,17 +18575,6 @@
       ]
     },
     {
-      "id": "native.android.33bd96ad84f6b1cd",
-      "source": "Your agents are ready",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.b4e0d4aa03353c07",
       "source": "Your phone is paired with ${recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName)}. Continue to finish node access.",
       "surface": "android",
@@ -19026,17 +18593,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.7cc7f3a18d2be1bc",
-      "source": "Your phone stays quiet until it is needed",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt"
         }
       ]
     },
@@ -19794,6 +19350,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.b7a51f5ac6098ec5",
+      "source": "%@ is not currently discoverable on this network.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
         }
       ]
     },
@@ -22735,10 +22302,6 @@
       "surface": "apple",
       "sites": [
         {
-          "kind": "conditional-branch",
-          "path": "apps/ios/Sources/RootTabs.swift"
-        },
-        {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/ChannelsSettings+View.swift"
         },
@@ -23607,6 +23170,17 @@
       ]
     },
     {
+      "id": "native.apple.c767224da1135c79",
+      "source": "Change the primary Gateway?",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.68f28e54baab5743",
       "source": "Change the search or readiness filter.",
       "surface": "apple",
@@ -24449,17 +24023,6 @@
         {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.9621ed74cd72289e",
-      "source": "Close canvas",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "ui-modifier",
-          "path": "apps/ios/Sources/RootTabs.swift"
         }
       ]
     },
@@ -26248,6 +25811,17 @@
       ]
     },
     {
+      "id": "native.apple.23f447855b25395a",
+      "source": "Could Not Change Primary Gateway",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.2e44cb00b99f5c81",
       "source": "Could Not Open Gateway Window",
       "surface": "apple",
@@ -26479,6 +26053,28 @@
         {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.6c192cb704c2f643",
+      "source": "Could not save the active gateway selection.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.839637d118fd48d8",
+      "source": "Could not save the paired gateway.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
         }
       ]
     },
@@ -26989,17 +26585,6 @@
         {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.640ff6aab8d97fda",
-      "source": "Debug Screen Status",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/ios/Sources/Design/SettingsProTabSections.swift"
         }
       ]
     },
@@ -28125,6 +27710,10 @@
           "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift"
         },
         {
+          "kind": "ui-named-argument",
+          "path": "apps/ios/Sources/RootTabs.swift"
+        },
+        {
           "kind": "ui-modifier",
           "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift"
         },
@@ -28923,28 +28512,6 @@
       ]
     },
     {
-      "id": "native.apple.75dd34360c117103",
-      "source": "Eval",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.689e209eeeb7cca9",
-      "source": "Eval JS",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
-        }
-      ]
-    },
-    {
       "id": "native.apple.b143af13bdd1e109",
       "source": "Event text",
       "surface": "apple",
@@ -29322,6 +28889,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayDiscoveryStatusText.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.cd811b1e4af50d99",
+      "source": "Failed to build the gateway URL.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
         }
       ]
     },
@@ -30139,6 +29717,17 @@
       ]
     },
     {
+      "id": "native.apple.a89c5ab50baafc61",
+      "source": "Gateway Setup Not Supported",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.384fcc93f505c5c1",
       "source": "Gateway URL",
       "surface": "apple",
@@ -30327,10 +29916,6 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift"
-        },
-        {
-          "kind": "conditional-branch",
-          "path": "apps/ios/Sources/RootTabs.swift"
         }
       ]
     },
@@ -30357,17 +29942,6 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.264053ca15a19c21",
-      "source": "Gateway needs attention",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "conditional-branch",
-          "path": "apps/ios/Sources/RootTabs.swift"
         }
       ]
     },
@@ -30454,6 +30028,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Voice/TalkModeManager.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.a6ec7e8d8d11e84a",
+      "source": "Gateway reconnect failed",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/ios/Sources/RootTabs.swift"
         }
       ]
     },
@@ -34325,6 +33910,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/RootSidebar.swift"
+        },
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/ios/Sources/RootTabs.swift"
         }
       ]
     },
@@ -35287,6 +34876,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.67798128e396e0ef",
+      "source": "No paired gateway is available to reconnect.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
         }
       ]
     },
@@ -37354,17 +36954,6 @@
         {
           "kind": "plist-string",
           "path": "apps/ios/Sources/Info.plist"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.3dfe5d3525846721",
-      "source": "OpenClaw iOS",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "conditional-branch",
-          "path": "apps/ios/Sources/RootTabs.swift"
         }
       ]
     },
@@ -41617,17 +41206,6 @@
       ]
     },
     {
-      "id": "native.apple.477f40964635800c",
-      "source": "Reveal",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
-        }
-      ]
-    },
-    {
       "id": "native.apple.f2ed0e4a3e0e2b6c",
       "source": "Reveal app in Finder",
       "surface": "apple",
@@ -41802,6 +41380,17 @@
       ]
     },
     {
+      "id": "native.apple.08109b7e335603e1",
+      "source": "Review the proposal draft before applying or rejecting it.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.d23668f12e319332",
       "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
       "surface": "apple",
@@ -41879,17 +41468,6 @@
         {
           "kind": "ui-named-argument",
           "path": "apps/ios/Sources/Design/AgentProNodesDestination.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.090579ae88131c3f",
-      "source": "Routed on this phone",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "conditional-branch",
-          "path": "apps/ios/Sources/RootTabs.swift"
         }
       ]
     },
@@ -43340,6 +42918,17 @@
       ]
     },
     {
+      "id": "native.apple.bb03dba3e7eb1ee8",
+      "source": "Sending test notification…",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.19c12c52941ddf52",
       "source": "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported.",
       "surface": "apple",
@@ -44582,17 +44171,6 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.bf0b00e244c5b237",
-      "source": "Snapshot",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
         }
       ]
     },
@@ -46008,6 +45586,17 @@
       ]
     },
     {
+      "id": "native.apple.0edae9804e36af9f",
+      "source": "Test notification queued.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.1a8953b851a377c3",
       "source": "Test remote",
       "surface": "apple",
@@ -47099,6 +46688,17 @@
       ]
     },
     {
+      "id": "native.apple.768fb431d51d4190",
+      "source": "This gateway is unavailable.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.39e226bc9f837cb8",
       "source": "This gateway is using unsupported auth",
       "surface": "apple",
@@ -47150,6 +46750,28 @@
         {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.47e70eedcab1a81c",
+      "source": "This paired gateway has an invalid saved endpoint.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.bb5f5e891aeadb25",
+      "source": "This paired gateway is no longer available.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
         }
       ]
     },
@@ -50733,6 +50355,17 @@
       ]
     },
     {
+      "id": "native.apple.8e781789ba7a7b6a",
+      "source": "an unencrypted private-network connection",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.a7cc4e836193eab6",
       "source": "announce",
       "surface": "apple",
@@ -50961,17 +50594,6 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsChannelsDestination.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.ec16f68de25be2eb",
-      "source": "eval → \\(canvasEvalResult)",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
         }
       ]
     },
@@ -51781,17 +51403,6 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.0c793c9099f80ae3",
-      "source": "snapshot → \\(canvasSnapshotPath)",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
         }
       ]
     },

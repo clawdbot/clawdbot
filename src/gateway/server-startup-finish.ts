@@ -72,6 +72,7 @@ export async function finishGatewayStartup(params: {
     lifecycle,
     startupState,
     pluginRuntime,
+    resolvePluginGatewayContext,
     gatewayTls,
     bindHost,
     getResolvedAuth,
@@ -91,6 +92,7 @@ export async function finishGatewayStartup(params: {
     baseMethods,
     startupPluginIds,
     pluginManifestRecords,
+    pluginMetadataSnapshot,
     pluginLookUpTable,
     ambientEnvTriggers,
     replaceAttachedPluginRuntime,
@@ -126,6 +128,7 @@ export async function finishGatewayStartup(params: {
     gatewayRequestContext,
     gatewayInstanceRuntime,
     residentRegistry,
+    getPluginMetadataSnapshot,
   } = runtime;
   const unregisterGatewayLifetimeSidecar = (sidecar: GatewayPostReadySidecarHandle) => {
     kernel.setGatewayLifetimeSidecars(
@@ -223,6 +226,7 @@ export async function finishGatewayStartup(params: {
           startCron: false,
           logCron,
           log,
+          resolveGatewayContext: resolvePluginGatewayContext,
         });
         kernel.setScheduledServiceHandles(activated);
       });
@@ -255,6 +259,7 @@ export async function finishGatewayStartup(params: {
         gatewayPluginConfigAtStart,
         activationSourceConfig: startupActivationSourceConfig,
         pluginManifestRecords,
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
         ambientEnvTriggers,
         pluginRegistry: pluginRuntime.registry,
         defaultWorkspaceDir,
@@ -279,6 +284,7 @@ export async function finishGatewayStartup(params: {
             pluginLookUpTable,
             startupTrace,
             ambientEnvTriggers,
+            resolveGatewayContext: resolvePluginGatewayContext,
           });
         },
         onStartupPluginsLoading: () => {
@@ -350,6 +356,7 @@ export async function finishGatewayStartup(params: {
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
   const configReloaderParams: Parameters<typeof startManagedGatewayConfigReloader>[0] = {
+    configRevisionProjector: gatewayRequestContext.configRevisionProjector,
     minimalTestGateway,
     initialConfig: cfgAtStart,
     initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
@@ -393,6 +400,7 @@ export async function finishGatewayStartup(params: {
         cronStartState.handled = true;
       }
     },
+    getPluginMetadataSnapshot,
     startChannel,
     stopChannel,
     getChannelAutostartSuppression: channelManager.getAutostartSuppression,

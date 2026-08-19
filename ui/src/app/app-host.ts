@@ -67,9 +67,10 @@ import {
   CUSTODIAN_PANEL_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
-  preloadOptionalElement,
+  LazyCustomElementRequestController,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
+import { hasStoredLazyShellAction } from "./lazy-shell-action.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
@@ -79,7 +80,11 @@ import {
   pushServerUiPrefs,
 } from "./server-prefs.ts";
 import { setSettingsChangeListener } from "./settings.ts";
-import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
+} from "./stale-chunk-reload.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -137,6 +142,12 @@ class OpenClawShell
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
+  readonly lazyCustomElements = new LazyCustomElementRequestController(
+    this,
+    () => this.shellChrome.cancelPendingLazyAction(),
+    () =>
+      hasStoredLazyShellAction() ? retryStaleChunkReloadWhenReachable() : Promise.resolve(false),
+  );
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
   @query("openclaw-exec-approval")
   approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
@@ -178,6 +189,30 @@ class OpenClawShell
   didConsiderNativeRouteRestore = false;
   pendingNativeNewSession = false;
   readonly settingsPreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
+  // Settings navigation is needed only after entering the settings takeover.
+  // Keep its search, update-card, and sidebar rendering graph off the startup path.
+  @state() settingsSidebarRenderer:
+    | typeof import("../components/settings-sidebar.ts").renderSettingsSidebar
+    | null = null;
+  @state() settingsSidebarLoadFailed = false;
+  private settingsSidebarRuntime: Promise<unknown> | null = null;
+
+  loadSettingsSidebarRenderer(): void {
+    this.settingsSidebarRuntime ??= import("../components/settings-sidebar.ts")
+      .then((module) => {
+        this.settingsSidebarRenderer = module.renderSettingsSidebar;
+        this.settingsSidebarLoadFailed = false;
+      })
+      .catch(() => {
+        this.settingsSidebarLoadFailed = true;
+        this.settingsSidebarRuntime = null;
+      });
+  }
+
+  retrySettingsSidebarRenderer(): void {
+    this.settingsSidebarLoadFailed = false;
+    this.loadSettingsSidebarRenderer();
+  }
   // Lazy: the critical-notice module stays out of the startup chunk (perf
   // budget); loaded on the first session.observer digest after boot.
   criticalNoticeRuntime: Promise<
@@ -261,12 +296,16 @@ class OpenClawShell
     this.subscriptions
       .effect(
         () => this.context,
-        () => {
+        (context) => {
           if (this.pendingNativeNewSession) {
             this.pendingNativeNewSession = false;
             this.handleNativeNewSession();
           }
-          return () => this.resetShellEpochState();
+          return () => {
+            if (this.context !== context) {
+              this.resetForContextEpoch();
+            }
+          };
         },
       )
       .watch(
@@ -394,7 +433,7 @@ class OpenClawShell
     this.outboxStoreUnsubscribe = null;
     this.lastLocalePrefSignature = null;
     setSettingsChangeListener(null);
-    this.resetShellEpochState();
+    this.resetForDocumentDisconnect();
     super.disconnectedCallback();
   }
 
@@ -410,7 +449,17 @@ class OpenClawShell
     this.requestUpdate();
   }
 
-  private resetShellEpochState() {
+  private resetForContextEpoch() {
+    this.shellChrome.abandonPendingLazyActionForContext();
+    this.resetShellState();
+  }
+
+  private resetForDocumentDisconnect() {
+    this.shellChrome.preservePendingLazyActionForReload();
+    this.resetShellState();
+  }
+
+  private resetShellState() {
     this.navDrawerOpen = false;
     this.desktopNavigationExpanded = false;
     this.navDrawerTrigger = null;
@@ -533,14 +582,9 @@ class OpenClawShell
   readonly handleShellNavDrawerToggle = (event: Event) =>
     this.shellChrome.handleShellNavDrawerToggle(event);
   readonly openApprovals = () => this.shellChrome.openApprovals();
-  readonly handleDeferredTerminalToggle = (event: Event) =>
-    this.shellChrome.handleDeferredTerminalToggle(event);
-  readonly handleDeferredBrowserToggle = (event: Event) =>
-    this.shellChrome.handleDeferredBrowserToggle(event);
-  readonly handleDeferredCustodianToggle = (event: Event) =>
-    this.shellChrome.handleDeferredCustodianToggle(event);
   readonly handleCommandPaletteSlashCommand = (command: string) =>
     this.shellChrome.handleCommandPaletteSlashCommand(command);
+  readonly restorePendingLazyAction = () => this.shellChrome.restorePendingLazyAction();
 
   nativeNavCollapsed(): boolean {
     return this.shellChrome.nativeNavCollapsed();
@@ -598,21 +642,22 @@ class OpenClawShell
         this.commandPalette.custodianAvailable = custodianAvailable;
       }
       if (isTerminalAvailable(gatewaySnapshot, context.config?.current.terminalEnabled ?? false)) {
-        preloadOptionalElement(this, this.terminalPanelElement);
+        this.lazyCustomElements.preload(this.terminalPanelElement);
       }
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
-        preloadOptionalElement(this, this.browserPanelElement);
+        this.lazyCustomElements.preload(this.browserPanelElement);
       }
       if (desktopAvailable) {
-        preloadOptionalElement(this, this.desktopPanelElement);
+        this.lazyCustomElements.preload(this.desktopPanelElement);
       }
       if (custodianAvailable) {
-        preloadOptionalElement(this, this.custodianPanelElement);
+        this.lazyCustomElements.preload(this.custodianPanelElement);
       }
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
-      preloadOptionalElement(this, this.execApprovalElement);
+      this.lazyCustomElements.preload(this.execApprovalElement);
     }
+    this.restorePendingLazyAction();
     const navState = {
       collapsed: this.nativeNavCollapsed(),
       width: context.navigation.snapshot.navWidth,

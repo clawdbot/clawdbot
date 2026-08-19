@@ -55,9 +55,6 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     return null;
   }
   const entry = value;
-  if (entry.skillWorkshopRevision !== undefined) {
-    return null;
-  }
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
   const createdAt =

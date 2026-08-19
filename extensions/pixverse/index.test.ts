@@ -24,6 +24,7 @@ function registerPixVerseProvider() {
 function createRuntimeContext(
   region: "international" | "cn",
   config: Record<string, unknown> = {
+    agents: { entries: { main: {}, work: { workspace: "/tmp/pixverse-workspace" } } },
     models: {
       providers: {
         pixverse: {
@@ -42,6 +43,7 @@ function createRuntimeContext(
   const ctx = {
     config,
     env: {},
+    workspaceDir: "/tmp/pixverse-workspace",
     prompter: {
       intro: vi.fn(),
       outro: vi.fn(),

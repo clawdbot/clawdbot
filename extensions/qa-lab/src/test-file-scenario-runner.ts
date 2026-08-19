@@ -394,31 +394,24 @@ function statusFromProducerEvidence(params: {
       status: "fail",
     };
   }
-  const blockingEntry = producerEvidence.entries.find(
-    (entry) =>
-      entry.result.status === "fail" ||
-      (!allowBlockedEvidence && entry.result.status === "blocked"),
-  );
-  if (blockingEntry) {
+  const failedEntry = producerEvidence.entries.find((entry) => entry.result.status === "fail");
+  const blockedEntry = producerEvidence.entries.find((entry) => entry.result.status === "blocked");
+  if (failedEntry) {
     return {
       failureMessage:
-        blockingEntry.result.failure?.reason ??
-        `${blockingEntry.test.id} reported ${blockingEntry.result.status}`,
-      status: blockingEntry.result.status,
+        failedEntry.result.failure?.reason ?? `${failedEntry.test.id} reported failed`,
+      status: "fail",
     };
   }
-  if (!producerEvidence.entries.some((entry) => entry.result.status === "pass")) {
-    // Allowing blocked checks does not make an entirely unexecuted producer a successful run.
-    const blockedEntry = producerEvidence.entries.find(
-      (entry) => entry.result.status === "blocked",
-    );
-    if (blockedEntry) {
-      return {
-        failureMessage:
-          blockedEntry.result.failure?.reason ?? `${blockedEntry.test.id} reported blocked`,
-        status: "blocked",
-      };
-    }
+  const hasPassed = producerEvidence.entries.some((entry) => entry.result.status === "pass");
+  if (blockedEntry && (!allowBlockedEvidence || !hasPassed)) {
+    return {
+      failureMessage:
+        blockedEntry.result.failure?.reason ?? `${blockedEntry.test.id} reported blocked`,
+      status: "blocked",
+    };
+  }
+  if (producerEvidence.entries.some((entry) => entry.result.status === "skipped")) {
     return { status: "skipped" };
   }
   return { status: "pass" };
@@ -550,6 +543,8 @@ async function writeTestFileEvidenceFile(params: {
   if (params.writeEvidenceFile ?? true) {
     await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  } else {
+    await fs.rm(evidencePath, { force: true });
   }
   return { evidencePath };
 }

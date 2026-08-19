@@ -176,21 +176,50 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
       expect.objectContaining({ firstAgent: { name: "main" } }),
     );
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      workspace,
+      runtime,
+      expect.objectContaining({ agentId: "main" }),
+    );
     expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(
       mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
     );
   });
 
-  it("passes an explicit first-agent name into the single creation step", async () => {
+  it("provisions and reports the named first agent returned by creation", async () => {
+    const workspace = "/tmp/robby-workspace";
+    mocks.ensureOnboardingAgent.mockImplementationOnce(
+      async ({ config }: { config: OpenClawConfig }) => ({
+        config: {
+          ...config,
+          agents: {
+            ...config.agents,
+            entries: {
+              robby: {
+                name: "robby",
+                workspace,
+                agentDir: "/tmp/robby-agent",
+              },
+            },
+          },
+        },
+        agentId: "robby",
+        bootstrapPending: true,
+        createdAgent: true,
+      }),
+    );
+
     await runNonInteractiveLocalSetup({
       opts: {
         nonInteractive: true,
         mode: "local",
         agentName: "robby",
+        workspace,
         authChoice: "skip",
         skipHooks: true,
         skipSkills: true,
         skipHealth: true,
+        json: true,
       },
       runtime,
       baseConfig: {},
@@ -199,6 +228,17 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
       expect.objectContaining({ firstAgent: { name: "robby" } }),
+    );
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      workspace,
+      runtime,
+      expect.objectContaining({ agentId: "robby" }),
+    );
+    expect(mocks.ensureWorkspaceAndSessions.mock.calls.map(([dir]) => dir)).not.toContain(
+      `${workspace}/main`,
+    );
+    expect(mocks.logJson).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: workspace }),
     );
   });
 

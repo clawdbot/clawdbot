@@ -60,7 +60,7 @@ type BundledHealthCheckPluginStateMode = "direct" | "deferred" | "isolated";
 function loadMemoryCoreHealthApi(): BundledHealthApi {
   return loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
     dirName: "memory-core",
-    artifactBasename: "api.js",
+    artifactBasename: "doctor-health-api.js",
   });
 }
 

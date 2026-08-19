@@ -72,6 +72,7 @@ export type PreparedReplyDispatchRuntime = Readonly<{
   config: OpenClawConfig;
   modelCatalog: ModelCatalogSnapshot;
   inboundPluginRegistry: PluginRegistry;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
 
 export type PreparedModelRuntimeStores = {
@@ -84,8 +85,6 @@ export type PreparedModelRuntimeInput = {
   agentDir: string;
   inheritedAuthDir?: string;
   workspaceDir?: string;
-  /** Admission-owned fact; plugin root changes require the normal reload/restart lifecycle. */
-  workspacePluginRootPresent?: boolean;
   preserveWorkspaceDirOnRefresh?: boolean;
   readOnly?: boolean;
   /** Load the exact runtime plugin generation for an isolated executable probe. */
@@ -114,6 +113,7 @@ export type PreparedModelRuntimeRefreshOptions = {
   catalogMode?: PreparedModelRuntimeCatalogMode;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{

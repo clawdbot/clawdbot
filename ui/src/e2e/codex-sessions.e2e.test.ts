@@ -493,18 +493,33 @@ suite.define(() => {
             nameFontSize: nameStyle?.fontSize ?? "",
             paddingBottom: linkStyle?.paddingBottom ?? "",
             paddingTop: linkStyle?.paddingTop ?? "",
+            singleLine: row.classList.contains("sidebar-recent-session--single-line"),
           };
         }),
       );
       expect(threadRowMetrics).toHaveLength(4);
-      expect(new Set(threadRowMetrics.map((metric) => metric.height)).size).toBe(1);
-      expect(threadRowMetrics[0]?.height).toBeGreaterThan(30);
+      // Gateway threads and native catalog children must stay density-identical, but a
+      // row with no preview text collapses to one line. Assert uniformity per shape, so
+      // the two sources drifting apart still fails while the collapse stays legal.
+      const singleLineHeights = new Set(
+        threadRowMetrics.filter((metric) => metric.singleLine).map((metric) => metric.height),
+      );
+      const twoLineHeights = new Set(
+        threadRowMetrics.filter((metric) => !metric.singleLine).map((metric) => metric.height),
+      );
+      expect(singleLineHeights.size).toBe(1);
+      expect(twoLineHeights.size).toBe(1);
+      const [collapsedHeight] = [...singleLineHeights];
+      const [expandedHeight] = [...twoLineHeights];
+      // Collapsed rows sit on the 30px min-height floor; renderer sub-pixels vary.
+      expect(collapsedHeight).toBeCloseTo(30, 1);
+      expect(expandedHeight).toBeGreaterThan(collapsedHeight!);
       for (const metric of threadRowMetrics) {
         expect(metric).toMatchObject({
           minHeight: "30px",
           nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
+          paddingBottom: "4px",
+          paddingTop: "4px",
         });
       }
       const projectLabelTone = await openclawProject

@@ -331,6 +331,7 @@ type ToolHandlerParams = Pick<
   | "hasRepliedRef"
   | "sessionId"
   | "agentId"
+  | "coreBuiltinToolNames"
   | "replaySafeToolNames"
   | "sideEffectToolOwners"
   | "toolResultFormat"

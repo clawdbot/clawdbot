@@ -43,6 +43,11 @@ export class NewSessionDraftPersistence {
   private routeKey = "";
   private revision = 0;
   private mutationGeneration = 0;
+  // Mutation counter at the last programmatic content replacement (reset,
+  // handoff, restore). A generation beyond it means the composer holds text
+  // the user typed; a restore must never apply over that, and `revision`
+  // cannot arbitrate because `selectRoute` zeroes it after late owner setup.
+  private pristineMutationBaseline = 0;
   private restoreGeneration = 0;
   private restoredIdentity = "";
   private pending: DraftSnapshot | null = null;
@@ -71,6 +76,7 @@ export class NewSessionDraftPersistence {
     if (currentOwner === nextOwner) {
       return;
     }
+    const routeKey = this.routeKey;
     this.persistNow();
     this.restoreGeneration += 1;
     this.restoredIdentity = "";
@@ -79,6 +85,10 @@ export class NewSessionDraftPersistence {
     this.recoveryScope = recoveryScope;
     if (currentOwner && !preserveCurrent) {
       this.apply("", [], true);
+    }
+    // The route may win the startup race; activate it as soon as its owner exists.
+    if (!preserveCurrent) {
+      this.activateRoute(routeKey);
     }
   }
 
@@ -100,7 +110,7 @@ export class NewSessionDraftPersistence {
   }
 
   selectRoute(routeKey: string) {
-    if (!this.gatewayOwner || !this.recoveryScope || !routeKey) {
+    if (!routeKey) {
       return;
     }
     if (this.routeKey !== routeKey) {
@@ -130,6 +140,10 @@ export class NewSessionDraftPersistence {
     const baseline = this.read();
     const signature = chatAttachmentDraftSignature(baseline.message, baseline.attachments);
     void this.restoreScope(scope, generation, mutationGeneration, signature);
+  }
+
+  noteDraftReplaced() {
+    this.pristineMutationBaseline = this.mutationGeneration;
   }
 
   noteUserMutation() {
@@ -370,13 +384,21 @@ export class NewSessionDraftPersistence {
     ) {
       return;
     }
+    // Restore only into a pristine composer: anything the user typed on this
+    // route wins over the stored draft, even when the stored revision is
+    // higher (after a reload `revision` restarts at 0, so revision order
+    // cannot arbitrate against live input).
     if (
       storedRevision === undefined ||
       storedRevision < this.revision ||
-      (mutationGeneration > 0 && storedRevision <= this.revision)
+      mutationGeneration > this.pristineMutationBaseline
     ) {
       if (storedRevision !== undefined && storedRevision >= this.revision) {
         this.revision = nextDraftRevision(storedRevision);
+      } else if (this.revision <= 0 && mutationGeneration > this.pristineMutationBaseline) {
+        // Text typed before route activation: selectRoute zeroed its revision,
+        // so mint one or the snapshot below is empty and the draft never lands.
+        this.revision = nextDraftRevision(0);
       }
       this.pending = this.snapshot();
       this.persistNow();

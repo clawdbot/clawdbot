@@ -36,6 +36,7 @@ const findSystemGatewayServices = vi.hoisted(() =>
 );
 const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
 const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
+const renderSystemdUnavailableHints = vi.hoisted(() => vi.fn((): string[] => []));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 
@@ -86,17 +87,8 @@ vi.mock("../daemon/service.js", async () => {
 });
 
 vi.mock("../daemon/systemd-hints.js", () => ({
-  renderSystemdUnavailableHints: vi.fn(() => []),
+  renderSystemdUnavailableHints,
 }));
-
-vi.mock("../daemon/systemd.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../daemon/systemd.js")>("../daemon/systemd.js");
-  return {
-    ...actual,
-    isSystemdUserServiceAvailable: vi.fn(async () => true),
-  };
-});
 
 vi.mock("../gateway/net.js", () => ({
   resolveGatewayBindHost,
@@ -203,6 +195,7 @@ describe("maybeRepairGatewayDaemon", () => {
     });
     buildGatewayRuntimeHints.mockReturnValue([]);
     formatGatewayRuntimeSummary.mockReturnValue(null);
+    renderSystemdUnavailableHints.mockReset().mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -419,6 +412,41 @@ describe("maybeRepairGatewayDaemon", () => {
     });
 
     expect(note).toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+  });
+
+  it("reports unknown service inspection without offering or executing repair", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: Failed to connect to bus: No medium found"),
+    );
+    renderSystemdUnavailableHints.mockReturnValueOnce(["restore the systemd user bus"]);
+    const prompter = createPrompter(() => true);
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter,
+      options: { deep: false },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    expect(renderSystemdUnavailableHints).toHaveBeenCalledWith({
+      wsl: false,
+      kind: "user_bus_unavailable",
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service status could not be determined"),
+      "Gateway",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("restore the systemd user bus"),
+      "Gateway",
+    );
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(findSystemGatewayServices).not.toHaveBeenCalled();
   });
 
   it("does not audit local services when skipped gateway health is remote", async () => {

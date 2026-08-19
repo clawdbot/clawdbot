@@ -3,17 +3,12 @@
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
-  ensureValue,
   currentRunningSnapshotInfo,
   makeTempDir,
   parseBoolEnv,
-  parseMode,
-  parseTcpPort,
-  parseProvider,
   readPositiveIntEnv,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
@@ -48,9 +43,9 @@ import {
   extractLastOpenClawVersion,
   packAndServeSmokeArtifact,
   printSmokeTargetSummary,
+  parseSmokeCliArgs,
   SmokeRunController,
-  type SmokeHostOptions,
-  type SmokeRunOptions,
+  type SmokeCliOptions,
 } from "./smoke-common.ts";
 
 // Older published baselines predate this warning, but still need update coverage.
@@ -86,13 +81,8 @@ function compareOpenClawPackageVersions(left: string, right: string): number {
   return 0;
 }
 
-interface LinuxOptions extends SmokeHostOptions, SmokeRunOptions {
-  vmName: string;
+interface LinuxOptions extends SmokeCliOptions {
   vmNameExplicit: boolean;
-  apiKeyEnv?: string;
-  modelId?: string;
-  installUrl: string;
-  latestVersion?: string;
 }
 
 interface LinuxSummary {
@@ -170,83 +160,16 @@ Options:
 }
 
 export function parseArgs(argv: string[]): LinuxOptions {
-  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
-  parseArgv: for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    switch (arg) {
-      case "--":
-        break parseArgv;
-      case "--vm":
-        options.vmName = ensureValue(args, i, arg);
-        options.vmNameExplicit = true;
-        i++;
-        break;
-      case "--snapshot-hint":
-        options.snapshotHint = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--mode":
-        options.mode = parseMode(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--provider":
-        options.provider = parseProvider(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--model":
-        options.modelId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--api-key-env":
-      case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--install-url":
-        options.installUrl = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--host-port":
-        options.hostPort = parseTcpPort(ensureValue(args, i, arg), arg);
-        options.hostPortExplicit = true;
-        i++;
-        break;
-      case "--host-ip":
-        options.hostIp = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--latest-version":
-        options.latestVersion = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--install-version":
-        options.installVersion = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--target-package-spec":
-        options.targetPackageSpec = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--npm-registry":
-        options.npmRegistry = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--keep-server":
-        options.keepServer = true;
-        break;
-      case "--json":
-        options.json = true;
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
-        die(`unknown arg: ${arg}`);
-    }
-  }
-  return options;
+  return parseSmokeCliArgs(argv, options, {
+    usage,
+    valueHandlers: {
+      "--vm": (parsed, value) => {
+        parsed.vmName = value;
+        parsed.vmNameExplicit = true;
+      },
+    },
+  });
 }
 
 class LinuxSmoke extends SmokeRunController<LinuxOptions> {

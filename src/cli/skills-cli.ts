@@ -447,13 +447,14 @@ async function runSkillProposalApply(
 ): Promise<SkillProposalApplyResult> {
   const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
     await import("../gateway/call.js");
+  let proposal: SkillProposalReadResult;
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
     // Once a Gateway answers, apply failures must never be replayed locally.
-    await callGateway({
+    proposal = await callGateway<SkillProposalReadResult>({
       config: resolved.config,
-      method: "health",
-      params: {},
+      method: "skills.proposals.inspect",
+      params: { agentId: resolved.agentId, proposalId },
       timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
@@ -486,12 +487,20 @@ async function runSkillProposalApply(
       throw err;
     }
     try {
+      const reviewedProposal = await inspectSkillProposal(proposalId, {
+        agentId: resolved.agentId,
+        workspaceDir: resolved.workspaceDir,
+      });
+      if (!reviewedProposal) {
+        throw new Error(`Skill proposal not found: ${proposalId}`, { cause: err });
+      }
       return await applySkillProposal({
         agentId: resolved.agentId,
         eventActor: { type: "system", id: "cli" },
         workspaceDir: resolved.workspaceDir,
         config: resolved.config,
         proposalId,
+        expectedRevisionHash: reviewedProposal.revisionHash,
       });
     } finally {
       await lock.release();
@@ -501,7 +510,11 @@ async function runSkillProposalApply(
   return await callGateway<SkillProposalApplyResult>({
     config: resolved.config,
     method: "skills.proposals.apply",
-    params: { agentId: resolved.agentId, proposalId },
+    params: {
+      agentId: resolved.agentId,
+      proposalId,
+      expectedRevisionHash: proposal.revisionHash,
+    },
     timeoutMs: GATEWAY_SKILLS_APPLY_TIMEOUT_MS,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
@@ -1227,14 +1240,23 @@ export function registerSkillsCli(program: Command) {
           runWorkshopAction(
             opts,
             command,
-            ({ agentId, workspaceDir }) =>
-              action({
+            async ({ agentId, workspaceDir }) => {
+              const reviewed =
+                name === "reject"
+                  ? await inspectSkillProposal(proposalId, { agentId, workspaceDir })
+                  : undefined;
+              if (name === "reject" && !reviewed) {
+                throw new Error(`Skill proposal not found: ${proposalId}`);
+              }
+              return action({
                 agentId,
                 eventActor: { type: "system", id: "cli" },
                 workspaceDir,
                 proposalId,
+                ...(reviewed ? { expectedRevisionHash: reviewed.revisionHash } : {}),
                 reason: opts.reason,
-              }),
+              });
+            },
             (record) => `${verb} ${record.id}\n`,
           ),
       );

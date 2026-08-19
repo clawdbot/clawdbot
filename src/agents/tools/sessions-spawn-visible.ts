@@ -1,13 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
-import { buildControlUiSessionPath } from "../../../packages/session-url-contract/src/index.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
+import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
@@ -42,7 +41,13 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent sidebar UI session; use for work the user will watch or return to, or when they ask for a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+    }),
+  ),
+  category: Type.Optional(
+    Type.String({
+      description:
+        "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -77,29 +82,6 @@ function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
 }
 
-function resolveVisibleSessionUrl(
-  cfg: OpenClawConfig,
-  childSessionKey: string,
-  targetAgentId: string,
-): string | undefined {
-  if (cfg.gateway?.controlUi?.enabled === false) {
-    return undefined;
-  }
-  const publicOrigin = resolveGatewayPublicOrigin(cfg);
-  const path = buildControlUiSessionPath({
-    namespace: "chat",
-    sessionKey: childSessionKey,
-    fallbackAgentId: targetAgentId,
-    basePath: cfg.gateway?.controlUi?.basePath,
-  });
-  if (!publicOrigin || !path) {
-    return undefined;
-  }
-  const url = new URL(publicOrigin);
-  url.pathname = path;
-  return url.toString();
-}
-
 async function deleteVisibleSession(
   gatewayCall: InProcessGatewayCaller,
   childSessionKey: string,
@@ -129,8 +111,11 @@ export async function maybeSpawnVisibleSession(params: {
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
+  const categoryProvided = Object.hasOwn(params.raw, "category");
+  const requestedCategory = readToolStringParam(params.raw, "category", { allowEmpty: true });
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
+      ["category", categoryProvided ? requestedCategory : undefined],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -222,6 +207,7 @@ export async function maybeSpawnVisibleSession(params: {
     sessionKey: requesterKey,
     agentId: params.options?.requesterAgentIdOverride,
   });
+  const category = normalizeOptionalString(requestedCategory);
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -335,6 +321,7 @@ export async function maybeSpawnVisibleSession(params: {
       response = await createGatewayCall("sessions.create", {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
+        ...(category ? { category } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,
@@ -457,7 +444,10 @@ export async function maybeSpawnVisibleSession(params: {
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
     });
     const ownerLabel = normalizeOptionalString(resolveAgentIdentity(cfg, requesterAgentId)?.name);
-    const sessionUrl = resolveVisibleSessionUrl(cfg, childSessionKey, targetAgentId);
+    const sessionUrl = resolveControlUiSessionUrl(cfg, {
+      sessionKey: childSessionKey,
+      fallbackAgentId: targetAgentId,
+    });
     return {
       status: "accepted",
       childSessionKey,

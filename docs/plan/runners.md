@@ -21,7 +21,7 @@ advances a milestone.
 | 1c  | Cleanup: node-pairing → device-pairing merge               | landed      | #120726                                                                                                                                                                            |
 | 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664, #122870                                                                                                                                                                   |
 | 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #120768, #122499                                                                                                                                                                   |
-| 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531, #122635, #122774, #122923                                                                                                                                        |
+| 4   | Picker: grouping, placement, liveness, enrichment          | landed      | #120804, #122531, #122635, #122774, #122923, #123198, #125708, #126118                                                                                                             |
 | F   | Real-wire session boundary harness                         | landed      | #121212                                                                                                                                                                            |
 | 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                                                                                                                   |
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901, #125708 |
@@ -299,6 +299,17 @@ get here, Tailscale's key/device revocation split is the documented model):
   fences in-flight placements. Node auto-cleanup after a long dead period
   mirrors runner-industry practice.
 
+Repository preparation now includes a dormant `scripts/connect.sh` wrapper.
+It requires an exact OpenClaw version, installs that version into the dedicated
+CLI prefix, and hands the join target to `openclaw connect --service
+--session-host` through a private temporary file. Before creating that file, it
+verifies the installed exact CLI's `connect --help` advertises `--target-file`,
+`--service`, and `--session-host`; unsupported versions fail before the
+single-use target is handed off. The wrapper is not hosted, website-synced, or
+emitted by the UI or devices CLI in this slice. Public activation still requires
+an explicitly authorized stable release and publish, followed by a separate
+activation change that hosts and emits the released wrapper.
+
 ### Bundle and updates (milestone 7)
 
 Exact-hash admission stays. The pinned, content-hashed bundle is pushed to
@@ -352,15 +363,25 @@ Revision 1's design rule stands: normal state is silent; only exceptions
 speak. Additions:
 
 - **Use the existing environment type discriminant** for picker grouping:
-  local gateway, execution-capable nodes, worker environments, and the
-  separate cloud profiles list. Device-runner inventory adds `sessionHost`
-  without creating another place ontology.
-- **Where picker regrouped** (`ui/src/pages/new-session/place-picker-sections.ts`):
-  sections "This gateway" / "Devices" / "Cloud". Device rows intersect the
-  environment catalog with execution-capable paired nodes; connected rows are
-  selectable, while remembered offline rows stay visible but disabled. Cloud
-  profiles remain their separate list. Folder and destination stay
-  orthogonal.
+  local gateway, node environments, worker environments, and the separate
+  cloud profiles list. Device-runner inventory adds `sessionHost` without
+  creating another place ontology.
+- **Where picker regrouped** (`ui/src/pages/new-session/device-placement.ts`):
+  sections "This gateway" / "Devices" / "Cloud". Device rows come only from
+  node entries in `environments.list`. A device is selectable only when its
+  current status is available, `sessionHost` is true, and its exact bounded
+  worker slots are valid with `available > 0`. Offline known session hosts,
+  connected non-hosts, saturated hosts, hosts without capacity, outdated
+  hosts, and unavailable hosts stay visible but disabled with a next step.
+  Cloud profiles remain their separate list.
+- **Remote placement uses one session path.** Device and cloud selections use
+  a Gateway project or folder, force a managed worktree, create the session
+  without `execNode`, dispatch by exact `{ deviceId }` or `{ profileId }`, and
+  send the first turn only after placement becomes active. Write-scoped
+  operators can place on devices; cloud profiles and "Connect a machine…"
+  remain admin-only. Gateway-local selection keeps the normal optional
+  worktree flow. New Session no longer browses node paths or restores node
+  folder recents.
 - **Node connection history is server-owned.** Successful node hello records
   `lastConnectedAtMs`; retiring that exact pairing generation and connection
   records `lastDisconnectedAtMs` in the existing node surface. `node.list` and
@@ -368,13 +389,20 @@ speak. Additions:
   topology refresh events and distinguishes "Never connected", "Offline for
   …", and the legacy/unclean-exit fallback "Last seen …". Connected rows stay
   silent. This adds no config, event, or SQLite schema-version surface.
+- **Offline host identity is producer-owned.** After accepting the current
+  generation's current v6 runner inventory, the paired-node transaction
+  records its exact `workerHost.enabled` consent. An explicit disabled or
+  empty current publication records false; legacy v1-v5 and update-required
+  dialects never overwrite the last current fact. Live inventory remains
+  authoritative while connected. Offline catalog rows use the stored boolean,
+  missing means false, and exact worker slots are never persisted. This adds
+  one optional paired-node field without a schema-version bump or migration.
 - **Placement chip** on the session header: shows quiet current placement;
   active cloud placements reclaim through `sessions.reclaim` with "Bring
   home". Stop-and-continue moves arrive with milestone 8.
-- **Remaining milestone work**: the admin-gated "Connect a machine…" foot and
-  durable `runner-offline` recovery actions. Pre-dispatch
-  offline attempts already fail visibly after a 10-second grace without
-  terminalizing the placement.
+- **Separate follow-up**: durable `runner-offline` session status and explicit
+  "Wait for device" / "Continue on Gateway" recovery actions remain owned by
+  placement recovery. This picker cutover does not synthesize that state.
 
 ### Cloud convergence (milestone 10)
 
@@ -476,10 +504,12 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
    shortcode mint + curl wrapper on the public site. Exit: a fresh machine
    pairs against a remote gateway with one pasted command and one admin
    click, no manual approval steps.
-4. **Picker** (in progress): regrouped sections, quiet placement + reclaim,
-   and the observed projects read model land first; live presence subscription,
-   the admin-gated "Connect a machine…" foot, additive `EnvironmentSummary`
-   enrichment, and never-connected vs lost states complete the milestone.
+4. **Picker** (landed): grouped Gateway/device/cloud sections, quiet placement
+   and reclaim, the observed projects read model, live environment facts,
+   admin-gated "Connect a machine…", exact slot eligibility, durable offline
+   session-host identity, and full device dispatch through the shared placement
+   startup/recovery owner. Durable runner-offline recovery actions remain a
+   separate placement-owner follow-up.
 5. **Public worker ingress**: path-tagged worker upgrade on the main TLS
    endpoint; opaque admission failure; shared preauth budgets. Exit: a worker
    process on any internet host with a valid dispatch credential completes

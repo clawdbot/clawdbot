@@ -42,12 +42,6 @@ export function createCodexSteeringQueue(params: {
   threadId: string;
   turnId: string;
   requestTimeoutMs: number;
-  claimPendingUserInput: () =>
-    | {
-        answer: (text: string) => boolean;
-        cancel: () => boolean;
-      }
-    | undefined;
   signal: AbortSignal;
 }) {
   type PendingSteerMessage = {
@@ -274,25 +268,6 @@ export function createCodexSteeringQueue(params: {
       if (unavailableError) {
         options?.onQueueAccepted?.(false);
         throw unavailableError;
-      }
-      // Only operator ingress can answer a pending prompt; internal steering stays transcript input.
-      const pendingUserInput =
-        options?.isInboundUserMessage === true ? params.claimPendingUserInput() : undefined;
-      if (pendingUserInput) {
-        if (!options?.images?.length) {
-          const answered = pendingUserInput.answer(text);
-          options?.onQueueAccepted?.(answered);
-          if (!answered) {
-            throw new Error("codex pending user input rejected the answer");
-          }
-          return;
-        }
-        // request_user_input cannot carry images. Submit the complete message
-        // before releasing the prompt so no partial text answer can win the race.
-        void flushBatch().catch(() => undefined);
-        const { item, delivery } = createPendingMessage(text, options);
-        await Promise.all([enqueueSend([item]).finally(() => pendingUserInput.cancel()), delivery]);
-        return;
       }
       const { item, delivery } = createPendingMessage(text, options);
       batchedMessages.push(item);

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -10,7 +11,7 @@ import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   countActiveDescendantRuns,
@@ -42,7 +43,11 @@ import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { buildControlUiAvatarUrl, normalizeControlUiBasePath } from "./control-ui-shared.js";
+import {
+  buildControlUiChannelAvatarUrl,
+  buildControlUiResourcePath,
+} from "./control-ui-contract.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
@@ -76,9 +81,15 @@ import {
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 /** Adds current actor display data without persisting rename-prone metadata. */
+/** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
+function channelAvatarRevision(reference: string): string {
+  return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
+}
+
 export function projectSessionActor(
   actor: SessionEntry["createdActor"],
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
@@ -94,7 +105,11 @@ export function projectSessionActor(
     const avatar = normalizeOptionalString(identity?.avatar);
     const avatarUrl =
       avatar && looksLikeAvatarPath(avatar)
-        ? buildControlUiAvatarUrl(normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath), id)
+        ? buildControlUiResourcePath(
+            "agentAvatar",
+            normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath),
+            id,
+          )
         : undefined;
     return {
       type: actor.type,
@@ -194,7 +209,7 @@ export function buildGatewaySessionRow(params: {
   store: Record<string, SessionEntry>;
   key: string;
   entry?: SessionEntry;
-  modelCatalog?: ModelCatalogEntry[];
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
@@ -229,8 +244,16 @@ export function buildGatewaySessionRow(params: {
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
   const id = parsed?.id;
-  const origin = deliveryFields.origin;
+  const storedOrigin = deliveryFields.origin;
+  const avatar = normalizeOptionalString(storedOrigin?.avatar);
+  const origin = storedOrigin
+    ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
+    : undefined;
   const originLabel = origin?.label;
+  const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
+  const channelAvatarUrl = avatar
+    ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
+    : undefined;
   const parsedAgent = parseAgentSessionKey(key);
   const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
@@ -434,10 +457,16 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  // A per-agent catalog map keeps unscoped listings owner-scoped: each row uses
+  // its own agent's completed catalog instead of a shared default-agent catalog.
+  const rowModelCatalog =
+    params.modelCatalog instanceof Map
+      ? params.modelCatalog.get(sessionAgentId)
+      : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
-  const thinkingModelCatalog = params.modelCatalog ?? (lightweight ? [] : undefined);
+  const thinkingModelCatalog = rowModelCatalog ?? (lightweight ? [] : undefined);
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
@@ -449,11 +478,20 @@ export function buildGatewaySessionRow(params: {
     rowContext,
     providerPolicySource: lightweight ? "active" : undefined,
   });
+  const catalogEntry =
+    rowModelCatalog && rowModelProvider && rowModel
+      ? findModelCatalogEntry(rowModelCatalog, {
+          provider: rowModelProvider,
+          modelId: rowModel,
+        })
+      : undefined;
   const resolvedCurrentContextTokens = resolvePositiveNumber(
     resolveContextTokensForModel({
       cfg,
       provider: rowModelProvider,
       model: rowModel,
+      modelContextTokens: catalogEntry?.contextTokens,
+      modelContextWindow: catalogEntry?.contextWindow,
       allowAsyncLoad: false,
     }),
   );
@@ -528,6 +566,7 @@ export function buildGatewaySessionRow(params: {
     kind: gatewayKind,
     label: entry?.label,
     icon: entry?.icon,
+    channelAvatarUrl,
     category: entry?.category,
     boardFace: entry?.boardFace,
     ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),
@@ -614,7 +653,7 @@ export function buildGatewaySessionRow(params: {
     modelProvider: rowModelProvider,
     model: rowModel,
     modelSelectionLocked: entry?.modelSelectionLocked,
-    agentRuntime: thinkingProjection.agentRuntime,
+    agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,
     contextBudgetStatus: entry?.contextBudgetStatus,
     deliveryContext: deliveryFields.deliveryContext,

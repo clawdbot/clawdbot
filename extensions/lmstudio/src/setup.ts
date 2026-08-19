@@ -2,7 +2,6 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderAppGuidedSetupContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  removeProviderAuthProfilesWithLock,
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   hasConfiguredSecretInput,
@@ -11,6 +10,7 @@ import {
   type SecretInput,
   type SecretInputMode,
 } from "openclaw/plugin-sdk/provider-auth";
+import { removeProviderAuthProfilesWithLock } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   selectPreferredLocalModelId,
   type ModelDefinitionConfig,
@@ -508,6 +508,7 @@ export async function prepareAppGuidedLmstudioSetup(
 export async function promptAndConfigureLmstudioInteractive(params: {
   config: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   prompter?: WizardPrompter;
   secretInputMode?: SecretInputMode;
   allowSecretRefPrompt?: boolean;
@@ -541,6 +542,7 @@ export async function promptAndConfigureLmstudioInteractive(params: {
       : params.prompter
         ? await ensureApiKeyFromEnvOrPrompt({
             config: params.config,
+            workspaceDir: params.workspaceDir,
             provider: PROVIDER_ID,
             envLabel: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
             promptMessage: `${LMSTUDIO_PROVIDER_LABEL} API key`,

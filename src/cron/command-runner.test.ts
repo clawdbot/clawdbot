@@ -84,6 +84,7 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command exited with code 7");
+    expect(result.failureNotificationDetail).toEqual({ kind: "command-exit", exitCode: 7 });
     expect(result.summary).toBe("bad thing");
     expect(result.diagnostics?.entries[0]).toMatchObject({
       source: "exec",
@@ -129,6 +130,10 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command timed out");
+    expect(result.failureNotificationDetail).toEqual({
+      kind: "command-timeout",
+      mode: "wall-clock",
+    });
     expect(result.diagnostics?.entries[0]).toMatchObject({
       ts: 456,
       source: "exec",
@@ -175,6 +180,10 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command produced no output before noOutputTimeoutSeconds");
+    expect(result.failureNotificationDetail).toEqual({
+      kind: "command-timeout",
+      mode: "no-output",
+    });
     expect(result.diagnostics?.entries[0]).toMatchObject({
       source: "exec",
       severity: "error",
@@ -197,5 +206,19 @@ describe("runCronCommandJob", () => {
     expect(result.status).toBe("error");
     expect(result.error).toBe("command stopped");
     expect(result.summary).toBeUndefined();
+    expect(result.failureNotificationDetail).toBeUndefined();
+  });
+
+  it("keeps command start failures generic", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: ["openclaw-command-that-does-not-exist"],
+        timeoutSeconds: 5,
+      }),
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.failureNotificationDetail).toBeUndefined();
   });
 });

@@ -5,10 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import {
-  CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
-  createHappyPathPromptSnapshotFiles,
-} from "../test/helpers/agents/happy-path-prompt-snapshots.js";
+import { createHappyPathPromptSnapshotFiles } from "../test/helpers/agents/happy-path-prompt-snapshots.js";
+import { CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR } from "../test/helpers/agents/prompt-snapshot-paths.js";
 import { coerceErrorMessage as describeError } from "./lib/error-format.mts";
 import {
   deleteStalePromptSnapshotFiles,
@@ -118,7 +116,7 @@ async function formatPromptSnapshotFiles(
   }
 }
 
-export async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
+async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
   const files = await createHappyPathPromptSnapshotFiles();
   return await formatPromptSnapshotFiles(factorCodexDynamicToolSnapshotFiles(files));
 }

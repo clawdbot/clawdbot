@@ -220,6 +220,7 @@ function renderIdentityMenuHelpSubmenu() {
           slot="submenu"
           class="sidebar-customize-menu__item"
           value=${`${LINK_VALUE_PREFIX}${encodeURIComponent(link.href)}`}
+          data-new-tab-action
           @click=${(event: MouseEvent) => {
             if (event.target instanceof Element && event.target.closest("a")) {
               (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";

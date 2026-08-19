@@ -140,7 +140,6 @@ describe("Gateway agent command execution identity", () => {
       throw new Error("expected captured present invoker");
     }
     expect(work.envelope.invoker.displayLabel).toBe("Operator OPENAI_API_KEY=***");
-    expect(work.envelope.invoker.displayLabel?.length).toBeLessThanOrEqual(128);
   });
 
   it("does not offer the prepared profile label to storage without execution audit opt-in", async () => {

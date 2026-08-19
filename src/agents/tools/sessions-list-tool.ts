@@ -85,6 +85,7 @@ const SessionListRowOutputSchema = Type.Object(
     archived: Type.Boolean(),
     pinned: Type.Boolean(),
     label: Type.Optional(Type.String()),
+    category: Type.Optional(Type.String()),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
@@ -377,6 +378,7 @@ export function createSessionsListTool(opts?: {
           typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
         const stateVersion = stateVersions[stateVersionAgentId]?.[key];
         const rowLabel = readStringValue(entry.label);
+        const category = readStringValue(entry.category);
         const displayName = readStringValue(entry.displayName);
         const derivedTitle = readStringValue(entry.derivedTitle);
         const lastMessagePreview = readStringValue(entry.lastMessagePreview);
@@ -428,6 +430,7 @@ export function createSessionsListTool(opts?: {
           archived: entry.archived === true,
           pinned: entry.pinned === true,
           ...(rowLabel ? { label: rowLabel } : {}),
+          ...(category ? { category } : {}),
           ...(displayName ? { displayName } : {}),
           ...(derivedTitle ? { derivedTitle } : {}),
           ...(lastMessagePreview ? { lastMessagePreview } : {}),

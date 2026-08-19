@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   type RequestFrame,
   type WorkerConnectParams,
+  type WorkerGitHubPublishParams,
   type WorkerErrorShape,
   type WorkerHeartbeatResult,
   type WorkerLiveEventErrorDetails,
@@ -20,6 +21,7 @@ import {
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResult,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_METHOD_LENGTH,
@@ -30,6 +32,7 @@ import {
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
+  validateWorkerGitHubPublishParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
@@ -97,8 +100,8 @@ export type WorkerConnectionService = {
   ) => WorkerProtocolCloseReason | null;
   executeSessionTool?: (
     identity: WorkerConnectionIdentity,
-    toolName: "sessions_spawn" | "sessions_send",
-    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+    toolName: "sessions_spawn" | "sessions_send" | "github_publish",
+    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerGitHubPublishParams,
     signal?: AbortSignal,
   ) => Promise<WorkerServiceResult<WorkerSessionToolResult, { reason: WorkerProtocolCloseReason }>>;
 };
@@ -295,9 +298,14 @@ async function dispatchWorkerRequest(params: {
   }
   if (
     params.request.method === WORKER_PROTOCOL_METHODS[3] ||
-    params.request.method === WORKER_PROTOCOL_METHODS[4]
+    params.request.method === WORKER_PROTOCOL_METHODS[4] ||
+    params.request.method === WORKER_PROTOCOL_METHODS[5]
   ) {
-    if (!params.identity.protocolFeatures.includes(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE)) {
+    const isGitHubPublish = params.request.method === WORKER_PROTOCOL_METHODS[5];
+    const requiredFeature = isGitHubPublish
+      ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
+      : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
+    if (!params.identity.protocolFeatures.includes(requiredFeature)) {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
       return;
     }
@@ -308,15 +316,20 @@ async function dispatchWorkerRequest(params: {
     const isSpawn = params.request.method === WORKER_PROTOCOL_METHODS[3];
     const requestValid = isSpawn
       ? validateWorkerSessionsSpawnParams(params.request.params)
-      : validateWorkerSessionsSendParams(params.request.params);
+      : isGitHubPublish
+        ? validateWorkerGitHubPublishParams(params.request.params)
+        : validateWorkerSessionsSendParams(params.request.params);
     if (!requestValid) {
       params.respond(false, undefined, workerProtocolError("invalid-frame"));
       return;
     }
     const outcome = await service.executeSessionTool(
       params.identity,
-      isSpawn ? "sessions_spawn" : "sessions_send",
-      params.request.params as WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+      isSpawn ? "sessions_spawn" : isGitHubPublish ? "github_publish" : "sessions_send",
+      params.request.params as
+        | WorkerSessionsSpawnParams
+        | WorkerSessionsSendParams
+        | WorkerGitHubPublishParams,
       params.signal,
     );
     if (outcome.ok) {
@@ -562,6 +575,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === WORKER_PROTOCOL_METHODS[2] ||
       parsed.method === WORKER_PROTOCOL_METHODS[3] ||
       parsed.method === WORKER_PROTOCOL_METHODS[4] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[5] ||
       parsed.method === WORKER_INFERENCE_METHODS[0] ||
       parsed.method === WORKER_INFERENCE_METHODS[1]
     ) {
@@ -594,7 +608,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         ...(signal ? { signal } : {}),
       });
     const isLongSessionOperation =
-      parsed.method === WORKER_PROTOCOL_METHODS[3] || parsed.method === WORKER_PROTOCOL_METHODS[4];
+      parsed.method === WORKER_PROTOCOL_METHODS[3] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[4] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[5];
     if (isLongSessionOperation) {
       if (sessionOperations.has(parsed.id)) {
         failFrame(1008, "invalid-frame");

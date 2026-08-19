@@ -56,6 +56,12 @@ export function registerWorkboardGatewayMethods(params: {
   registerWorkboardWorkspaceCardMethods({ api, store, redactCard: redactClaimToken });
 
   api.registerGatewayMethod(
+    "workboard.cards.start",
+    async (context) => await dispatchCards(context, { supportsMaxStarts: false, directCard: true }),
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
     "workboard.cards.move",
     async ({ params: requestParams, respond }) => {
       try {

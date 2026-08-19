@@ -365,9 +365,6 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       transformSystemPrompt: vi.fn((context: { systemPrompt: string }) => context.systemPrompt),
     },
     tools: {
-      preparedPlanning: {
-        loadMetadataSnapshot: () => ({}),
-      },
       normalize: vi.fn((tools) => tools),
       logDiagnostics: vi.fn(),
     },
@@ -1005,6 +1002,7 @@ export async function loadCompactHooksHarness(): Promise<{
     listAgentEntries: vi.fn(() => []),
     resolveAgentConfig: vi.fn(() => undefined),
     resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
+    resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp"),
     resolveDefaultAgentDir: resolveDefaultAgentDirMock,
     resolveDefaultAgentId: vi.fn(() => "main"),

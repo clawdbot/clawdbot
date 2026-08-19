@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createLocalEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRegistryFixture,
@@ -80,8 +81,13 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function registerTextProvider(): ProviderPlugin {
+function captureTextRegistration(): {
+  providers: ProviderPlugin[];
+  catalogProviders: Array<Parameters<OpenClawPluginApi["registerModelCatalogProvider"]>[0]>;
+} {
   const providers: ProviderPlugin[] = [];
+  const catalogProviders: Array<Parameters<OpenClawPluginApi["registerModelCatalogProvider"]>[0]> =
+    [];
   llamaCppPlugin.register(
     createTestPluginApi({
       id: LLAMA_CPP_PROVIDER_ID,
@@ -91,9 +97,17 @@ function registerTextProvider(): ProviderPlugin {
       pluginConfig: {},
       runtime: {} as never,
       registerProvider: (provider) => providers.push(provider),
+      registerModelCatalogProvider: (provider) => catalogProviders.push(provider),
     }),
   );
-  return expectDefined(providers[0], "llama.cpp provider");
+  return { providers, catalogProviders };
+}
+
+function registerTextProvider(): ProviderPlugin {
+  return expectDefined(
+    captureTextRegistration().providers.find((provider) => provider.id === LLAMA_CPP_PROVIDER_ID),
+    "llama.cpp provider",
+  );
 }
 
 function configuredOptions() {
@@ -141,16 +155,31 @@ describe("llama.cpp provider plugin", () => {
   });
 
   it("uses the normal OpenAI-compatible text transport", () => {
-    expect(registerTextProvider()).toEqual(
+    const { providers, catalogProviders } = captureTextRegistration();
+    const provider = expectDefined(providers[0], "llama.cpp provider");
+
+    expect(providers.map((registered) => registered.id)).toEqual([LLAMA_CPP_PROVIDER_ID]);
+    expect(provider).toEqual(
       expect.objectContaining({
         id: LLAMA_CPP_PROVIDER_ID,
         label: "llama.cpp",
         normalizeToolSchemas: expect.any(Function),
         inspectToolSchemas: expect.any(Function),
-        auth: [expect.objectContaining({ id: "local" })],
+        auth: expect.arrayContaining([
+          expect.objectContaining({ id: "local" }),
+          expect.objectContaining({ id: "existing-server" }),
+        ]),
       }),
     );
-    expect(registerTextProvider()).not.toHaveProperty("createStreamFn");
+    expect(provider.auth.map((method) => method.id)).toEqual(["local", "existing-server"]);
+    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual([
+      "llama-cpp",
+      "llama-cpp-existing-server",
+    ]);
+    expect(provider).not.toHaveProperty("createStreamFn");
+    expect(catalogProviders).toEqual([
+      expect.objectContaining({ provider: LLAMA_CPP_PROVIDER_ID, kinds: ["text"] }),
+    ]);
   });
 
   it("registers local embeddings through the generic provider contract", () => {

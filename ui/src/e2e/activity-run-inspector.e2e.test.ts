@@ -230,12 +230,13 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       });
       expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
 
-      const runTab = page.getByRole("tab", { name: "Run inspector" });
-      await expect.poll(() => runTab.getAttribute("aria-selected")).toBe("true");
-      const modePanel = page.getByRole("tabpanel");
-      await expect
-        .poll(() => modePanel.getAttribute("aria-labelledby"))
-        .toBe("activity-mode-tab-run");
+      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
+      const modePanel = page.locator("#activity-mode-panel");
+      expect(await modePanel.getAttribute("role")).toBeNull();
+      expect(await modePanel.getAttribute("aria-labelledby")).toBeNull();
+      const backToSessions = page.getByRole("link", { name: "Back to sessions" });
+      await backToSessions.waitFor();
+      expect(await backToSessions.getAttribute("href")).toBe("/activity");
       await page.getByRole("status", { name: "Inspection coverage: Unattributed" }).waitFor();
       for (const state of ["Present", "Absent", "Unknown", "Unsupported"]) {
         await page.locator(`[aria-label="Evidence state: ${state}"]`).first().waitFor();
@@ -271,6 +272,10 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       });
       expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
 
+      await backToSessions.click();
+      await page.getByRole("tab", { name: "Sessions" }).waitFor();
+      expect(await page.getByRole("tab").count()).toBe(2);
+      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
       const liveTab = page.getByRole("tab", { name: "Live activity" });
       await liveTab.focus();
       await expect
@@ -282,6 +287,10 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
         .poll(() => modePanel.getAttribute("aria-labelledby"))
         .toBe("activity-mode-tab-live");
       expect(new URL(page.url()).search).toBe("?view=live");
+      await page.goBack();
+      await expect
+        .poll(() => page.getByRole("tab", { name: "Sessions" }).getAttribute("aria-selected"))
+        .toBe("true");
       await page.goBack();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
     } finally {

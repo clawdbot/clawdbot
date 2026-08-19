@@ -55,12 +55,14 @@ export type ChatPageHost = ChatHost &
     localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
+    automaticallyFetchFavicons: boolean;
     chatToolMessages: Record<string, unknown>[];
     guardianNotices: ChatGuardianNotice[];
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
     chatMessagesBySession: ChatMessageCache;
     basePath: string;
+    resourceBasePath: string;
     chatAvatarUrl: string | null;
     chatAvatarSource: string | null;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;

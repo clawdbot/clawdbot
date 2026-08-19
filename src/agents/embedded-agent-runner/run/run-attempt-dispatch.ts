@@ -1,3 +1,4 @@
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -381,6 +382,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       ? {
           agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
             requesterSessionKey: params.sessionKey,
+            gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
           }),
         }
       : {}),

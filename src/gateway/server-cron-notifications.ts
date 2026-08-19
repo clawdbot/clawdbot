@@ -14,13 +14,13 @@ import {
   resolveCronDeliveryPlan,
   resolveFailureDestination,
   sendCronAnnouncePayloadStrict,
-  sendFailureNotificationAnnounce,
+  sendFailureNotificationAnnounce as sendFailureAnnounce,
 } from "../cron/delivery.js";
 import { cronFailureDetailLines } from "../cron/failure-notification-text.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
-import type { CronJob, CronMessageChannel } from "../cron/types.js";
+import type { CronFailureNotificationDetail, CronJob, CronMessageChannel } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
@@ -158,6 +158,7 @@ function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }
     jobName: params.job.name,
     message: `Automation "${params.job.name}" ${params.evt.status === "error" ? "failed" : "delivery failed"}: ${params.evt.error ?? params.evt.deliveryError ?? "unknown error"}`,
     status: params.evt.status,
+    completionStatus: params.evt.completionStatus,
     error: params.evt.error ?? params.evt.deliveryError,
     runAtMs: params.evt.runAtMs,
     durationMs: params.evt.durationMs,
@@ -434,6 +435,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
 /** Dispatches completion and failure-destination notifications after a cron run finishes. */
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
+  failureNotificationDetail?: CronFailureNotificationDetail;
   job?: CronJob;
   deps: CliDeps;
   logger: CronLogger;
@@ -495,6 +497,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 
   dispatchCronFailureDestinationNotifications({
     evt: params.evt,
+    failureNotificationDetail: params.failureNotificationDetail,
     job: params.job,
     deps: params.deps,
     logger: params.logger,
@@ -507,6 +510,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 
 function dispatchCronFailureDestinationNotifications(params: {
   evt: CronEvent;
+  failureNotificationDetail?: CronFailureNotificationDetail;
   job?: CronJob;
   deps: CliDeps;
   logger: CronLogger;
@@ -515,14 +519,21 @@ function dispatchCronFailureDestinationNotifications(params: {
   ssrfPolicy?: SsrFPolicy;
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
-  if (!params.job || params.job.delivery?.bestEffort === true) {
+  if (!params.job) {
     return;
   }
 
   const job = params.job;
+  const executionFailed = params.evt.status === "error";
+  const deliveryOnlyFailed = params.evt.status === "ok" && params.evt.completionStatus === "failed";
+  if (!executionFailed && !deliveryOnlyFailed) {
+    return;
+  }
+  if (executionFailed && job.delivery?.bestEffort === true) {
+    return;
+  }
   const failureDest = resolveFailureDestination(job, params.globalFailureDestination);
-  const deliveryFailed = params.evt.deliveryStatus === "not-delivered";
-  if (params.evt.status !== "error" && (!deliveryFailed || !failureDest)) {
+  if (deliveryOnlyFailed && !failureDest) {
     return;
   }
   const deliverySessionKey = resolveCronDeliverySessionKey(job);
@@ -589,17 +600,18 @@ function dispatchCronFailureDestinationNotifications(params: {
     return;
   }
 
-  const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(job.agentId);
   const failureAlertText = [
     `Automation "${job.name}" ${params.evt.status === "error" ? "failed" : "delivery failed"}`,
-    ...cronFailureDetailLines(job.state.lastErrorReason),
+    ...cronFailureDetailLines(job.state.lastErrorReason, params.failureNotificationDetail),
   ].join("\n");
   dispatchDetachedCronNotification({
     jobId: job.id,
     logger: params.logger,
-    deliver: () =>
-      sendFailureNotificationAnnounce(params.deps, runtimeConfig, agentId, job.id, announceTarget, {
+    deliver: () => {
+      const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(job.agentId);
+      return sendFailureAnnounce(params.deps, runtimeConfig, agentId, job.id, announceTarget, {
         text: appendCronRunStarted(`⚠️ ${failureAlertText}`, params.evt.runAtMs, runtimeConfig),
-      }),
+      });
+    },
   });
 }

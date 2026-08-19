@@ -599,11 +599,11 @@ openclaw-chat-page {
   z-index: 70;
   width: min(300px, calc(100vw - 42px));
   padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--popover) 96%, var(--card));
   color: var(--popover-foreground);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--overlay-shadow);
   animation: fade-in 150ms var(--ease-out);
 }
 
@@ -1610,10 +1610,10 @@ button.chat-reply-preview--message:disabled {
   position: fixed;
   z-index: 9999;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   min-width: 160px;
   animation: menu-in 140ms var(--ease-out);
 }
@@ -1644,10 +1644,10 @@ button.chat-reply-preview--message:disabled {
   display: flex;
   gap: 2px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   animation: fade-in 0.12s var(--ease-out);
 }
 
@@ -2707,6 +2707,19 @@ button.chat-pr__diff {
   box-shadow: var(--focus-ring);
 }
 
+.chat-pr__publication-outcome {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chat-pr__publication-outcome[data-state="failed"] {
+  color: var(--danger);
+}
+
 .chat-pr__dismiss {
   display: grid;
   padding: 2px;
@@ -3104,10 +3117,10 @@ button.chat-pr__diff {
 .agent-chat__attach-menu::part(menu) {
   width: 152px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .agent-chat__attach-menu-option {
@@ -3706,10 +3719,10 @@ button.chat-pr__diff {
 .chat-talk-input-picker::part(menu) {
   width: min(300px, calc(100vw - 24px));
   padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .chat-talk-input-picker__heading {
@@ -4230,9 +4243,9 @@ button.chat-pr__diff {
   max-height: 288px;
   overflow: hidden;
   background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   z-index: 30;
   margin-bottom: 4px;
 }
@@ -4750,10 +4763,10 @@ button.chat-pr__diff {
 }
 
 .chat-controls__inline-select-menu {
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .chat-controls__inline-select-option {

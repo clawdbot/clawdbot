@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveCommandEnv } from "../process/exec-spawn.js";
 
 const processMocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
 
@@ -9,6 +10,8 @@ vi.mock("../process/exec.js", () => ({ runCommandBuffered: processMocks.runComma
 
 import {
   installManagedGitHubProfile,
+  matchesPreparedGitHubPublicationIdentity,
+  prepareGitHubPublicationIdentity,
   prepareGitHubToolEnvironment,
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubAgentKey,
@@ -147,7 +150,7 @@ describe("GitHub tool identity", () => {
     expect(storeScrub.excludedStoreNames).toEqual(["PREVIEW_STORE_TOKEN"]);
   });
 
-  it("preserves ambient credentials for native identity", () => {
+  it("preserves ambient credentials for native identity", async () => {
     const native = prepareGitHubToolEnvironment({
       config: {},
       agentId: "main",
@@ -166,6 +169,18 @@ describe("GitHub tool identity", () => {
     expect(ambient).toMatchObject({
       credentialScrubEnv: {},
       managedLocalIdentity: false,
+    });
+    processMocks.runCommandBuffered.mockResolvedValue(
+      commandResult('{"id":101,"login":"native-user","avatarUrl":null}\n'),
+    );
+    const publication = await prepareGitHubPublicationIdentity({
+      config: {},
+      agentId: "main",
+      env: { GH_TOKEN: "test-token", GITHUB_TOKEN: "fallback-token" },
+    });
+    expect(publication.env).toMatchObject({
+      GH_TOKEN: "test-token",
+      GITHUB_TOKEN: "fallback-token",
     });
   });
 
@@ -243,7 +258,7 @@ describe("GitHub tool identity", () => {
     const workspace = tempDirs.make("openclaw-github-workspace-");
     processMocks.runCommandBuffered.mockImplementation(async (argv: string[]) =>
       argv[0] === "gh"
-        ? commandResult('{"login":"native-user","avatarUrl":null}\n')
+        ? commandResult('{"id":101,"login":"native-user","avatarUrl":null}\n')
         : commandResult(),
     );
 
@@ -260,6 +275,115 @@ describe("GitHub tool identity", () => {
       GITHUB_TOKEN: "native-fallback",
     });
     expect(gitCall?.[1]).toMatchObject({ cwd: workspace });
+  });
+
+  it("removes ambient tokens from the actual managed publication child environment", async () => {
+    const root = tempDirs.make("openclaw-github-publication-env-");
+    const profileId = "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const env = {
+      OPENCLAW_STATE_DIR: root,
+      GH_TOKEN: "ambient-primary",
+      GITHUB_TOKEN: "ambient-fallback",
+      PREVIEW_SERVICE_TOKEN: "preview-only",
+    };
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId,
+      env,
+    });
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(profileDir, "hosts.yml"), "github.com:\n", { mode: 0o600 });
+    processMocks.runCommandBuffered.mockResolvedValue(
+      commandResult('{"id":202,"login":"managed-user","avatarUrl":null}\n'),
+    );
+
+    const identity = await prepareGitHubPublicationIdentity({
+      config: {
+        tools: { github: { profileId } },
+        gateway: { controlUi: { github: { token: "resolved-preview-token" } } },
+      },
+      sourceConfig: {
+        tools: { github: { profileId } },
+        gateway: {
+          controlUi: {
+            github: {
+              token: { source: "env", provider: "default", id: "PREVIEW_SERVICE_TOKEN" },
+            },
+          },
+        },
+      },
+      agentId: "main",
+      env,
+    });
+    const childEnv = resolveCommandEnv({
+      argv: ["gh", "api", "user"],
+      baseEnv: env,
+      env: identity.env,
+    });
+
+    expect(identity.env).toMatchObject({
+      GH_CONFIG_DIR: profileDir,
+      GH_TOKEN: undefined,
+      GITHUB_TOKEN: undefined,
+      PREVIEW_SERVICE_TOKEN: undefined,
+    });
+    expect(childEnv.GH_TOKEN).toBeUndefined();
+    expect(childEnv.GITHUB_TOKEN).toBeUndefined();
+    expect(childEnv.GH_CONFIG_DIR).toBe(profileDir);
+    expect(childEnv.PREVIEW_SERVICE_TOKEN).toBeUndefined();
+    expect(
+      matchesPreparedGitHubPublicationIdentity({
+        config: { tools: { github: { profileId } } },
+        agentId: "main",
+        identity,
+      }),
+    ).toBe(true);
+    expect(
+      matchesPreparedGitHubPublicationIdentity({
+        config: {
+          tools: { github: { profileId: "ghp_cccccccccccccccccccccccccccccccc" } },
+        },
+        agentId: "main",
+        identity,
+      }),
+    ).toBe(false);
+    expect(processMocks.runCommandBuffered).toHaveBeenCalledWith(
+      expect.arrayContaining(["gh", "api", "user"]),
+      expect.objectContaining({
+        env: expect.objectContaining({
+          GH_CONFIG_DIR: profileDir,
+          GH_TOKEN: undefined,
+          GITHUB_TOKEN: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("removes a source-owned preview token from native publication commands", async () => {
+    processMocks.runCommandBuffered.mockResolvedValue(
+      commandResult('{"id":101,"login":"native-user","avatarUrl":null}\n'),
+    );
+    const identity = await prepareGitHubPublicationIdentity({
+      config: { gateway: { controlUi: { github: { token: "resolved-preview-token" } } } },
+      sourceConfig: {
+        gateway: {
+          controlUi: {
+            github: {
+              token: { source: "env", provider: "default", id: "GH_TOKEN" },
+            },
+          },
+        },
+      },
+      agentId: "main",
+      env: { GH_TOKEN: "preview-only", NATIVE_GH_CONFIG: "available" },
+    });
+
+    expect(identity.source).toBe("system-detected");
+    expect(identity.env).toMatchObject({
+      GH_TOKEN: undefined,
+      NATIVE_GH_CONFIG: "available",
+    });
   });
 
   it.each([
@@ -332,7 +456,7 @@ describe("GitHub tool identity", () => {
           return commandResult();
         }
         return commandResult(
-          '{"login":"managed-user","avatarUrl":"https://example.test/avatar"}\n',
+          '{"id":202,"login":"managed-user","avatarUrl":"https://example.test/avatar"}\n',
         );
       },
     );
@@ -343,7 +467,11 @@ describe("GitHub tool identity", () => {
       commitConfig: vi.fn(async () => undefined),
     });
 
-    expect(result).toEqual({ login: "managed-user", avatarUrl: "https://example.test/avatar" });
+    expect(result).toEqual({
+      accountId: 202,
+      login: "managed-user",
+      avatarUrl: "https://example.test/avatar",
+    });
     expect(calls[0]?.argv).not.toContain("test-managed-token");
     expect(calls[0]?.input).toBe("test-managed-token\n");
     for (const call of calls) {
@@ -374,7 +502,7 @@ describe("GitHub tool identity", () => {
           );
           return commandResult();
         }
-        return commandResult('{"login":"managed-user","avatarUrl":null}\n');
+        return commandResult('{"id":202,"login":"managed-user","avatarUrl":null}\n');
       },
     );
     const commitConfig = vi.fn(async () => {
@@ -421,7 +549,7 @@ describe("GitHub tool identity", () => {
           );
           return commandResult();
         }
-        return commandResult('{"login":"managed-user","avatarUrl":null}\n');
+        return commandResult('{"id":202,"login":"managed-user","avatarUrl":null}\n');
       },
     );
 

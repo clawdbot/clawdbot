@@ -42,6 +42,7 @@ import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImpl } from "../harness/runtime-plugin.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   clearCliSessionInStore as clearCliSessionInStoreImpl,
@@ -420,6 +421,7 @@ async function compactNativeHarnessCliTranscript(params: {
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
 }): Promise<NativeHarnessCliCompactionOutcome> {
   let result: EmbeddedAgentCompactResult | undefined;
   try {
@@ -427,21 +429,24 @@ async function compactNativeHarnessCliTranscript(params: {
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
     const modelSelectionLocked = params.sessionEntry.modelSelectionLocked === true;
     const authProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
-    const preparedRuntimeLease = await cliCompactionDeps.acquirePreparedModelRuntime({
-      config: params.cfg,
-      ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      allowGatewaySubagentBinding: true,
-      runtimePluginSelections: [
-        {
-          provider: params.provider,
-          modelId: params.model,
-          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-          ...(nativeHarnessId ? { runtime: nativeHarnessId } : {}),
-        },
-      ],
-    });
+    const preparedRuntimeLease = await cliCompactionDeps.acquirePreparedModelRuntime(
+      {
+        config: params.cfg,
+        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: [
+          {
+            provider: params.provider,
+            modelId: params.model,
+            ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+            ...(nativeHarnessId ? { runtime: nativeHarnessId } : {}),
+          },
+        ],
+      },
+      params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {},
+    );
     try {
       const preparedModelRuntime = preparedRuntimeLease.snapshot;
       result = await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
@@ -586,6 +591,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
 }): Promise<SessionEntry | undefined> {
   const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
   if (!params.storePath || !contextTokenBudget) {
@@ -691,6 +697,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       senderIsOwner: params.senderIsOwner,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,
+      pluginGeneration: params.pluginGeneration,
     });
     if (nativeOutcome.compacted) {
       compactionKind = "native-harness";

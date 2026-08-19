@@ -298,7 +298,7 @@ export function createWorkerWorkspaceActions(
         if (!success(packTransfer)) {
           throw workspaceSyncError(packTransfer);
         }
-        const [authorName, authorEmail] = await Promise.all(
+        const [detectedAuthorName, detectedAuthorEmail] = await Promise.all(
           ["user.name", "user.email"].map(async (key) => {
             const result = await runTask(
               ["git", "-C", gitRoot, "config", "--get", key],
@@ -310,6 +310,8 @@ export function createWorkerWorkspaceActions(
             return success(result) ? result.stdout.trim() : "";
           }),
         );
+        const authorName = request.gitAuthor?.name ?? detectedAuthorName;
+        const authorEmail = request.gitAuthor?.email ?? detectedAuthorEmail;
         const seeded = await runWorkspaceCommand({
           transportRetry: "never",
           argv: [

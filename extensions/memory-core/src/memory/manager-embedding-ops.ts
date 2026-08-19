@@ -32,6 +32,7 @@ import {
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
+import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
@@ -216,12 +217,7 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
 }
 
 function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[][] {
-  const limit = Math.max(1, Math.floor(maxRequests));
-  const batches: T[][] = [];
-  for (let start = 0; start < chunks.length; start += limit) {
-    batches.push(chunks.slice(start, start + limit));
-  }
-  return batches;
+  return chunkItems(chunks, Math.max(1, Math.floor(maxRequests)));
 }
 
 function resolveEmbeddingTimeoutMs(params: {

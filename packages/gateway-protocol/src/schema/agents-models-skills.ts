@@ -19,6 +19,7 @@ const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
   cloudPlacementSupported: Type.Optional(Type.Boolean()),
+  devicePlacementSupported: Type.Optional(Type.Boolean()),
   source: Type.Union([
     Type.Literal("env"),
     Type.Literal("agent"),
@@ -41,6 +42,7 @@ export const ModelChoiceSchema = closedObject({
   name: NonEmptyString,
   provider: NonEmptyString,
   alias: Type.Optional(NonEmptyString),
+  tags: Type.Optional(Type.Array(NonEmptyString)),
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
@@ -837,7 +839,7 @@ export const SkillsProposalRequestRevisionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   targetAgentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
-  expectedRevisionHash: Type.Optional(Sha256String),
+  expectedRevisionHash: Sha256String,
   instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
   sessionKey: NonEmptyString,
   sessionId: Type.Optional(NonEmptyString),
@@ -859,7 +861,16 @@ export const SkillsProposalRequestRevisionResultSchema = Type.Object(
   { additionalProperties: true },
 );
 
-/** Shared approve/reject/quarantine action payload for one proposal. */
+/** Apply/reject payload bound to the exact proposal revision reviewed by the operator. */
+export const SkillsProposalDecisionParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  proposalId: NonEmptyString,
+  expectedRevisionHash: Sha256String,
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  reason: Type.Optional(Type.String()),
+});
+
+/** Quarantine payload with optional optimistic-concurrency evidence. */
 export const SkillsProposalActionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
@@ -1291,6 +1302,7 @@ export type SkillsProposalRequestRevisionParams = Static<
 export type SkillsProposalRequestRevisionResult = Static<
   typeof SkillsProposalRequestRevisionResultSchema
 >;
+export type SkillsProposalDecisionParams = Static<typeof SkillsProposalDecisionParamsSchema>;
 export type SkillsProposalActionParams = Static<typeof SkillsProposalActionParamsSchema>;
 export type SkillProposalEvaluation = Static<typeof SkillProposalEvaluationSchema>;
 export type SkillsProposalEvaluateParams = Static<typeof SkillsProposalEvaluateParamsSchema>;

@@ -32,7 +32,7 @@ import {
   runsDetachedFromMainSession,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
-import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
+import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import { isRunnableJob } from "./timer-runnable.js";
 
 export function resolveRunConcurrency(): number {
@@ -665,10 +665,12 @@ export async function executeQueuedCronRun(params: {
       params.onSetupError?.(executionJob, errorText);
       outcome = {
         ...base,
-        status: "error",
-        error: errorText,
-        diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {
-          nowMs: state.deps.nowMs,
+        ...authorCronRunCompletion(state, executionJob, {
+          status: "error",
+          error: errorText,
+          diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {
+            nowMs: state.deps.nowMs,
+          }),
         }),
         ...(receiptSettlementDisposition ? { receiptSettlementDisposition } : {}),
         endedAt: state.deps.nowMs(),

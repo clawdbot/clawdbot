@@ -47,7 +47,6 @@ const JSON_NOT_APPLICABLE = {
       "transcripts",
       "gateway restart-handoff",
       "gateway diagnostics",
-      "daemon",
       "system",
       "system heartbeat",
       "promos",

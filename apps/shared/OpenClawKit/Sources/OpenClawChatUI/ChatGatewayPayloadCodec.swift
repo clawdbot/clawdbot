@@ -152,7 +152,10 @@ public enum OpenClawChatGatewayPayloadCodec {
                     agentId: message.agentId,
                     message: canonicalMessage,
                     messageId: message.messageId,
-                    messageSeq: message.messageSeq))
+                    messageSeq: message.messageSeq,
+                    hasActiveRun: message.hasActiveRun,
+                    activeRunIds: message.activeRunIds,
+                    activeRunIdsPresent: message.activeRunIdsPresent))
             }
             return .sessionMessage(message)
         case "agent":

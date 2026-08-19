@@ -25,6 +25,10 @@ import {
   verifyNpmProvenanceAttestation,
   verifyNpmRegistrySignatures,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
@@ -1059,7 +1063,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
-  it("flags undeclared imports from mjs and cjs root dist files", () => {
+  it("flags undeclared imports from nested mjs and direct cjs root dist files", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1067,9 +1071,9 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         version: "2026.4.22",
         dependencies: {},
       });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      mkdirSync(join(packageRoot, "dist", "runtime"), { recursive: true });
       writeFileSync(
-        join(packageRoot, "dist", "esm-entry.mjs"),
+        join(packageRoot, "dist", "runtime", "esm-entry.mjs"),
         'export { value } from "mjs-only";\n',
         "utf8",
       );
@@ -1081,7 +1085,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
         "installed package root is missing declared runtime dependency 'cjs-only' for dist importers: cjs-entry.cjs. Add it to package.json dependencies/optionalDependencies.",
-        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: runtime/esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
@@ -1155,7 +1159,32 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
-  it("refuses oversized root dist files", () => {
+  it.each([
+    {
+      expected: [
+        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
+      ],
+      name: "rejects oversized direct dist files",
+      relativePath: "oversized.js",
+    },
+    {
+      expected: [
+        "installed package root dist file 'runtime/oversized.js' is invalid or exceeds 6291456 bytes.",
+      ],
+      name: "rejects oversized arbitrary nested dist files",
+      relativePath: "runtime/oversized.js",
+    },
+    {
+      expected: [],
+      name: "accepts the oversized worker deploy entrypoint",
+      relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+    },
+    {
+      expected: [],
+      name: "accepts the oversized worker rsync receiver",
+      relativePath: `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+    },
+  ])("$name", ({ expected, relativePath }) => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1163,16 +1192,11 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         version: "2026.4.22",
         dependencies: {},
       });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "oversized.js"),
-        "x".repeat(6 * 1024 * 1024 + 1),
-        "utf8",
-      );
+      const filePath = join(packageRoot, "dist", relativePath);
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
-      ]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(expected);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

@@ -10,6 +10,7 @@ import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../activ
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
   CronDeliveryTrace,
@@ -102,7 +103,11 @@ export async function executeJobCore(
   if (job.trigger) {
     const evaluator = state.deps.evaluateCronTrigger;
     if (!evaluator) {
-      return { status: "error", error: "cron trigger evaluator is unavailable" };
+      return {
+        status: "error",
+        error: "cron trigger evaluator is unavailable",
+        ...cronScriptFailureMetadata("trigger", "runtime_unavailable"),
+      };
     }
     const evaluation = await evaluator({
       job,
@@ -127,6 +132,7 @@ export async function executeJobCore(
       return {
         status: "error",
         error: `cron trigger evaluation failed (${evaluation.code}): ${evaluation.error}`,
+        ...cronScriptFailureMetadata("trigger", evaluation.code),
         triggerEval: { fired: false, stateChanged: false },
       };
     }
@@ -420,6 +426,7 @@ async function executeDetachedCronJob(
       deliveryAttempted: res.deliveryAttempted,
       delivery: res.delivery,
       diagnostics: res.diagnostics,
+      failureNotificationDetail: res.failureNotificationDetail,
     };
   }
 
@@ -481,6 +488,7 @@ async function executeDetachedCronJob(
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     diagnostics: res.diagnostics,
+    failureNotificationDetail: res.failureNotificationDetail,
     model: res.model,
     provider: res.provider,
     usage: res.usage,
@@ -503,7 +511,11 @@ async function executeScriptCronJob(
     };
   }
   if (!state.deps.runScriptJob) {
-    return { status: "error" as const, error: "cron script payload executor is unavailable" };
+    return {
+      status: "error" as const,
+      error: "cron script payload executor is unavailable",
+      ...cronScriptFailureMetadata("payload", "runtime_unavailable"),
+    };
   }
   const result = await state.deps.runScriptJob({ job, streamBatch, abortSignal });
   // Script runners may settle after ignoring an abort. Recheck both operator
@@ -522,6 +534,7 @@ async function executeScriptCronJob(
     return {
       status: "error" as const,
       error: "cron script payload returned nextCheck, but this job has no pacing bounds",
+      ...cronScriptFailureMetadata("payload", "invalid_input"),
     };
   }
 

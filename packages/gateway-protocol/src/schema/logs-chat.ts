@@ -168,9 +168,6 @@ export const ChatSendParamsSchema = closedObject({
   // branch leaf (null = authoritative empty transcript). Steer sends ignore it;
   // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  // Optional exact-run fence for steer sends; on mismatch the send rejects
-  // instead of reaching a same-key successor run.
-  expectedRunId: Type.Optional(NonEmptyString),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
 });

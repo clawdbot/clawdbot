@@ -299,6 +299,8 @@ type OpenClawCodingToolsOptions = {
   allowGatewaySubagentBinding?: boolean;
   /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
   runtimeToolAllowlist?: string[];
+  /** Host-prepared proof that this exact session can request Gateway publication. */
+  githubPublicationAvailable?: boolean;
   /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
   inheritRuntimeToolAllowlist?: boolean;
   /** Mutable spawn capability snapshot refreshed after late-bound runtime tools are authorized. */
@@ -352,6 +354,8 @@ type OpenClawCodingToolsOptions = {
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  /** Side-effect-free runtime completion claimant composed with the durable subagent claim. */
+  claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
   /** Live observer called after wrapped tool outcomes are recorded. */
@@ -590,6 +594,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     applyPatchWorkspaceOnly,
     execDefaults: {
       ...execDefaults,
+      bypassHostApprovalFloors: sessionCoreToolPolicy?.bypassHostApprovalFloors,
       host: options?.exec?.host ?? execConfig.host,
       mode: effectiveExecPolicy.mode,
       security: effectiveExecPolicy.security,
@@ -807,6 +812,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             pluginToolAllowlist,
             pluginToolDenylist,
             runtimeToolAllowlist: options?.runtimeToolAllowlist,
+            githubPublicationAvailable: options?.githubPublicationAvailable,
             cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
@@ -820,6 +826,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
             modelProvider: options?.modelProvider,
             modelId: options?.modelId,
+            modelContextWindowTokens: options?.modelContextWindowTokens,
             skillWorkshop: options?.skillWorkshop,
             replyToMode: options?.replyToMode,
             hasRepliedRef: options?.hasRepliedRef,
@@ -848,6 +855,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             inheritedToolAllowlist,
             inheritedToolDenylist,
             onYield: options?.onYield,
+            claimYieldCompletion: options?.claimYieldCompletion,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             recordToolPrepStage: options?.recordToolPrepStage,
           }),

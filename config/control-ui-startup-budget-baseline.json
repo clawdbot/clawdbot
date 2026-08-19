@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 344395,
-  "reason": "Absorb accumulated startup creep from landed PRs to current main CI bytes (main red at 344395 B vs 343289 B baseline; run 32131816085)",
-  "updatedAt": "2026-08-18"
+  "startupJsGzipBytes": 345578,
+  "reason": "GitHub publication controls: lazy request chunk and branch-row state",
+  "updatedAt": "2026-08-19"
 }

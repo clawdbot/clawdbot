@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { dispatchGatewayMethodInProcess, setFallbackGatewayContext } from "../server-plugins.js";
+import { dispatchGatewayMethodInProcess } from "../server-plugins.js";
 import {
   resolveSessionMutationAuthorization,
   resolveSessionSharingRole,
@@ -107,33 +107,28 @@ describe("sessions.assignOwner", () => {
         },
       } as OpenClawConfig;
       const requestContext = context(cfg);
-      const clearContext = setFallbackGatewayContext(requestContext);
-
-      try {
-        await expect(
-          dispatchGatewayMethodInProcess(
-            "sessions.assignOwner",
-            { key: sessionKey, owner: { type: "agent", id: "research" } },
-            {
-              forceSyntheticClient: true,
-              agentToolCaller: {
-                agentId: "main",
-                sessionKey: "agent:main:discord:direct:colin",
-              },
-              syntheticScopes: ["operator.write"],
+      await expect(
+        dispatchGatewayMethodInProcess(
+          "sessions.assignOwner",
+          { key: sessionKey, owner: { type: "agent", id: "research" } },
+          {
+            forceSyntheticClient: true,
+            agentToolCaller: {
+              agentId: "main",
+              sessionKey: "agent:main:discord:direct:colin",
             },
-          ),
-        ).resolves.toMatchObject({
-          ok: true,
-          key: sessionKey,
-          owner: {
-            actor: { type: "agent", id: "research", label: "Research" },
-            assignedBy: { type: "agent", id: "main" },
+            syntheticScopes: ["operator.write"],
+            resolveGatewayContext: () => requestContext,
           },
-        });
-      } finally {
-        clearContext();
-      }
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        key: sessionKey,
+        owner: {
+          actor: { type: "agent", id: "research", label: "Research" },
+          assignedBy: { type: "agent", id: "main" },
+        },
+      });
 
       expect(
         loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,

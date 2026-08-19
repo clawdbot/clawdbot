@@ -73,6 +73,15 @@ const qaScenarioTransportPolicySchema = z.object({
   topLevelReplies: z.literal(true).optional(),
 });
 
+function normalizeQaScenarioExecutionChannels<T extends { channel?: string; channels?: string[] }>(
+  execution: T,
+): T & { channels?: string[] } {
+  return {
+    ...execution,
+    channels: execution.channel ? [execution.channel] : (execution.channels ?? []),
+  };
+}
+
 const qaFlowScenarioExecutionSchema = z
   .object({
     kind: z.literal("flow").default("flow"),
@@ -116,10 +125,13 @@ const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-const qaScenarioExecutionSchema = z.union([
+const qaScenarioExecutionInputSchema = z.union([
   qaFlowScenarioExecutionSchema,
   qaTestFileScenarioExecutionSchema,
 ]);
+const qaScenarioExecutionSchema = qaScenarioExecutionInputSchema.transform(
+  normalizeQaScenarioExecutionChannels,
+);
 
 const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
 
@@ -305,7 +317,7 @@ const qaSeedScenarioBodySchema = z.object({
   regressionRefs: z.array(z.string().trim().min(1)).optional(),
   docsRefs: z.array(z.string().trim().min(1)).optional(),
   codeRefs: z.array(z.string().trim().min(1)).optional(),
-  execution: qaScenarioExecutionSchema.optional(),
+  execution: qaScenarioExecutionInputSchema.optional(),
 });
 
 const qaSeedScenarioSchema = qaSeedScenarioBodySchema.extend({
@@ -315,7 +327,9 @@ const qaScenarioFileSchema = z
   .object({
     title: z.string().trim().min(1),
     scenario: qaSeedScenarioBodySchema.partial({ objective: true, successCriteria: true }),
-    flow: z.union([qaFlowSchema, qaScenarioModuleFlow.moduleSchema]).optional(),
+    flow: z
+      .union([qaFlowSchema, qaScenarioModuleFlow.moduleSchema, qaScenarioModuleFlow.sharedSchema])
+      .optional(),
   })
   .superRefine((file, ctx) => {
     if (file.scenario.runtimeParityUsage && !file.scenario.runtimePairLane) {

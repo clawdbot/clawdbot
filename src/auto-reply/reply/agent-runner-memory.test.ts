@@ -262,6 +262,7 @@ type CompactEmbeddedAgentSessionParams = {
   modelSelectionLocked?: boolean;
   preflightRequired?: boolean;
   preflightCompactionTrigger?: string;
+  sessionEntry?: SessionEntry;
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
@@ -1889,7 +1890,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });
 
-  it("passes runtime policy session key to preflight compaction sandbox resolution", async () => {
+  it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -1910,6 +1911,8 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokens: 120,
       totalTokensFresh: true,
       totalTokensVersion: 1,
+      permissionMode: "full",
+      sessionRoot: "/tmp/workspace",
     };
 
     await runPreflightCompactionIfNeeded({
@@ -1937,6 +1940,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionKey).toBe("agent:main:main");
     expect(compactCall.cwd).toBe("/tmp/task-repo");
     expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
+    expect(compactCall.sessionEntry).toBe(sessionEntry);
   });
 
   it.each([

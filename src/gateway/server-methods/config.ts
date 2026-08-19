@@ -60,6 +60,7 @@ import {
 import { diffConfigPaths } from "../config-diff.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
+import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
@@ -103,6 +104,7 @@ function requireConfigBaseHash(
   params: unknown,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
+  revisionProjector: GatewayConfigRevisionProjector,
 ): boolean {
   if (!snapshot.exists) {
     return true;
@@ -131,7 +133,7 @@ function requireConfigBaseHash(
     );
     return false;
   }
-  if (baseHash !== snapshotHash) {
+  if (baseHash !== revisionProjector.projectRawHash(snapshotHash)) {
     respond(
       false,
       undefined,
@@ -403,9 +405,10 @@ function rejectDestructiveArrayPatchWithoutIntent(params: {
 async function readConfigWriteSnapshotOrRespond(
   params: unknown,
   respond: RespondFn,
+  revisionProjector: GatewayConfigRevisionProjector,
 ): Promise<Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>> | null> {
   const result = await readConfigFileSnapshotForWrite();
-  if (!requireConfigBaseHash(params, result.snapshot, respond)) {
+  if (!requireConfigBaseHash(params, result.snapshot, respond, revisionProjector)) {
     return null;
   }
   return result;
@@ -686,7 +689,7 @@ async function respondWithConfigRestartWrite(params: {
   writeResult: ConfigWriteCommitResult;
   changedPaths: string[];
   actor: ReturnType<typeof resolveControlPlaneActor>;
-  context: GatewayRequestContext | undefined;
+  context: GatewayRequestContext;
   respond: RespondFn;
   preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
 }): Promise<void> {
@@ -712,7 +715,9 @@ async function respondWithConfigRestartWrite(params: {
       path: params.writeResult.path,
       // Additive ack hash: matches the hash config.get would report for the
       // persisted bytes, so writers can adopt it without a reload.
-      ...(params.writeResult.hash ? { hash: params.writeResult.hash } : {}),
+      ...(params.writeResult.hash
+        ? { hash: params.context.configRevisionProjector.projectRawHash(params.writeResult.hash) }
+        : {}),
       config: redactConfigObject(params.writeResult.config, uiHints),
       ...preparedSecretDegradationPayload(params.preparedSecretsSnapshot),
       restart,
@@ -855,6 +860,7 @@ export const configHandlers: GatewayRequestHandlers = {
       await readConfigGetResponse({
         getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
         loadUiHints: () => loadSchemaWithPlugins().uiHints,
+        revisionProjector: context.configRevisionProjector,
       }),
       undefined,
     );
@@ -902,7 +908,11 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
-    const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
+    const writeSnapshot = await readConfigWriteSnapshotOrRespond(
+      params,
+      respond,
+      context.configRevisionProjector,
+    );
     if (!writeSnapshot) {
       return;
     }
@@ -951,7 +961,9 @@ export const configHandlers: GatewayRequestHandlers = {
         path: writeResult.path,
         // Additive ack hash: matches the hash config.get would report for the
         // persisted bytes, so writers can adopt it without a reload.
-        ...(writeResult.hash ? { hash: writeResult.hash } : {}),
+        ...(writeResult.hash
+          ? { hash: context.configRevisionProjector.projectRawHash(writeResult.hash) }
+          : {}),
         config: redactConfigObject(
           writeResult.config,
           buildRuntimeConfigSchemaForConfig(writeResult.config).uiHints,
@@ -972,7 +984,7 @@ export const configHandlers: GatewayRequestHandlers = {
     // commit stale state, an accepted residual instead of adding connection-liveness plumbing.
     const writeSnapshot = hashlessPatch
       ? await readConfigFileSnapshotForWrite()
-      : await readConfigWriteSnapshotOrRespond(params, respond);
+      : await readConfigWriteSnapshotOrRespond(params, respond, context.configRevisionProjector);
     if (!writeSnapshot) {
       return;
     }
@@ -1175,7 +1187,11 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;
     }
-    const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
+    const writeSnapshot = await readConfigWriteSnapshotOrRespond(
+      params,
+      respond,
+      context.configRevisionProjector,
+    );
     if (!writeSnapshot) {
       return;
     }

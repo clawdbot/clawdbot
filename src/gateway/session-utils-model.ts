@@ -316,11 +316,19 @@ export function getSessionDefaults(
         defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: options?.allowPluginNormalization,
       });
+  const catalogEntry = modelCatalog
+    ? findModelCatalogEntry(modelCatalog, {
+        provider: resolved.provider,
+        modelId: resolved.model,
+      })
+    : undefined;
   const contextTokens =
     resolveContextTokensForModel({
       cfg,
       provider: resolved.provider,
       model: resolved.model,
+      modelContextTokens: catalogEntry?.contextTokens,
+      modelContextWindow: catalogEntry?.contextWindow,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
@@ -609,6 +617,7 @@ function resolveSessionDisplayModelIdentityRef(params: {
   const inferredProvider = inferUniqueProviderFromConfiguredModels({
     cfg: params.cfg,
     model,
+    agentId: params.agentId,
   });
   if (inferredProvider && !isCliProvider(inferredProvider, params.cfg)) {
     return { provider: inferredProvider, model };

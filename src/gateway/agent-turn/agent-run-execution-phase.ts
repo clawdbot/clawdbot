@@ -10,6 +10,7 @@ import {
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { loadPublishedGatewayReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
@@ -22,11 +23,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
@@ -103,12 +106,16 @@ export function startAgentRunExecution(params: {
   ) => Promise<boolean>;
 }): void {
   const { prepared } = params;
+  let unpersistedOffloadedRefs = prepared.unpersistedOffloadedRefs;
   let releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = (options) => {
+    const refsToDiscard = unpersistedOffloadedRefs;
+    unpersistedOffloadedRefs = [];
     prepared.activeRunAbort.cleanup(options);
     prepared.activeGatewayWorkAdmission.release();
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
+    void discardPreparedInboundMedia(refsToDiscard, params.context.logGateway);
   };
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
@@ -196,6 +203,14 @@ export function startAgentRunExecution(params: {
       const ingressAgentId = params.resolvedSessionKey
         ? params.activeSessionAgentId
         : params.agentId;
+      const replyDispatchRuntime = await loadPublishedGatewayReplyDispatchRuntime({
+        agentId: params.activeSessionAgentId,
+      });
+      if (!replyDispatchRuntime?.pluginGeneration) {
+        throw new Error(
+          `prepared reply dispatch runtime was not published for ${params.activeSessionAgentId}`,
+        );
+      }
       // Plugin-owned additive grants stay internal to the authenticated in-process run.
       // Public agent params cannot supply them, and normal tool policy still filters them.
       const runtimePluginToolGrant =
@@ -252,6 +267,10 @@ export function startAgentRunExecution(params: {
       dispatchAgentRunFromGateway(
         withAgentRunDispatchExecutionIdentity(
           {
+            commandRuntimeContext: {
+              config: replyDispatchRuntime.config,
+              pluginGeneration: replyDispatchRuntime.pluginGeneration,
+            },
             cronCreatorAuthority: prepared.cronCreatorAuthority,
             ingressOpts: {
               message,
@@ -335,6 +354,10 @@ export function startAgentRunExecution(params: {
               ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
               operationalRunInstance: prepared.operationalRunInstance,
               onAdmittedRunContext: (admittedRunContext) => {
+                bindGatewayContextResolver(
+                  admittedRunContext,
+                  params.context.resolveGatewayContext,
+                );
                 const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
                 if (!authority) {
                   throw new Error("agent run delegated authority was not admitted");

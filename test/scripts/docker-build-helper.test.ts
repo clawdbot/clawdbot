@@ -2708,6 +2708,14 @@ docker_e2e_docker_run_cmd run demo
     expect(script).not.toContain('"$HOME/.openclaw/agents/main/agent/auth-profiles.json"');
   });
 
+  it("prints channel-add failures through the shared E2E logger", () => {
+    const script = readFileSync(NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH, "utf8");
+    expect(script).toContain(
+      'openclaw_e2e_run_logged channel-add "$OPENCLAW_E2E_CLI_BIN" channels add --channel "$CHANNEL" "${CHANNEL_ADD_ARGS[@]}"',
+    );
+    expect(script).not.toContain("/tmp/openclaw-channel-add.log");
+  });
+
   it("keeps real-TTY onboarding drivers aligned with the first-agent prompt", () => {
     expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
       'wait_for_log "Continue?"',
@@ -3667,7 +3675,15 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner).not.toContain("cat /tmp/openclaw-codex-plugin-pack.log");
     expect(runner).not.toContain('CODEX_PLUGIN_SPEC="npm-pack:$container_path"');
     expect(runner).not.toContain("trap 'openclaw_e2e_stop_process \"${registry_pid:-}\"' EXIT");
-    expect(runner).not.toContain("final=false");
+    expectTextToIncludeAll(runner, [
+      "'continuesSourceReplyProgress'",
+      'FOLLOWTHROUGH_PROGRESS_FINAL_MODE="explicit"',
+      'FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"',
+      'FOLLOWTHROUGH_PROGRESS_INSTRUCTION="with final=false"',
+      'FOLLOWTHROUGH_PROGRESS_INSTRUCTION="without passing final"',
+      "message(action=send) $FOLLOWTHROUGH_PROGRESS_INSTRUCTION",
+      "final=true and send exactly",
+    ]);
     expect(runner).not.toContain("--timeout 420");
     expectTextToIncludeAll(assertions, [
       'Requested agent harness "codex" is not registered',

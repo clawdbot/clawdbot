@@ -48,28 +48,39 @@ export function buildSkillWorkshopToolSchema(
   supportsCompletion: boolean,
   updateProposals: boolean,
   collectionOnly: boolean,
+  proposalRevision = false,
 ) {
   const proposalActions = resolveProposalOnlyActions(updateProposals, supportsCompletion);
   return Type.Object(
     {
       action: stringEnum(
-        collectionOnly
-          ? ["read", "reconcile"]
-          : proposalOnly
-            ? proposalActions
-            : [...SKILL_WORKSHOP_ACTIONS],
+        proposalRevision
+          ? ["inspect", "revise"]
+          : collectionOnly
+            ? ["read", "reconcile"]
+            : proposalOnly
+              ? proposalActions
+              : [...SKILL_WORKSHOP_ACTIONS],
         {
-          description: proposalOnly
-            ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = bounded excerpt of an existing live skill (required before patch or update); update = full-body rewrite of an existing live skill after reading it;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
-            : collectionOnly
-              ? SKILL_COLLECTION_ACTION_DESCRIPTION
-              : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
+          description: proposalRevision
+            ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
+            : proposalOnly
+              ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = complete existing live skill when it fits the selected-model budget, otherwise metadata without a partial body (required before patch or update); update = full-body rewrite of an existing live skill after reading it;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
+              : collectionOnly
+                ? SKILL_COLLECTION_ACTION_DESCRIPTION
+                : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
         },
       ),
       proposal_id: Type.Optional(
         Type.String({
           description:
             "Existing proposal id for action=inspect, action=revise, action=evaluate, action=apply, action=reject, or action=quarantine.",
+        }),
+      ),
+      artifact_path: Type.Optional(
+        Type.String({
+          description:
+            "For action=inspect, select PROPOSAL.md or one listed support-file path. Omit to inspect PROPOSAL.md. Complete content is returned only when the selected artifact projection fits the model budget.",
         }),
       ),
       name: Type.Optional(
@@ -147,7 +158,7 @@ export function buildSkillWorkshopToolSchema(
       expected_revision_hash: Type.Optional(
         Type.String({
           description:
-            "Optional exact proposal revision hash for evaluate/apply/reject/quarantine. The action fails if content or support files changed.",
+            "Optional exact proposal revision hash for revise/evaluate/apply/reject/quarantine. The action fails if content or support files changed.",
         }),
       ),
       correlation_id: Type.Optional(

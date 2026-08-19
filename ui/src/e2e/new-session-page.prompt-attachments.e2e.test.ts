@@ -728,6 +728,7 @@ suite.define(() => {
 
       await pastePng(composer);
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await waitForCommittedNewSessionDraft(page, "", 1);
       const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
       await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
       await expect

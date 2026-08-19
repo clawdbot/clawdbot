@@ -30,6 +30,7 @@ export type VoiceOperationResult = {
 
 export type VoiceJoinOptions = {
   preserveFollowState?: boolean;
+  autoJoinWhenOccupied?: boolean;
   transcripts?: VoiceSessionEntry["transcripts"];
 };
 
@@ -91,6 +92,7 @@ type VoiceRealtimeLifecycle =
 
 export type VoiceSessionEntry = {
   generation: number;
+  autoJoinWhenOccupied: boolean;
   sessionLifecycle: { status: "active" } | { status: "stopped"; reason: string };
   guildId: string;
   guildName?: string;

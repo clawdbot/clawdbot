@@ -137,7 +137,7 @@ If an isolated run times out before the first model request, `openclaw automatio
 `--at <datetime>` schedules a one-shot run. Offset-less datetimes are treated as UTC unless you also pass `--tz <iana>`, which interprets the wall-clock time in the given timezone.
 
 <Note>
-One-shot jobs delete after success by default. Use `--keep-after-run` to preserve them.
+One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Use `--keep-after-run` to preserve successful jobs too.
 </Note>
 
 ### Recurring jobs
@@ -165,7 +165,7 @@ Add `--wait` when a script should block until that exact queued run records a te
 openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 ```
 
-With `--wait`, the CLI still calls `cron.run` first, then polls `cron.runs` for the returned `runId`. The command exits `0` only when the run finishes with status `ok`. It exits non-zero when the run finishes with `error` or `skipped`, when the Gateway response does not include a `runId`, or when `--wait-timeout` expires (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero.
+With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`; it does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`; `failed`, `unknown`, execution errors/skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero.
 
 <Note>
 Use `--due` when you want the manual command to run only if the job is currently due. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling.

@@ -190,7 +190,17 @@ export function extractToolPreview(
   outputText: string | undefined,
   toolName: string | undefined,
 ): ToolCard["preview"] | undefined {
-  return extractCanvasFromText(outputText, toolName);
+  const preview = extractCanvasFromText(outputText, toolName);
+  return preview?.surface === "assistant_message"
+    ? { ...preview, surface: "assistant_message" }
+    : undefined;
+}
+
+function extractToolDetailsPreview(details: unknown): ToolCard["preview"] | undefined {
+  const preview = extractCanvasFromDetails(details);
+  return preview?.surface === "assistant_message"
+    ? { ...preview, surface: "assistant_message" }
+    : undefined;
 }
 
 function resolveToolCallId(
@@ -346,12 +356,14 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
     if (isToolCall) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
       const callId = resolveToolCallId(item, m);
+      const details = item.details ?? m.details;
       cards.push({
         id: resolveToolCardId(item, m, index, prefix),
         ...(callId ? { callId } : {}),
         name: resolveToolName(item, m),
         args,
         inputText: serializeToolInput(args),
+        ...(details !== undefined ? { details } : {}),
         ...(isLiveToolStream
           ? { live: true, completed: m["__openclawToolStreamResultReceived"] === true }
           : {}),
@@ -377,7 +389,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
         );
       const text = extractToolText(item);
       const details = item.details ?? m.details;
-      const preview = extractCanvasFromDetails(details) ?? extractToolPreview(text, name);
+      const preview = extractToolDetailsPreview(details) ?? extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       const exitCode = readToolExitCode(item, details, text ? parseJsonRecord(text) : undefined, m);
       if (existing) {
@@ -444,7 +456,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
-      preview: extractCanvasFromDetails(m.details) ?? extractToolPreview(text, name),
+      preview: extractToolDetailsPreview(m.details) ?? extractToolPreview(text, name),
     });
   }
 

@@ -9,6 +9,7 @@ import type {
 } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
+import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type {
   MessagingToolSend,
@@ -95,6 +96,7 @@ export type EmbeddedAgentMeta = {
   };
   /** Estimated USD cost of the run's accumulated usage. Omitted when the model has no cost data. */
   costUsd?: number;
+  terminalReceipt?: Omit<AgentRunTerminalReceipt, "terminalDisposition">;
 };
 
 export type TraceAttempt = {

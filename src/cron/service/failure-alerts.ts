@@ -11,7 +11,12 @@ import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
-import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
+import type {
+  CronFailureNotificationDelivery,
+  CronFailureNotificationDetail,
+  CronJob,
+  CronMessageChannel,
+} from "../types.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { enqueueCronSystemEvent, requestCronHeartbeat } from "./wake.js";
 
@@ -161,6 +166,7 @@ function emitFailureAlert(
     job: CronJob;
     error?: string;
     errorReason?: FailoverReason;
+    failureNotificationDetail?: CronFailureNotificationDetail;
     runAtMs?: number;
     consecutiveErrors: number;
     channel: CronMessageChannel;
@@ -183,7 +189,7 @@ function emitFailureAlert(
           ...(errorReason ? [`Cause: ${errorReason}`] : []),
           `${detailLabel}: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`,
         ]
-      : cronFailureDetailLines(errorReason);
+      : cronFailureDetailLines(errorReason, params.failureNotificationDetail);
   const text = [
     `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
     ...detailLines,
@@ -256,6 +262,7 @@ export function maybeEmitFailureAlert(
     status: "error" | "skipped";
     error?: string;
     errorReason?: FailoverReason;
+    failureNotificationDetail?: CronFailureNotificationDetail;
     runAtMs?: number;
     consecutiveCount: number;
     delivery?: "emit" | "record-only";
@@ -301,6 +308,7 @@ export function maybeEmitFailureAlert(
       job,
       error: params.error,
       errorReason: params.errorReason,
+      failureNotificationDetail: params.failureNotificationDetail,
       runAtMs: params.runAtMs,
       consecutiveErrors: params.consecutiveCount,
       channel: alertConfig.channel,

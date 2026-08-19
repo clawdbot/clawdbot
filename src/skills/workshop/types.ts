@@ -93,6 +93,14 @@ export type SkillWorkshopProposalReviewCompletion = {
   recordProgress?: (progress: SkillWorkshopProposalReviewProgress) => Promise<void>;
 };
 
+/** Exact proposal revision an operator reviewed before requesting an agent-authored revision. */
+export type SkillWorkshopProposalRevisionConstraint = {
+  readonly agentId: string;
+  readonly workspaceDir: string;
+  readonly proposalId: string;
+  readonly expectedRevisionHash: string;
+};
+
 export type SkillWorkshopRunOptions = {
   env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
@@ -102,6 +110,7 @@ export type SkillWorkshopRunOptions = {
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
   collectionReconcile?: SkillCollectionReconcileContext;
+  proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
 export type SkillProposalScan = {

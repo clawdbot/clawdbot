@@ -7,8 +7,12 @@ import type {
   SidebarWorkboardSnapshot,
 } from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
+import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
-import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
+import {
+  renderLazySettingsSidebar,
+  type SettingsSidebarModule,
+} from "../components/settings-sidebar-lazy.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -25,11 +29,14 @@ import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gate
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { readScopeUpgradeAvailability } from "./device-scope-upgrade.ts";
+import {
+  hasDismissedScopeUpgradeBanner,
+  readScopeUpgradeAvailability,
+} from "./device-scope-upgrade.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
-  ensureOptionalElementForHost,
   isOptionalElementDefined,
+  type LazyCustomElementRequestController,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
@@ -45,7 +52,6 @@ import {
 } from "./settings.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
-const EMPTY_OUTBOX_ATTENTION_COUNT_FOR_SESSION = () => 0;
 const EMPTY_SESSION_HAS_DRAFT = () => false;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -62,10 +68,13 @@ function renderScopeUpgradeBanner(
   snapshot: ApplicationContext["gateway"]["snapshot"],
 ) {
   const state = readScopeUpgradeAvailability(snapshot);
-  if (state.phase === "hidden") {
+  if (
+    state.phase === "hidden" ||
+    (state.phase === "guidance" && hasDismissedScopeUpgradeBanner())
+  ) {
     return nothing;
   }
-  void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
+  host.lazyCustomElements.preload(SCOPE_UPGRADE_BANNER_ELEMENT);
   if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
     return html`<openclaw-device-scope-upgrade-banner
       .props=${{
@@ -91,6 +100,7 @@ export interface ShellViewHost {
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
+  readonly lazyCustomElements: LazyCustomElementRequestController;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
   readonly navigationSidebar: HTMLElement;
@@ -98,13 +108,17 @@ export interface ShellViewHost {
   readonly outboxStoreRuntime: OutboxStoreRuntime | null;
   readonly routeState: ShellRouteState;
   readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
+  readonly settingsSidebarRenderer: SettingsSidebarModule["renderSettingsSidebar"] | null;
+  readonly settingsSidebarLoadFailed: boolean;
   readonly settingsSearchQuery: string;
   readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
   readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
   readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
   readonly devicePairSetupLoadFailed: boolean;
   loadDevicePairSetupRenderer(): void;
+  loadSettingsSidebarRenderer(): void;
   retryDevicePairSetupRenderer(): void;
+  retrySettingsSidebarRenderer(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
@@ -232,7 +246,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         const scopeKey = outboxStoreRuntime.storedChatOutboxScopeKey(scope);
         return storedOutboxes?.attentionCountsByScope.get(scopeKey) ?? 0;
       }
-    : EMPTY_OUTBOX_ATTENTION_COUNT_FOR_SESSION;
+    : () => 0;
   const hasSessionDraft = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -302,6 +316,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     uiHints: runtimeConfig.configUiHints,
     identityAvailable: Boolean(gatewaySnapshot.selfUser),
     basePath: context.basePath,
+    canAdmin: operatorAccess.canAdmin,
   });
   const onboarding = host.onboardingMode;
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
@@ -413,7 +428,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     });
   }
   const navigationContent = settingsTakeover
-    ? renderSettingsSidebar({
+    ? renderLazySettingsSidebar(host, {
         basePath: context.basePath,
         activeRouteId: activeRoute,
         activePathname: host.routeState.location?.pathname ?? "",
@@ -462,11 +477,13 @@ export function renderApplicationShell(host: ShellViewHost) {
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
         },
+        canAdmin: operatorAccess.canAdmin,
       })
     : host.navigationSidebar;
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
   // and the upgraded panels catch the first toggle instead of dropping the event.
   return html`
+    ${renderLazyElementModal(host.lazyCustomElements)}
     ${isOptionalElementDefined(host.commandPaletteElement)
       ? html`<openclaw-command-palette
           .onNavigate=${(routeId: RouteId) => host.navigate(routeId)}
@@ -506,7 +523,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           `
         : nothing}
       <openclaw-app-topbar
-        .basePath=${context.basePath}
+        .resourceBasePath=${context.resourceBasePath}
         .navDrawerOpen=${navDrawerOpen}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
@@ -655,7 +672,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${browserPanelAvailable}
               .suppressed=${settingsTakeover}
-              .basePath=${context.basePath}
+              .resourceBasePath=${context.resourceBasePath}
               .authToken=${resolveControlUiAuthToken({
                 hello: gatewaySnapshot.hello,
                 settings: { token: context.gateway.connection.token },
@@ -667,6 +684,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${desktopPanelAvailable}
               .suppressed=${settingsTakeover}
+              .basePath=${context.basePath}
             ></openclaw-desktop-panel>
           `}
       <openclaw-custodian-panel
