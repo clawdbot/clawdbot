@@ -440,6 +440,9 @@ suite.define(() => {
     const toolSummary = page.locator(".chat-group--activity .chat-tool-msg-summary").first();
     traces.toolMiddleExpand = await toggleDisclosureWithFrameTrace(page, toolSummary);
     traces.toolMiddleCollapse = await toggleDisclosureWithFrameTrace(page, toolSummary);
+    const fileToolToggle = page.locator(".chat-group--activity .chat-tool-row__toggle").first();
+    traces.fileToolMiddleExpand = await toggleDisclosureWithFrameTrace(page, fileToolToggle);
+    traces.fileToolMiddleCollapse = await toggleDisclosureWithFrameTrace(page, fileToolToggle);
     traces.activityMiddleCollapse = await toggleDisclosureWithFrameTrace(page, activitySummary);
     traces.workMiddleCollapse = await toggleDisclosureWithFrameTrace(page, middleWorkSummary);
 

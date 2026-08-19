@@ -145,7 +145,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const target = event.target;
     const disclosure =
       target instanceof Element
-        ? target.closest(".chat-tool-msg-summary[aria-expanded], .chat-activity-group__summary")
+        ? target.closest(
+            ".chat-tool-row__toggle, .chat-tool-msg-summary[aria-expanded], .chat-activity-group__summary",
+          )
         : null;
     this.pendingDisclosureRow = disclosure?.closest<HTMLElement>(".chat-virtual-row") ?? null;
   };
