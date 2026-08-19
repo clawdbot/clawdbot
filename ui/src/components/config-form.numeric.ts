@@ -4,6 +4,7 @@ type DecimalRational = {
 };
 
 const CONFIG_FORM_DECIMAL_NUMBER_RE = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/u;
+const CONFIG_FORM_INTEGER_TEXT_RE = /^-?\d+$/u;
 
 export function coerceConfigFormNumberString(
   value: string,
@@ -18,6 +19,15 @@ export function coerceConfigFormNumberString(
   }
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed) || (integer && !Number.isInteger(parsed))) {
+    return value;
+  }
+  // 64-bit ids (Discord/Telegram snowflakes) exceed Number's 2^53 integer
+  // precision; a lossy parse would silently rewrite the id, so keep the string.
+  if (
+    CONFIG_FORM_INTEGER_TEXT_RE.test(trimmed) &&
+    !Number.isSafeInteger(parsed) &&
+    BigInt(trimmed) !== BigInt(parsed)
+  ) {
     return value;
   }
   return parsed;

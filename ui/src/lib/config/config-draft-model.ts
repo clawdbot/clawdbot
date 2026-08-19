@@ -1,3 +1,4 @@
+import { isJsonSchemaValueValid } from "@openclaw/normalization-core/json-schema";
 import {
   asNullableRecord as asConfigRecord,
   isRecord,
@@ -208,6 +209,14 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       return variant ? coerceFormValues(value, variant) : value;
     }
     if (typeof value === "string") {
+      // A string that already satisfies a string variant must stay a string:
+      // union id fields (e.g. tools.elevated.allowFrom.*) hold 64-bit
+      // snowflakes whose numeric parse exceeds 2^53 and rewrites the value.
+      for (const variant of variants) {
+        if (schemaType(variant) === "string" && isJsonSchemaValueValid(variant, value)) {
+          return value;
+        }
+      }
       for (const variant of variants) {
         const variantType = schemaType(variant);
         if (variantType === "number" || variantType === "integer") {
