@@ -109,6 +109,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // bindings until the container supplies a real key (classic mode renders
   // before route data resolves).
   @property({ attribute: false }) sessionKey = "";
+  // Route ownership settles after retained-pane preview; dashboard activity follows
+  // the pane the user can already see so its warmed runtime paints immediately.
+  @property({ attribute: false }) visuallyPresented = true;
   private activeValue = false;
   private headerPresentationGeneration = 0;
   private presentedValue = true;
