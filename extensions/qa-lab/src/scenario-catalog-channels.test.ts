@@ -27,7 +27,7 @@ describe("qa scenario catalog channel contracts", () => {
       (scenario) => scenario.execution.flowKind === "module",
     );
 
-    expect(moduleFlows).toHaveLength(146);
+    expect(moduleFlows).toHaveLength(153);
     expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
   });
 
@@ -49,19 +49,44 @@ describe("qa scenario catalog channel contracts", () => {
   });
 
   it("keeps channel-owned scenarios independent from the driver implementation", () => {
-    const channelByScenarioId = new Map([
-      ["slack-restart-resume", "slack"],
-      ["whatsapp-restart-resume", "whatsapp"],
-      ["whatsapp-access-control-dm-disabled", "whatsapp"],
-      ["whatsapp-access-control-dm-open", "whatsapp"],
-      ["whatsapp-access-control-group-disabled", "whatsapp"],
-      ["whatsapp-access-control-group-open", "whatsapp"],
-      ["whatsapp-pairing-block", "whatsapp"],
-      ["matrix-allowlist-hot-reload", "matrix"],
+    const channelByScenarioId = new Map<string, { channel: string; sharedCall?: string }>([
+      [
+        "matrix-restart-resume",
+        { channel: "matrix", sharedCall: "runQaRestartResumeScenarioFlow" },
+      ],
+      ["slack-restart-resume", { channel: "slack", sharedCall: "runQaRestartResumeScenarioFlow" }],
+      [
+        "whatsapp-restart-resume",
+        { channel: "whatsapp", sharedCall: "runQaRestartResumeScenarioFlow" },
+      ],
+      [
+        "whatsapp-access-control-dm-disabled",
+        { channel: "whatsapp", sharedCall: "runQaAccessControlScenarioFlow" },
+      ],
+      [
+        "whatsapp-access-control-dm-open",
+        { channel: "whatsapp", sharedCall: "runQaAccessControlScenarioFlow" },
+      ],
+      [
+        "whatsapp-access-control-group-disabled",
+        { channel: "whatsapp", sharedCall: "runQaAccessControlScenarioFlow" },
+      ],
+      [
+        "whatsapp-access-control-group-open",
+        { channel: "whatsapp", sharedCall: "runQaAccessControlScenarioFlow" },
+      ],
+      ["whatsapp-pairing-block", { channel: "whatsapp" }],
+      ["matrix-allowlist-hot-reload", { channel: "matrix" }],
     ]);
 
-    for (const [scenarioId, channel] of channelByScenarioId) {
-      expect(readQaScenarioById(scenarioId).execution.channel, scenarioId).toBe(channel);
+    for (const [scenarioId, expected] of channelByScenarioId) {
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      expect(scenario.execution.channel, scenarioId).toBe(expected.channel);
+      if (expected.sharedCall) {
+        expect(scenario.execution.flowKind, scenarioId).toBe("module");
+        expect(scenario.execution.suiteIsolation, scenarioId).toBe("isolated");
+        expect(JSON.stringify(scenario.execution.flow), scenarioId).toContain(expected.sharedCall);
+      }
     }
   });
 

@@ -38,6 +38,7 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
   "./errors.js": () => import("./errors.js"),
+  "./scenario-module-flow.js": () => import("./scenario-module-flow.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
