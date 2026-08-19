@@ -35,14 +35,6 @@ export type ClaudeAppServerBinding = {
   sandbox?: SandboxPolicy;
   dynamicToolsFingerprint?: string;
   /**
-   * Size of the dynamic tool catalog this thread was started/forked with.
-   * The fingerprint alone is a hash, so it can say "the catalog changed" but
-   * not "the catalog collapsed" — and those want opposite handling. Absent
-   * for bindings written before this field existed; callers must treat
-   * `undefined` as "no baseline" rather than zero.
-   */
-  dynamicToolsCount?: number;
-  /**
    * Hash of the developerInstructions sent at thread/start. Used to detect
    * SOUL.md / workspace-file changes mid-session — if the current hash
    * differs from the binding's stored value, we rotate to a fresh thread
