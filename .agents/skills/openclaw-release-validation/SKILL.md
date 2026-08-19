@@ -216,22 +216,28 @@ or other gateway internals. Ask which gateway the tester wants to copy. Never
 silently select or modify the personal gateway.
 
 After selection, inspect only that gateway and record its version and commit.
-Import its `.openclaw` state with OCM so sessions and other real user state are
-preserved in the fixture:
+Preview the disposable target, then import its `.openclaw` state with OCM so
+sessions and other real user state are preserved in the fixture:
 
 ```sh
+ocm adopt plan --name <test-env> <selected-state-dir> --json
 ocm adopt import --name <test-env> <selected-state-dir> --json
 ```
 
 Use the `stateDir` returned by `ocm env list --json` for an OCM environment and
 `~/.openclaw` for the plain gateway. Let OCM create the stopped, disposable
 environment and assign a non-conflicting port; do not make an additional staged
-copy. The returned environment name is the test environment; use that actual
-name in every tester-facing command rather than the `<test-env>` placeholder.
-Keep the source unchanged. Before activating copied channel credentials,
-stop the current credential owner and restore it when validation ends. For an
-OCM source, use `ocm service stop <source-env>`; for the plain source, use
-`openclaw gateway stop`. There is no `ocm stop` command.
+copy. OCM copies a configured repo-backed or symlinked workspace into the
+disposable environment and rewrites the fixture config to that copy; it never
+changes the source repository or workspace. The returned environment name is
+the test environment; use that actual name in every tester-facing command
+rather than the `<test-env>` placeholder. If OCM cannot isolate a config include
+or source path, pause and report that setup blocker conversationally—never make
+a manual state copy or put it in the campaign worksheet. Keep the source
+unchanged. Before activating copied channel credentials, stop the current
+credential owner and restore it when validation ends. For an OCM source, use
+`ocm service stop <source-env>`; for the plain source, use `openclaw gateway
+stop`. There is no `ocm stop` command.
 
 ## 3. Upgrade and report errors
 
