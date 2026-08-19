@@ -12,6 +12,7 @@ import {
   type GatewayMethodHandler,
   type GatewayMethodDescriptorInput,
   type GatewayMethodOwner,
+  type GatewayMethodProfileAccess,
   type GatewayMethodRegistryView,
   NODE_GATEWAY_METHOD_SCOPE,
 } from "./descriptor.js";
@@ -112,13 +113,14 @@ export function createPluginGatewayMethodDescriptor(params: {
   name: string;
   handler: GatewayMethodHandler;
   scope?: OperatorScope;
+  profileAccess?: GatewayMethodProfileAccess;
 }): GatewayMethodDescriptor {
   const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
   return {
     name: params.name,
     handler: params.handler,
     owner: { kind: "plugin", pluginId: params.pluginId },
-    profileAccess: "required",
+    profileAccess: params.profileAccess ?? "required",
     scope: normalizedScope ?? ADMIN_SCOPE,
   };
 }

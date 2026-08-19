@@ -21,7 +21,7 @@ export type GatewayMethodOwner =
 
 /** Startup availability flag exposed to clients as retryable startup-unavailable errors. */
 type GatewayMethodStartupAvailability = "available" | "unavailable-until-sidecars";
-type GatewayMethodProfileAccess = "independent" | "required";
+export type GatewayMethodProfileAccess = "independent" | "required";
 
 export type GatewayMethodHandler = (opts: never) => unknown;
 

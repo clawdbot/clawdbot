@@ -153,6 +153,33 @@ describe("Gateway pending-profile authorization", () => {
     }
   });
 
+  it("dispatches explicitly independent plugin status while profile sync is unavailable", async () => {
+    const client = createPendingProfileClient();
+    client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
+    const method = "logbook.status";
+    const methodRegistry = createGatewayMethodRegistry([
+      {
+        name: method,
+        handler,
+        owner: { kind: "plugin", pluginId: "logbook" },
+        profileAccess: "independent",
+        scope: "operator.read",
+      },
+    ]);
+
+    const respond = await dispatchPendingProfileMethod({
+      client,
+      handler,
+      method,
+      methodRegistry,
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
+    expect(client.authenticatedGitHubIdentitySync).not.toHaveBeenCalled();
+  });
+
   it("gates parameter-dependent incognito access without blocking ordinary independent requests", async () => {
     const client = createPendingProfileClient();
     client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
