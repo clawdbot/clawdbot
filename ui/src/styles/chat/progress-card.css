@@ -17,7 +17,8 @@
   min-width: 0;
 }
 
-.session-hovercard__avatar {
+.session-hovercard__avatar,
+.session-hovercard__avatar-fallback {
   display: grid;
   width: 34px;
   height: 34px;

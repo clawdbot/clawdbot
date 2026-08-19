@@ -42,6 +42,7 @@ describe("renderSessionHovercard", () => {
   });
 
   afterEach(() => {
+    document.body.replaceChildren();
     vi.useRealTimers();
   });
 
@@ -88,6 +89,29 @@ describe("renderSessionHovercard", () => {
     expect(avatar?.routeUrl).toBe(channelAvatarUrl);
     expect(avatar?.authTokens).toEqual(["device-token", "saved-token"]);
     expect(avatar?.authReady).toBe(true);
+    expect(container.querySelector("span.session-hovercard__avatar")).toBeNull();
+  });
+
+  it("keeps initials visible inside the channel avatar while auth is unavailable", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderSessionHovercard({
+        row: row({ channelAvatarUrl: "/__openclaw__/channel-avatar/pending" }),
+        channelAvatarAuth: { authTokens: [], authReady: false },
+      }),
+      container,
+    );
+
+    await customElements.whenDefined("openclaw-channel-avatar");
+    const avatar = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-channel-avatar",
+    );
+    await avatar?.updateComplete;
+
+    await vi.waitFor(() => {
+      expect(avatar?.querySelector(".session-hovercard__avatar-fallback")?.textContent).toBe("AB");
+    });
+    expect(avatar?.querySelector("img.channel-avatar")).toBeNull();
     expect(container.querySelector("span.session-hovercard__avatar")).toBeNull();
   });
 

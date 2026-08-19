@@ -79,6 +79,9 @@ function renderHeader(
   const owner = row.owner?.actor ?? row.createdActor;
   const ownerLabel = owner?.label?.trim() || owner?.id?.trim();
   const initials = owner ? sessionOwnerInitials(owner) : "";
+  const avatarFallback = initials
+    ? html`<span class="session-hovercard__avatar-fallback" aria-hidden="true">${initials}</span>`
+    : nothing;
   const created = formatRelativeTimestamp(row.startedAt, { fallback: "" });
   const updated = formatRelativeTimestamp(row.updatedAt, { fallback: "" });
   const metadata = [
@@ -96,6 +99,7 @@ function renderHeader(
           .routeUrl=${row.channelAvatarUrl}
           .authTokens=${channelAvatarAuth?.authTokens ?? []}
           .authReady=${channelAvatarAuth?.authReady ?? false}
+          .fallback=${avatarFallback}
         ></openclaw-channel-avatar>`
       : initials
         ? html`<span class="session-hovercard__avatar" aria-hidden="true">${initials}</span>`

@@ -424,6 +424,7 @@ suite.define(() => {
   it("shows the latest turn when the session has no progress card", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:no-progress-card";
+    const channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(sessionKey)}`;
     const lastMessagePreview =
       "The final release notes are ready for review, including <strong>plain text</strong>, rollout details, verification notes, compatibility guidance, and a concise operator checklist.";
 
@@ -435,6 +436,12 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        await page.route(`**${channelAvatarUrl}`, async (route) => {
+          expect(await route.request().headerValue("authorization")).toBe(
+            "Bearer e2e-device-token",
+          );
+          await route.fulfill({ status: 404 });
+        });
         const gateway = await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           historyMessages: [
@@ -448,6 +455,8 @@ suite.define(() => {
             "progressCard.get": { card: null },
             "sessions.list": chatSessionListResponse([
               {
+                channelAvatarUrl,
+                createdActor: { type: "human", id: "profile-ada", label: "Ada King" },
                 key: sessionKey,
                 kind: "direct",
                 label: "No progress card",
@@ -470,6 +479,12 @@ suite.define(() => {
         const card = page.locator(".session-progress-hovercard");
         await card.waitFor({ state: "visible" });
         expect(["left", "right"]).toContain(await card.getAttribute("data-side"));
+        const avatar = card.locator("openclaw-channel-avatar.session-hovercard__avatar");
+        await expect
+          .poll(() => avatar.locator(".session-hovercard__avatar-fallback").textContent())
+          .toBe("AK");
+        expect(await avatar.locator("img.channel-avatar").count()).toBe(0);
+        expect(await card.locator("span.session-hovercard__avatar").count()).toBe(0);
         await expect
           .poll(() => card.locator(".session-hovercard__excerpt").textContent())
           .toBe(lastMessagePreview);
