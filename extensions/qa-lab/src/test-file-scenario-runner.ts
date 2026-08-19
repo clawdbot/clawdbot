@@ -448,8 +448,8 @@ function buildTestFileEvidence(params: {
   );
   if (producerEntries.length > 0) {
     const definition = testFileRunnerDefinitions[params.kind];
-    // Failed scripts still need generic fallback evidence unless their producer
-    // already recorded that scenario identity at the authoritative boundary.
+    // Producer failures stay authoritative; parent terminal failures replace
+    // colliding non-fail results without discarding producer execution facts.
     const producerEntryIds = new Set(producerEntries.map((entry) => entry.test.id));
     const fallbackResults = params.results.filter(
       (result) => !result.producerEvidence || result.includeFallbackEvidence,
@@ -486,10 +486,17 @@ function buildTestFileEvidence(params: {
       profile: resolveQaEvidenceProfile({ env: params.env }),
       entries: [
         ...producerEntries.map((entry) => {
+          const fallbackFailure = fallbackEvidence?.entries.find(
+            (fallback) => fallback.test.id === entry.test.id && fallback.result.status === "fail",
+          );
+          const resolvedEntry =
+            entry.result.status !== "fail" && fallbackFailure
+              ? Object.assign({}, entry, { result: fallbackFailure.result })
+              : entry;
           if (evidenceMode !== "slim") {
-            return entry;
+            return resolvedEntry;
           }
-          const { execution: _execution, ...withoutExecution } = entry;
+          const { execution: _execution, ...withoutExecution } = resolvedEntry;
           return withoutExecution;
         }),
         ...(fallbackEvidence?.entries.filter((entry) => !producerEntryIds.has(entry.test.id)) ??
