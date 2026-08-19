@@ -31,7 +31,7 @@ function assertStateDatabaseIntegrityBeforeMutation(
   pathname: string,
 ): void {
   const userVersion = readSqliteUserVersion(database);
-  const hasApplicationSchema = database
+  const hasApplicationSchema = database // sqlite-allow-raw -- Cold-open schema presence probe before Kysely exposure.
     .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
     .get();
   const migrationPending =
