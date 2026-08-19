@@ -336,9 +336,16 @@ export function renderGroupedMessage(
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const standaloneToolPayload =
+    isStandaloneToolMessage &&
+    Boolean(markdown) &&
+    singleToolCard?.outputText?.trim() === markdown?.trim();
+  const bodyMarkdown = standaloneToolPayload ? null : markdown;
+  const bodyJsonResult = standaloneToolPayload ? null : jsonResult;
   // One expanded card already closes with its own outcome line; every other
   // shape renders inline rows only, so the message body records the failure.
-  const expandsSingleToolCard = Boolean(singleToolCard) && !markdown && !hasImages;
+  const expandsSingleToolCard =
+    Boolean(singleToolCard) && (!markdown || standaloneToolPayload) && !hasImages;
   const failedToolCard = expandsSingleToolCard ? undefined : toolCards.find(isToolCardError);
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
@@ -529,7 +536,7 @@ export function renderGroupedMessage(
                             )}
                           </div>`
                         : nothing}
-                      ${jsonResult
+                      ${bodyJsonResult
                         ? html`<details
                             class="chat-json-collapse"
                             ?open=${Boolean(opts.autoExpandToolCalls)}
@@ -537,14 +544,14 @@ export function renderGroupedMessage(
                             <summary class="chat-json-summary">
                               <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
                               <span class="chat-json-label"
-                                >${jsonSummaryLabel(jsonResult.parsed)}</span
+                                >${jsonSummaryLabel(bodyJsonResult.parsed)}</span
                               >
                             </summary>
-                            <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                            <pre class="chat-json-content"><code>${bodyJsonResult.pretty}</code></pre>
                           </details>`
-                        : markdown
+                        : bodyMarkdown
                           ? renderMarkdownText(
-                              markdown,
+                              bodyMarkdown,
                               opts.isStreaming,
                               markdownRenderOptions,
                               duplicateSuffix,
@@ -604,18 +611,18 @@ export function renderGroupedMessage(
                 </div>`
               : nothing}
             ${assistantViewContent}
-            ${jsonResult
+            ${bodyJsonResult
               ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">
                     <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
-                    <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+                    <span class="chat-json-label">${jsonSummaryLabel(bodyJsonResult.parsed)}</span>
                   </summary>
-                  <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                  <pre class="chat-json-content"><code>${bodyJsonResult.pretty}</code></pre>
                 </details>`
-              : markdown
+              : bodyMarkdown
                 ? normalizedRole === "user"
                   ? renderUserMessageMarkdown(
-                      markdown,
+                      bodyMarkdown,
                       messageKey,
                       opts,
                       markdownRenderOptions,
@@ -623,14 +630,14 @@ export function renderGroupedMessage(
                     )
                   : normalizedRole === "assistant"
                     ? renderAssistantMessageMarkdown(
-                        markdown,
+                        bodyMarkdown,
                         opts.isStreaming,
                         opts.assistantMessageDisclosure,
                         markdownRenderOptions,
                         duplicateSuffix,
                       )
                     : renderMarkdownText(
-                        markdown,
+                        bodyMarkdown,
                         opts.isStreaming,
                         markdownRenderOptions,
                         duplicateSuffix,

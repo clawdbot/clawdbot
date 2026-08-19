@@ -2362,6 +2362,27 @@ openclaw-chat-session-rail {
   min-height: 32px;
 }
 
+.code-block-json-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.code-block-json-tab {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.code-block-json-tab[aria-selected="true"] {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
 .code-block-lang {
   color: var(--muted);
   font-family: var(--mono);

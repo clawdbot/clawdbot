@@ -133,6 +133,49 @@ function buildToolCardSidebarContent(card: ToolCard): string {
   return sections.join("\n\n");
 }
 
+function handleToolCardModeChange(event: Event) {
+  const button = event.currentTarget as HTMLButtonElement | null;
+  const card = button?.closest(".chat-tool-card");
+  const mode = button?.dataset.mode;
+  if (!button || !card || (mode !== "diff" && mode !== "raw")) {
+    return;
+  }
+  for (const candidate of card.querySelectorAll<HTMLButtonElement>("[data-mode]")) {
+    const selected = candidate.dataset.mode === mode;
+    candidate.setAttribute("aria-selected", String(selected));
+    candidate.tabIndex = selected ? 0 : -1;
+  }
+  for (const body of card.querySelectorAll<HTMLElement>("[data-mode-body]")) {
+    body.hidden = body.dataset.modeBody !== mode;
+  }
+}
+
+function handleToolCardModeKeydown(event: KeyboardEvent) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    return;
+  }
+  const button = event.currentTarget as HTMLButtonElement | null;
+  const tabs = Array.from(
+    button?.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ??
+      [],
+  );
+  const index = button ? tabs.indexOf(button) : -1;
+  if (index < 0) {
+    return;
+  }
+  event.preventDefault();
+  const direction = button && getComputedStyle(button).direction === "rtl" ? -1 : 1;
+  const nextIndex =
+    event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? tabs.length - 1
+        : (index + (event.key === "ArrowRight" ? direction : -direction) + tabs.length) %
+          tabs.length;
+  tabs[nextIndex]?.click();
+  tabs[nextIndex]?.focus();
+}
+
 function handleRawDetailsToggle(event: Event) {
   const button = event.currentTarget as HTMLButtonElement | null;
   const root = button?.closest(".chat-tool-card__raw");
@@ -700,8 +743,6 @@ export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
 function renderTerminalBlock(
   command: string,
   output: string | undefined,
-  outcome: ToolCardOutcome,
-  exitCode?: number,
 ) {
   return html`
     <div class="chat-tool-term">
@@ -712,7 +753,43 @@ function renderTerminalBlock(
       ${output?.trim()
         ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
         : nothing}
-      ${renderToolOutcome(outcome, exitCode)}
+    </div>
+  `;
+}
+
+function renderToolCardModeControl(cardId: string) {
+  const diffTabId = `${cardId}-diff-tab`;
+  const rawTabId = `${cardId}-raw-tab`;
+  return html`
+    <div class="code-block-json-tabs" role="tablist" aria-label=${t("chat.toolCards.viewMode")}>
+      <button
+        class="code-block-json-tab"
+        type="button"
+        role="tab"
+        data-mode="diff"
+        id=${diffTabId}
+        aria-controls=${`${cardId}-diff-panel`}
+        aria-selected="true"
+        tabindex="0"
+        @click=${handleToolCardModeChange}
+        @keydown=${handleToolCardModeKeydown}
+      >
+        ${t("chat.toolCards.diff")}
+      </button>
+      <button
+        class="code-block-json-tab"
+        type="button"
+        role="tab"
+        data-mode="raw"
+        id=${rawTabId}
+        aria-controls=${`${cardId}-raw-panel`}
+        aria-selected="false"
+        tabindex="-1"
+        @click=${handleToolCardModeChange}
+        @keydown=${handleToolCardModeKeydown}
+      >
+        ${t("chat.toolCards.raw")}
+      </button>
     </div>
   `;
 }
@@ -1016,8 +1093,9 @@ export function renderExpandedToolCardContent(
     return html`
       <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__actions">${sidebarAction}</div>
-        ${renderTerminalBlock(view.command, card.outputText, outcome, card.exitCode)}
+        ${renderTerminalBlock(view.command, card.outputText)}
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
+        ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }
@@ -1033,14 +1111,33 @@ export function renderExpandedToolCardContent(
             workspaceFilePath,
             onOpenWorkspaceFile,
           )}
-          <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
+          <div class="chat-tool-card__actions">
+            ${hasOutput ? renderToolCardModeControl(card.id) : nothing}${diffCopyAction}${sidebarAction}
+          </div>
         </div>
-        ${renderDiffBlock(view.diff, outcome)} ${renderToolOutcome(outcome, card.exitCode)}
-        ${isError && hasOutput
-          ? renderToolDataBlock({ label: t("chat.toolCards.toolError"), text: card.outputText! })
-          : hasOutput
-            ? renderRawOutputToggle(card.outputText!)
-            : nothing}
+        <div
+          id=${`${card.id}-diff-panel`}
+          role="tabpanel"
+          aria-labelledby=${`${card.id}-diff-tab`}
+          data-mode-body="diff"
+        >
+          ${renderDiffBlock(view.diff, outcome)}
+        </div>
+        ${hasOutput
+          ? html`<div
+              id=${`${card.id}-raw-panel`}
+              role="tabpanel"
+              aria-labelledby=${`${card.id}-raw-tab`}
+              data-mode-body="raw"
+              hidden
+            >
+              ${renderToolDataBlock({
+                ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+                text: card.outputText!,
+              })}
+            </div>`
+          : nothing}
+        ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }

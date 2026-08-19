@@ -184,7 +184,7 @@ describe("tool-cards", () => {
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
-  it("renders multi-file patch headers, changed rows, and raw output together", () => {
+  it("switches a completed patch between mutually exclusive diff and raw bodies", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -234,12 +234,21 @@ describe("tool-cards", () => {
       ),
     ).toEqual(["new a", "new b"]);
 
-    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
-    expect(rawToggle?.textContent?.trim()).toBe("Raw details");
-    rawToggle?.click();
-    expect(container.querySelector(".chat-tool-card__raw-body code")?.textContent).toBe(
-      "Applied patch",
-    );
+    const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    expect(tabs.map((tab) => [tab.textContent?.trim(), tab.getAttribute("aria-selected")])).toEqual([
+      ["Diff", "true"],
+      ["Raw", "false"],
+    ]);
+    const diffBody = container.querySelector<HTMLElement>('[data-mode-body="diff"]');
+    const rawBody = container.querySelector<HTMLElement>('[data-mode-body="raw"]');
+    expect(diffBody?.hidden).toBe(false);
+    expect(rawBody?.hidden).toBe(true);
+
+    tabs[1]?.click();
+    expect(diffBody?.hidden).toBe(true);
+    expect(rawBody?.hidden).toBe(false);
+    expect(rawBody?.querySelector("code")?.textContent).toBe("Applied patch");
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
   });
 
   it("labels a completed Codex file creation from its recorded operation", () => {
