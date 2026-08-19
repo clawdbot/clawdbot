@@ -86,9 +86,7 @@ function createPendingSdpResponse(signal: AbortSignal | undefined): Response {
           "abort",
           () => {
             const reason = signal?.reason;
-            controller.error(
-              reason instanceof Error ? reason : new Error("offer request aborted"),
-            );
+            controller.error(reason instanceof Error ? reason : new Error("offer request aborted"));
           },
           { once: true },
         );
