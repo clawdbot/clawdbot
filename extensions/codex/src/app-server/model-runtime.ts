@@ -13,6 +13,13 @@ export function buildCodexRuntimeModelParams(catalogId: string, runtimeModelId: 
     : { [CODEX_APP_SERVER_RUNTIME_MODEL_PARAM]: runtimeModelId };
 }
 
-export function readCodexRuntimeModelId(model: CodexRuntimeModel): string {
-  return normalizeOptionalString(model.params?.[CODEX_APP_SERVER_RUNTIME_MODEL_PARAM]) ?? model.id;
+export function readCodexRuntimeModelId(
+  model: CodexRuntimeModel | undefined,
+  fallbackId: string,
+): string {
+  return (
+    normalizeOptionalString(model?.params?.[CODEX_APP_SERVER_RUNTIME_MODEL_PARAM]) ??
+    model?.id ??
+    fallbackId
+  );
 }

@@ -251,7 +251,7 @@ export function createCodexAppServerAgentHarness(
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,
         pluginConfig: resolveAttemptPluginConfig(params.config),
-        runtimeModelId: readCodexRuntimeModelId(params.model),
+        runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
         nativeHookRelay: { enabled: true },
       });
     },
@@ -290,9 +290,7 @@ export function createCodexAppServerAgentHarness(
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        runtimeModelId: params.runtimeModel
-          ? readCodexRuntimeModelId(params.runtimeModel)
-          : params.model,
+        runtimeModelId: readCodexRuntimeModelId(params.runtimeModel, params.model),
         nativeHookRelay: { enabled: true },
       });
     },
