@@ -19,7 +19,7 @@ Normal skill controls still apply. `skills.entries.<name>.enabled: false` disabl
 Every shipped Custodian skill uses the same five sections in this order:
 
 1. **Gather** reads redacted current config and probes live state.
-2. **Mutate** uses the canonical Custodian or onboarding config flow, never a direct file edit.
+2. **Mutate** uses validated non-interactive writes — `openclaw config set` / `openclaw config patch` from a trusted shell, or the in-session Custodian tool actions where policy allows — never a direct file edit.
 3. **Repair** runs `openclaw doctor` and separates diagnosis from any approved repair.
 4. **Prove** exercises one live end-to-end outcome.
 5. **Report** records what changed, what was observed, and what remains.

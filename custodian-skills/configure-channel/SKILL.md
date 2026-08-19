@@ -1,30 +1,68 @@
 ---
 name: configure-channel
-description: Configure and prove a Telegram, Discord, Slack, WhatsApp, or other OpenClaw channel.
+description: Configure and prove a chat channel with non-interactive one-liners; secrets only as SecretRefs.
 ---
 
 # Configure a channel
 
-Never print or persist secret values; put credentials in SecretRefs or the channel credential store. Never hand-edit config files on disk. Every run ends with the observable Prove result or an exact explanation of why it could not be proven.
-
-Use the channel's guide as the source of truth: [Telegram](https://docs.openclaw.ai/channels/telegram), [Discord](https://docs.openclaw.ai/channels/discord), [Slack](https://docs.openclaw.ai/channels/slack), or [WhatsApp](https://docs.openclaw.ai/channels/whatsapp).
+Never print or persist secret values; channel tokens enter config only as SecretRefs, or through the in-session `connect_channel` flow where the operator types the secret into a masked prompt. Never hand-edit config files on disk. Every run ends with the observable Prove result or an exact explanation of why it could not be proven.
 
 ## Gather
 
-Identify the channel family, account, test destination, and intended agent. Read current state with the `gateway` tool's `config.get` action and ask the `openclaw` tool to inspect the channel. Probe live status before changing anything. Do not request a token in chat or logs.
+```
+openclaw channels list --all
+openclaw channels status
+openclaw channels capabilities --channel telegram
+openclaw config get channels --json
+```
+
+Confirm the exact config path before writing — key names differ per channel (`channels.telegram.botToken`, `channels.discord.token`, ...):
+
+```
+openclaw config schema --json | jq '.properties.channels.properties.telegram'
+```
 
 ## Mutate
 
-Route setup through the `openclaw` tool. Its Custodian flow uses `connect_channel` and, when masked credential entry is needed, `open_setup` with `target=channels`; these are the canonical channel config flows. If an approved leaf change is necessary inside Custodian, it must use `config_schema` first, then `config_set` or `config_set_ref`, never a filesystem edit. Preserve unrelated accounts and bindings.
+Preferred shell path — token staged as an env var on the gateway process or in a `0600` file, wired as a SecretRef (Telegram example):
+
+```
+openclaw config set channels.telegram.botToken --ref-provider default --ref-source env --ref-id TELEGRAM_BOT_TOKEN
+openclaw config set channels.telegram.allowFrom '["+15555550123"]' --strict-json
+```
+
+Multi-field changes in one validated write:
+
+```
+openclaw config patch --stdin <<'JSON'
+{ channels: { telegram: { enabled: true, groupPolicy: "allowlist" } } }
+JSON
+```
+
+In-session alternative: call the `connect_channel` tool action with the channel id — the operator enters the token in a masked prompt, never in chat. Avoid `openclaw channels add --token <value>`: it puts the secret in argv and process listings.
 
 ## Repair
 
-Run `openclaw doctor`. If it reports a safe repair, explain it and get approval before running `openclaw doctor --fix` outside the active Custodian inference session. Re-read channel state afterward.
+```
+openclaw doctor --non-interactive
+openclaw channels status --deep
+```
+
+Apply `openclaw doctor --fix --non-interactive` only after approval, then re-check status.
 
 ## Prove
 
-Send one real, clearly labeled test message through the configured account to the agreed destination. Confirm receipt from the channel response, delivery result, or recipient observation. If sending or confirmation is impossible, report the exact account, permission, destination, or network blocker without exposing credentials.
+Send one real, clearly labeled test message and confirm delivery from the command result (use `--dry-run` first to inspect the payload):
+
+```
+openclaw message send --channel telegram --target @yourtestchat --message "OpenClaw channel test — please ignore" --dry-run
+openclaw message send --channel telegram --target @yourtestchat --message "OpenClaw channel test — please ignore"
+```
+
+If sending fails, report the exact account, permission, destination, or network blocker without exposing credentials.
 
 ## Report
 
-State the channel and account changed, the canonical flow used, the redacted config paths affected, the test destination, and the observed receipt. List any remaining operator action.
+State the channel and account changed, the exact config paths written (never values), the test destination, and the observed delivery result. List any remaining operator action.
+
+Further reference: https://docs.openclaw.ai/channels/telegram (and the matching page for other channels)

@@ -1,36 +1,71 @@
 ---
 name: cloud-image-bake
-description: Bake, select, dispatch-prove, and safely retire a Cloud Worker image.
+description: Bake, select, prove, and safely retire a Cloud Worker image with crabbox and config one-liners.
 ---
 
 # Bake a Cloud Worker image
 
-Never print or persist secret values; use SecretRefs and provider credential stores. Never hand-edit config files on disk. Every run ends with the observable Prove result or an exact explanation of why it could not be proven. Snapshots are cheap; unmanaged snapshot sprawl is not.
-
-Follow [Cloud Workers](https://docs.openclaw.ai/gateway/cloud-workers) and the active provider's image documentation.
+Never print or persist secret values; provider credentials stay in their stores. Never hand-edit config files on disk — profile changes go through `openclaw config`. Every run ends with the observable Prove result or an exact explanation of why it could not be proven. Snapshots are cheap; unmanaged snapshot sprawl is not. Never delete a provider image without hard operator confirmation.
 
 ## Gather
 
-Read `cloudWorkers.profiles.<profile>` with `gateway` `config.get`, then use `crabbox config show --json`, `crabbox doctor --provider <backend> --json`, and the read-only lease/image inventory. Record the current provider, class, image selection, setup, and superseded image id. Confirm the requested tooling and a secret-free bake source.
+```
+openclaw config get cloudWorkers --json
+crabbox config show --json
+crabbox doctor --provider <backend> --json
+crabbox checkpoint list --json
+```
+
+Record the current provider, class, image selection, setup command, and the id of the image being superseded. Confirm the requested tooling and a secret-free bake source.
 
 ## Mutate
 
-Lease from the current profile with `crabbox warmup --provider <backend> --class <class> --keep --timing-json`, then install and smoke-test the requested tooling with `crabbox run --id <lease> -- ...`.
+Lease from the current profile, install and smoke-test the tooling:
 
-- AWS: create a native image checkpoint with `crabbox checkpoint create --provider aws --id <lease> --mode native --strategy image --wait`, inspect it, then run `crabbox image promote <ami-id>` with the matching scope.
-- Hetzner: create the project snapshot with `hcloud image create --type snapshot --server <server-id> --description <name>`. There is no Crabbox Hetzner create/promote lifecycle for shared defaults; record this lifecycle gap and the explicit image selection outside OpenClaw.
-- Firecracker: rebuild and publish the rootfs template through the provider's documented template pipeline; do not snapshot a running microVM as a substitute.
+```
+crabbox warmup --provider <backend> --class <class> --keep --timing-json
+crabbox run --provider <backend> --id <lease> --no-sync -- bash -lc '<install commands> && <tool> --version'
+```
 
-Ask Custodian to run `config_schema` for the exact profile setting, then use approved `config_set` only for a supported image selector. The current Crabbox OpenClaw profile has no `image` key: AWS selection is owned by `crabbox image promote`; never invent a config field. Preserve the old image until proof passes.
+Snapshot per backend:
+
+- AWS: `crabbox checkpoint create --provider aws --id <lease> --mode native --strategy image --wait`, inspect it, then `crabbox image promote <ami-id>` with the matching scope. AWS image selection is owned by the promote catalog.
+- Hetzner: `hcloud image create --type snapshot --server <server-id> --description <name>`; there is no crabbox create/promote lifecycle for Hetzner yet, so record the snapshot id explicitly.
+- Firecracker: rebuild and republish the rootfs template through the host's template pipeline; do not snapshot a running microVM as a substitute.
+
+Point the profile at the new selection only through validated config writes — confirm the exact key first, dry-run, then write (example for a backend whose settings carry an image field):
+
+```
+openclaw config schema --json | jq '.properties.cloudWorkers'
+openclaw config set cloudWorkers.profiles.<profile>.settings.<imageKey> "<image-id>" --dry-run
+openclaw config set cloudWorkers.profiles.<profile>.settings.<imageKey> "<image-id>"
+```
+
+The bundled crabbox profile currently has no `image` settings key — AWS selection lives in `crabbox image promote`; never invent a config field. Preserve the old image until proof passes.
 
 ## Repair
 
-Run `openclaw doctor`. If repair is required, obtain approval and run `openclaw doctor --fix` outside the active Custodian inference session, then re-read the profile and provider inventory.
+```
+openclaw doctor --non-interactive
+crabbox doctor --provider <backend> --json
+```
+
+Apply `openclaw doctor --fix --non-interactive` only after approval, then re-read the profile and provider inventory.
 
 ## Prove
 
-Create a disposable managed-worktree session and time one real `sessions.dispatch` to the profile, using a generous Gateway timeout. Confirm the placement reaches `active`, the requested tooling runs on the worker, and record dispatch duration. If any step fails, roll back the image selection and report the exact blocker.
+Lease once from the new image and verify the baked tooling is present and fast:
+
+```
+crabbox warmup --provider <backend> --class <class> --timing-json
+crabbox run --provider <backend> --id <lease> --no-sync -- bash -lc '<tool> --version'
+crabbox stop --provider <backend> --id <lease>
+```
+
+Record warmup total and compare against the pre-bake timing. Then confirm the OpenClaw path end to end: dispatch one session to the profile from a client (Cloud destination) and verify the placement reaches active. If any step fails, roll back the image selection and report the exact blocker.
 
 ## Report
 
-Report the profile, backend, new and previous image ids, tooling smoke, dispatch duration, and rollback state. Only after successful proof, show the exact provider deletion target and get hard human confirmation. Then delete only that superseded snapshot (`crabbox image delete` or `hcloud image delete`) and verify it is absent; without confirmation, leave it intact and report cleanup pending.
+Report the profile, backend, new and previous image ids, tooling smoke result, timed warmup before/after, and rollback state. Only after successful proof, show the exact deletion target and get hard operator confirmation, then delete only that superseded snapshot (`crabbox image delete <id>` or `hcloud image delete <id>`) and verify it is gone. Without confirmation, leave it intact and report cleanup pending.
+
+Further reference: https://docs.openclaw.ai/gateway/cloud-workers
