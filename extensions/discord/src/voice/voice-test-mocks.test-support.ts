@@ -167,6 +167,7 @@ const {
       (params?: {
         configuredProviderId?: string;
         isProviderAvailable?: (provider: { id: string }) => boolean;
+        assertProviderAvailable?: (provider: { id: string }) => void;
       }) => {
         provider: {
           id: string;

@@ -93,6 +93,26 @@ describe("plugin-sdk provider-selection-runtime", () => {
     );
   });
 
+  it("retains the first unavailable provider when no auto candidate is available", () => {
+    const resolveProviderConfig = vi.fn();
+    const resolution = resolveConfiguredCapabilityProvider({
+      cfg: {},
+      cfgForResolve: {},
+      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
+      listProviders: () => providers,
+      isProviderAvailable: () => false,
+      resolveProviderConfig,
+      isProviderConfigured: () => true,
+    });
+
+    expect(resolution).toEqual({
+      ok: false,
+      code: "provider-unavailable",
+      provider: providers[0],
+    });
+    expect(resolveProviderConfig).not.toHaveBeenCalled();
+  });
+
   it("merges canonical and selected provider config", () => {
     expect(
       resolveProviderRawConfig({

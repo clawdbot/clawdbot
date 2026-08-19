@@ -100,6 +100,25 @@ describe("realtime voice provider resolver", () => {
     expect(resolution.provider).toBe(providers[1]);
   });
 
+  it("preserves the typed availability error when every auto provider is unavailable", () => {
+    class ProviderUnavailableError extends Error {}
+    const unavailable = new ProviderUnavailableError("provider owner is unavailable");
+    const assertProviderAvailable = vi.fn(() => {
+      throw unavailable;
+    });
+
+    expect(() =>
+      resolveConfiguredRealtimeVoiceProvider({
+        cfg: {},
+        providers,
+        isProviderAvailable: () => false,
+        assertProviderAvailable,
+      }),
+    ).toThrow(unavailable);
+    expect(assertProviderAvailable).toHaveBeenCalledOnce();
+    expect(assertProviderAvailable).toHaveBeenCalledWith(providers[0]);
+  });
+
   it("passes the host-selected agent to public provider readiness", () => {
     const isConfigured = vi.fn(({ agentId }) => agentId === "molty");
     const provider: RealtimeVoiceProviderPlugin = {

@@ -260,6 +260,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
           "capability",
           discordRealtimeVoiceSecretOwnerId(this.params.accountId, provider.id),
         ),
+      assertProviderAvailable: (provider) =>
+        assertSecretOwnerAvailable(
+          "capability",
+          discordRealtimeVoiceSecretOwnerId(this.params.accountId, provider.id),
+        ),
       noRegisteredProviderMessage: "No configured realtime voice provider registered",
     });
     assertSecretOwnerAvailable(
