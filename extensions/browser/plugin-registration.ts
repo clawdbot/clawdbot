@@ -201,7 +201,7 @@ function createBrowserProxyNodeHostCommand(command: string): OpenClawPluginNodeH
     ...(command === BROWSER_PROXY_UPLOAD_COMMAND
       ? {
           watchAvailability: () => {
-            void loadBrowserRegistrationRuntimeModule()
+            void import("./src/browser-proxy-upload.js")
               .then(({ ensureBrowserProxyUploadCleanup }) => ensureBrowserProxyUploadCleanup())
               .catch((error: unknown) => {
                 logger.warn(`browser proxy upload cleanup startup failed: ${String(error)}`);
