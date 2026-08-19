@@ -15,6 +15,7 @@ import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
   prepareGitHubToolEnvironment,
+  refreshManagedGitHubProfile,
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileDir,
@@ -359,9 +360,25 @@ describe("GitHub tool identity", () => {
   });
 
   it.each([
-    { failure: undefined, refreshExpiresAtMs: Date.now() + 60_000, expected: "available" },
-    { failure: "failed", refreshExpiresAtMs: Date.now() + 60_000, expected: "failed" },
-    { failure: undefined, refreshExpiresAtMs: 1, expected: "expired" },
+    {
+      failure: undefined,
+      pendingRefresh: undefined,
+      refreshExpiresAtMs: Date.now() + 60_000,
+      expected: "available",
+    },
+    {
+      failure: undefined,
+      pendingRefresh: true,
+      refreshExpiresAtMs: Date.now() + 60_000,
+      expected: "refreshing",
+    },
+    {
+      failure: "failed",
+      pendingRefresh: undefined,
+      refreshExpiresAtMs: Date.now() + 60_000,
+      expected: "failed",
+    },
+    { failure: undefined, pendingRefresh: undefined, refreshExpiresAtMs: 1, expected: "expired" },
   ] as const)("reports OAuth refresh state $expected", async (testCase) => {
     const root = tempDirs.make("openclaw-github-refresh-status-");
     const env = { OPENCLAW_STATE_DIR: root };
@@ -386,6 +403,7 @@ describe("GitHub tool identity", () => {
         accessExpiresAtMs: Date.now() + 60_000,
         refreshExpiresAtMs: testCase.refreshExpiresAtMs,
         scopes: ["offline_access", "repo"],
+        ...(testCase.pendingRefresh ? { pendingRefresh: true } : {}),
         ...(testCase.failure ? { refreshFailure: testCase.failure } : {}),
       },
     });
@@ -660,6 +678,55 @@ describe("GitHub tool identity", () => {
     }
     expect((await fs.stat(profileDir)).mode & 0o777).toBe(0o700);
     expect((await fs.stat(path.join(profileDir, "hosts.yml"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("atomically refreshes the credential seen by an already-prepared stable profile", async () => {
+    const root = tempDirs.make("openclaw-github-stable-refresh-");
+    const env = { OPENCLAW_STATE_DIR: root };
+    const profileId = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const config = { tools: { github: { profileId, kind: "oauth" as const } } };
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId,
+      env,
+    });
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(profileDir, "hosts.yml"), "old-credential\n", { mode: 0o600 });
+    const admitted = prepareGitHubToolEnvironment({ config, agentId: "main", env });
+    processMocks.runCommandBuffered.mockImplementation(
+      async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
+        const commandProfile = String(options.env?.GH_CONFIG_DIR);
+        if (argv[1] === "auth") {
+          await fs.writeFile(path.join(commandProfile, "hosts.yml"), "new-credential\n", {
+            mode: 0o600,
+          });
+          return commandResult();
+        }
+        const hosts = await fs.readFile(path.join(commandProfile, "hosts.yml"), "utf8");
+        return commandResult(
+          JSON.stringify({
+            id: 202,
+            login: hosts.includes("new-credential") ? "renamed-user" : "old-user",
+            avatarUrl: null,
+          }),
+        );
+      },
+    );
+
+    const account = await refreshManagedGitHubProfile({
+      profileDir,
+      token: "rotated-access-token",
+      expectedAccountId: 202,
+    });
+
+    expect(account.login).toBe("renamed-user");
+    expect(admitted.localIdentityEnv.GH_CONFIG_DIR).toBe(profileDir);
+    await expect(
+      fs.readFile(path.join(String(admitted.localIdentityEnv.GH_CONFIG_DIR), "hosts.yml"), "utf8"),
+    ).resolves.toBe("new-credential\n");
+    const publication = await prepareGitHubPublicationIdentity({ config, agentId: "main", env });
+    expect(publication).toMatchObject({ profileId, account: { login: "renamed-user" } });
   });
 
   it("keeps the previous generation after the new version commits", async () => {

@@ -189,12 +189,12 @@ struct GatewayProtocolGeneratedModelsTests {
     }
 
     @Test(arguments: [
-        (#"{"status":"pending","nextPollAtMs":1800000000000}"#, "pending"),
-        (#"{"status":"slow_down","nextPollAtMs":1800000005000}"#, "slow_down"),
+        (#"{"status":"pending","retryAfterMs":5000}"#, "pending"),
+        (#"{"status":"slow_down","retryAfterMs":10000}"#, "slow_down"),
         (#"{"status":"access_denied"}"#, "access_denied"),
         (#"{"status":"expired"}"#, "expired"),
         (#"{"status":"incorrect_device_code"}"#, "incorrect_device_code"),
-        (#"{"status":"network_error","retryAtMs":1800000005000}"#, "network_error"),
+        (#"{"status":"network_error","retryAfterMs":5000}"#, "network_error"),
         (#"{"status":"failed","reason":"identity_changed"}"#, "failed"),
         (
             #"{"status":"success","githubStatus":{"agentId":"main","selectedScope":"system","selected":{"scope":"system","configured":true,"identity":{"source":"system-configured","credentialKind":"managed-oauth","credentialState":"available","account":{"login":"octocat"},"gitAuthor":{"name":"octocat","email":"1+octocat@users.noreply.github.com"},"evidence":"github-api","accessExpiresAtMs":1800000000000,"refreshState":"available","oauthScopes":["repo"],"repositoryGrants":"unknown"}},"effective":{"source":"system-configured","credentialKind":"managed-oauth","credentialState":"available","account":{"login":"octocat"},"gitAuthor":{"name":"octocat","email":"1+octocat@users.noreply.github.com"},"evidence":"github-api","accessExpiresAtMs":1800000000000,"refreshState":"available","oauthScopes":["repo"],"repositoryGrants":"unknown"}}}"#,

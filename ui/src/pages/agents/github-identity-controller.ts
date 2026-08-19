@@ -1,5 +1,4 @@
 import { resolveSafeTimeoutDelayMs } from "@openclaw/gateway-client/browser";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ToolsGitHubAuthorizePollResult,
@@ -8,63 +7,22 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
-import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { generateUUID } from "../../lib/uuid.ts";
-
-type GitHubIdentityScope = "system" | "agent";
-type GitHubIdentityDraft = { token: string; name: string; email: string };
-
-type RequestOwner = {
-  client: GatewayBrowserClient;
-  agentId: string;
-  clientRevision: number;
-  agentRevision: number;
-  requestRevision: number;
-};
-
-type AuthorizationPresentation = ToolsGitHubAuthorizeStartResult & {
-  phase: "code" | "pending" | "network_error";
-  slowedDown?: boolean;
-  retryAtMs?: number;
-};
-
-type GitHubAuthorizationState =
-  | { phase: "idle" }
-  | { phase: "starting" }
-  | AuthorizationPresentation
-  | {
-      phase: "access_denied" | "expired" | "incorrect_device_code" | "failed";
-      message?: string;
-    };
-
-type AuthorizationOperation = {
-  owner: RequestOwner;
-  scope: GitHubIdentityScope;
-  controller: AbortController;
-  requestId?: string;
-  start?: ToolsGitHubAuthorizeStartResult;
-  timer?: ReturnType<typeof setTimeout>;
-};
-
-type GitHubIdentityHost = {
-  requestUpdate: () => void;
-  runExternalMutation: RuntimeConfigCapability["runExternalMutation"];
-};
-
-function configFingerprint(value: unknown): string {
-  return JSON.stringify(value ?? null);
-}
-
-function readDraft(value: unknown): GitHubIdentityDraft {
-  const github = isRecord(value) ? value : undefined;
-  const gitAuthor = isRecord(github?.gitAuthor) ? github.gitAuthor : undefined;
-  return {
-    token: "",
-    name: typeof gitAuthor?.name === "string" ? gitAuthor.name : "",
-    email: typeof gitAuthor?.email === "string" ? gitAuthor.email : "",
-  };
-}
+import {
+  runGitHubIdentityConfigure,
+  runGitHubIdentityInherit,
+} from "./github-identity-controller-mutations.ts";
+import {
+  cancelAuthorizationRequest,
+  configFingerprint,
+  readGitHubIdentityDraft,
+  type AuthorizationOperation,
+  type GitHubAuthorizationState,
+  type GitHubIdentityDraft,
+  type GitHubIdentityHost,
+  type GitHubIdentityScope,
+  type RequestOwner,
+} from "./github-identity-controller-shared.ts";
 
 export class GitHubIdentityController {
   status: ToolsGitHubStatusResult | null = null;
@@ -85,15 +43,16 @@ export class GitHubIdentityController {
   private clientRevision = -1;
   private agentRevision = -1;
   private requestRevision = 0;
-  private effectiveFingerprint = "";
+  private displayedIdentityFingerprint = "";
   private identityInitialized = false;
   private verificationQueued = false;
+  private confirmationPending = false;
   private mutationOwner: RequestOwner | null = null;
   private mutationIdentityChanged = false;
   private authorizationOperation: AuthorizationOperation | null = null;
   private drafts: Record<GitHubIdentityScope, GitHubIdentityDraft> = {
-    system: readDraft(undefined),
-    agent: readDraft(undefined),
+    system: readGitHubIdentityDraft(undefined),
+    agent: readGitHubIdentityDraft(undefined),
   };
   private draftDirty: Record<GitHubIdentityScope, boolean> = { system: false, agent: false };
   private configFingerprints: Record<GitHubIdentityScope, string> = { system: "", agent: "" };
@@ -105,7 +64,10 @@ export class GitHubIdentityController {
       this.authorization.phase === "starting" ||
       this.authorization.phase === "code" ||
       this.authorization.phase === "pending" ||
-      this.authorization.phase === "network_error"
+      this.authorization.phase === "network_error" ||
+      this.authorization.phase === "cancelling" ||
+      this.authorization.phase === "finishing" ||
+      this.authorization.phase === "cancel_error"
     );
   }
 
@@ -120,6 +82,7 @@ export class GitHubIdentityController {
   private queueVerification() {
     if (
       this.verificationQueued ||
+      this.confirmationPending ||
       !this.statusReadable ||
       !this.connected ||
       !this.agentId ||
@@ -175,10 +138,16 @@ export class GitHubIdentityController {
       system: resolved?.globalTools?.github,
       agent: resolved?.entry?.tools?.github,
     };
-    const effectiveFingerprint = configFingerprint(values.agent ?? values.system);
+    const displayedScope = agentChanged ? (values.agent ? "agent" : "system") : this.scope;
+    const displayedIdentityFingerprint = configFingerprint({
+      effective: values.agent ?? values.system,
+      selectedScope: displayedScope,
+      selected: values[displayedScope],
+    });
     const identityChanged =
-      this.identityInitialized && this.effectiveFingerprint !== effectiveFingerprint;
-    this.effectiveFingerprint = effectiveFingerprint;
+      this.identityInitialized &&
+      this.displayedIdentityFingerprint !== displayedIdentityFingerprint;
+    this.displayedIdentityFingerprint = displayedIdentityFingerprint;
     this.identityInitialized = true;
     const mutationOwner = this.mutationOwner;
     const mutationOwnsIdentityChange =
@@ -204,13 +173,16 @@ export class GitHubIdentityController {
       this.tokenRevealed = false;
       this.patVisible = false;
       this.authorization = { phase: "idle" };
-      this.drafts = { system: readDraft(values.system), agent: readDraft(values.agent) };
+      this.drafts = {
+        system: readGitHubIdentityDraft(values.system),
+        agent: readGitHubIdentityDraft(values.agent),
+      };
       this.draftDirty = { system: false, agent: false };
       this.configFingerprints = {
         system: configFingerprint(values.system),
         agent: configFingerprint(values.agent),
       };
-      this.scope = values.agent ? "agent" : "system";
+      this.scope = displayedScope;
       return;
     }
     if (capabilityChanged) {
@@ -220,7 +192,7 @@ export class GitHubIdentityController {
     for (const scope of ["system", "agent"] as const) {
       const fingerprint = configFingerprint(values[scope]);
       if (!this.draftDirty[scope] && this.configFingerprints[scope] !== fingerprint) {
-        this.drafts = { ...this.drafts, [scope]: readDraft(values[scope]) };
+        this.drafts = { ...this.drafts, [scope]: readGitHubIdentityDraft(values[scope]) };
         this.configFingerprints = { ...this.configFingerprints, [scope]: fingerprint };
       }
     }
@@ -255,6 +227,9 @@ export class GitHubIdentityController {
   }
 
   hidePatFallback() {
+    if (this.busy) {
+      return;
+    }
     this.patVisible = false;
     this.tokenRevealed = false;
     this.host.requestUpdate();
@@ -274,9 +249,7 @@ export class GitHubIdentityController {
     this.host.requestUpdate();
   }
 
-  dispose() {
-    this.retireAuthorization(true);
-  }
+  dispose = () => this.retireAuthorization(true);
 
   private captureRequest(): RequestOwner | null {
     if (!this.client || !this.connected || !this.agentId) {
@@ -311,15 +284,6 @@ export class GitHubIdentityController {
     );
   }
 
-  private cancelAuthorizationRequest(operation: AuthorizationOperation) {
-    if (!operation.requestId) {
-      return;
-    }
-    void operation.owner.client
-      .request("tools.github.authorize.cancel", { requestId: operation.requestId })
-      .catch(() => undefined);
-  }
-
   private retireAuthorization(notifyServer: boolean) {
     const operation = this.authorizationOperation;
     this.authorizationOperation = null;
@@ -331,27 +295,89 @@ export class GitHubIdentityController {
     }
     operation.controller.abort();
     if (notifyServer) {
-      this.cancelAuthorizationRequest(operation);
+      cancelAuthorizationRequest(operation);
     }
   }
 
-  cancelAuthorization() {
-    this.retireAuthorization(true);
-    this.authorization = { phase: "idle" };
-    this.busy = false;
+  async cancelAuthorization() {
+    const operation = this.authorizationOperation;
+    if (!operation || operation.cancelRequested || operation.cancelInFlight) {
+      return;
+    }
+    operation.cancelRequested = true;
+    operation.cancelError = undefined;
+    this.authorization = operation.start
+      ? {
+          ...operation.start,
+          displayExpiresAtMs: operation.displayExpiresAtMs ?? Date.now(),
+          phase: "cancelling",
+        }
+      : { phase: "cancelling" };
     this.host.requestUpdate();
+    if (operation.requestId) {
+      await this.finishExplicitCancellation(operation);
+    }
   }
 
-  private scheduleAuthorizationPoll(operation: AuthorizationOperation, nextPollAtMs: number) {
+  private async finishExplicitCancellation(operation: AuthorizationOperation) {
+    if (
+      !operation.requestId ||
+      operation.cancelInFlight ||
+      !this.isCurrentAuthorization(operation)
+    ) {
+      return;
+    }
+    operation.cancelInFlight = true;
+    try {
+      const result = await operation.owner.client.request<{ cancelled: boolean }>(
+        "tools.github.authorize.cancel",
+        { requestId: operation.requestId },
+      );
+      if (!this.isCurrentAuthorization(operation)) {
+        return;
+      }
+      if (result.cancelled) {
+        this.retireAuthorization(false);
+        this.authorization = { phase: "idle" };
+        this.busy = false;
+        this.host.requestUpdate();
+        return;
+      }
+      operation.cancelTooLate = true;
+      this.authorization = {
+        ...operation.start!,
+        displayExpiresAtMs: operation.displayExpiresAtMs ?? Date.now(),
+        phase: "finishing",
+      };
+      this.host.requestUpdate();
+    } catch (error) {
+      if (!this.isCurrentAuthorization(operation)) {
+        return;
+      }
+      operation.cancelRequested = false;
+      operation.cancelError = formatUiError(error);
+      this.authorization = operation.start
+        ? {
+            ...operation.start,
+            displayExpiresAtMs: operation.displayExpiresAtMs ?? Date.now(),
+            phase: "cancel_error",
+            message: operation.cancelError,
+          }
+        : { phase: "failed", message: operation.cancelError };
+      this.host.requestUpdate();
+    } finally {
+      operation.cancelInFlight = false;
+    }
+  }
+
+  private scheduleAuthorizationPoll(operation: AuthorizationOperation, delayMs: number) {
     if (!this.isCurrentAuthorization(operation) || !operation.start) {
       return;
     }
     if (operation.timer !== undefined) {
       clearTimeout(operation.timer);
     }
-    const expiresAtMs = operation.start.expiresAtMs;
-    const scheduledAtMs = Math.min(nextPollAtMs, expiresAtMs);
-    const delayMs = resolveSafeTimeoutDelayMs(Math.max(0, scheduledAtMs - Date.now()), {
+    const safeDelayMs = resolveSafeTimeoutDelayMs(delayMs, {
       minMs: 0,
     });
     operation.timer = setTimeout(() => {
@@ -359,14 +385,8 @@ export class GitHubIdentityController {
       if (!this.isCurrentAuthorization(operation)) {
         return;
       }
-      if (Date.now() >= expiresAtMs) {
-        this.authorizationOperation = null;
-        this.authorization = { phase: "expired" };
-        this.host.requestUpdate();
-        return;
-      }
       void this.pollAuthorization(operation);
-    }, delayMs);
+    }, safeDelayMs);
   }
 
   async startAuthorization() {
@@ -395,13 +415,22 @@ export class GitHubIdentityController {
       );
       operation.requestId = result.requestId;
       operation.start = result;
+      operation.displayExpiresAtMs = Date.now() + result.expiresInMs;
       if (!this.isCurrentAuthorization(operation)) {
-        this.cancelAuthorizationRequest(operation);
+        cancelAuthorizationRequest(operation);
         return;
       }
-      this.authorization = { ...result, phase: "code" };
+      if (operation.cancelRequested) {
+        await this.finishExplicitCancellation(operation);
+        return;
+      }
+      this.authorization = {
+        ...result,
+        displayExpiresAtMs: operation.displayExpiresAtMs,
+        phase: "code",
+      };
       this.host.requestUpdate();
-      this.scheduleAuthorizationPoll(operation, result.nextPollAtMs);
+      this.scheduleAuthorizationPoll(operation, result.pollAfterMs);
     } catch (error) {
       if (!this.isCurrentAuthorization(operation)) {
         return;
@@ -418,7 +447,16 @@ export class GitHubIdentityController {
     if (!operation.requestId || !operation.start || !this.isCurrentAuthorization(operation)) {
       return;
     }
-    this.authorization = { ...operation.start, phase: "pending" };
+    this.authorization = {
+      ...operation.start,
+      displayExpiresAtMs: operation.displayExpiresAtMs ?? Date.now(),
+      phase: operation.cancelTooLate
+        ? "finishing"
+        : operation.cancelError
+          ? "cancel_error"
+          : "pending",
+      ...(operation.cancelError ? { message: operation.cancelError } : {}),
+    };
     this.mutationOwner = operation.owner;
     this.mutationIdentityChanged = false;
     this.busy = true;
@@ -451,19 +489,25 @@ export class GitHubIdentityController {
       if (result.status === "pending" || result.status === "slow_down") {
         this.authorization = {
           ...operation.start,
-          phase: "pending",
+          displayExpiresAtMs: operation.displayExpiresAtMs ?? Date.now(),
+          phase: operation.cancelTooLate
+            ? "finishing"
+            : operation.cancelError
+              ? "cancel_error"
+              : "pending",
+          ...(operation.cancelError ? { message: operation.cancelError } : {}),
           ...(result.status === "slow_down" ? { slowedDown: true } : {}),
         };
-        this.scheduleAuthorizationPoll(operation, result.nextPollAtMs);
+        this.scheduleAuthorizationPoll(operation, result.retryAfterMs);
         return;
       }
       if (result.status === "network_error") {
         this.authorization = {
           ...operation.start,
+          displayExpiresAtMs: operation.displayExpiresAtMs ?? Date.now(),
           phase: "network_error",
-          retryAtMs: result.retryAtMs,
         };
-        this.scheduleAuthorizationPoll(operation, result.retryAtMs);
+        this.scheduleAuthorizationPoll(operation, result.retryAfterMs);
         return;
       }
       this.authorizationOperation = null;
@@ -490,25 +534,6 @@ export class GitHubIdentityController {
     } finally {
       this.finishMutation(operation.owner, succeeded);
     }
-  }
-
-  private async deleteSetupHandoff(client: GatewayBrowserClient, secretName: string) {
-    await client.request("secrets.store.delete", { name: secretName }).catch(() => undefined);
-  }
-
-  private runConfigureMutation(owner: RequestOwner, params: Record<string, unknown>) {
-    return this.host.runExternalMutation(
-      (client) => {
-        if (client !== owner.client) {
-          throw new Error("Connection changed before the GitHub identity update started.");
-        }
-        return client.request<ToolsGitHubStatusResult>("tools.github.configure", params);
-      },
-      {
-        canDispatch: () => this.isCurrent(owner) && this.configurable,
-        dispatchError: "Access changed before the GitHub identity update started.",
-      },
-    );
   }
 
   private finishMutation(owner: RequestOwner, succeeded: boolean) {
@@ -556,7 +581,13 @@ export class GitHubIdentityController {
   }
 
   async verify() {
-    if (!this.statusReadable || this.loading || this.busy || this.authorizationActive) {
+    if (
+      !this.statusReadable ||
+      this.loading ||
+      this.busy ||
+      this.confirmationPending ||
+      this.authorizationActive
+    ) {
       return;
     }
     const owner = this.captureRequest();
@@ -612,70 +643,14 @@ export class GitHubIdentityController {
       this.host.requestUpdate();
       return;
     }
-    const name = draft.name.trim();
-    const email = draft.email.trim();
     const owner = this.captureRequest();
     if (!owner) {
       return;
     }
-    this.mutationOwner = owner;
-    this.mutationIdentityChanged = false;
-    this.loading = false;
-    this.busy = true;
-    this.error = null;
-    this.host.requestUpdate();
-    let stored = false;
-    let secretName = "";
-    let succeeded = false;
-    try {
-      secretName = `github-setup-${generateUUID().replaceAll("-", "").toLowerCase()}`;
-      await owner.client.request("secrets.store.set", {
-        name: secretName,
-        value: draft.token,
-        kind: "secret",
-        allowedHosts: [],
-      });
-      stored = true;
-      if (!this.isCurrent(owner)) {
-        await this.deleteSetupHandoff(owner.client, secretName);
-        return;
-      }
-      const mutation = await this.runConfigureMutation(owner, {
-        scope,
-        agentId: owner.agentId,
-        mode: "managed",
-        secretName,
-        ...(name || email
-          ? {
-              gitAuthor: {
-                ...(name ? { name } : {}),
-                ...(email ? { email } : {}),
-              },
-            }
-          : {}),
-      });
-      if (!mutation.ok) {
-        throw new Error(mutation.error);
-      }
-      stored = false;
-      this.applyMutationStatus(
-        owner,
-        scope,
-        mutation.value,
-        { ...draft, token: "" },
-        mutation.refresh.ok ? null : mutation.refresh.error,
-      );
-      succeeded = true;
-    } catch (error) {
-      if (stored) {
-        await this.deleteSetupHandoff(owner.client, secretName);
-      }
-      if (this.isCurrent(owner)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      this.finishMutation(owner, succeeded);
-    }
+    await runGitHubIdentityConfigure({
+      ...this.createMutationOwner(owner, scope),
+      draft,
+    });
   }
 
   async inherit() {
@@ -687,41 +662,39 @@ export class GitHubIdentityController {
     if (!owner) {
       return;
     }
-    this.mutationOwner = owner;
-    this.mutationIdentityChanged = false;
-    this.loading = false;
-    this.busy = true;
-    this.error = null;
-    this.host.requestUpdate();
-    let succeeded = false;
-    try {
-      const mutation = await this.runConfigureMutation(owner, {
-        scope,
-        agentId: owner.agentId,
-        mode: "inherit",
-      });
-      if (!mutation.ok) {
-        throw new Error(mutation.error);
-      }
-      if (this.isCurrent(owner)) {
-        this.applyMutationStatus(
-          owner,
-          scope,
-          mutation.value,
-          readDraft(undefined),
-          mutation.refresh.ok ? null : mutation.refresh.error,
-        );
-        if (scope === "agent") {
-          this.scope = "system";
-        }
-        succeeded = true;
-      }
-    } catch (error) {
-      if (this.isCurrent(owner)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      this.finishMutation(owner, succeeded);
-    }
+    await runGitHubIdentityInherit({
+      ...this.createMutationOwner(owner, scope),
+      canContinue: () => this.configurable && !this.busy && !this.authorizationActive,
+      setConfirmationPending: (pending) => {
+        this.confirmationPending = pending;
+      },
+    });
+  }
+
+  private createMutationOwner(owner: RequestOwner, scope: GitHubIdentityScope) {
+    return {
+      owner,
+      scope,
+      isCurrent: () => this.isCurrent(owner),
+      isConfigurable: () => this.configurable,
+      runExternalMutation: this.host.runExternalMutation,
+      begin: () => {
+        this.mutationOwner = owner;
+        this.mutationIdentityChanged = false;
+        this.loading = false;
+        this.busy = true;
+        this.error = null;
+        this.host.requestUpdate();
+      },
+      applyStatus: (
+        status: ToolsGitHubStatusResult,
+        nextDraft: GitHubIdentityDraft,
+        refreshError: string | null,
+      ) => this.applyMutationStatus(owner, scope, status, nextDraft, refreshError),
+      finish: (succeeded: boolean) => this.finishMutation(owner, succeeded),
+      setError: (error: string) => {
+        this.error = error;
+      },
+    };
   }
 }

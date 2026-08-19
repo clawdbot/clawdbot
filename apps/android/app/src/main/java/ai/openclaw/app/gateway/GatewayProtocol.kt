@@ -221,9 +221,8 @@ data class ToolsGitHubAuthorizeStartResult(
   val requestId: String,
   val userCode: String,
   val verificationUri: String = "https://github.com/login/device",
-  val expiresAtMs: Long,
-  val pollIntervalMs: Long,
-  val nextPollAtMs: Long,
+  val expiresInMs: Long,
+  val pollAfterMs: Long,
 )
 
 @Serializable
@@ -234,13 +233,13 @@ data class ToolsGitHubAuthorizePollParams(
 @SerialName("pending")
 @Serializable
 data class ToolsGitHubAuthorizePendingResult(
-  val nextPollAtMs: Long,
+  val retryAfterMs: Long,
 ) : ToolsGitHubAuthorizePollResult
 
 @SerialName("slow_down")
 @Serializable
 data class ToolsGitHubAuthorizeSlowDownResult(
-  val nextPollAtMs: Long,
+  val retryAfterMs: Long,
 ) : ToolsGitHubAuthorizePollResult
 
 @SerialName("access_denied")
@@ -258,7 +257,7 @@ data object ToolsGitHubAuthorizeIncorrectDeviceCodeResult : ToolsGitHubAuthorize
 @SerialName("network_error")
 @Serializable
 data class ToolsGitHubAuthorizeNetworkErrorResult(
-  val retryAtMs: Long,
+  val retryAfterMs: Long,
 ) : ToolsGitHubAuthorizePollResult
 
 @SerialName("failed")

@@ -41,6 +41,10 @@ const deviceRecord: GitHubDeviceAuthorizationRecord = {
   agentId: "main",
   scope: "agent",
   expectedIdentity: null,
+  agentLifecycleBinding: {
+    agentId: "main",
+    provenance: null,
+  },
 };
 
 const oauthRecord: GitHubOAuthRecord = {
@@ -101,6 +105,36 @@ describe("GitHub OAuth hidden records", () => {
     [
       "access expiry after refresh",
       { ...oauthRecord, accessExpiresAtMs: oauthRecord.refreshExpiresAtMs },
+    ],
+    [
+      "both pending-initial and pending-refresh markers",
+      {
+        ...oauthRecord,
+        pendingInitial: {
+          requestId,
+          scope: "agent",
+          agentId: "main",
+          expectedIdentity: null,
+          agentLifecycleBinding: { agentId: "main", provenance: null },
+        },
+        pendingRefresh: true,
+      },
+    ],
+    [
+      "pending-initial scope mismatch",
+      {
+        ...oauthRecord,
+        pendingInitial: {
+          requestId,
+          scope: "system",
+          agentId: "main",
+          expectedIdentity: null,
+        },
+      },
+    ],
+    [
+      "pending refresh with terminal failure",
+      { ...oauthRecord, pendingRefresh: true, refreshFailure: "expired" },
     ],
   ])("rejects refresh metadata with %s", (_label, value) => {
     const candidate = structuredClone(oauthRecord);

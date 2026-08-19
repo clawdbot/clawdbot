@@ -108,12 +108,12 @@ describe("tools.github handlers", () => {
     oauth.retireProfile.mockReset();
   });
 
-  it("refreshes and returns selected-scope plus effective status", async () => {
+  it("returns selected-scope plus effective status without refreshing credentials", async () => {
     const respond = await invoke("tools.github.status", {
       agentId: "main",
       selectedScope: "system",
     });
-    expect(oauth.refreshEffectiveIdentity).toHaveBeenCalledWith("main");
+    expect(oauth.refreshEffectiveIdentity).not.toHaveBeenCalled();
     expect(github.status).toHaveBeenCalledWith({
       config: {},
       agentId: "main",
@@ -273,11 +273,10 @@ describe("tools.github handlers", () => {
       requestId,
       userCode: "ABCD-EFGH",
       verificationUri: "https://github.com/login/device",
-      expiresAtMs: 1_000,
-      pollIntervalMs: 5_000,
-      nextPollAtMs: 5_000,
+      expiresInMs: 900_000,
+      pollAfterMs: 5_000,
     });
-    oauth.pollAuthorization.mockResolvedValue({ status: "pending", nextPollAtMs: 10_000 });
+    oauth.pollAuthorization.mockResolvedValue({ status: "pending", retryAfterMs: 10_000 });
     oauth.cancelAuthorization.mockReturnValue(true);
 
     const start = await invoke("tools.github.authorize.start", {
@@ -294,11 +293,10 @@ describe("tools.github handlers", () => {
       requestId,
       userCode: "ABCD-EFGH",
       verificationUri: "https://github.com/login/device",
-      expiresAtMs: 1_000,
-      pollIntervalMs: 5_000,
-      nextPollAtMs: 5_000,
+      expiresInMs: 900_000,
+      pollAfterMs: 5_000,
     });
-    expect(poll).toHaveBeenCalledWith(true, { status: "pending", nextPollAtMs: 10_000 });
+    expect(poll).toHaveBeenCalledWith(true, { status: "pending", retryAfterMs: 10_000 });
     expect(cancel).toHaveBeenCalledWith(true, { cancelled: true });
     expect(JSON.stringify(start.mock.calls)).not.toContain("device_code");
     expect(JSON.stringify(start.mock.calls)).not.toContain("access_token");

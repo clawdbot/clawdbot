@@ -168,9 +168,8 @@ suite.define(() => {
           requestId: "github-device-11111111111111111111111111111111",
           userCode: "ABCD-1234",
           verificationUri: "https://github.com/login/device",
-          expiresAtMs: Date.now() + 60_000,
-          pollIntervalMs: 1_000,
-          nextPollAtMs: Date.now() + 1_000,
+          expiresInMs: 60_000,
+          pollAfterMs: 1_000,
         });
         await page.getByText("ABCD-1234", { exact: true }).waitFor();
         const openGitHub = page.getByRole("link", { name: "Open github.com/login/device" });
@@ -183,7 +182,7 @@ suite.define(() => {
         await gateway.deferNext("tools.github.authorize.poll");
         await gateway.resolveDeferred("tools.github.authorize.poll", {
           status: "pending",
-          nextPollAtMs: Date.now() + 1_000,
+          retryAfterMs: 1_000,
         });
         await page.getByText("Waiting for approval…", { exact: true }).waitFor();
         await capture(page, "02-pending.png");
@@ -192,7 +191,7 @@ suite.define(() => {
         await gateway.deferNext("tools.github.authorize.poll");
         await gateway.resolveDeferred("tools.github.authorize.poll", {
           status: "slow_down",
-          nextPollAtMs: Date.now() + 1_000,
+          retryAfterMs: 1_000,
         });
         await page.getByText("GitHub asked us to wait longer…", { exact: true }).waitFor();
         await capture(page, "02b-slow-down.png");
@@ -218,10 +217,10 @@ suite.define(() => {
         await page.getByText("@system-octocat", { exact: true }).waitFor();
         await page.getByText("@agent-octocat", { exact: true }).waitFor();
         expect(await page.getByText("Managed GitHub authorization", { exact: true }).count()).toBe(
-          2,
+          1,
         );
         expect(await page.getByText("Managed personal access token", { exact: true }).count()).toBe(
-          0,
+          1,
         );
         await capture(page, "04b-system-shadowed.png");
 
@@ -238,9 +237,8 @@ suite.define(() => {
           requestId: "github-device-22222222222222222222222222222222",
           userCode: "WXYZ-9876",
           verificationUri: "https://github.com/login/device",
-          expiresAtMs: Date.now() + 60_000,
-          pollIntervalMs: 1,
-          nextPollAtMs: Date.now() + 1,
+          expiresInMs: 60_000,
+          pollAfterMs: 1_000,
         });
         await gateway.waitForRequest("tools.github.authorize.poll", { after: 3 });
         await gateway.resolveDeferred("tools.github.authorize.poll", { status: "expired" });
@@ -260,9 +258,8 @@ suite.define(() => {
           requestId: "github-device-33333333333333333333333333333333",
           userCode: "DISC-0001",
           verificationUri: "https://github.com/login/device",
-          expiresAtMs: Date.now() + 60_000,
-          pollIntervalMs: 5_000,
-          nextPollAtMs: Date.now() + 5_000,
+          expiresInMs: 60_000,
+          pollAfterMs: 5_000,
         });
         await page.getByText("DISC-0001", { exact: true }).waitFor();
         await gateway.setOnline(false);

@@ -104,9 +104,8 @@ describe("GitHub tools protocol", () => {
       requestId: "github-device-11111111111111111111111111111111",
       userCode: "ABCD-1234",
       verificationUri: "https://github.com/login/device",
-      expiresAtMs: 1_800_000_000_000,
-      pollIntervalMs: 5_000,
-      nextPollAtMs: 1_799_999_105_000,
+      expiresInMs: 900_000,
+      pollAfterMs: 5_000,
     };
     expect(Value.Check(ToolsGitHubAuthorizeStartResultSchema, result)).toBe(true);
     expect(
@@ -124,12 +123,12 @@ describe("GitHub tools protocol", () => {
   });
 
   it.each([
-    { status: "pending", nextPollAtMs: 1_800_000_000_000 },
-    { status: "slow_down", nextPollAtMs: 1_800_000_005_000 },
+    { status: "pending", retryAfterMs: 5_000 },
+    { status: "slow_down", retryAfterMs: 10_000 },
     { status: "access_denied" },
     { status: "expired" },
     { status: "incorrect_device_code" },
-    { status: "network_error", retryAtMs: 1_800_000_005_000 },
+    { status: "network_error", retryAfterMs: 5_000 },
     { status: "failed", reason: "identity_changed" },
     { status: "failed", reason: "setup_failed" },
     {
@@ -149,14 +148,14 @@ describe("GitHub tools protocol", () => {
     expect(
       Value.Check(ToolsGitHubAuthorizePollResultSchema, {
         status: "pending",
-        nextPollAtMs: 1_800_000_000_000,
+        retryAfterMs: 5_000,
         device_code: "not-allowed",
       }),
     ).toBe(false);
     expect(
       Value.Check(ToolsGitHubAuthorizePollResultSchema, {
         status: "network_error",
-        retryAtMs: 1_800_000_000_000,
+        retryAfterMs: 5_000,
         message: "upstream diagnostic",
       }),
     ).toBe(false);

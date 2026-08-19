@@ -260,9 +260,9 @@ describe("agents tools panel (browser)", () => {
       requestId: "github-device-11111111111111111111111111111111",
       userCode: "ABCD-1234",
       verificationUri: "https://github.com/login/device",
-      expiresAtMs: 1_900_000_000_000,
-      pollIntervalMs: 5_000,
-      nextPollAtMs: 1_800_000_005_000,
+      expiresInMs: 900_000,
+      pollAfterMs: 5_000,
+      displayExpiresAtMs: 1_900_000_000_000,
     };
 
     render(renderAgentTools(createBaseParams({ githubIdentity })), container);
@@ -278,6 +278,39 @@ describe("agents tools panel (browser)", () => {
     expect(container.querySelector(".settings-secret input")).toBeNull();
     expect(container.textContent).not.toContain("github-device-11111111111111111111111111111111");
     expect(container.querySelector(".settings-segmented")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps complete effective facts when This Agent inherits System", async () => {
+    const container = document.createElement("div");
+    const params = createBaseParams();
+    const effective = {
+      source: "system-configured" as const,
+      credentialKind: "managed-oauth" as const,
+      credentialState: "available" as const,
+      account: { login: "system-user" },
+      gitAuthor: { name: "System Author", email: "system@example.com" },
+      evidence: "github-api" as const,
+      accessExpiresAtMs: 1_900_000_000_000,
+      refreshState: "available" as const,
+      oauthScopes: ["repo", "workflow"],
+      repositoryGrants: "unknown" as const,
+    };
+    params.githubIdentity.scope = "agent";
+    params.githubIdentity.status = {
+      agentId: "main",
+      selectedScope: "agent",
+      selected: { scope: "agent", configured: false, identity: null },
+      effective,
+    };
+
+    render(renderAgentTools(params), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("@system-user");
+    expect(container.textContent).toContain("System Author · system@example.com");
+    expect(container.textContent).toContain("Managed GitHub authorization");
+    expect(container.textContent).toContain("repo, workflow");
+    expect(container.textContent).toContain("This scope inherits the effective identity");
   });
 
   it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
@@ -312,6 +345,14 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
     expect(container.querySelector(".settings-secret input")).not.toBeNull();
     expect(container.textContent).not.toContain("Connect GitHub");
+
+    githubIdentity.busy = true;
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    const cancel = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Cancel",
+    );
+    expect(cancel?.disabled).toBe(true);
   });
 
   it("shows fallback warning when runtime catalog fails", async () => {

@@ -47,6 +47,77 @@ function githubEvidenceDetail(status: ToolsGitHubStatusResult["effective"]) {
   }
 }
 
+function renderIdentityFacts(
+  identity: ToolsGitHubStatusResult["effective"],
+  labels: {
+    account: string;
+    status: string;
+    author: string;
+    credential: string;
+    accessExpiry: string;
+    refresh: string;
+    scopes: string;
+  },
+) {
+  const credentialStatus = GITHUB_CREDENTIAL_STATUS[identity.credentialState];
+  const authorParts = [identity.gitAuthor.name, identity.gitAuthor.email].filter(
+    (part): part is string => typeof part === "string" && part.length > 0,
+  );
+  return html`
+    ${renderSettingsRow({
+      title: labels.account,
+      description: githubSourceLabel(identity.source),
+      control: identity.account
+        ? renderSettingsValue(`@${identity.account.login}`, { mono: true })
+        : renderSettingsValue(t("agentTools.githubNoAccount")),
+    })}
+    ${renderSettingsRow({
+      title: labels.status,
+      description: githubEvidenceDetail(identity),
+      control: renderSettingsStatus({
+        kind: credentialStatus.kind,
+        label: t(credentialStatus.label),
+      }),
+    })}
+    ${renderSettingsRow({
+      title: labels.author,
+      control: renderSettingsValue(
+        authorParts.length > 0 ? authorParts.join(" · ") : t("agentTools.githubAuthorUnset"),
+      ),
+    })}
+    ${renderSettingsRow({
+      title: labels.credential,
+      control: renderSettingsValue(t(GITHUB_CREDENTIAL_KIND[identity.credentialKind])),
+    })}
+    ${identity.credentialKind === "managed-oauth"
+      ? html`
+          ${renderSettingsRow({
+            title: labels.accessExpiry,
+            control: renderSettingsValue(
+              identity.accessExpiresAtMs
+                ? formatDateTimeMs(identity.accessExpiresAtMs, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })
+                : t("common.na"),
+            ),
+          })}
+          ${renderSettingsRow({
+            title: labels.refresh,
+            control: renderSettingsValue(t(GITHUB_REFRESH_STATE[identity.refreshState])),
+          })}
+          ${renderSettingsRow({
+            title: labels.scopes,
+            control: renderSettingsValue(
+              identity.oauthScopes.length ? identity.oauthScopes.join(", ") : t("common.none"),
+              { mono: true },
+            ),
+          })}
+        `
+      : nothing}
+  `;
+}
+
 const GITHUB_CREDENTIAL_KIND = {
   native: "agentTools.githubKindNative",
   "managed-pat": "agentTools.githubKindPat",
@@ -82,37 +153,68 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
       description: t("agentTools.githubAdminRequired"),
     });
   }
-  if (authorization.phase === "starting") {
+  if (
+    authorization.phase === "starting" ||
+    (authorization.phase === "cancelling" && !("userCode" in authorization))
+  ) {
     return renderSettingsRow({
       title: t("agentTools.githubAuthorization"),
       control: html`
-        ${renderSettingsStatus({ kind: "accent", label: t("agentTools.githubStarting") })}
-        <button class="btn btn--sm" @click=${() => controller.cancelAuthorization()}>
-          ${t("common.cancel")}
-        </button>
+        ${renderSettingsStatus({
+          kind: "accent",
+          label:
+            authorization.phase === "cancelling"
+              ? t("agentTools.githubCancelling")
+              : t("agentTools.githubStarting"),
+        })}
+        ${authorization.phase === "starting"
+          ? html`<button class="btn btn--sm" @click=${() => void controller.cancelAuthorization()}>
+              ${t("common.cancel")}
+            </button>`
+          : nothing}
       `,
     });
   }
   if (
     authorization.phase === "code" ||
     authorization.phase === "pending" ||
-    authorization.phase === "network_error"
+    authorization.phase === "network_error" ||
+    authorization.phase === "cancelling" ||
+    authorization.phase === "finishing" ||
+    authorization.phase === "cancel_error"
   ) {
+    if (!("userCode" in authorization)) {
+      return nothing;
+    }
     const copyLabel = t("agentTools.githubCopyCode");
     const stateLabel =
       authorization.phase === "code"
         ? t("agentTools.githubCodeReady")
-        : authorization.phase === "network_error"
-          ? t("agentTools.githubNetworkRetry")
-          : authorization.slowedDown
-            ? t("agentTools.githubSlowDown")
-            : t("agentTools.githubWaiting");
+        : authorization.phase === "cancelling"
+          ? t("agentTools.githubCancelling")
+          : authorization.phase === "finishing"
+            ? t("agentTools.githubFinishing")
+            : authorization.phase === "cancel_error"
+              ? t("agentTools.githubCancelFailed")
+              : authorization.phase === "network_error"
+                ? t("agentTools.githubNetworkRetry")
+                : authorization.slowedDown
+                  ? t("agentTools.githubSlowDown")
+                  : t("agentTools.githubWaiting");
     return html`
       ${renderSettingsRow({
         title: t("agentTools.githubAuthorization"),
-        description: t("agentTools.githubAuthorizationHint"),
+        description:
+          authorization.phase === "cancel_error"
+            ? authorization.message
+              ? `${t("agentTools.githubCancelFailedHint")} ${authorization.message}`
+              : t("agentTools.githubCancelFailedHint")
+            : t("agentTools.githubAuthorizationHint"),
         control: renderSettingsStatus({
-          kind: authorization.phase === "network_error" ? "warn" : "accent",
+          kind:
+            authorization.phase === "network_error" || authorization.phase === "cancel_error"
+              ? "warn"
+              : "accent",
           label: stateLabel,
         }),
       })}
@@ -128,7 +230,7 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
       ${renderSettingsRow({
         title: t("agentTools.githubExpires"),
         control: renderSettingsValue(
-          formatDateTimeMs(authorization.expiresAtMs, {
+          formatDateTimeMs(authorization.displayExpiresAtMs, {
             dateStyle: "medium",
             timeStyle: "short",
           }),
@@ -153,9 +255,17 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
           >
             <span data-copy-label>${copyLabel}</span>
           </button>
-          <button type="button" class="btn" @click=${() => controller.cancelAuthorization()}>
-            ${t("common.cancel")}
-          </button>
+          ${authorization.phase === "cancelling" || authorization.phase === "finishing"
+            ? nothing
+            : html`<button
+                type="button"
+                class="btn"
+                @click=${() => void controller.cancelAuthorization()}
+              >
+                ${authorization.phase === "cancel_error"
+                  ? t("agentTools.githubRetryCancel")
+                  : t("common.cancel")}
+              </button>`}
         </div>
       </div>
     `;
@@ -240,20 +350,8 @@ export function renderGitHubIdentity(controller: GitHubIdentityController) {
   const effective = status?.effective ?? null;
   const selectedIdentity = status?.selected.identity ?? null;
   const selectedDiffers = Boolean(
-    effective &&
-    selectedIdentity &&
-    (effective.source !== selectedIdentity.source ||
-      effective.credentialKind !== selectedIdentity.credentialKind ||
-      effective.account?.login !== selectedIdentity.account?.login),
+    effective && selectedIdentity && JSON.stringify(effective) !== JSON.stringify(selectedIdentity),
   );
-  const credentialStatus = selectedIdentity
-    ? GITHUB_CREDENTIAL_STATUS[selectedIdentity.credentialState]
-    : null;
-  const authorParts = selectedIdentity
-    ? [selectedIdentity.gitAuthor.name, selectedIdentity.gitAuthor.email].filter(
-        (part): part is string => typeof part === "string" && part.length > 0,
-      )
-    : [];
   const statusRows = !status
     ? renderSettingsRow({
         title: t("agentTools.githubAccount"),
@@ -261,93 +359,41 @@ export function renderGitHubIdentity(controller: GitHubIdentityController) {
         control: renderSettingsValue(t("agentTools.githubNoAccount")),
       })
     : html`
-        ${renderSettingsRow({
-          title: t("agentTools.githubEffectiveAccount"),
-          description: githubSourceLabel(status.effective.source),
-          control: status.effective.account
-            ? html`
-                <span class="settings-account">
-                  <span class="settings-row__value settings-row__value--mono"
-                    >@${status.effective.account.login}</span
-                  >
-                </span>
-              `
-            : renderSettingsValue(t("agentTools.githubNoAccount")),
+        ${renderIdentityFacts(status.effective, {
+          account: t("agentTools.githubEffectiveAccount"),
+          status: t("agentTools.githubEffectiveStatus"),
+          author: t("agentTools.githubEffectiveAuthor"),
+          credential: t("agentTools.githubEffectiveCredential"),
+          accessExpiry: t("agentTools.githubEffectiveAccessExpiry"),
+          refresh: t("agentTools.githubEffectiveRefresh"),
+          scopes: t("agentTools.githubEffectiveScopes"),
         })}
-        ${credentialStatus
-          ? renderSettingsRow({
-              title: t("agentTools.status"),
-              description: selectedIdentity ? githubEvidenceDetail(selectedIdentity) : undefined,
-              control: renderSettingsStatus({
-                kind: credentialStatus.kind,
-                label: t(credentialStatus.label),
-              }),
-            })
-          : nothing}
-        ${selectedIdentity
-          ? html`
-              ${renderSettingsRow({
-                title: t("agentTools.githubAuthor"),
-                control: renderSettingsValue(
-                  authorParts.length > 0
-                    ? authorParts.join(" · ")
-                    : t("agentTools.githubAuthorUnset"),
-                ),
-              })}
-              ${renderSettingsRow({
-                title: t("agentTools.githubCredentialKind"),
-                control: renderSettingsValue(
-                  t(GITHUB_CREDENTIAL_KIND[selectedIdentity.credentialKind]),
-                ),
-              })}
-            `
-          : nothing}
         ${renderSettingsRow({
-          title: t("agentTools.githubSelectedConfiguration"),
+          title: t("agentTools.githubSelectedConfiguration", {
+            scope:
+              controller.scope === "agent"
+                ? t("agentTools.githubAgentOverride")
+                : t("agentTools.githubSystem"),
+          }),
+          description: status.selected.configured
+            ? t("agentTools.githubConfiguredHere")
+            : t("agentTools.githubInheritedHere"),
           control: renderSettingsValue(
             status.selected.configured
-              ? t("agentTools.githubConfiguredHere")
-              : t("agentTools.githubInheritedHere"),
+              ? t("agentTools.githubSelectedConfigured")
+              : t("agentTools.githubSelectedInherited"),
           ),
         })}
         ${selectedDiffers && selectedIdentity
-          ? renderSettingsRow({
-              title: t("agentTools.githubSelectedAccount"),
-              description: t(GITHUB_CREDENTIAL_KIND[selectedIdentity.credentialKind]),
-              control: selectedIdentity.account
-                ? renderSettingsValue(`@${selectedIdentity.account.login}`, { mono: true })
-                : renderSettingsValue(t("agentTools.githubNoAccount")),
+          ? renderIdentityFacts(selectedIdentity, {
+              account: t("agentTools.githubSelectedAccount"),
+              status: t("agentTools.githubSelectedStatus"),
+              author: t("agentTools.githubSelectedAuthor"),
+              credential: t("agentTools.githubSelectedCredential"),
+              accessExpiry: t("agentTools.githubSelectedAccessExpiry"),
+              refresh: t("agentTools.githubSelectedRefresh"),
+              scopes: t("agentTools.githubSelectedScopes"),
             })
-          : nothing}
-        ${selectedIdentity?.credentialKind === "managed-oauth"
-          ? html`
-              ${renderSettingsRow({
-                title: t("agentTools.githubAccessExpiry"),
-                control: renderSettingsValue(
-                  selectedIdentity.accessExpiresAtMs
-                    ? formatDateTimeMs(selectedIdentity.accessExpiresAtMs, {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })
-                    : t("common.na"),
-                ),
-              })}
-              ${renderSettingsRow({
-                title: t("agentTools.githubRefresh"),
-                control: renderSettingsValue(
-                  t(GITHUB_REFRESH_STATE[selectedIdentity.refreshState]),
-                ),
-              })}
-              ${renderSettingsRow({
-                title: t("agentTools.githubOAuthScopes"),
-                control: renderSettingsValue(
-                  selectedIdentity.oauthScopes.length
-                    ? selectedIdentity.oauthScopes.join(", ")
-                    : t("common.none"),
-                  { mono: true },
-                ),
-              })}
-            `
           : nothing}
       `;
   return renderSettingsSection(
@@ -415,7 +461,11 @@ export function renderGitHubIdentity(controller: GitHubIdentityController) {
               ${renderAuthorRow("email", t("agentTools.githubAuthorEmail"))}
               <div class="settings-row settings-row--actions">
                 <div class="settings-row__control">
-                  <button class="btn" @click=${() => controller.hidePatFallback()}>
+                  <button
+                    class="btn"
+                    ?disabled=${controller.busy}
+                    @click=${() => controller.hidePatFallback()}
+                  >
                     ${t("common.cancel")}
                   </button>
                   <button
@@ -432,7 +482,16 @@ export function renderGitHubIdentity(controller: GitHubIdentityController) {
         : nothing}
       <div class="settings-row">
         <div class="settings-row__text">
-          <span class="settings-row__desc">${t("agentTools.githubCloudNote")}</span>
+          <span class="settings-row__title">
+            ${controller.scope === "agent"
+              ? t("agentTools.githubAgentOverride")
+              : t("agentTools.githubSystem")}
+          </span>
+          <span class="settings-row__desc">
+            ${controller.scope === "agent"
+              ? t("agentTools.githubAgentMutationHint")
+              : t("agentTools.githubSystemMutationHint")}
+          </span>
         </div>
         <div class="settings-row__control">
           ${status?.selected.configured
@@ -442,12 +501,16 @@ export function renderGitHubIdentity(controller: GitHubIdentityController) {
                 @click=${() => void controller.inherit()}
               >
                 ${controller.scope === "agent"
-                  ? t("agentTools.githubUseSystem")
-                  : t("agentTools.githubUseNative")}
+                  ? t("agentTools.githubUseSystemNewRuns")
+                  : t("agentTools.githubUseNativeNewRuns")}
               </button>`
             : nothing}
         </div>
       </div>
+      ${renderSettingsRow({
+        title: t("agentTools.githubCloudNoteTitle"),
+        description: t("agentTools.githubCloudNote"),
+      })}
     `,
   );
 }

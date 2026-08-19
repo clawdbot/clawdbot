@@ -212,8 +212,8 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
       return [resolveManagedGitHubAgentKey(agentId), new Set(profileId ? [profileId] : [])];
     }),
   );
-  // A rotated pair can be durable before its config CAS. Preserve that exact
-  // generation so the lifecycle owner can finish or roll back recovery.
+  // Initial setup can be durable before its config CAS is known. Pending
+  // refresh metadata also owns the selected stable profile until recovery.
   for (const { record } of listGitHubOAuthRecords()) {
     if (!record) {
       continue;

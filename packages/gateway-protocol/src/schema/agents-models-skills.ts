@@ -1124,9 +1124,8 @@ export const ToolsGitHubAuthorizeStartResultSchema = closedObject({
   requestId: GitHubDeviceRequestIdSchema,
   userCode: Type.String({ pattern: "^[A-Z0-9]{4}-[A-Z0-9]{4}$" }),
   verificationUri: Type.Literal("https://github.com/login/device"),
-  expiresAtMs: Type.Integer({ minimum: 0 }),
-  pollIntervalMs: Type.Integer({ minimum: 1 }),
-  nextPollAtMs: Type.Integer({ minimum: 0 }),
+  expiresInMs: Type.Integer({ minimum: 1, maximum: 900_000 }),
+  pollAfterMs: Type.Integer({ minimum: 1_000, maximum: 60_000 }),
 });
 
 export const ToolsGitHubAuthorizePollParamsSchema = closedObject({
@@ -1135,12 +1134,12 @@ export const ToolsGitHubAuthorizePollParamsSchema = closedObject({
 
 export const ToolsGitHubAuthorizePendingResultSchema = closedObject({
   status: Type.Literal("pending"),
-  nextPollAtMs: Type.Integer({ minimum: 0 }),
+  retryAfterMs: Type.Integer({ minimum: 1, maximum: 60_000 }),
 });
 
 export const ToolsGitHubAuthorizeSlowDownResultSchema = closedObject({
   status: Type.Literal("slow_down"),
-  nextPollAtMs: Type.Integer({ minimum: 0 }),
+  retryAfterMs: Type.Integer({ minimum: 1, maximum: 60_000 }),
 });
 
 export const ToolsGitHubAuthorizeAccessDeniedResultSchema = closedObject({
@@ -1157,7 +1156,7 @@ export const ToolsGitHubAuthorizeIncorrectDeviceCodeResultSchema = closedObject(
 
 export const ToolsGitHubAuthorizeNetworkErrorResultSchema = closedObject({
   status: Type.Literal("network_error"),
-  retryAtMs: Type.Integer({ minimum: 0 }),
+  retryAfterMs: Type.Integer({ minimum: 1, maximum: 60_000 }),
 });
 
 export const ToolsGitHubAuthorizeFailedResultSchema = closedObject({

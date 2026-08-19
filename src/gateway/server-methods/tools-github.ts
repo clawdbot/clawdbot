@@ -37,7 +37,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    await context.githubOAuthService?.refreshEffectiveIdentity(resolved.agentId);
     respond(
       true,
       await resolveGitHubToolIdentityStatus({

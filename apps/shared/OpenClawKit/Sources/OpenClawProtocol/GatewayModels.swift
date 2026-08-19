@@ -15197,33 +15197,29 @@ public struct ToolsGitHubAuthorizeStartResult: Codable, Sendable {
     public let requestid: String
     public let usercode: String
     public let verificationuri: String
-    public let expiresatms: Int
-    public let pollintervalms: Int
-    public let nextpollatms: Int
+    public let expiresinms: Int
+    public let pollafterms: Int
 
     public init(
         requestid: String,
         usercode: String,
         verificationuri: String,
-        expiresatms: Int,
-        pollintervalms: Int,
-        nextpollatms: Int)
+        expiresinms: Int,
+        pollafterms: Int)
     {
         self.requestid = requestid
         self.usercode = usercode
         self.verificationuri = verificationuri
-        self.expiresatms = expiresatms
-        self.pollintervalms = pollintervalms
-        self.nextpollatms = nextpollatms
+        self.expiresinms = expiresinms
+        self.pollafterms = pollafterms
     }
 
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
         case usercode = "userCode"
         case verificationuri = "verificationUri"
-        case expiresatms = "expiresAtMs"
-        case pollintervalms = "pollIntervalMs"
-        case nextpollatms = "nextPollAtMs"
+        case expiresinms = "expiresInMs"
+        case pollafterms = "pollAfterMs"
     }
 }
 
@@ -15243,37 +15239,37 @@ public struct ToolsGitHubAuthorizePollParams: Codable, Sendable {
 
 public struct ToolsGitHubAuthorizePendingResult: Codable, Sendable {
     public let status: String
-    public let nextpollatms: Int
+    public let retryafterms: Int
 
     public init(
         status: String,
-        nextpollatms: Int)
+        retryafterms: Int)
     {
         self.status = status
-        self.nextpollatms = nextpollatms
+        self.retryafterms = retryafterms
     }
 
     private enum CodingKeys: String, CodingKey {
         case status
-        case nextpollatms = "nextPollAtMs"
+        case retryafterms = "retryAfterMs"
     }
 }
 
 public struct ToolsGitHubAuthorizeSlowDownResult: Codable, Sendable {
     public let status: String
-    public let nextpollatms: Int
+    public let retryafterms: Int
 
     public init(
         status: String,
-        nextpollatms: Int)
+        retryafterms: Int)
     {
         self.status = status
-        self.nextpollatms = nextpollatms
+        self.retryafterms = retryafterms
     }
 
     private enum CodingKeys: String, CodingKey {
         case status
-        case nextpollatms = "nextPollAtMs"
+        case retryafterms = "retryAfterMs"
     }
 }
 
@@ -15321,19 +15317,19 @@ public struct ToolsGitHubAuthorizeIncorrectDeviceCodeResult: Codable, Sendable {
 
 public struct ToolsGitHubAuthorizeNetworkErrorResult: Codable, Sendable {
     public let status: String
-    public let retryatms: Int
+    public let retryafterms: Int
 
     public init(
         status: String,
-        retryatms: Int)
+        retryafterms: Int)
     {
         self.status = status
-        self.retryatms = retryatms
+        self.retryafterms = retryafterms
     }
 
     private enum CodingKeys: String, CodingKey {
         case status
-        case retryatms = "retryAtMs"
+        case retryafterms = "retryAfterMs"
     }
 }
 

@@ -24,6 +24,8 @@ const MANAGED_GITHUB_ROOT_SEGMENTS = ["credentials", "github"] as const;
 
 export type GitHubToolAccount = { accountId: number; login: string; avatarUrl: string | null };
 
+export class GitHubAccountMismatchError extends Error {}
+
 export function createManagedGitHubProfileId(): string {
   return `ghp_${randomBytes(16).toString("hex")}`;
 }
@@ -281,7 +283,7 @@ async function readGitAuthor(env: NodeJS.ProcessEnv, cwd: string) {
   return author;
 }
 
-export async function isPrivateManagedGitHubProfile(profileDir: string): Promise<boolean> {
+async function isPrivateManagedGitHubProfile(profileDir: string): Promise<boolean> {
   try {
     const [profile, hosts] = await Promise.all([
       fs.lstat(profileDir),
@@ -380,8 +382,10 @@ async function resolveGitHubIdentityFacts(params: {
       ? "not_applicable"
       : oauth.state !== "valid"
         ? "unavailable"
-        : (oauth.record.refreshFailure ??
-          (oauth.record.refreshExpiresAtMs <= Date.now() ? "expired" : "available"));
+        : oauth.record.pendingRefresh
+          ? "refreshing"
+          : (oauth.record.refreshFailure ??
+            (oauth.record.refreshExpiresAtMs <= Date.now() ? "expired" : "available"));
   return {
     source: identity.source,
     credentialKind: !managed
@@ -487,24 +491,19 @@ async function makePrivateTree(root: string): Promise<void> {
   }
 }
 
-/** Publishes a new inactive profile and switches config without retiring in-use generations. */
-export async function installManagedGitHubProfile(params: {
-  profileDir: string;
-  token: string;
-  commitConfig: (account: GitHubToolAccount) => Promise<void>;
-  retainProfileOnCommitFailure?: boolean;
-}): Promise<GitHubToolAccount> {
-  const token = params.token.trim();
-  if (!token || /[\r\n]/u.test(token)) {
+function normalizeManagedGitHubToken(token: string): string {
+  const normalized = token.trim();
+  if (!normalized || /[\r\n]/u.test(normalized)) {
     throw new Error("Managed GitHub credential must be one non-empty line.");
   }
-  const parent = path.dirname(params.profileDir);
+  return normalized;
+}
+
+async function stageManagedGitHubProfile(parent: string, token: string) {
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
   await fs.chmod(parent, 0o700);
   const stagingRoot = await fs.mkdtemp(path.join(parent, ".github-profile.staging-"));
   const stagedProfile = path.join(stagingRoot, "profile");
-  let published = false;
-  let committed = false;
   try {
     await fs.mkdir(stagedProfile, { mode: 0o700 });
     const stagedEnv: NodeJS.ProcessEnv = {
@@ -515,7 +514,7 @@ export async function installManagedGitHubProfile(params: {
     const login = await runIdentityCommand(
       ["gh", "auth", "login", "--hostname", GITHUB_HOST, "--with-token", "--insecure-storage"],
       stagedEnv,
-      `${token}\n`,
+      `${normalizeManagedGitHubToken(token)}\n`,
     );
     if (login.code !== 0) {
       throw new Error("GitHub CLI rejected the managed credential.");
@@ -525,15 +524,67 @@ export async function installManagedGitHubProfile(params: {
       throw new Error("GitHub CLI could not verify the managed credential.");
     }
     await makePrivateTree(stagedProfile);
-    await fs.rename(stagedProfile, params.profileDir);
+    return { account: verified.account, stagedProfile, stagingRoot };
+  } catch (error) {
+    await fs.rm(stagingRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** Verifies a rotated token, then atomically replaces credentials in one stable profile. */
+export async function refreshManagedGitHubProfile(params: {
+  profileDir: string;
+  token: string;
+  expectedAccountId: number;
+}): Promise<GitHubToolAccount> {
+  if (!(await isPrivateManagedGitHubProfile(params.profileDir))) {
+    throw new Error("The configured GitHub identity profile is unavailable.");
+  }
+  const staged = await stageManagedGitHubProfile(path.dirname(params.profileDir), params.token);
+  const targetHosts = path.join(params.profileDir, "hosts.yml");
+  const replacementHosts = path.join(
+    params.profileDir,
+    `.hosts.yml.refresh-${randomBytes(16).toString("hex")}`,
+  );
+  try {
+    if (staged.account.accountId !== params.expectedAccountId) {
+      throw new GitHubAccountMismatchError("GitHub OAuth refresh returned a different account.");
+    }
+    const targetStat = await fs.lstat(targetHosts);
+    if (!targetStat.isFile() || targetStat.isSymbolicLink()) {
+      throw new Error("The configured GitHub identity profile is unavailable.");
+    }
+    await fs.copyFile(path.join(staged.stagedProfile, "hosts.yml"), replacementHosts);
+    await fs.chmod(replacementHosts, 0o600);
+    await fs.rename(replacementHosts, targetHosts);
+    return staged.account;
+  } finally {
+    await fs.rm(replacementHosts, { force: true });
+    await fs.rm(staged.stagingRoot, { recursive: true, force: true });
+  }
+}
+
+/** Publishes a new inactive profile and switches config without retiring in-use generations. */
+export async function installManagedGitHubProfile(params: {
+  profileDir: string;
+  token: string;
+  commitConfig: (account: GitHubToolAccount) => Promise<void>;
+  retainProfileOnCommitFailure?: boolean;
+}): Promise<GitHubToolAccount> {
+  const parent = path.dirname(params.profileDir);
+  const staged = await stageManagedGitHubProfile(parent, params.token);
+  let published = false;
+  let committed = false;
+  try {
+    await fs.rename(staged.stagedProfile, params.profileDir);
     published = true;
-    await params.commitConfig(verified.account);
+    await params.commitConfig(staged.account);
     committed = true;
-    return verified.account;
+    return staged.account;
   } finally {
     if (published && !committed && !params.retainProfileOnCommitFailure) {
       await fs.rm(params.profileDir, { recursive: true, force: true });
     }
-    await fs.rm(stagingRoot, { recursive: true, force: true });
+    await fs.rm(staged.stagingRoot, { recursive: true, force: true });
   }
 }

@@ -8,6 +8,7 @@ import {
   readHiddenGitHubSecretRecord,
   writeHiddenGitHubSecretRecord,
 } from "../secrets/store/secret-store.js";
+import type { AgentLifecycleBinding } from "./agent-lifecycle-registry.js";
 import type { GitHubOAuthTokenPair } from "./github-oauth-client.js";
 import type { GitHubToolAccount } from "./github-tool-identity.js";
 
@@ -38,6 +39,15 @@ export type GitHubDeviceAuthorizationRecord = Readonly<{
   agentId: string;
   scope: GitHubIdentityScope;
   expectedIdentity: GitHubToolIdentityConfig | null;
+  agentLifecycleBinding?: AgentLifecycleBinding;
+}>;
+
+type GitHubOAuthPendingInitial = Readonly<{
+  requestId: string;
+  scope: GitHubIdentityScope;
+  agentId: string;
+  expectedIdentity: GitHubToolIdentityConfig | null;
+  agentLifecycleBinding?: AgentLifecycleBinding;
 }>;
 
 export type GitHubOAuthRecord = Readonly<{
@@ -52,8 +62,8 @@ export type GitHubOAuthRecord = Readonly<{
   refreshExpiresAtMs: number;
   scopes: readonly string[];
   createdAtMs: number;
-  replacesProfileId?: string;
-  profilePending?: true;
+  pendingInitial?: GitHubOAuthPendingInitial;
+  pendingRefresh?: true;
   refreshFailure?: "expired" | "failed";
 }>;
 
@@ -64,8 +74,8 @@ export function createGitHubOAuthRecord(params: {
   account: GitHubToolAccount;
   tokens: GitHubOAuthTokenPair;
   now: number;
-  replacesProfileId?: string;
-  profilePending?: true;
+  pendingInitial?: GitHubOAuthPendingInitial;
+  pendingRefresh?: true;
 }): GitHubOAuthRecord {
   return {
     version: 1,
@@ -79,8 +89,8 @@ export function createGitHubOAuthRecord(params: {
     refreshExpiresAtMs: params.now + params.tokens.refreshTokenExpiresInSeconds * 1_000,
     scopes: params.tokens.scopes,
     createdAtMs: params.now,
-    ...(params.replacesProfileId ? { replacesProfileId: params.replacesProfileId } : {}),
-    ...(params.profilePending ? { profilePending: true } : {}),
+    ...(params.pendingInitial ? { pendingInitial: params.pendingInitial } : {}),
+    ...(params.pendingRefresh ? { pendingRefresh: true } : {}),
   };
 }
 
@@ -152,6 +162,49 @@ function parseCanonicalAgentId(value: unknown): string | undefined {
   return normalized === value ? value : undefined;
 }
 
+function parseAgentLifecycleBinding(value: unknown): AgentLifecycleBinding | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, ["agentId", "provenance"])) {
+    return undefined;
+  }
+  const agentId = parseCanonicalAgentId(value.agentId);
+  if (!agentId) {
+    return undefined;
+  }
+  if (value.provenance === null) {
+    return { agentId, provenance: null };
+  }
+  if (
+    !isRecord(value.provenance) ||
+    !hasExactKeys(value.provenance, ["agentId", "createdAtMs", "createdVia", "creatorAgentId"])
+  ) {
+    return undefined;
+  }
+  const provenanceAgentId = parseCanonicalAgentId(value.provenance.agentId);
+  const creatorAgentId =
+    value.provenance.creatorAgentId === null
+      ? null
+      : parseCanonicalAgentId(value.provenance.creatorAgentId);
+  if (
+    provenanceAgentId !== agentId ||
+    (value.provenance.createdVia !== "operator" &&
+      value.provenance.createdVia !== "agent" &&
+      value.provenance.createdVia !== "claw") ||
+    creatorAgentId === undefined ||
+    !isTimestamp(value.provenance.createdAtMs)
+  ) {
+    return undefined;
+  }
+  return {
+    agentId,
+    provenance: {
+      agentId,
+      createdVia: value.provenance.createdVia,
+      creatorAgentId,
+      createdAtMs: value.provenance.createdAtMs,
+    },
+  };
+}
+
 function githubDeviceRecordName(requestId: string): string {
   if (!DEVICE_REQUEST_ID_PATTERN.test(requestId)) {
     throw new Error("GitHub device authorization request id is invalid.");
@@ -188,21 +241,27 @@ function parseGitHubDeviceAuthorizationRecord(
   const expectedIdentity = parseIdentityConfig(value.expectedIdentity);
   const scope = parseScope(value.scope);
   const agentId = parseCanonicalAgentId(value.agentId);
+  const agentLifecycleBinding =
+    value.agentLifecycleBinding === undefined
+      ? undefined
+      : parseAgentLifecycleBinding(value.agentLifecycleBinding);
+  const keys = [
+    "agentId",
+    ...(value.agentLifecycleBinding === undefined ? [] : ["agentLifecycleBinding"]),
+    "createdAtMs",
+    "deviceCode",
+    "expectedIdentity",
+    "expiresAtMs",
+    "nextPollAtMs",
+    "pollIntervalMs",
+    "requestId",
+    "scope",
+    "userCode",
+    "verificationUri",
+    "version",
+  ].toSorted();
   if (
-    !hasExactKeys(value, [
-      "agentId",
-      "createdAtMs",
-      "deviceCode",
-      "expectedIdentity",
-      "expiresAtMs",
-      "nextPollAtMs",
-      "pollIntervalMs",
-      "requestId",
-      "scope",
-      "userCode",
-      "verificationUri",
-      "version",
-    ]) ||
+    !hasExactKeys(value, keys) ||
     value.version !== 1 ||
     typeof value.requestId !== "string" ||
     !DEVICE_REQUEST_ID_PATTERN.test(value.requestId) ||
@@ -223,6 +282,9 @@ function parseGitHubDeviceAuthorizationRecord(
     value.nextPollAtMs > value.expiresAtMs ||
     !agentId ||
     !scope ||
+    (scope === "agent"
+      ? !agentLifecycleBinding || agentLifecycleBinding.agentId !== agentId
+      : agentLifecycleBinding !== undefined) ||
     expectedIdentity === undefined
   ) {
     return undefined;
@@ -240,6 +302,7 @@ function parseGitHubDeviceAuthorizationRecord(
     agentId,
     scope,
     expectedIdentity,
+    ...(agentLifecycleBinding ? { agentLifecycleBinding } : {}),
   };
 }
 
@@ -262,6 +325,46 @@ function parseScopes(value: unknown): string[] | undefined {
     normalized.every((scope, index) => scope === value[index])
     ? normalized
     : undefined;
+}
+
+function parsePendingInitial(value: unknown): GitHubOAuthPendingInitial | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const expectedIdentity = parseIdentityConfig(value.expectedIdentity);
+  const scope = parseScope(value.scope);
+  const agentId = parseCanonicalAgentId(value.agentId);
+  const agentLifecycleBinding =
+    value.agentLifecycleBinding === undefined
+      ? undefined
+      : parseAgentLifecycleBinding(value.agentLifecycleBinding);
+  const keys = [
+    "agentId",
+    ...(value.agentLifecycleBinding === undefined ? [] : ["agentLifecycleBinding"]),
+    "expectedIdentity",
+    "requestId",
+    "scope",
+  ].toSorted();
+  if (
+    !hasExactKeys(value, keys) ||
+    typeof value.requestId !== "string" ||
+    !DEVICE_REQUEST_ID_PATTERN.test(value.requestId) ||
+    !scope ||
+    !agentId ||
+    expectedIdentity === undefined ||
+    (scope === "agent"
+      ? !agentLifecycleBinding || agentLifecycleBinding.agentId !== agentId
+      : agentLifecycleBinding !== undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    requestId: value.requestId,
+    scope,
+    agentId,
+    expectedIdentity,
+    ...(agentLifecycleBinding ? { agentLifecycleBinding } : {}),
+  };
 }
 
 function parseGitHubOAuthRecord(raw: string): GitHubOAuthRecord | undefined {
@@ -289,23 +392,25 @@ function parseGitHubOAuthRecord(raw: string): GitHubOAuthRecord | undefined {
   ];
   const keys = [
     ...required,
-    ...(value.replacesProfileId === undefined ? [] : ["replacesProfileId"]),
-    ...(value.profilePending === undefined ? [] : ["profilePending"]),
+    ...(value.pendingInitial === undefined ? [] : ["pendingInitial"]),
+    ...(value.pendingRefresh === undefined ? [] : ["pendingRefresh"]),
     ...(value.refreshFailure === undefined ? [] : ["refreshFailure"]),
   ];
   const scope = parseScope(value.scope);
   const agentId = parseCanonicalAgentId(value.agentId);
   const scopes = parseScopes(value.scopes);
   const profileId = typeof value.profileId === "string" ? value.profileId : "";
-  const replacesProfileId =
-    typeof value.replacesProfileId === "string" ? value.replacesProfileId : undefined;
+  const pendingInitial =
+    value.pendingInitial === undefined ? undefined : parsePendingInitial(value.pendingInitial);
   if (
     !hasExactKeys(value, keys.toSorted()) ||
     value.version !== 1 ||
     !isManagedGitHubProfileId(profileId) ||
-    (value.replacesProfileId !== undefined &&
-      (replacesProfileId === undefined || !isManagedGitHubProfileId(replacesProfileId))) ||
-    (value.profilePending !== undefined && value.profilePending !== true) ||
+    (value.pendingInitial !== undefined &&
+      (!pendingInitial || pendingInitial.scope !== scope || pendingInitial.agentId !== agentId)) ||
+    (value.pendingRefresh !== undefined && value.pendingRefresh !== true) ||
+    (value.pendingInitial !== undefined && value.pendingRefresh !== undefined) ||
+    (value.pendingRefresh !== undefined && value.refreshFailure !== undefined) ||
     (value.refreshFailure !== undefined &&
       value.refreshFailure !== "expired" &&
       value.refreshFailure !== "failed") ||
@@ -340,8 +445,8 @@ function parseGitHubOAuthRecord(raw: string): GitHubOAuthRecord | undefined {
     refreshExpiresAtMs: value.refreshExpiresAtMs,
     scopes,
     createdAtMs: value.createdAtMs,
-    ...(replacesProfileId ? { replacesProfileId } : {}),
-    ...(value.profilePending === true ? { profilePending: true } : {}),
+    ...(pendingInitial ? { pendingInitial } : {}),
+    ...(value.pendingRefresh === true ? { pendingRefresh: true } : {}),
     ...(value.refreshFailure === "expired" || value.refreshFailure === "failed"
       ? { refreshFailure: value.refreshFailure }
       : {}),
