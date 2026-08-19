@@ -194,7 +194,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(failureDiagnostics.run).toContain("The agent-authored output was quarantined");
     expect(failureDiagnostics.run).toContain('"$failure_output/$lane-diagnostic.json"');
     expect(failureDiagnostics.run).toContain('sudo mv -T "$agent_output" "$quarantine"');
-    expect(failureDiagnostics.run).toContain('sudo mv -T "$failure_output" "$MANTIS_OUTPUT_DIR"');
+    expect(failureDiagnostics.run).toContain('sudo mv -T "$failure_output" "$agent_output"');
 
     const sutWrapper = readFileSync(SUT_CONTAINER_WRAPPER, "utf8");
     expect(sutWrapper).toContain(
@@ -229,7 +229,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
     expect(gate).toContain('sudo install -d -m 0755 -o root -g root "$trusted_output"');
     expect(gate).toContain('sudo mv -T "$agent_output" "$quarantine"');
-    expect(gate).toContain('sudo mv -T "$trusted_output" "$MANTIS_OUTPUT_DIR"');
+    expect(gate).toContain('sudo mv -T "$trusted_output" "$agent_output"');
     expect(gate).not.toMatch(/sudo (?:install|tee)[^\n]*\$MANTIS_OUTPUT_DIR/u);
     expect(gate).toContain('.comparison.baseline.status == "pass"');
     expect(gate).toContain('.comparison.candidate.status == "pass"');
@@ -376,8 +376,23 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(install.run).toContain("test -f scripts/e2e/telegram-user-driver.py");
     expect(install.run).toContain('node_bin="$(command -v node)"');
     expect(install.run).toContain('corepack_bin="$(command -v corepack)"');
+    expect(install.run).toContain(
+      'corepack_root="$(dirname "$(dirname "$(readlink -f "$corepack_bin")")")"',
+    );
     expect(install.run).toContain("/usr/local/lib/mantis-toolchain/node");
     expect(install.run).toContain("/usr/local/lib/mantis-toolchain/pnpm");
+    expect(install.run).toContain(
+      'sudo install -m 0755 "$node_bin" /usr/local/lib/mantis-toolchain/node',
+    );
+    expect(install.run).toContain(
+      'sudo cp -a "$corepack_root" /usr/local/lib/mantis-toolchain/corepack',
+    );
+    expect(install.run).toContain("/usr/local/lib/mantis-toolchain/corepack/dist/corepack.js pnpm");
+    expect(install.run).not.toContain("${RUNNER_TEMP}/mantis-node");
+    expect(install.run).toContain(
+      'sudo install -m 0755 "$uv_bin" /usr/local/lib/mantis-toolchain/uv',
+    );
+    expect(install.run).not.toContain("${RUNNER_TEMP}/mantis-uv");
     expect(install.run).toContain("/usr/local/bin/openclaw-telegram-mantis-lane");
     expect(install.run).toContain("/usr/local/bin/openclaw-telegram-desktop-recorder");
     expect(install.run).toContain(

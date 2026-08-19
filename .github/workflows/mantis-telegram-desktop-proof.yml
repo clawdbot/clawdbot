@@ -225,6 +225,7 @@ jobs:
           test -f scripts/e2e/telegram-user-driver.py
           node_bin="$(command -v node)"
           corepack_bin="$(command -v corepack)"
+          corepack_root="$(dirname "$(dirname "$(readlink -f "$corepack_bin")")")"
           # The recorder spawns the user driver directly, and runs under sudo where PATH is
           # sudo's secure_path. Resolving uv here pins it the same way node and pnpm are
           # pinned, and fails at setup instead of inside the agent 25 minutes later.
@@ -235,20 +236,11 @@ jobs:
           sudo useradd --system --create-home --home-dir /var/lib/mantis-sut \
             --shell /usr/sbin/nologin --gid mantis-proof mantis-sut
           "$node_bin" "$corepack_bin" pnpm --version >/dev/null
-          cat >"${RUNNER_TEMP}/mantis-node" <<EOF
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec "$node_bin" "\$@"
-          EOF
           cat >"${RUNNER_TEMP}/mantis-pnpm" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
-          exec "$node_bin" "$corepack_bin" pnpm "\$@"
-          EOF
-          cat >"${RUNNER_TEMP}/mantis-uv" <<EOF
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec "$uv_bin" "\$@"
+          exec /usr/local/lib/mantis-toolchain/node \
+            /usr/local/lib/mantis-toolchain/corepack/dist/corepack.js pnpm "\$@"
           EOF
           cat >"${RUNNER_TEMP}/telegram-user-driver" <<EOF
           #!/usr/bin/env bash
@@ -317,14 +309,20 @@ jobs:
           set -euo pipefail
           exec sudo -n -u mantis-sut /usr/local/lib/mantis-toolchain/telegram-mantis-lane "\$@"
           EOF
-          chmod 0755 "${RUNNER_TEMP}/mantis-node" "${RUNNER_TEMP}/mantis-pnpm" "${RUNNER_TEMP}/mantis-uv"
+          chmod 0755 "${RUNNER_TEMP}/mantis-pnpm"
           chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-lane" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" "${RUNNER_TEMP}/openclaw-telegram-user-driver" "${RUNNER_TEMP}/telegram-desktop-recorder-exec" "${RUNNER_TEMP}/telegram-mantis-lane" "${RUNNER_TEMP}/telegram-user-driver"
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           sudo install -d -m 0755 /usr/local/lib/mantis-toolchain
-          sudo install -m 0755 "${RUNNER_TEMP}/mantis-node" /usr/local/lib/mantis-toolchain/node
+          # The Actions toolcache is runner-private on Blacksmith. Copy the complete
+          # executable closures before crossing users; wrappers back into RUNNER_TEMP fail.
+          sudo install -m 0755 "$node_bin" /usr/local/lib/mantis-toolchain/node
+          sudo cp -a "$corepack_root" /usr/local/lib/mantis-toolchain/corepack
+          sudo chown -R root:root /usr/local/lib/mantis-toolchain/corepack
+          sudo find /usr/local/lib/mantis-toolchain/corepack -xdev ! -type l -perm /222 \
+            -exec chmod a-w {} +
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-pnpm" /usr/local/lib/mantis-toolchain/pnpm
-          sudo install -m 0755 "${RUNNER_TEMP}/mantis-uv" /usr/local/lib/mantis-toolchain/uv
+          sudo install -m 0755 "$uv_bin" /usr/local/lib/mantis-toolchain/uv
           sudo ln -s /usr/bin/ffmpeg /usr/local/lib/mantis-toolchain/ffmpeg
           sudo ln -s /usr/bin/ffprobe /usr/local/lib/mantis-toolchain/ffprobe
           sudo install -m 0755 "${RUNNER_TEMP}/telegram-mantis-lane" /usr/local/lib/mantis-toolchain/telegram-mantis-lane
@@ -701,7 +699,7 @@ jobs:
         run: |
           set -euo pipefail
           runtime_parent="$(</etc/openclaw-mantis-sut-runtime-root)"
-          agent_output="$MANTIS_OUTPUT_DIR"
+          agent_output="$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
           agent_manifest="$agent_output/mantis-evidence.json"
           test -f "$agent_manifest"
           trusted_output="$RUNNER_TEMP/mantis-trusted-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -846,7 +844,7 @@ jobs:
             exit 1
           fi
           sudo mv -T "$agent_output" "$quarantine"
-          sudo mv -T "$trusted_output" "$MANTIS_OUTPUT_DIR"
+          sudo mv -T "$trusted_output" "$agent_output"
 
       - name: Preserve trusted-evidence failure diagnostics
         id: trusted_evidence_failure
@@ -856,7 +854,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          agent_output="$MANTIS_OUTPUT_DIR"
+          agent_output="$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
           quarantine="$RUNNER_TEMP/mantis-agent-output-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           failure_output="$RUNNER_TEMP/mantis-trusted-failure-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo test ! -e "$failure_output"
@@ -890,7 +888,8 @@ jobs:
             sudo test ! -L "$quarantine"
             sudo mv -T "$agent_output" "$quarantine"
           fi
-          sudo mv -T "$failure_output" "$MANTIS_OUTPUT_DIR"
+          sudo install -d -m 0755 -o root -g root "$(dirname "$agent_output")"
+          sudo mv -T "$failure_output" "$agent_output"
 
       - name: Return proof artifacts to the runner
         if: ${{ always() && (steps.trusted_evidence.outcome == 'success' || steps.trusted_evidence_failure.outcome == 'success') }}
