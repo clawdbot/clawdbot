@@ -220,7 +220,9 @@ describe("Telegram Mantis SUT CLI", () => {
           workspace: path.join(runtimeRoot, "workspace"),
         },
         schemaVersion: 1,
-        telegram: { botToken: "secret-token", chat: "-100123456789" },
+        // Omitting the token is the assertion: the session file rides inside the public proof
+        // artifact, so stop must accept a credential-free session rather than require one.
+        telegram: { chat: "-100123456789" },
       })}\n`,
       { mode: 0o600 },
     );

@@ -81,8 +81,9 @@ const sutSessionSchema = z.object({
   outputDir: z.string().min(1),
   runtime: sutRuntimeSchema,
   schemaVersion: z.literal(1),
+  // No credential belongs here: this file ships inside the public proof artifact, where
+  // the 0600 mode writePrivateJson sets does not survive the upload.
   telegram: z.object({
-    botToken: z.string().min(1),
     chat: z.string().regex(/^-100\d+$/u),
   }),
 });
@@ -830,7 +831,7 @@ async function startCli(values: Map<string, string>): Promise<void> {
     outputDir,
     runtime,
     schemaVersion: 1,
-    telegram: { botToken: credential.sutToken, chat: credential.groupId },
+    telegram: { chat: credential.groupId },
   } satisfies MantisSutSession);
   console.log(
     JSON.stringify({ session: path.relative(process.cwd(), sessionPath), status: "pass" }),
