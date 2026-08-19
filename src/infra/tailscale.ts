@@ -14,6 +14,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { runExec } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { sleep } from "../utils/sleep.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
 import { retryAsync } from "./retry.js";
@@ -393,10 +394,78 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
   }
 }
 
+const ORPHAN_SWEEP_TIMEOUT_MS = 3_000;
+const ORPHAN_KILL_GRACE_MS = 500;
+
+/**
+ * `startTailscaleRouteOwner` spawns a detached `tailscale serve/funnel
+ * --bg=false` foreground child that only its route-owner worker knows how to
+ * release (IPC `disconnect` or an explicit `stop`). If that worker dies
+ * ungracefully — SIGKILL, crash, an unclean Gateway restart — the child is
+ * reparented to PID 1 and keeps holding the route. Every later claim attempt
+ * then fails with TailscaleRouteOwnershipConflictError and there is no
+ * recovery path short of manually finding and killing the orphan. A PID-1
+ * parent is the reliable signal: any still-owned foreground child keeps its
+ * spawning worker as parent, so this can never match a live route.
+ */
+function parseOrphanedTailscaleRouteOwnerPids(psOutput: string): number[] {
+  const pids: number[] = [];
+  for (const line of psOutput.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (!match) {
+      continue;
+    }
+    const [, pidRaw, ppidRaw, command] = match;
+    if (ppidRaw !== "1") {
+      continue;
+    }
+    const lower = (command ?? "").toLowerCase();
+    if (!lower.includes("tailscale")) {
+      continue;
+    }
+    if (!/\b(serve|funnel)\b/.test(lower) || !lower.includes("--bg=false")) {
+      continue;
+    }
+    const pid = Number.parseInt(pidRaw ?? "", 10);
+    if (Number.isFinite(pid) && pid > 0) {
+      pids.push(pid);
+    }
+  }
+  return pids;
+}
+
+async function sweepOrphanedTailscaleRouteOwners(exec: typeof runExec = runExec): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  let stdout: string;
+  try {
+    ({ stdout } = await exec("ps", ["-axww", "-o", "pid=,ppid=,command="], {
+      timeoutMs: ORPHAN_SWEEP_TIMEOUT_MS,
+      maxBuffer: 400_000,
+    }));
+  } catch {
+    // Best-effort probe; a failed scan should not block a fresh claim attempt.
+    return;
+  }
+  const pids = parseOrphanedTailscaleRouteOwnerPids(stdout);
+  if (pids.length === 0) {
+    return;
+  }
+  for (const pid of pids) {
+    signalProcessTree(pid, "SIGTERM", { detached: true });
+  }
+  await sleep(ORPHAN_KILL_GRACE_MS);
+  for (const pid of pids) {
+    signalProcessTree(pid, "SIGKILL", { detached: true });
+  }
+}
+
 export async function claimTailscaleRoute(
   mode: "serve" | "funnel",
   target: number | string,
 ): Promise<TailscaleRouteClaim> {
+  await sweepOrphanedTailscaleRouteOwners();
   const tailscaleBin = await getTailscaleBinary();
   const args = [mode, "--yes", "--bg=false", `${target}`];
   try {

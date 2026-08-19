@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, symlinkSync, watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -333,4 +334,53 @@ describe("tailscale helpers", () => {
 
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toBe(failure);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "kills an orphaned foreground route child reparented to PID 1 before claiming a fresh route",
+    async () => {
+      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
+      );
+      const fixturePath = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
+      );
+
+      // Reproduce the exact orphan shape left behind when a route-owner
+      // worker is killed ungracefully: spawn a detached fixture child from a
+      // throwaway "grandparent" that exits immediately, so the OS reparents
+      // the child to PID 1 while it is still holding its foreground route.
+      const spawner = spawnSync(
+        process.execPath,
+        [
+          "-e",
+          "const {spawn}=require('node:child_process');" +
+            "const c=spawn(process.argv[1],process.argv.slice(2),{detached:true,stdio:'ignore'});" +
+            "c.unref();process.stdout.write(String(c.pid));",
+          fixturePath,
+          "serve",
+          "--yes",
+          "--bg=false",
+          "50999",
+        ],
+        { encoding: "utf8" },
+      );
+      const orphanPid = Number.parseInt(spawner.stdout.trim(), 10);
+      expect(Number.isFinite(orphanPid) && orphanPid > 0).toBe(true);
+
+      await vi.waitFor(() => {
+        const ppid = spawnSync("ps", ["-o", "ppid=", "-p", String(orphanPid)], {
+          encoding: "utf8",
+        }).stdout.trim();
+        expect(ppid).toBe("1");
+      });
+
+      const claim = await claimTailscaleRoute("serve", 18789);
+      try {
+        expect(claim.isActive()).toBe(true);
+        expect(() => process.kill(orphanPid, 0)).toThrow();
+      } finally {
+        await claim.stop();
+      }
+    },
+  );
 });
