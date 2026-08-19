@@ -92,6 +92,10 @@ export async function createCopilotSessionSetup(params: {
       messages,
       ctx: hookContext,
       bootstrapContextRunKind: input.bootstrapContextRunKind,
+      toolAuthority: {
+        fingerprint: input.toolAuthorityFingerprint,
+        activeToolNames: () => promptPolicyResult?.callableToolNames ?? [],
+      },
     });
   }
   const attemptInput =

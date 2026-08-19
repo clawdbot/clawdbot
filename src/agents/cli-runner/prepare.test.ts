@@ -2024,6 +2024,31 @@ describe("prepareCliRunContext", () => {
     expect(promptContext?.senderId).toBe("user-789");
   });
 
+  it("applies turn-authorized prompt enrichment after CLI tool preparation", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runAuthorizedPromptBuild: vi.fn(async () => ({
+        prependContext: "authorized memory context",
+      })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+    const context = await fixture.prepare({
+      toolAuthorityFingerprint: "turn-authority",
+    });
+
+    expect(context.params.prompt).toBe("authorized memory context\n\nlatest ask");
+    expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "latest ask" }),
+      expect.any(Object),
+      {
+        toolAuthorityFingerprint: "turn-authority",
+        activeToolNames: [],
+      },
+    );
+  });
+
   it("preserves the base prompt when prompt-build hooks fail", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),

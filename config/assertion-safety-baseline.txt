@@ -11,7 +11,7 @@ extensions/acpx/src/service.ts	2
 extensions/acpx/src/state.ts	1
 extensions/active-memory/config.ts	4
 extensions/active-memory/doctor-contract-api.ts	3
-extensions/active-memory/index.ts	7
+extensions/active-memory/index.ts	6
 extensions/active-memory/query.ts	2
 extensions/active-memory/session.ts	4
 extensions/active-memory/transcript-result.ts	2

@@ -192,6 +192,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       messages: structuredClone(historyState.messages),
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
+      toolAuthority: {
+        fingerprint: params.toolAuthorityFingerprint,
+        activeToolNames: () =>
+          flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
+            .map((tool) => tool.name)
+            .filter(isNonEmptyString),
+      },
     });
     if (isRestrictivePromptToolsAllow(result.toolsAllow)) {
       throw new Error(

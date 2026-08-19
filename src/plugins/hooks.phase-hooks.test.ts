@@ -1,5 +1,5 @@
 /** Tests phase-scoped plugin hooks and hook registration ordering. */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import { createHookRunner } from "./hooks.js";
@@ -241,5 +241,48 @@ describe("phase hooks merger", () => {
         toolsAllow,
       ),
     ).toEqual([{ name: "web_search" }]);
+  });
+
+  it("dispatches authorized enrichment only after the host supplies the final tool surface", async () => {
+    const enrichment = vi.fn((_event, ctx) => {
+      expect(ctx.toolAuthority?.allows("memory_search")).toBe(false);
+      expect(ctx.toolAuthority?.allows("message")).toBe(true);
+      return { prependContext: "authorized context", systemPrompt: "ignored override" };
+    });
+    registry.typedHooks.push(
+      {
+        pluginId: "restrictor",
+        hookName: "before_prompt_build",
+        handler: () => ({ toolsAllow: ["message"] }),
+        source: "test",
+      },
+      {
+        pluginId: "enricher",
+        hookName: "before_prompt_build",
+        handler: enrichment,
+        requiresToolAuthority: true,
+        source: "test",
+      },
+    );
+    const runner = createHookRunner(registry);
+    const event = { prompt: "test", messages: [] };
+
+    await expect(runner.runBeforePromptBuild(event, {})).resolves.toMatchObject({
+      toolsAllow: ["message"],
+    });
+    expect(enrichment).not.toHaveBeenCalled();
+
+    const result = await runner.runAuthorizedPromptBuild(
+      event,
+      {},
+      {
+        toolAuthorityFingerprint: "turn-authority",
+        activeToolNames: ["message"],
+      },
+    );
+    const retainedAuthority = enrichment.mock.calls[0]?.[1].toolAuthority;
+
+    expect(result).toEqual({ prependContext: "authorized context" });
+    expect(() => retainedAuthority?.assertActive()).toThrow("no longer active");
   });
 });

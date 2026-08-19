@@ -301,6 +301,10 @@ export type MemoryPluginCapability = {
   flushPlanResolver?: MemoryFlushPlanResolver;
   runtime?: MemoryPluginRuntime;
   publicArtifacts?: MemoryPluginPublicArtifactsProvider;
+  /** Local deterministic recall tool required by provider-owned direct lookup. */
+  deterministicRecallToolName?: string;
+  /** Whether recall may read protected same-agent private session transcripts. */
+  supportsPrivateTranscriptRecall?: boolean;
 };
 
 export type MemoryPluginCapabilityRegistration = {
