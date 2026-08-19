@@ -4,15 +4,21 @@ import { GatewayClient as BaseGatewayClient } from "../../packages/gateway-clien
 import type {
   GatewayClientConnectionMetadata,
   GatewayClientHostDeps,
-  GatewayClientOptions,
+  GatewayClientOptions as BaseGatewayClientOptions,
   GatewayClientRequestOptions,
 } from "../../packages/gateway-client/src/index.js";
 import {
   clearDeviceAuthToken,
+  clearOriginDeviceToken,
   loadDeviceAuthToken,
+  loadDeviceAuthTokenReadOnly,
+  loadOriginDeviceToken,
+  loadOriginDeviceTokenReadOnly,
   storeDeviceAuthToken,
+  storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
 import {
+  loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
@@ -21,9 +27,10 @@ import {
   ensureInheritedManagedProxyRoutingActive,
   registerManagedProxyGatewayLoopbackBypass,
 } from "../infra/net/proxy/proxy-lifecycle.js";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { logDebug, logError } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { VERSION } from "../version.js";
 
 export {
@@ -32,30 +39,95 @@ export {
 } from "../../packages/gateway-client/src/index.js";
 export type {
   GatewayClientCloseInfo,
-  GatewayClientOptions,
   GatewayClientRequestOptions,
   GatewayReconnectPausedInfo,
 } from "../../packages/gateway-client/src/index.js";
 
+export type GatewayClientOptions = BaseGatewayClientOptions & {
+  /** Exact normalized remote gateway scope for origin-bound device credentials. */
+  deviceAuthScope?: string;
+  /** Prevent this client lifecycle from creating or mutating shared state. */
+  sharedStateMode?: "read-only";
+  /** Auth already resolved and validated by the one-shot call owner. */
+  preparedDeviceAuth?: DeviceAuthEntry;
+};
+
 function createOpenClawGatewayClientHostDeps(
   overrides?: GatewayClientHostDeps,
+  deviceAuthScope?: string,
+  suppressOriginDeviceAuth = false,
+  sharedStateMode?: "read-only",
+  preparedDeviceAuth?: DeviceAuthEntry,
 ): GatewayClientHostDeps {
+  const readOnly = sharedStateMode === "read-only";
+  // Prepared auth is immutable request input. Any later durable mutation must
+  // still match this token so a stale request cannot undo a concurrent rotation.
+  const rotationFence = preparedDeviceAuth
+    ? { expectedToken: preparedDeviceAuth.token }
+    : undefined;
+  const deviceAuthDeps: Pick<
+    GatewayClientHostDeps,
+    "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
+  > = deviceAuthScope
+    ? {
+        loadDeviceAuthToken: (params) =>
+          suppressOriginDeviceAuth
+            ? null
+            : readOnly
+              ? loadOriginDeviceTokenReadOnly({ ...params, gatewayScope: deviceAuthScope })
+              : loadOriginDeviceToken({ ...params, gatewayScope: deviceAuthScope }),
+        storeDeviceAuthToken: readOnly
+          ? () => {}
+          : (params) =>
+              storeOriginDeviceToken({
+                ...params,
+                gatewayScope: deviceAuthScope,
+                ...rotationFence,
+              }),
+        clearDeviceAuthToken: readOnly
+          ? () => {}
+          : (params) =>
+              clearOriginDeviceToken({
+                ...params,
+                gatewayScope: deviceAuthScope,
+                ...rotationFence,
+              }),
+      }
+    : readOnly
+      ? {
+          loadDeviceAuthToken: loadDeviceAuthTokenReadOnly,
+          storeDeviceAuthToken: () => {},
+          clearDeviceAuthToken: () => {},
+        }
+      : {
+          loadDeviceAuthToken,
+          storeDeviceAuthToken: (params) => storeDeviceAuthToken({ ...params, ...rotationFence }),
+          clearDeviceAuthToken: (params) => clearDeviceAuthToken({ ...params, ...rotationFence }),
+        };
+  const preparedDeviceAuthDeps = preparedDeviceAuth
+    ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
+    : deviceAuthDeps;
   return {
     // This wrapper is the only place the package reaches into OpenClaw runtime
     // state. Keep device identity, token storage, proxy, and redaction here.
     loadOrCreateDeviceIdentity,
     signDevicePayload,
     publicKeyRawBase64UrlFromPem,
-    loadDeviceAuthToken,
-    storeDeviceAuthToken,
-    clearDeviceAuthToken,
+    ...preparedDeviceAuthDeps,
     beforeConnect: ensureInheritedManagedProxyRoutingActive,
     registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
-    normalizeTlsFingerprint: (fingerprint) => normalizeFingerprint(fingerprint ?? ""),
     logDebug,
     logError,
     redactForLog: redactToolPayloadText,
     ...overrides,
+    ...(readOnly
+      ? {
+          // Read-only is an authoritative lifecycle policy: caller overrides
+          // must not restore identity creation or token writes behind it.
+          loadOrCreateDeviceIdentity: () => loadDeviceIdentityIfPresent() ?? undefined,
+          ...preparedDeviceAuthDeps,
+        }
+      : {}),
   };
 }
 
@@ -63,10 +135,23 @@ export class GatewayClient {
   #client: BaseGatewayClient;
 
   constructor(opts: GatewayClientOptions) {
+    const { deviceAuthScope, preparedDeviceAuth, sharedStateMode, ...baseOptions } = opts;
+    const suppressOriginDeviceAuth = Boolean(
+      deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim()),
+    );
+    for (const value of Object.values(baseOptions.edgeAuthHeaders ?? {})) {
+      registerSecretValueForRedaction(value);
+    }
     this.#client = new BaseGatewayClient({
-      ...opts,
-      clientVersion: opts.clientVersion ?? VERSION,
-      hostDeps: createOpenClawGatewayClientHostDeps(opts.hostDeps),
+      ...baseOptions,
+      clientVersion: baseOptions.clientVersion ?? VERSION,
+      hostDeps: createOpenClawGatewayClientHostDeps(
+        baseOptions.hostDeps,
+        deviceAuthScope,
+        suppressOriginDeviceAuth,
+        sharedStateMode,
+        preparedDeviceAuth,
+      ),
     });
   }
 
@@ -94,7 +179,11 @@ export class GatewayClient {
     return this.#client.getConnectionMetadata();
   }
 
-  updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+  updateNodeManifest(manifest: {
+    caps: string[];
+    commands: string[];
+    computerUse?: BaseGatewayClientOptions["computerUse"];
+  }): void {
     this.#client.updateNodeManifest(manifest);
   }
 }

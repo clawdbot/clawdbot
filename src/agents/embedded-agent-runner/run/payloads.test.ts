@@ -596,7 +596,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("surfaces exec tool errors for cron sessions even when verbose mode is off", () => {
+  it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -610,12 +610,12 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail:
+      absentDetail:
         "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
     });
   });
 
-  it("surfaces timed-out exec tool errors for cron-triggered custom session keys", () => {
+  it("keeps timed-out cron-trigger exec failures compact", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -629,11 +629,11 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail: "Command timed out after 1800 seconds.",
+      absentDetail: "Command timed out after 1800 seconds.",
     });
   });
 
-  it("surfaces heartbeat exec tool output details when the task run fails", () => {
+  it("keeps heartbeat exec commands and paths private without full verbosity", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -646,8 +646,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSingleToolErrorPayload(payloads, {
-      title: "show last 20 lines",
-      detail: "No such file or directory",
+      title: "Exec",
+      absentDetail: "/home/user/.openclaw/workspace/memory/2026-06-04.md",
     });
   });
 
@@ -683,6 +683,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         toolName: "message",
       });
     }
+  });
+
+  it("keeps a quiet heartbeat response with a recovered mutation receipt", () => {
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolRecovery: { toolName: "write" },
+    });
+
+    expect(payloads.map((payload) => payload.text)).toStrictEqual([
+      "HEARTBEAT_OK",
+      "✅ ✍️ Write succeeded after retry.",
+    ]);
+    expect(resolveHeartbeatToolResponseFromReplyResult(payloads)).toEqual({
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
   });
 
   it("marks plain-text heartbeat replies with unresolved mutating failures", () => {

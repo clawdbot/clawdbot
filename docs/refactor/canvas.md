@@ -43,6 +43,9 @@ Done:
 - Moved Canvas host URL and scoped capability helpers into `extensions/canvas/src`.
 - Moved Canvas node command defaults out of hardcoded core lists and into plugin `nodeInvokePolicies`.
 - Added plugin-owned Canvas host config at `plugins.entries.canvas.config.host`.
+- Registered A2UI as a sandboxed board widget source kind through the generic
+  Plugin SDK content-kind seam. The capability-scoped A2UI asset route remains
+  available when the optional Canvas file host is disabled.
 - Moved Canvas and A2UI HTTP serving behind Canvas plugin HTTP route registration.
 - Added generic plugin WebSocket upgrade dispatch for plugin-owned HTTP routes.
 - Replaced Canvas-specific gateway host URL and node capability auth with generic hosted plugin surface and node capability helpers.
@@ -109,7 +112,7 @@ Before calling the refactor complete:
 - `rg "createCanvasHostHandler|handleA2uiHttpRequest" src/gateway` returns no gateway runtime ownership.
 - `rg "apps/shared/OpenClawKit/Tools/CanvasA2UI|canvas-a2ui-copy|extensions/canvas/src/host/a2ui" scripts .github package.json` finds only compatibility wrappers or plugin-owned paths.
 - `pnpm plugins:inventory:check` passes.
-- `pnpm plugin-sdk:api:check` passes, or generated API contract records are intentionally updated and reviewed.
+- `pnpm plugin-sdk:api:diff --base "$(git merge-base origin/main HEAD)" --head HEAD` reports the intended API changes.
 - Targeted Canvas tests pass.
 - Changed-lanes tests pass for Canvas host/A2UI paths.
 - PR body explicitly says Canvas is experimental and plugin-backed.
@@ -125,7 +128,7 @@ pnpm test extensions/canvas/src/config-migration.test.ts src/commands/doctor-leg
 pnpm test test/scripts/changed-lanes.test.ts test/scripts/build-all.test.ts extensions/canvas/scripts/bundle-a2ui.test.ts test/scripts/bundled-plugin-assets.test.ts extensions/canvas/scripts/copy-a2ui.test.ts src/infra/run-node.test.ts
 pnpm tsgo:extensions
 pnpm plugins:inventory:check
-pnpm plugin-sdk:api:check
+pnpm plugin-sdk:api:diff --base "$(git merge-base origin/main HEAD)" --head HEAD
 ```
 
 Run `pnpm build` before push if runtime barrel, lazy import, packaging, or published plugin surfaces change.

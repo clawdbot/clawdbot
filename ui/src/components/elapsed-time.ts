@@ -36,7 +36,7 @@ class ElapsedTime extends OpenClawLightDomContentsElement {
     }
     const end = this.endMs ?? Date.now();
     // Sub-second elapsed reads as "1s", not a millisecond counter.
-    return html`${formatDurationCompact(Math.max(1_000, end - start), { spaced: true })}`;
+    return html`${formatDurationCompact(Math.max(1_000, end - start))}`;
   }
 }
 

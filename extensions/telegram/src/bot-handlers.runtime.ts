@@ -1,20 +1,31 @@
-// Telegram bot handler composition.
-import { createTelegramHandlerAuthorizationRuntime } from "./bot-handlers.authorization.runtime.js";
-import { registerTelegramCallbackQueryHandler } from "./bot-handlers.callback.runtime.js";
-import { createTelegramHandlerInboundRuntime } from "./bot-handlers.inbound.runtime.js";
-import { registerTelegramMessageHandlers } from "./bot-handlers.message-events.runtime.js";
-import { createTelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
-import { registerTelegramMigrationHandler } from "./bot-handlers.migration.runtime.js";
-import { registerTelegramReactionHandler } from "./bot-handlers.reaction.runtime.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import { createTelegramCallbackRouter } from "./bot-handlers.callback-router.js";
+import { createTelegramEventBindings } from "./bot-handlers.event-bindings.js";
+import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
+import {
+  createTelegramInboundPipeline,
+  registerTelegramInboundHandlers,
+} from "./bot-handlers.inbound-pipeline.js";
+import { createTelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 
 export const registerTelegramHandlers = (params: RegisterTelegramHandlerParams) => {
-  const messageRuntime = createTelegramHandlerMessageRuntime(params);
-  const authorizationRuntime = createTelegramHandlerAuthorizationRuntime(params);
-  const inboundRuntime = createTelegramHandlerInboundRuntime(params, messageRuntime);
+  const message = createTelegramMessagePipeline(params);
+  const authorization = createTelegramHandlerAuthorization(params);
+  const inboundPipeline = createTelegramInboundPipeline({ params, message, authorization });
+  const callbackRouter = createTelegramCallbackRouter({ params, message, authorization });
+  const eventBindings = createTelegramEventBindings({
+    params,
+    message,
+    authorization,
+    registerMessages: () =>
+      registerTelegramInboundHandlers({ bot: params.bot, pipeline: inboundPipeline }),
+  });
 
-  registerTelegramReactionHandler(params, authorizationRuntime);
-  registerTelegramCallbackQueryHandler(params, messageRuntime, authorizationRuntime);
-  registerTelegramMigrationHandler(params);
-  registerTelegramMessageHandlers(params, messageRuntime, authorizationRuntime, inboundRuntime);
+  eventBindings.registerReaction();
+  eventBindings.registerPolls();
+  params.bot.on("callback_query", async (ctx) => {
+    await callbackRouter.route(ctx);
+  });
+  eventBindings.registerMigration();
+  eventBindings.registerMessages();
 };

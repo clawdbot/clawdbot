@@ -72,6 +72,7 @@ function parseLease(raw, expectedNonce, options = {}) {
     !lease ||
     lease.version !== 1 ||
     lease.nonce !== expectedNonce ||
+    (lease.sharedHost !== undefined && typeof lease.sharedHost !== "boolean") ||
     !Array.isArray(lease.processes) ||
     lease.processes.length > 4096 ||
     lease.processes.some((entry) => !validProcessReference(entry)) ||
@@ -92,6 +93,10 @@ function persistLease(targetPath, lease, verifyCurrent) {
   fs.renameSync(temporary, targetPath);
 }`;
 
+// Signal sites tolerate ESRCH (gone) without aborting the protocol. EPERM (exists but
+// unsignalable, e.g. macOS SIP-protected same-uid processes on shared static-ssh dev hosts)
+// must not crash cleanup/resume paths, but a freeze target that returns EPERM stays counted
+// as live so quiescence fails closed instead of reporting a still-running process as frozen.
 export const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`const childProcess = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -110,6 +115,9 @@ const nonce = crypto.randomBytes(16).toString("hex");
 const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 const watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
 if (!Number.isSafeInteger(watchdogTimeoutMs) || watchdogTimeoutMs < 1) throw new Error("invalid watchdog timeout");
+const isolationMode = process.argv[3] || "dedicated";
+if (isolationMode !== "dedicated" && isolationMode !== "shared-host") throw new Error("invalid workspace quiescence isolation mode");
+const sharedHost = isolationMode === "shared-host";
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
 const frozen = new Map();
@@ -118,18 +126,21 @@ function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
   persistLease(leasePath, {
     version: 1,
     nonce,
+    sharedHost,
     processes: [...frozen].map(([pid, start]) => ({ pid, start })),
     watchdog: watchdogReference,
     expiresAtMs,
   });
 }
+// EPERM on SIGCONT implies the target was never ours to freeze: kill permission checks are
+// identical for SIGSTOP and SIGCONT, so any process this uid successfully stopped can be resumed.
 function resumeProcesses(entries) {
   for (const entry of entries) {
     if (processIdentity(entry.pid) !== entry.start) continue;
     try {
       process.kill(entry.pid, "SIGCONT");
     } catch (error) {
-      if (!error || error.code !== "ESRCH") throw error;
+      if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error;
     }
   }
 }
@@ -143,7 +154,7 @@ for (const name of orphanNames) {
   const orphanPath = path.join(leaseDirectory, name);
   const lease = parseLease(fs.readFileSync(orphanPath, "utf8"), match[1]);
   if (lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
-    try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+    try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
   }
   resumeProcesses(lease.processes);
   fs.unlinkSync(orphanPath);
@@ -173,7 +184,14 @@ watchdogReference = { pid: watchdog.pid, start: watchdogStart };
 writeLease();
 let quietScans = 0;
 try {
-  for (let attempt = 0; attempt < 250 && quietScans < 3; attempt += 1) {
+  if (sharedHost) {
+    // The worker has already published its terminal result. Manifest stability fences around
+    // transfer, apply, renewal, and publication reject later writes; only the uid-wide SIGSTOP
+    // sweep is skipped because this provider explicitly declared processes the lease does not own.
+    process.stderr.write("workspace quiescence: shared host declared; skipping process freeze sweep\n");
+    quietScans = 3;
+  }
+  for (let attempt = 0; !sharedHost && attempt < 250 && quietScans < 3; attempt += 1) {
     const candidates = quiescenceCandidates(
       processes(),
       uid,
@@ -194,6 +212,11 @@ try {
         }
         process.kill(pid, "SIGSTOP");
       } catch (error) {
+        if (error && error.code === "EPERM") {
+          frozen.delete(pid);
+          writeLease();
+          continue;
+        }
         if (!error || error.code !== "ESRCH") throw error;
       }
     }
@@ -210,7 +233,7 @@ try {
   }
 } catch (error) {
   if (processIdentity(watchdog.pid) === watchdogStart) {
-    try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || killError.code !== "ESRCH") throw killError; }
+    try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || (killError.code !== "ESRCH" && killError.code !== "EPERM")) throw killError; }
   }
   resumeProcesses([...frozen].map(([pid, start]) => ({ pid, start })));
   try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
@@ -254,7 +277,7 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
           typeof entry.start !== "string" ||
           processIdentity(entry.pid) !== entry.start
         ) continue;
-        try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+        try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
       }
       watchdogFs.unlinkSync(watchedLeasePath);
     } catch (error) {
@@ -275,11 +298,14 @@ const root = fs.realpathSync(process.argv[1]);
 const nonce = process.argv[2];
 const timeoutMs = Number(process.argv[3] || 12 * 60 * 1000);
 const validationMode = process.argv[4] || "final";
+const isolationMode = process.argv[5] || "dedicated";
 if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
 const uid = process.getuid();
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 10 * 1000) throw new Error("invalid watchdog timeout");
 if (validationMode !== "heartbeat" && validationMode !== "final") throw new Error("invalid workspace quiescence validation mode");
+if (isolationMode !== "dedicated" && isolationMode !== "shared-host") throw new Error("invalid workspace quiescence isolation mode");
+const sharedHost = isolationMode === "shared-host";
 const leasePath = path.join(os.homedir(), ".openclaw-worker", "quiescence", crypto.createHash("sha256").update(root).digest("hex") + "." + nonce + ".json");
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
@@ -288,6 +314,7 @@ const input = parseLease(fs.readFileSync(leasePath, "utf8"), nonce, {
   minimumRemainingMs: 5000,
   errorMessage: "workspace quiescence lease is no longer active",
 });
+if ((input.sharedHost === true) !== sharedHost) throw new Error("workspace quiescence isolation mode changed");
 function writeLease(processes, expiresAtMs) {
   // renewalQueue is the nonce's only writer; the watchdog only reads this lease.
   persistLease(leasePath, { ...input, processes, expiresAtMs }, (current) => {
@@ -317,7 +344,7 @@ for (const entry of input.processes) {
   if (status.state && !status.state.startsWith("T")) throw new Error("workspace quiescence process resumed unexpectedly");
 }
 refreshLease(input.processes);
-if (validationMode === "final") {
+if (validationMode === "final" && !sharedHost) {
   const frozen = new Map(input.processes.map((entry) => [entry.pid, entry.start]));
   let quietScans = 0;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
@@ -345,7 +372,9 @@ if (validationMode === "final") {
         if (input.expiresAtMs - Date.now() < 2500) refreshLease(frozenEntries);
         process.kill(pid, "SIGSTOP");
       } catch (error) {
-        if (!error || error.code !== "ESRCH") throw error;
+        if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error;
+        // Fail-closed either way: the candidate scan below runs without the frozen filter,
+        // so an EPERM-live process re-registers as a candidate and blocks quiescence.
         frozen.delete(pid);
       }
     }
@@ -393,11 +422,11 @@ ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
 const input = parseLease(raw, nonce);
 if (input.watchdog !== null && processIdentity(input.watchdog.pid) === input.watchdog.start) {
-  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
 }
 for (const entry of input.processes) {
   if (processIdentity(entry.pid) !== entry.start) continue;
-  try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+  try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
 }
 fs.unlinkSync(leasePath);
 `;

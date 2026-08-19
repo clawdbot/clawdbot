@@ -116,6 +116,7 @@ public actor GatewayNodeSession {
     }
 
     private struct ActiveInvoke {
+        let requestID: String
         let admissionGeneration: UInt64
         let task: Task<BridgeInvokeResponse, Never>
     }
@@ -1127,10 +1128,13 @@ extension GatewayNodeSession {
             return
         }
         if evt.event == "node.invoke.cancel" {
-            guard let payload = evt.payload, let onInvokeCancel else { return }
+            guard let payload = evt.payload else { return }
             do {
                 let cancel: NodeInvokeCancelPayload = try self.decodeEventPayload(from: payload)
-                await onInvokeCancel(cancel.invokeId)
+                self.cancelActiveInvoke(
+                    requestID: cancel.invokeId,
+                    admissionGeneration: admissionGeneration)
+                await self.onInvokeCancel?(cancel.invokeId)
             } catch {
                 self.logger.error("node invoke cancel decode failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -1242,6 +1246,7 @@ extension GatewayNodeSession {
               self.channel != nil
         else { return Self.staleRouteInvokeResponse(requestId: request.id) }
         let requiresRouteScopedCancellation = request.command == "computer.act" ||
+            request.command == OpenClawCameraCommand.ptzControl.rawValue ||
             OpenClawTalkCommand(rawValue: request.command) != nil
         guard requiresRouteScopedCancellation else {
             return await onInvoke(request)
@@ -1251,6 +1256,7 @@ extension GatewayNodeSession {
         let invokeID = UUID()
         let task = Task { await onInvoke(request) }
         self.activeInvokes[invokeID] = ActiveInvoke(
+            requestID: request.id,
             admissionGeneration: expectedRoute.admissionGeneration,
             task: task)
         let response = await withTaskCancellationHandler {
@@ -1369,6 +1375,14 @@ extension GatewayNodeSession {
             match.task.cancel()
         }
         return matches
+    }
+
+    private func cancelActiveInvoke(requestID: String, admissionGeneration: UInt64) {
+        for invoke in self.activeInvokes.values
+            where invoke.requestID == requestID && invoke.admissionGeneration == admissionGeneration
+        {
+            invoke.task.cancel()
+        }
     }
 
     private func awaitActiveInvokes(

@@ -16,10 +16,14 @@ enum GatewayActivationBindingKeyStore {
     // keychain password on every read. DEBUG is a config heuristic, not a
     // signing check — same accepted tradeoff as MacGatewayProfileStore.service.
     #if DEBUG
-    private static let service = "ai.openclaw.onboarding-route-binding.debug"
+    private static let baseService = "ai.openclaw.onboarding-route-binding.debug"
     #else
-    private static let service = "ai.openclaw.onboarding-route-binding"
+    private static let baseService = "ai.openclaw.onboarding-route-binding"
     #endif
+    static var service: String {
+        AppProfile.current.keychainService(base: self.baseService)
+    }
+
     private static let account = "credential-binding-v1"
     private static let byteCount = 32
 

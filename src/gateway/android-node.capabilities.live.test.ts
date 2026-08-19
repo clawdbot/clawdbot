@@ -1,6 +1,8 @@
 // Android node capability live tests verify paired node command allowlists and remote policy behavior.
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
 import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
@@ -53,24 +55,15 @@ type CommandResult = {
   durationMs: number;
 };
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     throw new Error(`expected ${label}`);
   }
-  expect(Array.isArray(value), label).toBe(false);
-  return value as Record<string, unknown>;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return value;
 }
 
 function expectNonEmptyString(value: unknown, label: string): string {
-  const text = readString(value);
+  const text = normalizeNullableString(value);
   if (text === null) {
     throw new Error(`expected ${label}`);
   }
@@ -97,7 +90,7 @@ function parseErrorCode(message: string): string {
 }
 
 function readGatewayErrorCode(err: unknown, fallbackMessage: string): string {
-  const byField = readString(asRecord(err).gatewayCode);
+  const byField = normalizeNullableString(asRecord(err).gatewayCode);
   if (byField) {
     return byField;
   }
@@ -362,13 +355,13 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
 
 async function resolveGatewayConnection() {
   const cfg = await readLiveTestConfig();
-  const urlOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_URL);
+  const urlOverride = normalizeNullableString(process.env.OPENCLAW_ANDROID_GATEWAY_URL);
   const details = buildGatewayConnectionDetails({
     config: cfg,
     ...(urlOverride ? { url: urlOverride } : {}),
   });
-  const tokenOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_TOKEN);
-  const passwordOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_PASSWORD);
+  const tokenOverride = normalizeNullableString(process.env.OPENCLAW_ANDROID_GATEWAY_TOKEN);
+  const passwordOverride = normalizeNullableString(process.env.OPENCLAW_ANDROID_GATEWAY_PASSWORD);
   const creds = resolveGatewayCredentialsFromConfig({
     cfg,
     explicitAuth: {
@@ -482,16 +475,16 @@ async function connectGatewayClient(params: {
 }
 
 function isAndroidNode(node: NodeListNode): boolean {
-  const platform = readString(node.platform)?.toLowerCase();
+  const platform = normalizeNullableString(node.platform)?.toLowerCase();
   if (platform === "android") {
     return true;
   }
-  const displayName = readString(node.displayName)?.toLowerCase();
+  const displayName = normalizeNullableString(node.displayName)?.toLowerCase();
   return displayName?.includes("android") === true;
 }
 
 function selectTargetNode(nodes: NodeListNode[]): NodeListNode {
-  const nodeIdOverride = readString(process.env.OPENCLAW_ANDROID_NODE_ID);
+  const nodeIdOverride = normalizeNullableString(process.env.OPENCLAW_ANDROID_NODE_ID);
   if (nodeIdOverride) {
     const match = nodes.find((node) => node.nodeId === nodeIdOverride);
     if (!match) {
@@ -500,10 +493,12 @@ function selectTargetNode(nodes: NodeListNode[]): NodeListNode {
     return match;
   }
 
-  const nodeNameOverride = readString(process.env.OPENCLAW_ANDROID_NODE_NAME)?.toLowerCase();
+  const nodeNameOverride = normalizeNullableString(
+    process.env.OPENCLAW_ANDROID_NODE_NAME,
+  )?.toLowerCase();
   if (nodeNameOverride) {
     const match = nodes.find(
-      (node) => readString(node.displayName)?.toLowerCase() === nodeNameOverride,
+      (node) => normalizeNullableString(node.displayName)?.toLowerCase() === nodeNameOverride,
     );
     if (!match) {
       throw new Error(`OPENCLAW_ANDROID_NODE_NAME not found in node.list: ${nodeNameOverride}`);

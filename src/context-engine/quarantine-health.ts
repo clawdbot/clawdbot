@@ -1,5 +1,6 @@
 // Persists context-engine runtime quarantines so health surfaces can see
 // failures recorded in sibling runtime processes.
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   createRuntimeHealthRecordEnvelope,
   createRuntimeHealthStore,
@@ -17,10 +18,6 @@ type PersistedContextEngineRuntimeQuarantine = {
 type PersistedContextEngineQuarantineRecord = RuntimeHealthRecordEnvelope &
   Omit<PersistedContextEngineRuntimeQuarantine, "failedAt">;
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 // No TTL: a quarantine is recorded once per failure and stays valid for the
 // recorder's lifetime, so process liveness alone owns expiry here.
 const quarantineStore = createRuntimeHealthStore<PersistedContextEngineQuarantineRecord>({
@@ -29,9 +26,9 @@ const quarantineStore = createRuntimeHealthStore<PersistedContextEngineQuarantin
   maxEntries: 64,
   normalizeRecord: (value) => {
     if (
-      !isNonEmptyString(value.engineId) ||
-      !isNonEmptyString(value.operation) ||
-      !isNonEmptyString(value.reason)
+      !hasNonEmptyString(value.engineId) ||
+      !hasNonEmptyString(value.operation) ||
+      !hasNonEmptyString(value.reason)
     ) {
       return undefined;
     }
@@ -43,7 +40,7 @@ const quarantineStore = createRuntimeHealthStore<PersistedContextEngineQuarantin
       processId: value.processId,
       processToken: value.processToken,
       processStartTime: value.processStartTime,
-      ...(isNonEmptyString(value.owner) ? { owner: value.owner } : {}),
+      ...(hasNonEmptyString(value.owner) ? { owner: value.owner } : {}),
     };
   },
   displayKey: (record) => record.engineId,

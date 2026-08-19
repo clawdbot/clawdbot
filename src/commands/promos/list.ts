@@ -1,11 +1,8 @@
 /** Lists active ClawHub promotional model offers. */
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import {
-  ClawHubRequestError,
-  fetchClawHubPromotions,
-  type ClawHubPromotion,
-} from "../../infra/clawhub.js";
+import { ClawHubRequestError } from "../../infra/clawhub-client.js";
+import { fetchClawHubPromotions, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
 import { markPromotionSlugsNotified } from "../../infra/promotions-feed.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 

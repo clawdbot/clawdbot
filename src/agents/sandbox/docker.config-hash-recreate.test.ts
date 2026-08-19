@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
@@ -40,13 +41,7 @@ const runtimeMocks = vi.hoisted(() => ({
   log: vi.fn(),
 }));
 
-const tmpDirs: string[] = [];
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-mounts-"));
-  tmpDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function usePodmanMachine() {
   spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
@@ -261,12 +256,6 @@ async function ensureSandboxCreateCallForTest(params: {
 }
 
 describe("ensureSandboxContainer config-hash recreation", () => {
-  afterEach(() => {
-    for (const dir of tmpDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   beforeEach(async () => {
     spawnState.calls.length = 0;
     spawnState.containerExists = true;
@@ -286,7 +275,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("serializes concurrent provisioning for one container", async () => {
-    const workspaceDir = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
     spawnState.containerExists = false;
     spawnState.inspectRunning = false;
@@ -311,7 +300,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("uses the canonical non-shared scope for Docker names, labels, and registry identity", async () => {
-    const workspaceDir = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
     cfg.scope = "agent";
     spawnState.containerExists = false;
@@ -337,7 +326,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   it("recreates shared container when array-order change alters hash", async () => {
     // Docker flag order is part of the runtime contract, so order-sensitive
     // config changes must invalidate a shared container.
-    const workspaceDir = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const oldCfg = createSandboxConfig(["1.1.1.1", "8.8.8.8"], [`${workspaceDir}:/workspace:rw`]);
     const newCfg = createSandboxConfig(["8.8.8.8", "1.1.1.1"], [`${workspaceDir}:/workspace:rw`]);
 
@@ -397,7 +386,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("recreates a cold container when the shared Docker create-args epoch changes", async () => {
-    const workspaceDir = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     // Keep the create-args epoch as the only hash delta in this scenario.
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
     const hashInput = {
@@ -438,7 +427,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("keeps a hot pre-init container running and emits the recreate hint", async () => {
-    const workspaceDir = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
     const oldHash = computeSandboxConfigHash({
       docker: cfg.docker,
@@ -476,7 +465,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("rejects a hot stale container when current config is required", async () => {
-    const workspaceDir = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
     spawnState.labelHash = "stale-hash";
     registryMocks.readRegistryEntry.mockResolvedValue({
@@ -503,7 +492,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("recreates shared container when previously filtered explicit env becomes allowed", async () => {
-    const workspaceDir = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig(["1.1.1.1"], undefined, "rw", {
       LANG: "C.UTF-8",
       GEMINI_API_KEY: "dummy-gemini",
@@ -552,8 +541,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("applies custom binds after workspace mounts so overlapping binds can override", async () => {
-    const workspaceDir = makeTempDir();
-    const customRoot = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
+    const customRoot = tempDirs.make("openclaw-docker-mounts-");
     const customUserFile = path.join(customRoot, "USER.md");
     const cfg = createSandboxConfig(["1.1.1.1"], [`${customUserFile}:/workspace/USER.md:ro`]);
     cfg.docker.dangerouslyAllowExternalBindSources = true;
@@ -593,8 +582,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     async (backend) => {
       // The protected overlay remains authoritative for both engines, avoiding
       // duplicate mount rejection without making checked-in skills writable.
-      const workspaceDir = makeTempDir();
-      const customRoot = makeTempDir();
+      const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
+      const customRoot = tempDirs.make("openclaw-docker-mounts-");
       fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
       const customMount = `${customRoot}:/workspace/skills:rw`;
       const cfg = createSandboxConfig([], [customMount]);
@@ -998,7 +987,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("invalidates a Podman container when the same tmpfs list becomes explicit", async () => {
-    const workspaceDir = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
     const genericHash = computeSandboxConfigHash({
       docker: cfg.docker,

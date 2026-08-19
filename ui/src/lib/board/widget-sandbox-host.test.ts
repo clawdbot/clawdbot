@@ -826,6 +826,185 @@ describe("BoardWidgetSandboxHost", () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   });
 
+  it("records one-shot proxy readiness while inactive", async () => {
+    vi.useFakeTimers();
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const fetchMock = vi.fn(async () => new Response("<!doctype html><p>retained</p>"));
+    vi.stubGlobal("fetch", fetchMock);
+    const onReadyTimeout = vi.fn();
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      resolveFrameUrl: () => "/widget",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
+      onUnauthorized: vi.fn(),
+      onReadyTimeout,
+      onLoaded,
+      onError: vi.fn(),
+    });
+    const reloadFrame = vi.spyOn(frame, "src", "set");
+
+    host.setActive(false);
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: {
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: { sandboxUrl: SANDBOX_URL },
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onReadyTimeout).not.toHaveBeenCalled();
+
+    host.setActive(true);
+    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(reloadFrame).not.toHaveBeenCalled();
+    host.dispose();
+  });
+
+  it("retains a ready loaded frame and bridge while inactive", async () => {
+    vi.useFakeTimers();
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const fetchMock = vi.fn(async () => new Response("<!doctype html><p>retained</p>"));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = { request: vi.fn(async () => ({ resumed: true })) };
+    const onReadyTimeout = vi.fn();
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      client,
+      resolveFrameUrl: () => "/widget",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
+      onUnauthorized: vi.fn(),
+      onReadyTimeout,
+      onLoaded,
+      onError: vi.fn(),
+    });
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: {
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: { sandboxUrl: SANDBOX_URL },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
+    const bridgePort = await offerBridgePort(host, frame);
+    const retainedFrame = host.frame;
+    const reloadFrame = vi.spyOn(frame, "src", "set");
+
+    host.setActive(false);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(
+      sendBridgeRequest(bridgePort, {
+        type: "openclaw:widget-bridge-request",
+        id: "inactive",
+        method: "data.read",
+        params: { bindingId: "health" },
+        ticket: "ticket",
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "Widget inactive" });
+    expect(client.request).not.toHaveBeenCalled();
+
+    host.setActive(true);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(host.frame).toBe(retainedFrame);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onReadyTimeout).not.toHaveBeenCalled();
+    expect(reloadFrame).not.toHaveBeenCalled();
+    await expect(
+      sendBridgeRequest(bridgePort, {
+        type: "openclaw:widget-bridge-request",
+        id: "resumed",
+        method: "data.read",
+        params: { bindingId: "health" },
+        ticket: "ticket",
+      }),
+    ).resolves.toMatchObject({ ok: true, result: { resumed: true } });
+    bridgePort.close();
+    host.dispose();
+  });
+
+  it("resumes one interrupted document load after reactivation", async () => {
+    let resolveFirstFetch: (response: Response) => void = () => {};
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const sourceUrl = "https://gateway.example/widget";
+    const originalFetch = globalThis.fetch.bind(globalThis);
+    let sourceFetches = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== sourceUrl) {
+        return await originalFetch(input, init);
+      }
+      sourceFetches += 1;
+      if (sourceFetches === 1) {
+        return await new Promise<Response>((resolve) => {
+          resolveFirstFetch = resolve;
+        });
+      }
+      return new Response("<!doctype html><p>resumed</p>");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      resolveFrameUrl: () => "/widget",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
+      onUnauthorized: vi.fn(),
+      onReadyTimeout: vi.fn(),
+      onLoaded,
+      onError: vi.fn(),
+    });
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: {
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: { sandboxUrl: SANDBOX_URL },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(sourceFetches).toBe(1));
+
+    host.setActive(false);
+    resolveFirstFetch(new Response("<!doctype html><p>stale</p>"));
+    await Promise.resolve();
+    expect(onLoaded).not.toHaveBeenCalled();
+
+    host.setActive(true);
+    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
+    expect(sourceFetches).toBe(2);
+    host.dispose();
+  });
+
   it("bounds missing proxy readiness and stops the timer on disposal", async () => {
     vi.useFakeTimers();
     const frame = document.createElement("iframe");
@@ -847,6 +1026,10 @@ describe("BoardWidgetSandboxHost", () => {
       onError: vi.fn(),
     });
 
+    host.setActive(false);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(onReadyTimeout).not.toHaveBeenCalled();
+    host.setActive(true);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(onReadyTimeout).toHaveBeenCalledOnce();
     expect(frame.src).toBe(SANDBOX_URL);

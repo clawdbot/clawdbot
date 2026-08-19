@@ -10,7 +10,7 @@ import {
   runPluginPayloadSmokeCheckForManifestRecords,
 } from "./plugin-payload-validation.js";
 
-type BundleFormat = "codex" | "claude" | "cursor";
+type BundleFormat = "agent" | "codex" | "claude" | "cursor";
 type FormatMarkedBundleInstallRecord = PluginInstallRecord & {
   format: "bundle";
   bundleFormat?: BundleFormat;
@@ -52,16 +52,28 @@ describe("runPluginPayloadSmokeCheck", () => {
       await fs.mkdir(path.join(params.dir, "skills"), { recursive: true });
       return;
     }
-    const manifestDir =
-      params.format === "codex"
-        ? ".codex-plugin"
-        : params.format === "cursor"
-          ? ".cursor-plugin"
-          : ".claude-plugin";
-    await fs.mkdir(path.join(params.dir, manifestDir), { recursive: true });
+    const manifestRelativePath =
+      params.format === "agent"
+        ? "plugin.json"
+        : path.join(
+            params.format === "codex"
+              ? ".codex-plugin"
+              : params.format === "cursor"
+                ? ".cursor-plugin"
+                : ".claude-plugin",
+            "plugin.json",
+          );
+    await fs.mkdir(path.dirname(path.join(params.dir, manifestRelativePath)), { recursive: true });
     await fs.writeFile(
-      path.join(params.dir, manifestDir, "plugin.json"),
-      JSON.stringify(params.manifest ?? { name: `${params.format}-bundle` }),
+      path.join(params.dir, manifestRelativePath),
+      JSON.stringify(
+        params.manifest ?? {
+          ...(params.format === "agent"
+            ? { $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" }
+            : {}),
+          name: `${params.format}-bundle`,
+        },
+      ),
       "utf8",
     );
     await fs.mkdir(path.join(params.dir, "skills"), { recursive: true });
@@ -201,6 +213,7 @@ describe("runPluginPayloadSmokeCheck", () => {
   });
 
   it.each([
+    ["agent", "format"],
     ["codex", "clawhubFamily"],
     ["claude", "format"],
     ["cursor", "format"],

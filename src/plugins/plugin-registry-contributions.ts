@@ -2,7 +2,7 @@
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  normalizePluginsConfigWithResolver,
+  normalizePluginsConfigWithResolverCore,
   type NormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
@@ -260,7 +260,7 @@ export function normalizePluginsConfigWithRegistry(
   index: PluginRegistrySnapshot,
   options: PluginRegistryIdNormalizerOptions = {},
 ): NormalizedPluginsConfig {
-  return normalizePluginsConfigWithResolver(
+  return normalizePluginsConfigWithResolverCore(
     config,
     createPluginRegistryIdNormalizer(index, options),
   );

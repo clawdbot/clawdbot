@@ -13,26 +13,15 @@ import {
   runPolicyChecks,
   runPolicyDoctorLint,
   runPolicyRepairCheck,
-  describe0BeforeEach0,
-  describe0AfterEach1,
+  setupPolicyDoctorTest,
+  teardownPolicyDoctorTest,
+  writePolicyFixture,
 } from "./register.test-harness.js";
 
 const scanPolicyMcpServers = (cfg: object) =>
   collectPolicyEvidence(cfg as Record<string, unknown>).mcpServers;
 const scanPolicyIngress = (cfg: object) =>
   collectPolicyEvidence(cfg as Record<string, unknown>).ingress ?? [];
-
-async function writePolicyFixture(...json: Parameters<typeof JSON.stringify>): Promise<string> {
-  const [policy] = json;
-  const configPath = join(workspaceDir, "openclaw.jsonc");
-  await fs.writeFile(configPath, "{}", "utf-8");
-  await fs.writeFile(
-    join(workspaceDir, "policy.jsonc"),
-    typeof policy === "string" ? policy : JSON.stringify(...json),
-    "utf-8",
-  );
-  return configPath;
-}
 
 function writeModelPolicyFixture(providers: object): Promise<string> {
   return writePolicyFixture({ models: { providers } });
@@ -51,9 +40,9 @@ function writeIngressPolicyFixture(ingress: object): Promise<string> {
 }
 
 describe("registerPolicyDoctorChecks", () => {
-  beforeEach(describe0BeforeEach0);
+  beforeEach(setupPolicyDoctorTest);
 
-  afterEach(describe0AfterEach1);
+  afterEach(teardownPolicyDoctorTest);
 
   it("repairs required agent workspace deny tool findings", async () => {
     const cfg = {

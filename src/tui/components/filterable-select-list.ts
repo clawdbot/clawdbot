@@ -12,6 +12,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
+import { sanitizeRenderableLine } from "../tui-formatters.js";
 
 export interface FilterableSelectItem extends SelectItem {
   /** Additional searchable fields beyond label */
@@ -42,7 +43,7 @@ export class FilterableSelectList implements Component, Focusable {
     this.maxVisible = maxVisible;
     this.theme = theme;
     this.input = new Input();
-    this.selectList = new SelectList(this.allItems, maxVisible, theme);
+    this.selectList = this.createSelectList(this.allItems);
   }
 
   get focused(): boolean {
@@ -55,13 +56,28 @@ export class FilterableSelectList implements Component, Focusable {
 
   private applyFilter(): void {
     if (!this.filterText.trim()) {
-      this.selectList = new SelectList(this.allItems, this.maxVisible, this.theme);
+      this.selectList = this.createSelectList(this.allItems);
       return;
     }
     const filtered = fuzzyFilter(this.allItems, this.filterText, (item) =>
       [item.label, item.description, item.searchText].filter(Boolean).join(" "),
     );
-    this.selectList = new SelectList(filtered, this.maxVisible, this.theme);
+    this.selectList = this.createSelectList(filtered);
+  }
+
+  private createSelectList(items: FilterableSelectItem[]): SelectList {
+    return new SelectList(
+      items.map((item) => ({
+        ...item,
+        label:
+          sanitizeRenderableLine(item.label || item.value) ||
+          sanitizeRenderableLine(item.value) ||
+          "(unnamed)",
+        description: sanitizeRenderableLine(item.description ?? ""),
+      })),
+      this.maxVisible,
+      this.theme,
+    );
   }
 
   invalidate(): void {

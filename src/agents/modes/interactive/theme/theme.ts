@@ -545,7 +545,7 @@ const THEME_KEY = Symbol.for("openclaw:agent-theme");
 
 // Export theme as a getter that reads from globalThis
 // This ensures all module instances (tsx, jiti) see the same theme
-export const theme: Theme = new Proxy({} as Theme, {
+export const interactiveAgentTheme: Theme = new Proxy({} as Theme, {
   get(_target, prop) {
     const t = (globalThis as Record<symbol, Theme>)[THEME_KEY];
     if (!t) {
@@ -607,12 +607,12 @@ export function highlightCode(code: string, lang?: string): string[] {
   // auto-detection is unreliable and can misidentify prose as AppleScript,
   // LiveCodeServer, etc., coloring random English words as keywords.
   if (!validLang) {
-    return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
+    return code.split("\n").map((line) => interactiveAgentTheme.fg("mdCodeBlock", line));
   }
   const opts = {
     language: validLang,
     ignoreIllegals: true,
-    theme: getCliHighlightTheme(theme),
+    theme: getCliHighlightTheme(interactiveAgentTheme),
   };
   try {
     return highlight(code, opts).split("\n");

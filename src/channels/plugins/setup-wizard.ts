@@ -232,6 +232,21 @@ async function applyWizardTextInputValue(params: {
       }).cfg;
 }
 
+function resolveTextInputKeepMessage(
+  input: ChannelSetupWizardTextInput,
+  currentValue: string,
+): string {
+  if (input.sensitive === true) {
+    // Never pass a configured secret to plugin-owned presentation code.
+    return typeof input.keepPrompt === "string"
+      ? input.keepPrompt
+      : `${input.message} already configured. Keep it?`;
+  }
+  return typeof input.keepPrompt === "function"
+    ? input.keepPrompt(currentValue)
+    : (input.keepPrompt ?? `${input.message} set (${currentValue}). Keep it?`);
+}
+
 export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
   plugin: ChannelSetupWizardPlugin;
   wizard: ChannelSetupWizard;
@@ -511,11 +526,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
 
           if (currentValue && textInput.confirmCurrentValue !== false) {
             const keep = await prompter.confirm({
-              message:
-                typeof textInput.keepPrompt === "function"
-                  ? textInput.keepPrompt(currentValue)
-                  : (textInput.keepPrompt ??
-                    `${textInput.message} set (${currentValue}). Keep it?`),
+              message: resolveTextInputKeepMessage(textInput, currentValue),
               initialValue: true,
             });
             if (keep) {
@@ -533,17 +544,21 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             }
           }
 
-          const initialValue = normalizeOptionalString(
-            (await textInput.initialValue?.({
-              cfg: next,
-              accountId,
-              credentialValues,
-            })) ?? currentValue,
-          );
+          const initialValue =
+            textInput.sensitive === true
+              ? undefined
+              : normalizeOptionalString(
+                  (await textInput.initialValue?.({
+                    cfg: next,
+                    accountId,
+                    credentialValues,
+                  })) ?? currentValue,
+                );
           const rawValue = await prompter.text({
             message: textInput.message,
-            initialValue,
             placeholder: textInput.placeholder,
+            ...(textInput.sensitive === true ? {} : { initialValue }),
+            ...(textInput.sensitive === true ? { sensitive: true } : {}),
             validate: (value) => {
               const trimmed = normalizeOptionalString(value) ?? "";
               if (!trimmed && textInput.required !== false) {

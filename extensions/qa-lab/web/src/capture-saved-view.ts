@@ -34,7 +34,7 @@ const payloadLayouts = new Set<NonNullable<CaptureSavedView["payloadLayout"]>>([
 ]);
 const payloadExtents = new Set<CaptureSavedView["payloadExtent"]>(["preview", "full"]);
 
-function readString(value: unknown, maxLength: number): string | null {
+function readBoundedString(value: unknown, maxLength: number): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -73,8 +73,8 @@ export function normalizeCaptureSavedView(value: unknown): CaptureSavedView | nu
   if (!record) {
     return null;
   }
-  const id = readString(record.id, MAX_FILTER_VALUE_LENGTH);
-  const name = readString(record.name, MAX_NAME_LENGTH);
+  const id = readBoundedString(record.id, MAX_FILTER_VALUE_LENGTH);
+  const name = readBoundedString(record.name, MAX_NAME_LENGTH);
   if (!id || !name) {
     return null;
   }

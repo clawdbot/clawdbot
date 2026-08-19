@@ -8,7 +8,7 @@ import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-u
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { openSessionEntryReadView, type SessionEntryReadView } from "./session-accessor.js";
 import {
   foldedSessionKeyAliasCandidates,
@@ -82,7 +82,7 @@ export function extractDeliveryInfo(
 
 function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string[] {
   const paths = new Set<string>();
-  paths.add(resolveStorePath(cfg.session?.store, { agentId }));
+  paths.add(resolveSessionStorePathCore(cfg.session?.store, { agentId }));
   // Delivery can be restored from any resolved agent target; store order keeps the configured
   // primary path first while still covering per-agent stores.
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {

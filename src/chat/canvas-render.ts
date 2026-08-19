@@ -1,12 +1,12 @@
 // Renders chat canvas payloads into text and metadata for transcript output.
-import { expectDefined, safeParseJson } from "@openclaw/normalization-core";
+import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 
 // Extracts assistant-message canvas previews from tool JSON or markdown embed
 // shortcodes. The returned text strips consumed shortcodes for channel delivery.
-type CanvasSurface = "assistant_message";
+type CanvasSurface = "assistant_message" | "node_panel";
 type CanvasSandbox = "strict" | "scripts";
 
 type McpAppPreviewDescriptor = {
@@ -95,7 +95,7 @@ function coerceMcpAppDescriptor(
 }
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
-  return value === "assistant_message" ? value : undefined;
+  return value === "assistant_message" || value === "node_panel" ? value : undefined;
 }
 
 function normalizeSandbox(value: string | undefined): CanvasSandbox | undefined {
@@ -106,6 +106,10 @@ function normalizePreferredHeight(value: number | undefined): number | undefined
   return typeof value === "number" && Number.isFinite(value) && value >= 160
     ? Math.min(Math.trunc(value), 1200)
     : undefined;
+}
+
+export function isCanvasBoardWidgetName(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(value);
 }
 
 function coerceCanvasPreview(
@@ -145,10 +149,9 @@ function coerceCanvasPreview(
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
   const requestedBoardWidgetName = getRecordStringField(view, "boardWidgetName");
-  const boardWidgetName =
-    requestedBoardWidgetName && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(requestedBoardWidgetName)
-      ? requestedBoardWidgetName
-      : undefined;
+  const boardWidgetName = isCanvasBoardWidgetName(requestedBoardWidgetName)
+    ? requestedBoardWidgetName
+    : undefined;
   if (mcpAppViewId && viewId === mcpAppViewId) {
     return {
       kind: "canvas",
@@ -259,7 +262,7 @@ export function extractCanvasFromText(
   outputText: string | undefined,
   _toolName?: string,
 ): CanvasPreview | undefined {
-  const parsed = outputText ? asOptionalRecord(safeParseJson(outputText)) : undefined;
+  const parsed = outputText ? safeParseJsonRecord(outputText) : undefined;
   return coerceCanvasPreview(parsed);
 }
 

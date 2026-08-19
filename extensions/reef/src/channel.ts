@@ -1,3 +1,4 @@
+import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   dispatchInboundDirectDm,
   recordChannelBotPairLoopAndCheckSuppression,
@@ -10,6 +11,7 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import {
   ReefChannelConfigSchema,
@@ -93,6 +95,12 @@ function replyText(payload: unknown): string {
     : "";
 }
 
+function matchesReefToolTarget(target: string, toolContext?: ChannelThreadingToolContext): boolean {
+  const currentTarget = toolContext?.currentMessagingTarget ?? toolContext?.currentChannelId;
+  const normalizedCurrent = normalizeReefTarget(currentTarget ?? "");
+  return normalizedCurrent !== undefined && normalizeReefTarget(target) === normalizedCurrent;
+}
+
 export const reefPlugin: ChannelPlugin<ReefAccount> = {
   id: "reef",
   meta: {
@@ -166,6 +174,26 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           })
         : null;
     },
+  },
+  threading: {
+    threadAddressing: "message",
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      matchesReefToolTarget(target, toolContext),
+    resolveReplyToMode: () => "all",
+    buildToolContext: ({ context, hasRepliedRef }) => {
+      const currentTarget = context.To?.trim() || undefined;
+      return {
+        currentChannelId: currentTarget,
+        currentMessagingTarget: currentTarget,
+        currentMessageId: context.CurrentMessageId,
+        currentThreadTs:
+          context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+        replyToMode: context.ReplyToMode ?? "all",
+        hasRepliedRef,
+      };
+    },
+    resolveAutoThreadId: ({ to, toolContext }) =>
+      matchesReefToolTarget(to, toolContext) ? toolContext?.currentThreadTs : undefined,
   },
   directory: createChannelDirectoryAdapter({
     listPeers: async ({ cfg, query, limit }) =>
@@ -267,6 +295,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           return;
         }
         await dispatchInboundDirectDm({
+          channelIngress: "unsupported",
           cfg: ctx.cfg,
           channel: "reef",
           channelLabel: "Reef",
@@ -324,6 +353,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           let resendText = "";
           let dispatchFailure: Error | undefined;
           await dispatchInboundDirectDm({
+            channelIngress: "unsupported",
             cfg: ctx.cfg,
             channel: "reef",
             channelLabel: "Reef",
@@ -433,26 +463,10 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           initialCursor: inboxCursor.load(),
           persistCursor: (cursor) => inboxCursor.advance(cursor),
           onState: (state) => {
-            if (ctx.abortSignal.aborted) {
+            if (ctx.abortSignal.aborted || state !== "connected") {
               return;
             }
-            ctx.setStatus(
-              state === "connected"
-                ? {
-                    accountId: "default",
-                    running: true,
-                    connected: true,
-                    lifecycle: "ready",
-                    lastConnectedAt: Date.now(),
-                    lastError: null,
-                  }
-                : {
-                    accountId: "default",
-                    running: true,
-                    connected: false,
-                    lifecycle: "recovering",
-                  },
-            );
+            ctx.setStatus(channelReadyPatch({ accountId: "default", lastDisconnect: null }));
           },
           onError: (error) => {
             if (ctx.abortSignal.aborted) {
@@ -465,6 +479,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
               connected: false,
               lifecycle: "recovering",
               lastError: error.message,
+              lastDisconnect: { at: Date.now(), error: error.message },
             });
           },
         },

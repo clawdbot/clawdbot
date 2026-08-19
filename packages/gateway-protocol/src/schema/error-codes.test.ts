@@ -2,19 +2,34 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   ErrorCodes,
+  CronJobNotFoundErrorDetailsSchema,
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   isMcpAppViewExpiredError,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  ProjectCloneErrorDetailsSchema,
   missingScopeErrorShape,
   readMissingScopeError,
   readMissingScopeErrorDetails,
+  readCronJobNotFoundError,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
 } from "./error-codes.js";
 
 describe("gateway error details", () => {
+  it("validates and reads cron job lookup misses", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND,
+      jobId: "job-123",
+    };
+
+    expect(Value.Check(CronJobNotFoundErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(readCronJobNotFoundError({ details })).toEqual(details);
+    expect(readCronJobNotFoundError({ details: { ...details, jobId: "" } })).toBeNull();
+  });
+
   it("validates missing-scope details", () => {
     const details = {
       code: GatewayErrorDetailCodes.MISSING_SCOPE,
@@ -49,6 +64,18 @@ describe("gateway error details", () => {
     expect(Value.Check(WizardNotFoundErrorDetailsSchema, details)).toBe(true);
     expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
     expect(Value.Check(WizardNotFoundErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(
+      false,
+    );
+  });
+
+  it("validates typed project clone failures", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
+      cause: "auth_required",
+    };
+    expect(Value.Check(ProjectCloneErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(ProjectCloneErrorDetailsSchema, { ...details, cause: "unknown" })).toBe(
       false,
     );
   });

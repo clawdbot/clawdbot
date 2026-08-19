@@ -1,4 +1,3 @@
-// Whatsapp tests cover deliver reply plugin behavior.
 import type { WAMessage } from "baileys";
 import {
   createChannelPartialDeliveryError,
@@ -8,6 +7,8 @@ import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbo
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+// Whatsapp tests cover deliver reply plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createWebSendApi } from "../inbound/send-api.js";
 import { normalizeWhatsAppSendResult } from "../inbound/send-result.js";
@@ -58,7 +59,6 @@ vi.mock("../media.js", () => ({ loadWebMedia: vi.fn() }));
 
 let deliverWebReply: typeof import("./deliver-reply.js").deliverWebReply;
 let createWhatsAppReplyTransportContext: typeof import("./deliver-reply.js").createWhatsAppReplyTransportContext;
-let whatsappOutbound: typeof import("../outbound-adapter.js").whatsappOutbound;
 
 type DeliveryParams = Parameters<typeof deliverWebReply>[0];
 type DeliveryOverrides = Partial<Omit<DeliveryParams, "replyResult" | "transport">>;
@@ -110,12 +110,7 @@ function expectFirstSendMediaPayload(msg: AdmittedWebInboundMessage) {
   return requireRecord(mockCallArg(msg.platform.sendMedia, 0, 0, "sendMedia"), "sendMedia payload");
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const call = (mock as MockWithCalls).mock.calls.at(callIndex);
@@ -224,7 +219,6 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 describe("deliverWebReply", () => {
   beforeAll(async () => {
     ({ createWhatsAppReplyTransportContext, deliverWebReply } = await import("./deliver-reply.js"));
-    ({ whatsappOutbound } = await import("../outbound-adapter.js"));
   });
 
   it("does not resend an accepted reply when its transport reports a disconnect afterward", async () => {
@@ -739,78 +733,6 @@ describe("deliverWebReply", () => {
       expect.objectContaining({ mediaUrl: "http://example.com/img2.jpg" }),
       "failed to send web media reply",
     );
-  });
-
-  it("sanitizes XML tool-call blocks for outbound sendPayload delivery", async () => {
-    const sendWhatsApp = vi.fn(async (_to: string, _text: string) => ({
-      messageId: "wa-1",
-      toJid: "jid",
-    }));
-
-    await whatsappOutbound.sendPayload!({
-      cfg: {},
-      to: "5511999999999@c.us",
-      text: "",
-      payload: {
-        text: 'Before\n<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>\nAfter',
-      },
-      deps: { sendWhatsApp },
-    });
-
-    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    const sentText = mockCallArg(sendWhatsApp, 0, 1, "sendWhatsApp");
-    expect(sentText).not.toContain("function_calls");
-    expect(sentText).not.toContain("invoke");
-    expect(sentText).toContain("Before");
-    expect(sentText).toContain("After");
-  });
-
-  it("keeps payload and auto-reply media normalization in parity", async () => {
-    const payload = {
-      text: "\n\ncaption",
-      mediaUrls: ["   ", " /tmp/voice.ogg "],
-    };
-    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
-
-    await whatsappOutbound.sendPayload!({
-      cfg: {},
-      to: "5511999999999@c.us",
-      text: "",
-      payload,
-      deps: { sendWhatsApp },
-    });
-
-    const { msg, params } = createDelivery(payload);
-    mockLoadedMedia("aud", "audio/ogg", "audio");
-
-    await deliverWebReply(params);
-
-    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenCalledWith(
-      "5511999999999@c.us",
-      "caption",
-      expect.objectContaining({
-        verbose: false,
-        cfg: {},
-        mediaUrl: "/tmp/voice.ogg",
-        mediaLocalRoots: undefined,
-        accountId: undefined,
-        gifPlayback: undefined,
-        onDeliveryResult: expect.any(Function),
-      }),
-    );
-    expect(loadWebMedia).toHaveBeenCalledWith("/tmp/voice.ogg", {
-      maxBytes: 1024 * 1024,
-      localRoots: undefined,
-    });
-    expect(msg.platform.sendMedia).toHaveBeenCalledTimes(1);
-    const mediaPayload = expectFirstSendMediaPayload(msg);
-    expectBuffer(mediaPayload.audio, "sendMedia audio");
-    expect(mediaPayload.ptt).toBe(true);
-    expect(mediaPayload.mimetype).toBe("audio/ogg; codecs=opus");
-    expect(mockCallArg(msg.platform.sendMedia, 0, 1, "sendMedia")).toBeUndefined();
-    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
-    expect(msg.platform.reply).toHaveBeenCalledWith("caption", undefined);
   });
 
   it("sends audio media as ptt voice note with visible text separately", async () => {

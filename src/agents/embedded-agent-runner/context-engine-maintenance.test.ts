@@ -1,6 +1,7 @@
 // Coverage for deferred context-engine maintenance and transcript rewrite hooks.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -8,7 +9,7 @@ import { enqueueCommandInLane, markGatewayDraining } from "../../process/command
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { createQueuedTaskRun as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
+import { createQueuedTaskRunCore as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
@@ -38,7 +39,9 @@ let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-ma
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.test-support.js").resetDeferredTurnMaintenanceStateForTest;
 let waitForDeferredTurnMaintenanceForSession: typeof import("./context-engine-maintenance.js").waitForDeferredTurnMaintenanceForSession;
 
-function createQueuedTaskRun(params: Parameters<typeof createQueuedTaskRunOrNull>[0]): TaskRecord {
+function createQueuedTaskRunCore(
+  params: Parameters<typeof createQueuedTaskRunOrNull>[0],
+): TaskRecord {
   // Task creation can legally return null for invalid inputs; tests here always
   // need a concrete queued task record.
   const task = createQueuedTaskRunOrNull(params);
@@ -80,12 +83,7 @@ async function waitForAssertion(
   }
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function firstMaintainParams(maintain: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   return requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
@@ -1001,7 +999,7 @@ describe("runContextEngineMaintenance", () => {
         resetTaskFlowRegistryForTests({ persist: false });
 
         const sessionKey = "agent:main:session-legacy";
-        const legacyTask = createQueuedTaskRun({
+        const legacyTask = createQueuedTaskRunCore({
           runtime: "acp",
           taskKind: TURN_MAINTENANCE_TASK_KIND,
           sourceId: TURN_MAINTENANCE_TASK_KIND,

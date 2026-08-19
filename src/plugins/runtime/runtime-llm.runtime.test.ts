@@ -1,6 +1,9 @@
 // Runtime LLM tests cover plugin provider hooks inside the model runtime adapter.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
+import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
+import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
@@ -65,12 +68,7 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value), label).toBe(true);
@@ -231,6 +229,69 @@ describe("runtime.llm.complete", () => {
       }),
     ).rejects.toThrow("not bound to an active session agent");
     expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not trust a fallback-derived agent in the after-turn caller", async () => {
+    const attempt = {
+      sessionKey: "legacy-session",
+      config: cfg,
+      skillsSnapshot: undefined,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      thinkLevel: "off" as const,
+    } satisfies Parameters<typeof buildAfterTurnRuntimeContext>[0]["attempt"];
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt,
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+    });
+
+    await expect(
+      runtimeContext.llm!.complete({
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow("not bound to an active session agent");
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+
+    const maintain = vi.fn(async (params: { runtimeContext?: typeof runtimeContext }) => {
+      await params.runtimeContext?.llm?.complete({
+        messages: [{ role: "user", content: "maintain" }],
+      });
+      return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+    });
+    const maintenanceResult = await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test" },
+        maintain,
+      } as never,
+      sessionId: "legacy-session",
+      sessionKey: "legacy-session",
+      sessionFile: "legacy-session",
+      reason: "turn",
+      config: cfg,
+      agentId: "main",
+      runtimeContext,
+    });
+
+    expect(maintain).toHaveBeenCalledOnce();
+    expect(maintenanceResult).toBeUndefined();
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
+  it("accepts an explicitly trusted pre-fallback agent", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "legacy-session",
+      explicitAgentId: "ada",
+      purpose: "context-engine.after-turn",
+    });
+
+    const result = await runtimeContext.llm!.complete({
+      messages: [{ role: "user", content: "summarize" }],
+    });
+
+    expect(result.agentId).toBe("ada");
   });
 
   it("fails closed for context-engine completions without any session agent", async () => {

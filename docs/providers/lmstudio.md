@@ -73,7 +73,7 @@ curl http://localhost:1234/api/v1/models
 ## Non-interactive onboarding
 
 ```bash
-openclaw onboard --non-interactive --accept-risk --auth-choice lmstudio
+openclaw onboard --non-interactive --accept-risk --skip-health --auth-choice lmstudio
 ```
 
 Or specify base URL, model, and API key explicitly:
@@ -82,6 +82,7 @@ Or specify base URL, model, and API key explicitly:
 openclaw onboard \
   --non-interactive \
   --accept-risk \
+  --skip-health \
   --auth-choice lmstudio \
   --custom-base-url http://localhost:1234/v1 \
   --lmstudio-api-key "$LM_API_TOKEN" \

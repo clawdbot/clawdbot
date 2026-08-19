@@ -147,9 +147,7 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
-      <span class="about-sr-only" role="status" aria-live="polite"
-        >${copyStatus(props.copyState)}</span
-      >
+      <span class="sr-only" role="status" aria-live="polite">${copyStatus(props.copyState)}</span>
     </span>
   `;
 }

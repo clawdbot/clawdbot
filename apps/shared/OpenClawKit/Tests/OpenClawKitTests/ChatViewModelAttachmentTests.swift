@@ -8,17 +8,44 @@ import XCTest
 
 private actor AttachmentSendCapture {
     private(set) var attachments: [OpenClawChatAttachmentPayload] = []
+    private(set) var sends = 0
 
     func store(_ attachments: [OpenClawChatAttachmentPayload]) {
         self.attachments = attachments
+        self.sends += 1
     }
 
     func count() -> Int {
         self.attachments.count
     }
 
+    func sendCount() -> Int {
+        self.sends
+    }
+
     func first() -> OpenClawChatAttachmentPayload? {
         self.attachments.first
+    }
+}
+
+private enum AttachmentRouteLeaseAvailability: Sendable {
+    case available
+    case unsupported
+    case indeterminate
+}
+
+private actor AttachmentRouteLeasePlan {
+    private var availability: [AttachmentRouteLeaseAvailability]
+
+    init(_ availability: [AttachmentRouteLeaseAvailability]) {
+        self.availability = availability
+    }
+
+    func next() -> AttachmentRouteLeaseAvailability {
+        guard self.availability.count > 1 else {
+            return self.availability.first ?? .available
+        }
+        return self.availability.removeFirst()
     }
 }
 
@@ -58,6 +85,7 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
     let responseStatus: String
     let returnsEmptyHistory: Bool
     let durableOutboxAvailable: Bool
+    let routeLeasePlan: AttachmentRouteLeasePlan?
 
     init(
         capture: AttachmentSendCapture? = nil,
@@ -65,7 +93,8 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
         failsAmbiguously: Bool = false,
         responseStatus: String = "started",
         returnsEmptyHistory: Bool = false,
-        durableOutboxAvailable: Bool = true)
+        durableOutboxAvailable: Bool = true,
+        routeLeasePlan: AttachmentRouteLeasePlan? = nil)
     {
         self.capture = capture
         self.healthGate = healthGate
@@ -73,6 +102,7 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
         self.responseStatus = responseStatus
         self.returnsEmptyHistory = returnsEmptyHistory
         self.durableOutboxAvailable = durableOutboxAvailable
+        self.routeLeasePlan = routeLeasePlan
     }
 
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
@@ -117,8 +147,20 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
     }
 
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
-        guard self.durableOutboxAvailable else {
-            return .unavailable(reason: OpenClawChatTransportUpgradeMessage.routingContract)
+        let availability: AttachmentRouteLeaseAvailability = if let routeLeasePlan {
+            await routeLeasePlan.next()
+        } else {
+            self.durableOutboxAvailable ? .available : .unsupported
+        }
+        switch availability {
+        case .indeterminate:
+            return .unavailable(reason: nil)
+        case .unsupported:
+            return .unavailable(
+                reason: OpenClawChatTransportUpgradeMessage.routingContract,
+                allowsLiveSend: true)
+        case .available:
+            break
         }
         let transport = self
         return .available(OpenClawChatTransportRouteLease(
@@ -583,6 +625,78 @@ final class ChatViewModelAttachmentTests: XCTestCase {
 
         let commands = await outbox.loadCommands()
         XCTAssertTrue(commands.isEmpty)
+    }
+
+    func testIndeterminateOutboxRouteRetainsAttachmentAndRetriesOnceAvailable() async throws {
+        let capture = AttachmentSendCapture()
+        let routeLeasePlan = AttachmentRouteLeasePlan([
+            .indeterminate,
+            .available,
+            .available,
+        ])
+        let outbox = try makeAttachmentOutbox()
+        let attachmentData = Data("retry-image".utf8)
+        let viewModel = await MainActor.run {
+            makeDurableAttachmentViewModel(
+                transport: AttachmentProcessingTransport(
+                    capture: capture,
+                    returnsEmptyHistory: true,
+                    routeLeasePlan: routeLeasePlan),
+                outbox: outbox)
+        }
+        await MainActor.run { viewModel.load() }
+        try await waitUntil("attachment outbox bootstrap completed") {
+            await MainActor.run {
+                viewModel.healthOK && !viewModel.isLoading && viewModel.hasRestoredOutboxMessages
+            }
+        }
+        let attachmentID = await MainActor.run {
+            let attachment = OpenClawPendingAttachment(
+                url: nil,
+                data: attachmentData,
+                fileName: "retry.jpg",
+                mimeType: "image/jpeg",
+                preview: nil)
+            viewModel.input = "retry caption"
+            viewModel.attachments = [attachment]
+            viewModel.send()
+            return attachment.id
+        }
+
+        let routeError =
+            "Could not verify this attachment's delivery route. Reconnect, then try again."
+        try await waitUntil("indeterminate attachment route is visible") {
+            await MainActor.run { viewModel.errorText == routeError }
+        }
+        let retainedState = await MainActor.run {
+            (viewModel.input, viewModel.attachments.map(\.id))
+        }
+        XCTAssertEqual(retainedState.0, "retry caption")
+        XCTAssertEqual(retainedState.1, [attachmentID])
+        let retainedCommands = await outbox.loadCommands()
+        let initialSendCount = await capture.sendCount()
+        XCTAssertTrue(retainedCommands.isEmpty)
+        XCTAssertEqual(initialSendCount, 0)
+
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("attachment retry sent") {
+            await capture.sendCount() == 1
+        }
+        try await Task.sleep(for: .milliseconds(100))
+
+        let capturedPayload = await capture.first()
+        let payload = try XCTUnwrap(capturedPayload)
+        XCTAssertEqual(payload.fileName, "retry.jpg")
+        XCTAssertEqual(payload.mimeType, "image/jpeg")
+        XCTAssertEqual(payload.content, attachmentData.base64EncodedString())
+        let finalSendCount = await capture.sendCount()
+        XCTAssertEqual(finalSendCount, 1)
+        let sentState = await MainActor.run {
+            (viewModel.input, viewModel.attachments.isEmpty, viewModel.errorText)
+        }
+        XCTAssertEqual(sentState.0, "")
+        XCTAssertTrue(sentState.1)
+        XCTAssertNil(sentState.2)
     }
 
     func testLegacyGatewayRetainsAttachmentUntilOutboxRestoreCompletes() async throws {

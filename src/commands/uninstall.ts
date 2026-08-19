@@ -8,17 +8,13 @@ import {
   stylePromptMessage,
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
-import {
-  prepareLegacyWorkspaceStateReset,
-  removeLegacyWorkspaceStateForReset,
-} from "../agents/workspace-legacy-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveHomeDir, shortenHomeInString } from "../utils.js";
-import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
+import { resolveHomeDir } from "../utils.js";
+import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
 import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
@@ -78,34 +74,39 @@ async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   }
   if (!loaded) {
     runtime.log(`Gateway service ${service.notLoadedText}.`);
-    return true;
   }
-  try {
-    await service.stop({ env: process.env, stdout: process.stdout });
-  } catch (err) {
-    runtime.error(
-      `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
-    );
+  let stopped = true;
+  if (loaded) {
+    try {
+      await service.stop({ env: process.env, stdout: process.stdout });
+    } catch (err) {
+      stopped = false;
+      runtime.error(
+        `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
+      );
+    }
   }
   try {
     await service.uninstall({ env: process.env, stdout: process.stdout });
-    return true;
   } catch (err) {
     runtime.error(
       `Gateway uninstall failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for the service state.`,
     );
     return false;
   }
+  return stopped;
 }
 
-async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean) {
+async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean): Promise<boolean> {
   if (process.platform !== "darwin") {
-    return;
+    runtime.log("macOS app cleanup is not applicable on this platform.");
+    return true;
   }
-  await removePath("/Applications/OpenClaw.app", runtime, {
+  const result = await removePath("/Applications/OpenClaw.app", runtime, {
     dryRun,
     label: "/Applications/OpenClaw.app",
   });
+  return result.ok;
 }
 
 function logBackupRecommendation(runtime: RuntimeEnv) {
@@ -178,61 +179,115 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
 
   const dryRun = Boolean(opts.dryRun);
   let stateRemoved = false;
-  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-    resolveCleanupPlanFromDisk();
+  let workspaceBlocked = false;
+  let failed = false;
+  let serviceSafe = true;
+  const removesLocalData = scopes.has("state") || scopes.has("workspace");
 
-  if (scopes.has("state") || scopes.has("workspace")) {
+  if (removesLocalData) {
     logBackupRecommendation(runtime);
   }
 
   if (scopes.has("service")) {
     if (dryRun) {
       runtime.log("[dry-run] remove gateway service");
-    } else {
-      await stopAndUninstallService(runtime);
+    } else if (!(await stopAndUninstallService(runtime))) {
+      // Service removal may prevent relaunch even when runtime termination is
+      // uncertain; preserve mutable user data until teardown can be verified.
+      serviceSafe = false;
+      failed = true;
     }
   }
 
-  if (scopes.has("state")) {
+  let cleanupPlan;
+  if (removesLocalData && serviceSafe) {
+    try {
+      cleanupPlan = dryRun
+        ? await resolveCleanupPlanForDryRun()
+        : await resolveCleanupPlanForRemoval(runtime);
+    } catch (error) {
+      runtime.error(`Failed to prepare local data cleanup: ${formatErrorMessage(error)}`);
+    }
+    if (!cleanupPlan) {
+      failed = true;
+    }
+  } else if (removesLocalData) {
+    runtime.error("State and workspace cleanup blocked because gateway service teardown failed.");
+  }
+
+  if (scopes.has("state") && cleanupPlan) {
+    const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
+      cleanupPlan;
     if (!scopes.has("workspace")) {
-      for (const workspaceDir of workspaceDirs) {
-        const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
-        const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan, { dryRun });
-        for (const removedPath of legacyCleanup.removedPaths) {
-          if (dryRun) {
-            runtime.log(`[dry-run] remove ${shortenHomeInString(removedPath)}`);
-          }
+      try {
+        const legacyFailures = await removeWorkspaceDirs(workspaceDirs, runtime, {
+          dryRun,
+          preserveWorkspace: true,
+        });
+        if (legacyFailures.length > 0) {
+          runtime.error(`Retired workspace state cleanup incomplete: ${legacyFailures.join(", ")}`);
+          failed = true;
         }
-        for (const warning of legacyCleanup.warnings) {
-          runtime.error(warning);
-        }
+      } catch (error) {
+        runtime.error(`Retired workspace state cleanup failed: ${formatErrorMessage(error)}`);
+        failed = true;
       }
     }
     // Preserve workspaces when state-only uninstall is requested; workspace scope removes them explicitly.
-    stateRemoved = await removeStateAndLinkedPaths(
-      { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
-      runtime,
-      { dryRun, preservePaths: scopes.has("workspace") ? [] : workspaceDirs },
-    );
+    try {
+      stateRemoved = await removeStateAndLinkedPaths(
+        { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
+        runtime,
+        { dryRun, preservePaths: scopes.has("workspace") ? [] : workspaceDirs },
+      );
+    } catch (error) {
+      runtime.error(`State cleanup failed: ${formatErrorMessage(error)}`);
+      workspaceBlocked = true;
+    }
+    failed ||= !stateRemoved;
   }
 
-  if (scopes.has("workspace")) {
-    await removeWorkspaceDirs(workspaceDirs, runtime, {
-      dryRun,
-      removeStateRows: !scopes.has("state") || !stateRemoved,
-    });
+  if (scopes.has("workspace") && cleanupPlan && workspaceBlocked) {
+    runtime.error("Workspace cleanup blocked because state cleanup could not safely complete.");
+  } else if (scopes.has("workspace") && cleanupPlan) {
+    try {
+      const workspaceFailures = await removeWorkspaceDirs(cleanupPlan.workspaceDirs, runtime, {
+        dryRun,
+        removeStateRows: !scopes.has("state") || !stateRemoved,
+      });
+      if (workspaceFailures.length > 0) {
+        runtime.error(`Workspace cleanup incomplete: ${workspaceFailures.join(", ")}`);
+        failed = true;
+      }
+    } catch (error) {
+      runtime.error(`Workspace cleanup failed: ${formatErrorMessage(error)}`);
+      failed = true;
+    }
   }
 
   if (scopes.has("app")) {
-    await removeMacApp(runtime, dryRun);
+    try {
+      const appRemoved = await removeMacApp(runtime, dryRun);
+      if (!appRemoved) {
+        failed = true;
+      }
+    } catch (error) {
+      runtime.error(`App cleanup failed: ${formatErrorMessage(error)}`);
+      failed = true;
+    }
   }
 
-  runtime.log("CLI still installed. Remove via npm/pnpm if desired.");
+  if (!failed) {
+    runtime.log("CLI still installed. Remove via npm/pnpm if desired.");
+  }
 
-  if (scopes.has("state") && !scopes.has("workspace")) {
+  if (scopes.has("state") && !scopes.has("workspace") && cleanupPlan) {
     const home = resolveHomeDir();
-    if (home && workspaceDirs.some((dir) => dir.startsWith(path.resolve(home)))) {
+    if (home && cleanupPlan.workspaceDirs.some((dir) => dir.startsWith(path.resolve(home)))) {
       runtime.log("Tip: workspaces were preserved. Re-run with --workspace to remove them.");
     }
+  }
+  if (failed) {
+    runtime.exit(1);
   }
 }

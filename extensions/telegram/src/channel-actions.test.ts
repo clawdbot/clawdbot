@@ -463,7 +463,7 @@ describe("telegramMessageActions", () => {
     expect(discovery?.actions).not.toContain("react");
   });
 
-  it("advertises poll duration as a positive integer in message tool schema", () => {
+  it("advertises poll duration and public vote routing in message tool schema", () => {
     const cfg = {
       channels: {
         telegram: {
@@ -479,6 +479,14 @@ describe("telegramMessageActions", () => {
     expect(schema?.properties.pollDurationSeconds).toMatchObject({
       type: "integer",
       minimum: 1,
+    });
+    expect(schema?.properties.pollAnonymous).toMatchObject({
+      type: "boolean",
+      description: expect.stringContaining("do not create agent turns"),
+    });
+    expect(schema?.properties.pollPublic).toMatchObject({
+      type: "boolean",
+      description: expect.stringContaining("route into the originating agent conversation"),
     });
   });
 

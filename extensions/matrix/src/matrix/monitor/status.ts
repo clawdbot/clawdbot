@@ -2,7 +2,9 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  createConnectedChannelStatusPatch,
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { isMatrixAccessTokenInvalidatedError } from "../sdk/client-support.js";
@@ -59,19 +61,19 @@ export function createMatrixMonitorStatusController(params: {
   };
 
   const noteConnected = (at = Date.now(), options?: { transportActivity?: boolean }) => {
-    if (status.connected === true) {
-      status.lastEventAt = at;
-    } else {
-      Object.assign(status, createConnectedChannelStatusPatch(at));
-    }
+    const lastConnectedAt = status.connected === true ? (status.lastConnectedAt ?? at) : at;
+    Object.assign(
+      status,
+      channelReadyPatch({
+        lastConnectedAt,
+        lastEventAt: at,
+        lastDisconnect: null,
+        healthState: "healthy",
+      }),
+    );
     if (options?.transportActivity) {
       Object.assign(status, createTransportActivityStatusPatch(at));
     }
-    status.lastError = null;
-    status.lastDisconnect = null;
-    status.healthState = "healthy";
-    status.lifecycle = "ready";
-    status.terminalDisconnect = undefined;
     emit();
   };
 
@@ -97,10 +99,14 @@ export function createMatrixMonitorStatusController(params: {
       at,
       ...(error ? { error } : {}),
     };
-    status.lastError = error;
     status.healthState = paramsLocal.state.toLowerCase();
-    status.lifecycle = tokenInvalidated ? "blocked" : "recovering";
-    status.terminalDisconnect = tokenInvalidated || undefined;
+    if (tokenInvalidated) {
+      Object.assign(status, channelBlockedPatch(error ?? "Matrix access token invalidated"));
+    } else {
+      status.lastError = error;
+      status.lifecycle = "recovering";
+      status.terminalDisconnect = undefined;
+    }
     emit();
   };
 
@@ -129,11 +135,11 @@ export function createMatrixMonitorStatusController(params: {
       noteDisconnected({ state: "ERROR", at, error });
     },
     markStopped(at = Date.now()) {
-      status.connected = false;
-      status.lastEventAt = at;
       if (status.lifecycle !== "blocked" && status.healthState !== "error") {
-        status.healthState = "stopped";
-        status.lifecycle = "stopped";
+        Object.assign(status, channelStoppedPatch({ lastEventAt: at, healthState: "stopped" }));
+      } else {
+        status.connected = false;
+        status.lastEventAt = at;
       }
       emit();
     },

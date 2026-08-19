@@ -399,14 +399,21 @@ function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void 
   if (!fs.existsSync(agentsDir)) {
     return;
   }
-  for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const sourcePath = path.join(agentsDir, entry.name, "agent", "auth-profiles.json");
-    const targetPath = path.join(tempStateDir, "agents", entry.name, "agent", "auth-profiles.json");
-    copyFileIfExists(sourcePath, targetPath);
-  }
+  const liveAuthStageScript = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "helpers",
+    "stage-live-auth-profiles.ts",
+  );
+  // Live workers need canonical SQLite auth without loading the database stack
+  // into every hermetic Vitest worker.
+  execFileSync(
+    process.execPath,
+    ["--import", "tsx", liveAuthStageScript, realStateDir, tempStateDir],
+    {
+      env: { ...process.env, NODE_OPTIONS: undefined },
+      stdio: "pipe",
+    },
+  );
 }
 
 function stageLiveTestState(params: {

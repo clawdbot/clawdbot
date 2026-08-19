@@ -2,7 +2,7 @@
  * Tests gateway talk runtime wiring for speech provider execution.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODE_HEAVY_SPOKEN_FALLBACK } from "../../packages/speech-core/src/speech-text.js";
+import { CODE_HEAVY_SPOKEN_FALLBACK } from "../tts/speech-text.js";
 import {
   invokeTalkSpeakDirect,
   type TalkSpeakTestPayload,

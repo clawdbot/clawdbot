@@ -2,7 +2,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   executeSqliteQuerySync,
@@ -20,8 +20,11 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureEnv } from "../test-utils/env.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
@@ -40,6 +43,8 @@ import {
 } from "./task-registry.store.js";
 import {
   loadTaskRegistryStateFromSqlite,
+  loadTaskRegistryStateFromSqliteReadOnly,
+  loadTaskRegistryStateFromSqliteReadOnlyResult,
   saveTaskRegistryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
 import type { TaskDeliveryState, TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
@@ -56,8 +61,6 @@ import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
-
-const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -132,9 +135,55 @@ function createUnsafeTaskOwnerIndex(database: DatabaseSync): void {
 }
 
 describe("task-registry store runtime", () => {
+  it("does not create shared state for a read-only task snapshot", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-readonly-" },
+      async () => {
+        const statePath = resolveOpenClawStateSqlitePath();
+        expect(() => statSync(statePath)).toThrow();
+
+        const snapshot = loadTaskRegistryStateFromSqliteReadOnly();
+        expect(snapshot.tasks.size).toBe(0);
+        expect(snapshot.deliveryStates.size).toBe(0);
+        expect(() => statSync(statePath)).toThrow();
+      },
+    );
+  });
+
+  it("reports an additive schema migration without querying newer task columns", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-old-schema-" },
+      async () => {
+        const database = openOpenClawStateDatabase();
+        database.db.exec("ALTER TABLE task_runs DROP COLUMN tool_use_count");
+        closeOpenClawStateDatabase();
+
+        expect(loadTaskRegistryStateFromSqliteReadOnlyResult()).toEqual({
+          state: "migration-required",
+          snapshot: {
+            tasks: new Map(),
+            deliveryStates: new Map(),
+          },
+        });
+      },
+    );
+  });
+  let testState: OpenClawTestState;
+
+  beforeAll(async () => {
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-task-store-suite-",
+    });
+  });
+
+  afterAll(async () => {
+    await testState.cleanup();
+  });
+
   afterEach(() => {
-    ORIGINAL_ENV.restore();
-    resetTaskRegistryForTests();
+    testState.applyEnv();
+    resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     loggingState.rawConsole = null;
     setLoggerOverride(null);
@@ -341,6 +390,7 @@ describe("task-registry store runtime", () => {
     expect(parseTaskScopeKind("system")).toBe("system");
     expect(parseTaskStatus("running")).toBe("running");
     expect(parseTaskDeliveryStatus("pending")).toBe("pending");
+    expect(parseTaskDeliveryStatus("dismissed")).toBe("dismissed");
     expect(parseTaskNotifyPolicy("done_only")).toBe("done_only");
     expect(parseOptionalTaskTerminalOutcome("blocked")).toBe("blocked");
     expect(parseOptionalTaskTerminalOutcome(null)).toBeUndefined();

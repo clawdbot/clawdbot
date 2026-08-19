@@ -273,6 +273,7 @@ export async function handleMatrixAction(
         const content = readStringParam(params, "content", {
           required: !mediaUrl,
           allowEmpty: true,
+          trim: false,
         });
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
@@ -297,7 +298,7 @@ export async function handleMatrixAction(
       case "editMessage": {
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
-        const content = readStringParam(params, "content", { required: true });
+        const content = readStringParam(params, "content", { required: true, trim: false });
         const result = await withReadTarget(roomId, async (target) => {
           return await editMatrixMessage(target.roomId, messageId, content, {
             ...clientOpts,

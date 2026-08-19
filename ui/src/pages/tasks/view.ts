@@ -4,6 +4,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -24,6 +25,7 @@ type TasksProps = {
   agentId: string;
   mainKey: string;
   connected: boolean;
+  canCopy: boolean;
   canCancel: boolean;
   loading: boolean;
   error: string | null;
@@ -31,6 +33,9 @@ type TasksProps = {
   cancellingTaskIds: ReadonlySet<string>;
   sessionRow: (sessionKey: string) => GatewaySessionRow | undefined;
   onCancel: (taskId: string) => void;
+  onRetry: (taskId: string) => void;
+  onDismiss: (taskId: string) => void;
+  onCopyResult: (taskId: string) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
 
@@ -53,14 +58,7 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
     class="session-link"
     href=${href}
     @click=${(event: MouseEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey
-      ) {
+      if (!shouldHandleNavigationClick(event)) {
         return;
       }
       event.preventDefault();
@@ -76,6 +74,9 @@ function renderTask(task: TaskSummary, props: TasksProps) {
   const detail = taskDetail(task);
   const title = taskTitle(task);
   const cancelling = props.cancellingTaskIds.has(task.id);
+  const retainedResult = task.terminalOutcome === "blocked";
+  const recoverableDelivery = retainedResult && task.deliveryStatus === "failed";
+  const dismissedDelivery = retainedResult && task.deliveryStatus === "dismissed";
   return html`
     <div class="list-item" data-task-id=${task.id}>
       <div class="list-main">
@@ -90,6 +91,14 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             : nothing}
         </div>
         ${detail ? html`<div class="list-sub">${detail}</div>` : nothing}
+        ${retainedResult
+          ? html`<div class="callout warn">
+              ${t(dismissedDelivery ? "tasksPage.deliveryDismissed" : "tasksPage.deliveryBlocked")}
+              ${recoverableDelivery
+                ? html`<div class="muted">${t("tasksPage.duplicateRisk")}</div>`
+                : nothing}
+            </div>`
+          : nothing}
       </div>
       <div class="list-meta">
         ${timestamp > 0
@@ -106,6 +115,36 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             >
               ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
             </button>`
+          : nothing}
+        ${retainedResult && props.canCopy
+          ? html`<button
+              class="btn"
+              type="button"
+              ?disabled=${cancelling || !props.connected}
+              @click=${() => props.onCopyResult(task.taskId)}
+            >
+              ${t("tasksPage.copyResult")}
+            </button>`
+          : nothing}
+        ${recoverableDelivery && props.canCancel
+          ? html`
+              <button
+                class="btn"
+                type="button"
+                ?disabled=${cancelling || !props.connected}
+                @click=${() => props.onRetry(task.taskId)}
+              >
+                ${t("tasksPage.retryDelivery")}
+              </button>
+              <button
+                class="btn"
+                type="button"
+                ?disabled=${cancelling || !props.connected}
+                @click=${() => props.onDismiss(task.taskId)}
+              >
+                ${t("tasksPage.dismissDelivery")}
+              </button>
+            `
           : nothing}
       </div>
     </div>

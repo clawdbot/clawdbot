@@ -4,7 +4,6 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
 const SIDEBAR_SESSION_LIST_LIMIT = 60;
-const SIDEBAR_CATALOG_LIMIT_PER_HOST = 40;
 const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
 const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
 
@@ -22,12 +21,12 @@ type GatewayHandlerPrewarmHandle = {
 };
 
 async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
-  const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
+  const [{ loadCombinedSessionStoreForGatewayCore }, { listSessionsFromStoreAsync }] =
     await Promise.all([
       import("../config/sessions/combined-store-gateway.js"),
       import("./session-utils-list.js"),
     ]);
-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId,
     projection: "list",
   });
@@ -77,7 +76,7 @@ function dashboardDataPrewarmItems(
       name: `sessions.${agentId}`,
       load: async () => {
         // A count-only query keeps unusually large stores off the synchronous JSON projection
-        // path. Request-time session and catalog handlers remain authoritative when skipped.
+        // path. The request-time session handler remains authoritative when skipped.
         if (!(await shouldPrewarmSessionData())) {
           return;
         }
@@ -91,20 +90,6 @@ function dashboardDataPrewarmItems(
         await listManagedPlugins({ config: cfg });
       },
     },
-    ...agentIds.map((agentId) => ({
-      name: `session-catalog.${agentId}`,
-      load: async () => {
-        if (!(await shouldPrewarmSessionData())) {
-          return;
-        }
-        const { prewarmSessionCatalogList } = await import("./server-methods/session-catalog.js");
-        await prewarmSessionCatalogList({
-          config: cfg,
-          agentId,
-          limitPerHost: SIDEBAR_CATALOG_LIMIT_PER_HOST,
-        });
-      },
-    })),
   ];
 }
 
@@ -116,7 +101,8 @@ export function scheduleGatewayHandlerPrewarm(params: {
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayHandlerPrewarmHandle {
   // Frequent updater restarts make cold dashboard data the remaining slow tier.
-  // Keep cheap session reads first, process-stable plugin data second, and provider catalogs last.
+  // Keep bounded session reads first and process-stable plugin data second.
+  // Provider catalogs stay request-driven because their adapters may do unbounded external work.
   const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart, params.log);
   let stopped = false;
   let nextIndex = 0;

@@ -93,7 +93,22 @@ describe("sendFailureNotificationAnnounce", () => {
       "main",
       "job-1",
       { channel: "telegram", to: "123", accountId: "bot-a" },
-      "Cron failed",
+      {
+        text: "Cron failed",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Log in to Codex",
+                  action: { type: "command", command: "/login codex" },
+                },
+              ],
+            },
+          ],
+        },
+      },
     );
 
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
@@ -118,7 +133,24 @@ describe("sendFailureNotificationAnnounce", () => {
     expect(deliveryRequest.to).toBe("123");
     expect(deliveryRequest.accountId).toBe("bot-a");
     expect(deliveryRequest.threadId).toBe(42);
-    expect(deliveryRequest.payloads).toEqual([{ text: "Cron failed" }]);
+    expect(deliveryRequest.payloads).toEqual([
+      {
+        text: "Cron failed",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Log in to Codex",
+                  action: { type: "command", command: "/login codex" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
     expect(deliveryRequest.session).toEqual({ kind: "session" });
     expect(deliveryRequest.identity).toEqual({ kind: "identity" });
     expect(deliveryRequest.bestEffort).toBe(false);
@@ -136,7 +168,7 @@ describe("sendFailureNotificationAnnounce", () => {
         channel: "telegram",
         sessionKey: "agent:main:telegram:direct:123:thread:99",
       },
-      "Cron failed",
+      { text: "Cron failed" },
     );
 
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
@@ -169,7 +201,7 @@ describe("sendFailureNotificationAnnounce", () => {
         sessionKey: "agent:main:telegram:group:-1001234567890:thread:42",
         inheritSessionThread: false,
       },
-      "Cron failed",
+      { text: "Cron failed" },
     );
 
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
@@ -201,7 +233,7 @@ describe("sendFailureNotificationAnnounce", () => {
       agentId: "main",
       jobId: "job-1",
       target: { channel: "telegram", to: "123" },
-      message: "Cron failed",
+      payload: { text: "Cron failed" },
       abortSignal: abortController.signal,
     });
 
@@ -230,7 +262,7 @@ describe("sendFailureNotificationAnnounce", () => {
       "main",
       "job-1",
       { channel: "telegram", to: "123" },
-      "Cron failed",
+      { text: "Cron failed" },
     );
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
@@ -250,7 +282,7 @@ describe("sendFailureNotificationAnnounce", () => {
         "main",
         "job-1",
         { channel: "telegram", to: "123" },
-        "Cron failed",
+        { text: "Cron failed" },
       ),
     ).resolves.toBeUndefined();
 
@@ -277,7 +309,7 @@ describe("sendFailureNotificationAnnounce", () => {
       "main",
       "job-1",
       { channel: "telegram", to: "123" },
-      "Cron failed",
+      { text: "Cron failed" },
     );
 
     await vi.advanceTimersByTimeAsync(29_999);
@@ -340,7 +372,7 @@ describe("sendFailureNotificationAnnounce", () => {
         "main",
         "job-1",
         { channel: "telegram", to: "123" },
-        "Cron failed",
+        { text: "Cron failed" },
       );
 
       await vi.advanceTimersByTimeAsync(0);
@@ -375,7 +407,7 @@ describe("sendFailureNotificationAnnounce", () => {
         "main",
         "job-1",
         { channel: "telegram", to: "123" },
-        "Cron failed",
+        { text: "Cron failed" },
       ),
     ).resolves.toBeUndefined();
 

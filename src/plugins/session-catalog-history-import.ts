@@ -1,3 +1,4 @@
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
@@ -15,8 +16,7 @@ function importedSessionCatalogMessage(params: {
   item: SessionCatalogTranscriptItem;
   fallbackTimestamp: number;
 }): AgentMessage | undefined {
-  const parsedTimestamp = params.item.timestamp ? Date.parse(params.item.timestamp) : Number.NaN;
-  const timestamp = Number.isFinite(parsedTimestamp) ? parsedTimestamp : params.fallbackTimestamp;
+  const timestamp = parseDateStringTimestampMs(params.item.timestamp) ?? params.fallbackTimestamp;
   const importedText = params.item.text?.trim();
   if (!importedText && params.item.type === "reasoning") {
     return undefined;
@@ -177,9 +177,9 @@ export async function importSessionCatalogHistory(params: {
         continue;
       }
       const message = {
-        ...(imported as unknown as Record<string, unknown>),
+        ...imported,
         idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:${item.id ?? index}`,
-      } as unknown as AgentMessage;
+      };
       await transcript.appendMessage({
         message,
         idempotencyLookup: "scan",

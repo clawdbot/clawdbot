@@ -256,7 +256,10 @@ function formatSkippedRows(count: number): string {
 }
 
 function formatSessionExportWarning(summary: SessionExportWarningSummary): string {
-  const rows = summary.rows.length > 0 ? ` rows ${summary.rows.join(", ")}` : "";
+  const rows =
+    summary.rows.length > 0
+      ? ` rows ${summary.rows.join(", ")}${summary.count > summary.rows.length ? ", …" : ""}`
+      : "";
   const verb = summary.count === 1 ? "was" : "were";
   switch (summary.code) {
     case "invalid-session-json":

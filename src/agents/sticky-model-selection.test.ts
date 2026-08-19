@@ -76,7 +76,9 @@ describe("persistStickyModelSelection", () => {
   ])("writes the $name", async ({ agentId, cfg, target }) => {
     mocks.cfg = structuredClone(cfg);
 
-    persistStickyModelSelectionBestEffort({ agentId, model: " openai/gpt-5.6-sol " });
+    expect(persistStickyModelSelectionBestEffort({ agentId, model: " openai/gpt-5.6-sol " })).toBe(
+      "requested",
+    );
     await vi.waitFor(() =>
       expect(mocks.info).toHaveBeenCalledWith(
         `persisted sticky model selection agentId=${agentId} model=openai/gpt-5.6-sol target=${target}`,
@@ -94,7 +96,9 @@ describe("persistStickyModelSelection", () => {
   });
 
   it("rejects an empty model before starting a config mutation", async () => {
-    persistStickyModelSelectionBestEffort({ agentId: "main", model: "   " });
+    expect(persistStickyModelSelectionBestEffort({ agentId: "main", model: "   " })).toBe(
+      "requested",
+    );
 
     await vi.waitFor(() =>
       expect(mocks.warn).toHaveBeenCalledWith(
@@ -109,7 +113,7 @@ describe("persistStickyModelSelection", () => {
 
     expect(
       persistStickyModelSelectionBestEffort({ agentId: "main", model: "openai/gpt-5.6-sol" }),
-    ).toBeUndefined();
+    ).toBe("requested");
 
     await vi.waitFor(() =>
       expect(mocks.warn).toHaveBeenCalledWith(
@@ -121,8 +125,18 @@ describe("persistStickyModelSelection", () => {
   it("skips immutable Nix config and warns only once per process", () => {
     mocks.isNixMode = true;
 
-    persistStickyModelSelectionBestEffort({ agentId: "main", model: "openai/gpt-5.6-sol" });
-    persistStickyModelSelectionBestEffort({ agentId: "work", model: "openai/gpt-5.6-luna" });
+    expect(
+      persistStickyModelSelectionBestEffort({
+        agentId: "main",
+        model: "openai/gpt-5.6-sol",
+      }),
+    ).toBe("skipped-immutable");
+    expect(
+      persistStickyModelSelectionBestEffort({
+        agentId: "work",
+        model: "openai/gpt-5.6-luna",
+      }),
+    ).toBe("skipped-immutable");
 
     expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     expect(mocks.warn).toHaveBeenCalledOnce();

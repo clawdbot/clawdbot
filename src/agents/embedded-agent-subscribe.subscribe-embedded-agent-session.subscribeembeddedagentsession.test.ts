@@ -22,6 +22,13 @@ import {
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
+const retryingCompactionEnd = () =>
+  ({
+    type: "compaction_end",
+    reason: "overflow",
+    outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: true },
+  }) as const;
+
 describe("subscribeEmbeddedAgentSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
     // Block replies can schedule nested microtasks; drain twice before checking
@@ -1104,6 +1111,52 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAgentEventSpy.mockRestore();
   });
 
+  it("emits live edit diff progress while tool arguments stream", () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    const { emit } = createSubscribedHarness({ runId: "run-live-edit-diff" });
+    const partialJson =
+      '{"path":"notes.md","edits":[{"oldText":"old\\nline","newText":"new\\nline\\n';
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "tool-live-edit",
+          name: "edit",
+          arguments: {},
+          partialJson,
+        },
+      ],
+    };
+
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: {
+        type: "toolcall_delta",
+        contentIndex: 0,
+        delta: partialJson,
+        partial: message,
+      },
+    });
+
+    expect(
+      emitAgentEventSpy.mock.calls
+        .map(([event]) => event)
+        .find((event) => event.stream === "tool" && event.data?.phase === "input_delta"),
+    ).toMatchObject({
+      runId: "run-live-edit-diff",
+      stream: "tool",
+      data: {
+        phase: "input_delta",
+        toolCallId: "tool-live-edit",
+        name: "edit",
+        diff: { added: 2, removed: 1 },
+      },
+    });
+    emitAgentEventSpy.mockRestore();
+  });
+
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {
     const onReasoningEnd = vi.fn();
 
@@ -1391,7 +1444,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       });
     }
 
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     emitToolRun({
       emit,
       toolName: "write",
@@ -1545,7 +1598,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result: { ok: true },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     emit({ type: "agent_end" });
 
     expect(subscription.getReplayState()).toEqual({
@@ -1579,7 +1632,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result: { details: { status: "ok" } },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     emit({ type: "agent_end" });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
@@ -1614,7 +1667,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         },
       },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
 
     expect(subscription.getAcceptedSessionSpawns()).toEqual([
       {
@@ -1633,7 +1686,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("notifies the runner once when a heartbeat response tool result is recorded", async () => {
+  it("notifies the runner once when a heartbeat response tool result is accepted", async () => {
     const { session, emit } = createStubSessionHarness();
     const onHeartbeatToolResponse = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
@@ -1645,7 +1698,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     const result = {
       details: {
-        status: "recorded",
+        status: "accepted",
         outcome: "no_change",
         notify: false,
         summary: "Nothing needs attention.",

@@ -22,8 +22,7 @@ on:
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
+  pull-requests: read
 
 concurrency:
   group: mantis-discord-status-reactions-${{ github.event.issue.number || inputs.pr_number || inputs.candidate_ref || github.run_id }}-${{ github.run_attempt }}
@@ -81,93 +80,15 @@ jobs:
     name: Resolve Mantis request
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    outputs:
-      baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
-      candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
-      pr_number: ${{ steps.resolve.outputs.pr_number }}
-      request_source: ${{ steps.resolve.outputs.request_source }}
-      should_run: ${{ steps.resolve.outputs.should_run }}
-    steps:
-      - name: Resolve refs and target PR
-        id: resolve
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const defaultBaseline = "0bf06e953fdda290799fc9fb9244a8f67fdae593";
-            const eventName = context.eventName;
-
-            function setOutput(name, value) {
-              core.setOutput(name, value ?? "");
-              core.info(`${name}=${value ?? ""}`);
-            }
-
-            if (eventName === "workflow_dispatch") {
-              const inputs = context.payload.inputs ?? {};
-              setOutput("should_run", "true");
-              setOutput("baseline_ref", inputs.baseline_ref || defaultBaseline);
-              setOutput("candidate_ref", inputs.candidate_ref || "main");
-              setOutput("pr_number", inputs.pr_number || "");
-              setOutput("request_source", "workflow_dispatch");
-              return;
-            }
-
-            if (eventName !== "issue_comment") {
-              core.setFailed(`Unsupported event: ${eventName}`);
-              return;
-            }
-
-            const issue = context.payload.issue;
-            const body = context.payload.comment?.body ?? "";
-            if (!issue?.pull_request) {
-              core.setFailed("Mantis issue_comment trigger requires a pull request comment.");
-              return;
-            }
-
-            const normalized = body.toLowerCase();
-            const requested =
-              (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
-              normalized.includes("discord") &&
-              normalized.includes("status") &&
-              normalized.includes("reaction");
-            if (!requested) {
-              core.notice("Comment mentioned Mantis but did not request the Discord status-reactions scenario.");
-              setOutput("should_run", "false");
-              setOutput("baseline_ref", "");
-              setOutput("candidate_ref", "");
-              setOutput("pr_number", "");
-              setOutput("request_source", "unsupported_issue_comment");
-              return;
-            }
-
-            const { owner, repo } = context.repo;
-            const { data: pr } = await github.rest.pulls.get({
-              owner,
-              repo,
-              pull_number: issue.number,
-            });
-
-            const baselineMatch = body.match(/(?:baseline|base)[\s:=]+([^\s`]+)/i);
-            const candidateMatch = body.match(/(?:candidate|head)[\s:=]+([^\s`]+)/i);
-            const baseline = baselineMatch?.[1] ?? defaultBaseline;
-            const rawCandidate = candidateMatch?.[1];
-            const candidate =
-              rawCandidate && !["head", "pr", "pr-head"].includes(rawCandidate.toLowerCase())
-                ? rawCandidate
-                : pr.head.sha;
-
-            setOutput("should_run", "true");
-            setOutput("baseline_ref", baseline);
-            setOutput("candidate_ref", candidate);
-            setOutput("pr_number", String(issue.number));
-            setOutput("request_source", "issue_comment");
-
-            await github.rest.reactions.createForIssueComment({
-              owner,
-              repo,
-              comment_id: context.payload.comment.id,
-              content: "eyes",
-            }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
+    uses: ./.github/workflows/mantis-resolve-request.yml
+    with:
+      request-pattern: '(?=[\s\S]*discord)(?=[\s\S]*status)(?=[\s\S]*reaction)'
+      skip-notice: Comment mentioned Mantis but did not request the Discord status-reactions scenario.
+      dispatch-params: ${{ github.event_name == 'workflow_dispatch' && toJSON(inputs) || '{"baseline_ref":"0bf06e953fdda290799fc9fb9244a8f67fdae593"}' }}
+      runner: blacksmith-8vcpu-ubuntu-2404
+    secrets:
+      MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+      MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
 
   validate_refs:
     name: Validate selected refs
@@ -175,8 +96,8 @@ jobs:
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
-      baseline_revision: ${{ steps.validate.outputs.baseline_revision }}
-      candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
+      baseline_revision: ${{ steps.validate.outputs['baseline-revision'] }}
+      candidate_revision: ${{ steps.validate.outputs['candidate-revision'] }}
     steps:
       - name: Checkout harness ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -188,53 +109,10 @@ jobs:
         id: validate
         env:
           GH_TOKEN: ${{ github.token }}
-          BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
-          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-
-          validate_ref() {
-            local label="$1"
-            local input_ref="$2"
-            local revision=""
-            local reason=""
-
-            revision="$(git rev-parse "${input_ref}^{commit}")"
-            if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
-              reason="main-ancestor"
-            elif git tag --points-at "$revision" | grep -Eq '^v'; then
-              reason="release-tag"
-            else
-              local pr_head_count
-              pr_head_count="$(
-                gh api \
-                  -H "Accept: application/vnd.github+json" \
-                  "repos/${GITHUB_REPOSITORY}/commits/${revision}/pulls" \
-                  --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${revision}"'")] | length'
-              )"
-              if [[ "$pr_head_count" != "0" ]]; then
-                reason="open-pr-head"
-              fi
-            fi
-
-            if [[ -z "$reason" ]]; then
-              echo "${label} ref '${input_ref}' resolved to ${revision}, which is not trusted for this secret-bearing Mantis run." >&2
-              exit 1
-            fi
-
-            echo "${label}_revision=${revision}" >> "$GITHUB_OUTPUT"
-            {
-              echo "${label}: \`${input_ref}\`"
-              echo "${label} SHA: \`${revision}\`"
-              echo "${label} trust reason: \`${reason}\`"
-            } >> "$GITHUB_STEP_SUMMARY"
-          }
-
-          validate_ref baseline "$BASELINE_REF"
-          validate_ref candidate "$CANDIDATE_REF"
+        uses: ./.github/actions/mantis-validate-trusted-ref
+        with:
+          baseline-ref: ${{ fromJSON(needs.resolve_request.outputs.params).baseline_ref }}
+          candidate-ref: ${{ fromJSON(needs.resolve_request.outputs.params).candidate_ref }}
 
   run_status_reactions:
     name: Run Discord status reaction before/after
@@ -583,40 +461,12 @@ jobs:
   clear_issue_comment_reaction:
     name: Clear Mantis command reaction
     needs: [resolve_request, validate_refs, run_status_reactions]
-    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
-    runs-on: ubuntu-24.04
-    permissions:
-      issues: write
-    steps:
-      - name: Remove workflow eyes reaction
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const commentId = context.payload.comment?.id;
-            if (!commentId) {
-              core.info("No issue comment id found; skipping reaction cleanup.");
-              return;
-            }
-
-            const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
-              owner,
-              repo,
-              comment_id: commentId,
-              per_page: 100,
-            });
-            const eyes = reactions.filter(
-              (reaction) => reaction.content === "eyes" && reaction.user?.login === "github-actions[bot]",
-            );
-            for (const reaction of eyes) {
-              await github.rest.reactions.deleteForIssueComment({
-                owner,
-                repo,
-                comment_id: commentId,
-                reaction_id: reaction.id,
-              });
-              core.info(`Removed eyes reaction ${reaction.id} from comment ${commentId}.`);
-            }
-            if (eyes.length === 0) {
-              core.info(`No workflow eyes reaction found on comment ${commentId}.`);
-            }
+    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' && needs.resolve_request.outputs.reaction_id != '' }}
+    permissions: {}
+    uses: ./.github/workflows/mantis-clear-reaction.yml
+    with:
+      comment-id: ${{ format('{0}', github.event.comment.id) }}
+      reaction-id: ${{ needs.resolve_request.outputs.reaction_id }}
+    secrets:
+      MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+      MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}

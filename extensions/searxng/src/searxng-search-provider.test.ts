@@ -1,4 +1,5 @@
 // Searxng tests cover searxng search provider plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSearxngBaseUrl,
@@ -195,7 +196,7 @@ describe("searxng web search provider", () => {
 
   it("persists base URL to plugin config via setConfiguredCredentialValue", () => {
     const provider = createSearxngWebSearchProvider();
-    const config = {} as Record<string, unknown>;
+    const config: OpenClawConfig = {};
     const setConfiguredCredentialValue = provider.setConfiguredCredentialValue;
     if (!setConfiguredCredentialValue) {
       throw new Error("Expected SearXNG provider setConfiguredCredentialValue");
@@ -203,12 +204,6 @@ describe("searxng web search provider", () => {
 
     setConfiguredCredentialValue(config, "http://search.local:9000");
 
-    expect(
-      (
-        config as {
-          plugins?: { entries?: { searxng?: { config?: { webSearch?: { baseUrl?: string } } } } };
-        }
-      ).plugins?.entries?.searxng?.config?.webSearch?.baseUrl,
-    ).toBe("http://search.local:9000");
+    expect(resolveSearxngBaseUrl(config, {})).toBe("http://search.local:9000");
   });
 });

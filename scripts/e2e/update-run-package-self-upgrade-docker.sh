@@ -25,6 +25,7 @@ SKIP_BUILD="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_DOCKER_RUN_TIMEOUT:-1800s}"
 ARTIFACT_DIR="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/update-run-package-self-upgrade}"
 QA_CHANNEL_FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-update-run-qa-channel.XXXXXX")"
+HISTORICAL_DIST_ARCHIVE="$QA_CHANNEL_FIXTURE_ROOT/historical-dist.tar"
 
 cleanup() {
   rm -rf "$QA_CHANNEL_FIXTURE_ROOT"
@@ -72,6 +73,8 @@ prepare_qa_channel_fixture() {
           tagObject: process.env.TAG_OBJECT,
           commit: process.env.SOURCE_COMMIT,
           buildCommand: "OPENCLAW_BUILD_PRIVATE_QA=1 corepack pnpm build:docker",
+          runtimeInstall: `npm install --prefix <isolated-root> --omit=dev openclaw@${process.env.SOURCE_TAG.slice(1)}`,
+          privateDistOverlay: true,
         }, null, 2)}\n`,
       );
     ' "$ARTIFACT_DIR/qa-channel-fixture-provenance.json"
@@ -102,6 +105,7 @@ prepare_qa_channel_fixture() {
       return 1
     fi
   done
+  tar -C "$checkout_root" -cf "$HISTORICAL_DIST_ARCHIVE" dist
 }
 
 mkdir -p "$ARTIFACT_DIR"
@@ -123,7 +127,47 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR=/tmp/openclaw-update-run-artifacts \
   -e OPENCLAW_UPDATE_RUN_SELF_UPGRADE_SOURCE_VERSION="$SOURCE_VERSION" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-update-run-artifacts" \
-  -v "$QA_CHANNEL_FIXTURE_ROOT/checkout:/tmp/openclaw-update-run-build:ro" \
+  -v "$HISTORICAL_DIST_ARCHIVE:/tmp/openclaw-update-run-historical-dist.tar:ro" \
   "$IMAGE_NAME" \
   timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
-  bash scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh
+  bash -lc 'set -euo pipefail
+historical_install_root=/tmp/openclaw-update-run-historical-install
+historical_package_root="$historical_install_root/node_modules/openclaw"
+qa_plugin_link=/tmp/openclaw-update-run-build/dist/extensions/qa-channel
+npm install \
+  --prefix "$historical_install_root" \
+  --omit=dev \
+  --no-fund \
+  --no-audit \
+  "openclaw@$OPENCLAW_UPDATE_RUN_SELF_UPGRADE_SOURCE_VERSION" \
+  2>&1 | tee /tmp/openclaw-update-run-artifacts/historical-package-install.log
+tar --no-same-owner \
+  -xf /tmp/openclaw-update-run-historical-dist.tar \
+  -C "$historical_package_root"
+mkdir -p "$(dirname "$qa_plugin_link")"
+ln -s "$historical_package_root/dist/extensions/qa-channel" "$qa_plugin_link"
+HISTORICAL_PACKAGE_ROOT="$historical_package_root" \
+  HISTORICAL_PLUGIN_ENTRY="$historical_package_root/dist/extensions/qa-channel/index.js" \
+  HISTORICAL_PREFLIGHT_OUT=/tmp/openclaw-update-run-artifacts/historical-package-preflight.json \
+  node --input-type=module <<NODE
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const packageRoot = process.env.HISTORICAL_PACKAGE_ROOT;
+const pluginEntry = process.env.HISTORICAL_PLUGIN_ENTRY;
+const packageVersion = JSON.parse(
+  fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
+).version;
+const pluginVersion = JSON.parse(
+  fs.readFileSync(path.join(path.dirname(pluginEntry), "package.json"), "utf8"),
+).version;
+if (packageVersion !== process.env.OPENCLAW_UPDATE_RUN_SELF_UPGRADE_SOURCE_VERSION) {
+  throw new Error("isolated historical package version mismatch: " + packageVersion);
+}
+await import(pathToFileURL(pluginEntry).href);
+fs.writeFileSync(
+  process.env.HISTORICAL_PREFLIGHT_OUT,
+  JSON.stringify({ packageVersion, pluginVersion, pluginEntryImported: true }, null, 2) + "\n",
+);
+NODE
+exec bash scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh'

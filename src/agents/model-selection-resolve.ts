@@ -64,7 +64,7 @@ export function getModelRefStatus(
 }
 
 /** Resolves a raw model string into an allowed model ref or an explanatory error. */
-export function resolveAllowedModelRef(
+export function resolveAllowedModelRefCore(
   params: {
     cfg: OpenClawConfig;
     catalog: ModelCatalogEntry[];

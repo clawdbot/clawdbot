@@ -279,6 +279,142 @@ function toolCallEvents(name, args) {
   ];
 }
 
+function editRecoveryFixtureError(reason) {
+  return responseEvents(`OPENCLAW_E2E_EDIT_FAILURE_FIXTURE_ERROR reason=${reason}`);
+}
+
+function collectEditRecoveryOutputs(body) {
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const outputs = new Map();
+  for (const item of input) {
+    if (item?.type !== "function_call_output") {
+      continue;
+    }
+    if (typeof item.call_id !== "string" || typeof item.output !== "string") {
+      return null;
+    }
+    const existing = outputs.get(item.call_id);
+    if (existing !== undefined && existing !== item.output) {
+      return null;
+    }
+    outputs.set(item.call_id, item.output);
+  }
+  return outputs;
+}
+
+function isEditFailureOutput(output, path) {
+  try {
+    const parsed = JSON.parse(output);
+    return (
+      parsed?.status === "error" &&
+      parsed?.tool === "edit" &&
+      typeof parsed.error === "string" &&
+      parsed.error.startsWith(`Could not find the exact text in ${path}.`)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function editRecoveryToolStep(name, args, accept, errorReason) {
+  return { kind: "tool", name, args, call: buildMockFunctionCall(name, args), accept, errorReason };
+}
+
+const editRecoveryPath = "issue-46548-edit-recovery.txt";
+const editRecoverySeedStep = editRecoveryToolStep(
+  "write",
+  { path: editRecoveryPath, content: "before\n" },
+  (output) => output === `Successfully wrote 7 bytes to ${editRecoveryPath}`,
+  "seed-result-mismatch",
+);
+const editRecoveryFailureStep = editRecoveryToolStep(
+  "edit",
+  { path: editRecoveryPath, edits: [{ oldText: "absent\n", newText: "after\n" }] },
+  (output) => isEditFailureOutput(output, editRecoveryPath),
+  "edit-result-mismatch",
+);
+const editRecoveryRetryStep = editRecoveryToolStep(
+  "edit",
+  { path: editRecoveryPath, edits: [{ oldText: "before\n", newText: "after\n" }] },
+  (output) => output === `Successfully replaced 1 block(s) in ${editRecoveryPath}.`,
+  "retry-result-mismatch",
+);
+
+const editRecoveryScenarios = Object.freeze([
+  {
+    trigger: "OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
+    steps: [
+      editRecoverySeedStep,
+      editRecoveryFailureStep,
+      { kind: "final", text: "OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED_FINAL" },
+    ],
+  },
+  {
+    trigger: "OPENCLAW_E2E_EDIT_FAILURE_MATCHED_RETRY",
+    steps: [
+      editRecoverySeedStep,
+      editRecoveryFailureStep,
+      editRecoveryRetryStep,
+      { kind: "final", text: "OPENCLAW_E2E_EDIT_FAILURE_MATCHED_RETRY_FINAL" },
+    ],
+  },
+]);
+
+function resolveEditRecoveryScenario(bodyText) {
+  const matches = editRecoveryScenarios.filter((scenario) => bodyText.includes(scenario.trigger));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function resolveEditRecoveryPrefix(scenario, outputs) {
+  const toolSteps = scenario.steps.filter((step) => step.kind === "tool");
+  const expectedCallIds = new Set(toolSteps.map((step) => step.call.item.call_id));
+  if ([...outputs.keys()].some((callId) => !expectedCallIds.has(callId))) {
+    return { kind: "error", reason: "impossible-prefix" };
+  }
+
+  let completed = 0;
+  for (const step of toolSteps) {
+    const output = outputs.get(step.call.item.call_id);
+    if (output === undefined) {
+      break;
+    }
+    if (!step.accept(output)) {
+      return { kind: "error", reason: step.errorReason };
+    }
+    completed += 1;
+  }
+  if (completed !== outputs.size) {
+    return { kind: "error", reason: "impossible-prefix" };
+  }
+
+  const next = scenario.steps[completed];
+  return next.kind === "final" ? next : { kind: "tool", name: next.name, args: next.args };
+}
+
+function editRecoveryEvents(body, bodyText) {
+  if (!bodyText.includes("OPENCLAW_E2E_EDIT_FAILURE_")) {
+    return null;
+  }
+  const scenario = resolveEditRecoveryScenario(bodyText);
+  if (!scenario) {
+    return editRecoveryFixtureError("invalid-scenario");
+  }
+  if (!hasDeclaredTool(bodyText, "write") || !hasDeclaredTool(bodyText, "edit")) {
+    return editRecoveryFixtureError("tool-not-declared");
+  }
+  const outputs = collectEditRecoveryOutputs(body);
+  if (!outputs) {
+    return editRecoveryFixtureError("malformed-tool-output");
+  }
+  const decision = resolveEditRecoveryPrefix(scenario, outputs);
+  if (decision.kind === "error") {
+    return editRecoveryFixtureError(decision.reason);
+  }
+  return decision.kind === "final"
+    ? responseEvents(decision.text)
+    : toolCallEvents(decision.name, decision.args);
+}
+
 function writeResponsesEvents(res, stream, events) {
   if (stream === false) {
     const completed = events.find((event) => event.type === "response.completed");
@@ -505,6 +641,24 @@ function mcpAppConformanceEvents(body, bodyText) {
     : responseEvents("MCP_APP_CONFORMANCE_FAIL");
 }
 
+function agentPluginBundleEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!/agent plugin bundle qa check/i.test(allText)) {
+    return null;
+  }
+  const toolOutput = collectFunctionCallOutputText(body);
+  if (!toolOutput) {
+    return hasDeclaredTool(bodyText, "weather-probe__weather_probe")
+      ? toolCallEvents("weather-probe__weather_probe", {})
+      : responseEvents("AGENT_BUNDLE_MCP_FAIL tool-not-declared");
+  }
+  return toolOutput.includes("probe ok") &&
+    toolOutput.includes("PLUGIN_ROOT=") &&
+    toolOutput.includes("PLUGIN_DATA=")
+    ? responseEvents("AGENT_BUNDLE_MCP_OK")
+    : responseEvents("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
+}
+
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -550,6 +704,11 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
+      const agentBundleEvents = agentPluginBundleEvents(body, bodyText);
+      if (agentBundleEvents) {
+        writeResponsesEvents(res, body.stream, agentBundleEvents);
+        return;
+      }
       const appEvents = mcpAppConformanceEvents(body, bodyText);
       if (appEvents) {
         writeResponsesEvents(res, body.stream, appEvents);
@@ -563,6 +722,11 @@ const server = http.createServer((req, res) => {
       const draftEvents = progressDraftEvents(body, bodyText);
       if (draftEvents) {
         writeResponsesEvents(res, body.stream, draftEvents);
+        return;
+      }
+      const editRecovery = editRecoveryEvents(body, bodyText);
+      if (editRecovery) {
+        writeResponsesEvents(res, body.stream, editRecovery);
         return;
       }
       const responseText = resolveResponseText(bodyText);

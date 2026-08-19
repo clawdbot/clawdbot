@@ -76,7 +76,6 @@ vi.mock("./status-reaction.js", () => ({
 }));
 
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
-import { createEchoTracker } from "./echo.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
 const baseRoute = {
@@ -251,11 +250,7 @@ function createGroupCfg(): Record<string, unknown> {
   };
 }
 
-function createHandler(
-  warn = vi.fn(),
-  cfg: Record<string, unknown> = createCfg(),
-  echoTracker?: ReturnType<typeof createEchoTracker>,
-) {
+function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg()) {
   const groupHistories = new Map();
   return {
     warn,
@@ -268,12 +263,6 @@ function createHandler(
       groupHistoryLimit: 20,
       groupHistories,
       groupMemberNames: new Map(),
-      echoTracker: echoTracker ?? {
-        has: () => false,
-        forget: () => {},
-        rememberText: () => {},
-        buildCombinedKey: ({ combinedBody }: { combinedBody: string }) => combinedBody,
-      },
       backgroundTasks: new Set(),
       replyResolver: vi.fn() as never,
       replyLogger: {
@@ -384,40 +373,106 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     resolveConfiguredBindingRouteMock.mockImplementation(resolvedConfiguredRoute());
   });
 
-  it("dispatches another conversation's identical text while suppressing the actual echo", async () => {
-    const sentConversation = "15550001111@s.whatsapp.net";
-    const otherConversation = "15550002222@s.whatsapp.net";
-    const echoTracker = createEchoTracker({ maxItems: 10 });
-    echoTracker.rememberText("Done.", { conversationId: sentConversation });
+  it.each([
+    {
+      name: "remote message with media and quote context",
+      message: createTestWebInboundMessage({
+        admission: {
+          accountId: "work",
+          conversation: { kind: "direct", id: directConversationId },
+          sender: { id: directConversationId },
+        },
+        event: { id: "in-2" },
+        payload: {
+          body: "Done.",
+          media: { kind: "image", path: "/tmp/collision.jpg", type: "image/jpeg" },
+        },
+        platform: {
+          chatJid: directConversationId,
+          recipientJid: "15559876543@s.whatsapp.net",
+        },
+        quote: {
+          id: "quoted-1",
+          body: "Earlier message",
+        },
+      }),
+      cfg: createCfg(),
+    },
+    {
+      name: "linked-device self-chat message",
+      message: createTestWebInboundMessage({
+        admission: {
+          accountId: "work",
+          isSelfChat: true,
+          conversation: { kind: "direct", id: directConversationId },
+          sender: { id: directConversationId, isSamePhone: true },
+        },
+        event: { id: "in-2" },
+        payload: { body: "Done." },
+        platform: {
+          chatJid: directConversationId,
+          recipientJid: "15559876543@s.whatsapp.net",
+          fromMe: true,
+        },
+      }),
+      cfg: createCfg(),
+    },
+    {
+      name: "owner group message",
+      message: createGroupMessage({
+        event: { id: "in-2" },
+        payload: { body: "Done." },
+        platform: { fromMe: true },
+      }),
+      cfg: createGroupCfg(),
+    },
+  ])("dispatches a distinct-ID $name with identical text", async ({ message, cfg }) => {
     resolveConfiguredBindingRouteMock.mockImplementation(({ route }) => ({
       bindingResolution: null,
       route,
     }));
-    const { handler } = createHandler(vi.fn(), createCfg(), echoTracker);
+    const { handler } = createHandler(vi.fn(), cfg);
 
-    const messageForConversation = (conversationId: string) =>
+    await handler(message);
+
+    expect(processMessageMock).toHaveBeenCalledTimes(1);
+    const dispatchedMessage = processMessageMock.mock.calls[0]?.[0]?.msg;
+    expect(dispatchedMessage?.event.id).toBe(message.event.id);
+    expect(dispatchedMessage?.payload).toMatchObject(message.payload);
+    expect(dispatchedMessage?.quote).toEqual(message.quote);
+    expect(dispatchedMessage?.platform.fromMe).toBe(message.platform.fromMe);
+  });
+
+  it("dispatches two same-content messages with distinct native ids in order", async () => {
+    const sentConversation = "15550001111@s.whatsapp.net";
+    resolveConfiguredBindingRouteMock.mockImplementation(({ route }) => ({
+      bindingResolution: null,
+      route,
+    }));
+    const { handler } = createHandler(vi.fn(), createCfg());
+
+    const messageForId = (id: string) =>
       createTestWebInboundMessage({
         admission: {
           accountId: "work",
-          conversation: { kind: "direct", id: conversationId },
-          sender: { id: conversationId },
+          conversation: { kind: "direct", id: sentConversation },
+          sender: { id: sentConversation },
         },
+        event: { id },
         payload: { body: "Done." },
         platform: {
-          chatJid: conversationId,
+          chatJid: sentConversation,
           recipientJid: "15559876543@s.whatsapp.net",
         },
       });
 
-    await handler(messageForConversation(otherConversation));
+    await handler(messageForId("in-2"));
+    await handler(messageForId("in-3"));
 
-    expect(processMessageMock).toHaveBeenCalledTimes(1);
-    expect(echoTracker.has("Done.", sentConversation)).toBe(true);
-
-    await handler(messageForConversation(sentConversation));
-
-    expect(processMessageMock).toHaveBeenCalledTimes(1);
-    expect(echoTracker.has("Done.", sentConversation)).toBe(false);
+    expect(processMessageMock.mock.calls.map(([params]) => params.msg.event.id)).toEqual([
+      "in-2",
+      "in-3",
+    ]);
   });
 
   it("rewrites matching WhatsApp inbound turns to the configured ACP session key", async () => {

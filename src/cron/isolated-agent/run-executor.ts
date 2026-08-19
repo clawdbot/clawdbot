@@ -1,14 +1,26 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+import { createContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
+import {
+  finalizeAcceptedContextEngineTurn,
+  type ContextEngineTurnAttemptFacts,
+} from "../../agents/harness/context-engine-turn-attempt.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
+import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
@@ -28,8 +40,9 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
+import type { CronAgentExecutionPhaseUpdate, CronJob, CronStoredJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
   resolveCurrentChannelTarget,
@@ -53,16 +66,33 @@ import {
   runWithModelFallback,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
-import type {
-  CronLiveSelection,
-  MutableCronSession,
-  PersistCronSessionEntry,
+import {
+  type CronLiveSelection,
+  type MutableCronSession,
+  type PersistCronSessionEntry,
+  setCronSessionRuntimeModel,
+  syncCronSessionLiveSelection,
 } from "./run-session-state.js";
-import { syncCronSessionLiveSelection } from "./run-session-state.js";
 import { resolveEffectiveAgentRuntime, resolveThinkingDefault } from "./run.runtime.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
+
+function assertCronRuntimeAuthorityCandidate(params: {
+  authority?: CronRuntimeAuthority;
+  candidateRuntime: string;
+  cliExecution: boolean;
+}): void {
+  const authority = params.authority;
+  if (!authority) {
+    return;
+  }
+  if (params.candidateRuntime !== authority.runtimeId || params.cliExecution) {
+    throw new AgentHarnessPreflightError(
+      `This automation carries ${authority.namespace} authority captured for the ${authority.runtimeId} runtime, but the selected execution runtime is ${params.candidateRuntime}. Restore that runtime and auth profile, or explicitly replace the automation's toolsAllow cap from an authenticated creator turn.`,
+    );
+  }
+}
 type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
@@ -74,14 +104,6 @@ const cronSubagentRegistryRuntimeLoader = createLazyImportLoader<CronSubagentReg
   () => import("./run-subagent-registry.runtime.js"),
 );
 
-async function loadCronEmbeddedRuntime() {
-  return await cronEmbeddedRuntimeLoader.load();
-}
-
-async function loadCronSubagentRegistryRuntime() {
-  return await cronSubagentRegistryRuntimeLoader.load();
-}
-
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
 }
@@ -89,6 +111,22 @@ function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
 const COMMAND_STYLE_CRON_PREFIX =
   /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
 const MAX_CRON_DELIVERY_TARGET_CONTEXT_CHARS = 1000;
+
+function shouldAdvanceCronContextEngineTurn(params: {
+  outcome: "completed" | "exhausted";
+  result: CronPromptRunResult;
+}): boolean {
+  const meta = params.result.meta;
+  return (
+    params.outcome === "completed" &&
+    meta.yielded !== true &&
+    meta.aborted !== true &&
+    meta.error === undefined &&
+    meta.timeoutPhase === undefined &&
+    meta.stopReason !== "error" &&
+    meta.stopReason !== "timeout"
+  );
+}
 
 function resolveIsolatedCronPromptCacheKey(params: {
   job: CronJob;
@@ -200,7 +238,7 @@ export type CronExecutionResult = {
 function createCronPromptExecutor(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
-  job: CronJob;
+  job: CronStoredJob;
   agentId: string;
   agentDir: string;
   agentSessionKey: string;
@@ -268,10 +306,15 @@ function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
-  const scheduledToolPolicy = resolveCronScheduledToolPolicy({
+  const validatedScheduledToolPolicy = resolveCronScheduledToolPolicy({
     toolsAllow: params.agentPayload?.toolsAllow,
     scheduledToolPolicy: params.job.scheduledToolPolicy,
     owner: params.job.owner,
+  });
+  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+    toolsAllow: params.agentPayload?.toolsAllow,
+    scheduledToolPolicy: validatedScheduledToolPolicy,
+    callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
   });
   const { sourceDelivery } = params;
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
@@ -339,17 +382,37 @@ function createCronPromptExecutor(params: {
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
+    const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
+      config: params.cfgWithAgentDefaults,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    let acceptedContextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
+    const runId = params.cronSession.sessionEntry.sessionId;
+    const preparedRunAdmission = prepareAgentRunAdmission({
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+      cfg: params.cfgWithAgentDefaults,
+      facts: {
+        runId,
+        agentId: params.agentId,
+        ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+      },
+    });
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
       model: params.liveSelection.model,
       requestedRouteResolution: "resolved",
-      runId: params.cronSession.sessionEntry.sessionId,
+      runId,
       sessionId: params.cronSession.sessionEntry.sessionId,
       lane: resolveCronAgentLane(params.lane),
       agentDir: params.agentDir,
       agentId: params.agentId,
       sessionKey: params.runSessionKey,
+      userLockedAuthProfileId:
+        params.liveSelection.authProfileIdSource === "user"
+          ? params.liveSelection.authProfileId
+          : undefined,
       abortSignal: params.abortSignal,
       resolveAgentHarnessRuntimeOverride: (provider) =>
         resolveSessionRuntimeOverrideForProvider({
@@ -381,15 +444,11 @@ function createCronPromptExecutor(params: {
       canFallbackAfterError: () => !currentAttemptCommittedMedia(),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
+        let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
         attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
         }
-        // The candidate that admits detached work owns its continuation even
-        // if the provider throws before returning result metadata.
-        params.cronSession.sessionEntry.modelProvider = providerOverride;
-        params.cronSession.sessionEntry.model = modelOverride;
-        await params.persistRunContinuationSession?.();
         const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
           provider: providerOverride,
           entry: params.cronSession.sessionEntry,
@@ -459,6 +518,19 @@ function createCronPromptExecutor(params: {
                 modelId: modelOverride,
               }) ?? providerOverride));
         const cliExecution = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
+        assertCronRuntimeAuthorityCandidate({
+          authority: params.job.runtimeAuthority,
+          candidateRuntime,
+          cliExecution,
+        });
+        // The validated candidate that admits detached work owns its continuation
+        // even if the provider throws before returning result metadata.
+        setCronSessionRuntimeModel({
+          entry: params.cronSession.sessionEntry,
+          provider: providerOverride,
+          model: modelOverride,
+        });
+        await params.persistRunContinuationSession?.();
         await params.setRunContinuationCliExecutionProvider?.(
           cliExecution ? executionProvider : undefined,
         );
@@ -477,7 +549,6 @@ function createCronPromptExecutor(params: {
           // Cron intentionally reuses its durable session id as the run id; turn
           // claims stay unique via per-claim ids and the worker gate handles this
           // via credential rotation (see worker-environments/service.ts fences).
-          const runId = params.cronSession.sessionEntry.sessionId;
           const result = await withLocalSessionPlacementTurnAdmission(
             {
               sessionId: params.cronSession.sessionEntry.sessionId,
@@ -485,8 +556,9 @@ function createCronPromptExecutor(params: {
               agentId: params.agentId,
               runId,
             },
-            () =>
-              runCliAgent({
+            async () =>
+              await runCliAgent({
+                preparedRunAdmission,
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
                 sessionEntry: params.cronSession.sessionEntry,
@@ -495,11 +567,17 @@ function createCronPromptExecutor(params: {
                 jobId: params.job.id,
                 cleanupCliLiveSessionOnRunEnd: params.usesDetachedRunSession === true,
                 sessionFile,
+                storePath: params.cronSession.storePath,
+                persistAssistantTranscript: true,
                 workspaceDir: params.workspaceDir,
                 config: params.cfgWithAgentDefaults,
                 prompt: promptText,
                 finalizePromptForResolvedTools,
                 modelProvider: providerOverride,
+                modelHasVision: modelSupportsInput(
+                  findModelInCatalog(thinkingCatalog ?? [], providerOverride, modelOverride),
+                  "image",
+                ),
                 provider: executionProvider,
                 model: modelOverride,
                 thinkLevel: candidateThinkLevel,
@@ -532,6 +610,10 @@ function createCronPromptExecutor(params: {
                 fastModeStartedAtMs,
                 fastModeAutoProgressState,
                 isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+                contextEngineLogicalTurnLease,
+                onContextEngineTurnCandidate: (facts) => {
+                  contextEngineTurnCandidate = facts;
+                },
                 userTurnTranscriptRecorder,
                 suppressNextUserMessagePersistence:
                   userTurnTranscriptRecorder.hasPersisted() ||
@@ -541,9 +623,10 @@ function createCronPromptExecutor(params: {
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
+          acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
           return result;
         }
-        const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
+        const { resolveFastModeState, runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
         const promptCacheKey = resolveIsolatedCronPromptCacheKey({
           job: params.job,
           agentId: params.agentId,
@@ -559,6 +642,7 @@ function createCronPromptExecutor(params: {
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({
+          preparedRunAdmission,
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
           sessionTarget: {
@@ -621,6 +705,9 @@ function createCronPromptExecutor(params: {
           bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
+          scheduledRuntimeAuthority: params.job.runtimeAuthority,
+          scheduledRuntimeAuthorityRecoveryRequired:
+            params.job.runtimeAuthorityRecoveryRequired === true,
           scheduledToolPolicy,
           execOverrides: params.suppressExecNotifyOnExit
             ? {
@@ -641,6 +728,10 @@ function createCronPromptExecutor(params: {
           disableMessageTool: !sourceDelivery.messageTool.enabled,
           forceMessageTool: sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+          contextEngineLogicalTurnLease,
+          onContextEngineTurnCandidate: (facts) => {
+            contextEngineTurnCandidate = facts;
+          },
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
           onExecutionPhase: params.onExecutionPhase,
@@ -654,16 +745,41 @@ function createCronPromptExecutor(params: {
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
+        acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
         return result;
       },
-    });
+    })
+      .catch(async (error: unknown) => {
+        await contextEngineLogicalTurnLease.dispose();
+        throw error;
+      })
+      .finally(() => preparedRunAdmission.close());
+    try {
+      if (
+        acceptedContextEngineTurnCandidate &&
+        shouldAdvanceCronContextEngineTurn({
+          outcome: fallbackResult.outcome,
+          result: fallbackResult.result,
+        })
+      ) {
+        await finalizeAcceptedContextEngineTurn({
+          facts: acceptedContextEngineTurnCandidate,
+          lease: contextEngineLogicalTurnLease,
+        });
+      }
+    } finally {
+      await contextEngineLogicalTurnLease.dispose();
+    }
     runResult = fallbackResult.result;
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;
     params.liveSelection.provider = fallbackResult.provider;
     params.liveSelection.model = fallbackResult.model;
-    params.cronSession.sessionEntry.modelProvider = fallbackResult.provider;
-    params.cronSession.sessionEntry.model = fallbackResult.model;
+    setCronSessionRuntimeModel({
+      entry: params.cronSession.sessionEntry,
+      provider: fallbackResult.provider,
+      model: fallbackResult.model,
+    });
     await params.persistRunContinuationSession?.();
     runEndedAt = Date.now();
     pendingUserTurn = undefined;
@@ -685,7 +801,7 @@ function createCronPromptExecutor(params: {
 export async function executeCronRun(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
-  job: CronJob;
+  job: CronStoredJob;
   agentId: string;
   agentDir: string;
   agentSessionKey: string;
@@ -866,7 +982,7 @@ export async function executeCronRun(params: {
     let hasActiveDescendants = false;
     if (shouldRetryInterimAck) {
       const { countActiveDescendantRuns, listDescendantRunsForRequester } =
-        await loadCronSubagentRegistryRuntime();
+        await cronSubagentRegistryRuntimeLoader.load();
       hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
         const descendantStartedAt =
           typeof entry.execution.startedAt === "number"

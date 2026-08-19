@@ -37,6 +37,8 @@ const threadParticipation = createPersistentDedupeCache<MattermostThreadParticip
       "thread-participation-state",
       "Mattermost persistent thread participation state failed",
     ),
+    // Restoring participation must not extend its original mention-bypass window.
+    readTimestamp: ({ repliedAt }) => repliedAt,
   },
 });
 

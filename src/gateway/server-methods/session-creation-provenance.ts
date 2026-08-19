@@ -7,6 +7,8 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 export type TrustedSessionCreation = {
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
+  /** Exact spawning session retained separately from the stable actor identity. */
+  requesterSessionKey?: string;
   /** Immutable completion recipient for a spawn-owned visible session. */
   completionOwnerSessionKey?: string;
   /** Effective caller tool-policy snapshot for an in-process visible spawn. */
@@ -41,7 +43,8 @@ export function resolveOperatorSessionCreation(
   if (options.allowTrustedHint && agentRuntimeIdentity?.sessionSpawnContext) {
     return {
       via: "spawn",
-      actor: { type: "agent", id: agentRuntimeIdentity.sessionKey },
+      actor: { type: "agent", id: agentRuntimeIdentity.agentId },
+      requesterSessionKey: agentRuntimeIdentity.sessionKey,
       ...(agentRuntimeIdentity.sessionSpawnContext.completionOwnerSessionKey
         ? {
             completionOwnerSessionKey:
@@ -52,9 +55,8 @@ export function resolveOperatorSessionCreation(
     };
   }
   const profileId = client?.authenticatedUserProfile?.profileId;
-  // Actor only when proven: a profile-less wire connection may be an agent-tool
-  // client on a remote topology, so claiming a human actor would misattribute
-  // agent-caused creations. Absent actor means unknown, never inferred.
+  // Profile linking can canonicalize this id after connection attach, so session
+  // ownership follows the live trusted profile while audit keeps its frozen facts.
   return {
     via: "operator",
     ...(profileId ? { actor: { type: "human" as const, id: profileId } } : {}),

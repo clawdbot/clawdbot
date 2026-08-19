@@ -1,7 +1,9 @@
 // Media fetch tests cover remote media download limits and validation.
 import fs from "node:fs/promises";
+import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -413,6 +415,7 @@ describe("readRemoteMediaBuffer", () => {
       expectedError: {
         code: "fetch_failed",
         name: "MediaFetchError",
+        cause: expect.objectContaining({ name: "TimeoutError" }),
       },
     },
   ] as const)("$name", async ({ lookupFn, fetchImpl, readIdleTimeoutMs, expectedError }) => {
@@ -671,6 +674,41 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("retries a default response-body idle timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array([1, 2]));
+              },
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        readIdleTimeoutMs: 20,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(result).resolves.toMatchObject({ buffer: Buffer.from("ok") });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not retry 4xx responses", async () => {
     const fetchImpl = vi
       .fn()
@@ -823,6 +861,22 @@ describe("readRemoteMediaBuffer", () => {
       url: "https://example.com/file.bin",
       timeoutMs: 1234,
       signal: parent.signal,
+    });
+  });
+
+  it("passes the HTTPS-only redirect policy through the guarded fetch path", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+
+    await readRemoteMediaBuffer({
+      url: "https://example.com/favicon.ico",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      requireHttps: true,
+    });
+
+    expect(requireFetchGuardRequest()).toMatchObject({
+      url: "https://example.com/favicon.ico",
+      requireHttps: true,
     });
   });
 
@@ -1360,15 +1414,34 @@ describe("readRemoteMediaBuffer", () => {
     },
   );
 
-  it("saves bodyless successful responses without unbounded buffering", async () => {
-    const saved = await saveResponseMedia(new Response(null, { status: 204 }), {
-      sourceUrl: "https://example.com/empty",
-      fallbackContentType: "application/octet-stream",
-      maxBytes: 8,
-    });
+  it("rejects bodyless successful responses without saving an empty file", async () => {
+    const inboundDir = path.join(tempHome.home, ".openclaw", "media", "inbound");
+    const listInboundFiles = async () => {
+      try {
+        return (await fs.readdir(inboundDir)).toSorted();
+      } catch (error) {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return [];
+        }
+        throw error;
+      }
+    };
+    const before = await listInboundFiles();
 
-    expect(saved.size).toBe(0);
-    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.alloc(0));
+    await expect(
+      saveResponseMedia(new Response(null, { status: 204 }), {
+        sourceUrl: "https://example.com/empty",
+        fallbackContentType: "application/octet-stream",
+        maxBytes: 8,
+      }),
+    ).rejects.toMatchObject({
+      name: "MediaFetchError",
+      code: "http_error",
+      status: 204,
+      message:
+        "Failed to fetch media from https://example.com/empty: HTTP 204; empty response body",
+    });
+    await expect(listInboundFiles()).resolves.toEqual(before);
   });
 
   it("uses caller filename hints for MIME detection without preserving storage basenames", async () => {

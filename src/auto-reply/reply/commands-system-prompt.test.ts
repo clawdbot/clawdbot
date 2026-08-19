@@ -46,6 +46,7 @@ vi.mock("../../skills/runtime/session-snapshot.js", () => ({
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => undefined),
+  resolveSessionAgentId: vi.fn(({ agentId }: { agentId?: string }) => agentId ?? "main"),
   resolveSessionAgentIds: vi.fn(() => ({ sessionAgentId: "main" })),
 }));
 
@@ -71,6 +72,8 @@ vi.mock("../../agents/agent-tools.js", () => ({
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 function makeParams(): HandleCommandsParams {

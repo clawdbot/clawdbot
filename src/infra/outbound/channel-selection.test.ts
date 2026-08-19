@@ -32,6 +32,10 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: (value?: string | null) => {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : undefined;
+    return normalized && deliverableChannelIds.includes(normalized) ? normalized : undefined;
+  },
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
 }));
 
@@ -48,6 +52,26 @@ vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
           repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
         }
       : null,
+  resolveMissingOfficialExternalChannelPluginRepairHints: ({
+    channelIds,
+  }: {
+    channelIds: string[];
+  }) =>
+    channelIds.flatMap((channelId) =>
+      mocks.missingOfficialExternalChannels.has(channelId)
+        ? [
+            {
+              pluginId: channelId,
+              channelId,
+              label: channelId === "whatsapp" ? "WhatsApp" : "Feishu",
+              installSpec: `@openclaw/${channelId}`,
+              installCommand: `openclaw plugins install @openclaw/${channelId}`,
+              doctorFixCommand: "openclaw doctor --fix",
+              repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
+            },
+          ]
+        : [],
+    ),
 }));
 
 type ChannelSelectionModule = typeof import("./channel-selection.js");
@@ -270,27 +294,46 @@ describe("resolveMessageChannelSelection", () => {
     },
   ])("resolves message channel selection for %j", async ({ setup, params, expected, verify }) => {
     const setupResult = setup?.();
-    await expect(expectResolvedSelection(params)).resolves.toEqual(expected);
+    await expect(expectResolvedSelection(params)).resolves.toMatchObject(expected);
     verify?.(setupResult as never);
+  });
+
+  it("returns the exact bootstrapped plugin used to prove availability", async () => {
+    const plugin = { id: "alpha" };
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
+
+    const selection = await expectResolvedSelection({ cfg: {} as never, channel: "alpha" });
+
+    expect(selection.plugin).toBe(plugin);
+  });
+
+  it("returns the exact configured plugin used for single-channel selection", async () => {
+    const plugin = makePlugin({ id: "delta", isConfigured: async () => true });
+    mocks.listChannelPlugins.mockReturnValue([plugin]);
+
+    const selection = await expectResolvedSelection({ cfg: {} as never });
+
+    expect(selection.plugin).toBe(plugin);
   });
 
   it("allows bootstrap while checking explicit and fallback channels", async () => {
     const cfg = {} as never;
+    const fallbackPlugin = { id: "beta" };
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
-      channel === "beta" ? { id: "beta" } : undefined,
+      channel === "beta" ? fallbackPlugin : undefined,
     );
 
-    await expect(
-      expectResolvedSelection({
-        cfg,
-        channel: "alpha",
-        fallbackChannel: "beta",
-      }),
-    ).resolves.toEqual({
+    const selection = await expectResolvedSelection({
+      cfg,
+      channel: "alpha",
+      fallbackChannel: "beta",
+    });
+    expect(selection).toMatchObject({
       channel: "beta",
       configured: [],
       source: "tool-context-fallback",
     });
+    expect(selection.plugin).toBe(fallbackPlugin);
 
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(1, {
       channel: "alpha",
@@ -304,10 +347,24 @@ describe("resolveMessageChannelSelection", () => {
     });
   });
 
+  it("carries the admitted agent into channel bootstrap", async () => {
+    const cfg = {} as never;
+
+    await expectResolvedSelection({ cfg, channel: "alpha", agentId: "ops" });
+
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "alpha",
+      cfg,
+      agentId: "ops",
+      allowBootstrap: true,
+    });
+  });
+
   it.each([
     {
       params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "not-a-channel" },
-      expectedMessage: "Unknown channel: channel:c123",
+      expectedMessage:
+        'Unknown channel "channel:c123". Run `openclaw channels list --all` to see configured and installable channels.',
     },
     {
       setup: () => {

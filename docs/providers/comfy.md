@@ -78,8 +78,10 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
         {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "comfy/workflow",
+              mediaModels: {
+                image: {
+                  primary: "comfy/workflow",
+                },
               },
             },
           },
@@ -153,8 +155,10 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
         {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "comfy/workflow",
+              mediaModels: {
+                image: {
+                  primary: "comfy/workflow",
+                },
               },
             },
           },
@@ -250,8 +254,10 @@ The `image` and `video` sections also support a reference-image input node:
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "comfy/workflow",
+          mediaModels: {
+            image: {
+              primary: "comfy/workflow",
+            },
           },
         },
       },
@@ -291,8 +297,10 @@ The `image` and `video` sections also support a reference-image input node:
     {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "comfy/workflow",
+          mediaModels: {
+            video: {
+              primary: "comfy/workflow",
+            },
           },
         },
       },

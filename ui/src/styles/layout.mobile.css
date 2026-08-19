@@ -148,18 +148,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   box-shadow: 0 -12px 32px color-mix(in srgb, black 16%, transparent);
 }
 
-.shell--mobile-nav .board-session-surface__reopen {
-  top: auto;
-  right: 12px;
-  bottom: 8px;
-  left: auto;
-  transform: none;
-}
-
-.shell--mobile-nav .board-session-surface__reopen span {
-  writing-mode: horizontal-tb;
-}
-
 .shell--mobile-nav .sidebar-resizer {
   display: none;
 }
@@ -234,8 +222,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .shell--mobile-nav .nav-item {
   margin: 0;
   min-height: 40px;
-  padding: 0 12px;
-  font-size: 13px;
+  padding: 0 12px 0 8px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   border-radius: var(--radius-md);
   white-space: nowrap;
   flex: 0 0 auto;
@@ -335,7 +323,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .shell--mobile-nav .nav-item {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */
@@ -369,8 +357,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     left: auto;
     z-index: 100;
     width: min(420px, calc(100vw - var(--safe-area-left) - var(--safe-area-right) - 16px));
-    background: var(--card, #161b22);
-    border: 1px solid var(--border, #30363d);
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
     padding: 10px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
@@ -428,12 +416,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     grid-area: session;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
-    min-height: 44px;
-    padding: 10px 12px;
-    font-size: 14px;
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
     grid-area: model;
   }
@@ -446,14 +428,12 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     font-size: 14px;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-menu {
-    bottom: auto;
-    top: calc(100% + 6px);
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model-menu,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__effort-menu {
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
     width: 100%;
     font-size: 14px;
     min-height: 44px;
@@ -504,20 +484,11 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     border-radius: var(--radius-md);
   }
 
-  .stat-label {
-    font-size: 12px; /* was 11px */
-  }
-
   .stat-value {
     font-size: 18px;
   }
 
   /* Forms */
-  .form-grid {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-
   .field input,
   .field textarea,
   .field select {
@@ -539,21 +510,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   /* Chat */
-  .chat-header {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-
-  .chat-header__left {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .chat-header__right {
-    justify-content: space-between;
-  }
-
   .chat-session {
     min-width: unset;
     width: 100%;
@@ -583,20 +539,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
 
-  .agent-chat__toolbar {
-    align-items: stretch;
-    gap: 8px;
-    padding: 6px 8px;
-  }
-
-  .agent-chat__toolbar-left,
-  .agent-chat__toolbar-right {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn--ghost,
   .chat-send-btn {
     width: 44px;
     min-width: 44px;
@@ -604,7 +547,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn--ghost svg,
   .chat-send-btn svg {
     width: 16px;
     height: 16px;
@@ -693,13 +635,9 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding: 8px 10px;
   }
 
-  .brand-title {
-    font-size: 13px;
-  }
-
   .nav-item {
     padding: 6px 8px;
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm); /* was 11px */
   }
 
   .content {
@@ -786,10 +724,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding: 8px 10px;
   }
 
-  .data-table-wrapper {
-    border-radius: var(--radius-sm);
-  }
-
   .session-key-cell {
     max-width: 200px;
   }
@@ -826,8 +760,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 }
 
-/* ≤500px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
-@media (max-width: 500px) {
+/* ≤560px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
+@media (max-width: 560px) {
   .data-table.sessions-table {
     min-width: 320px;
   }

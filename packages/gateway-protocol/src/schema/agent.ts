@@ -315,12 +315,16 @@ export const AgentParamsSchema = closedObject({
   bootstrapContextMode: Type.Optional(
     Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
   ),
-  // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
   bootstrapContextRunKind: Type.Optional(
     Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
   ),
   acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
   internalRuntimeHandoffId: Type.Optional(NonEmptyString),
+  // Enabled backend recovery supplies only capture/retry mode. Disabled collection omits it;
+  // the private token, when present, remains in durable session state.
+  internalExecutionIdentityRetry: Type.Optional(Type.Boolean()),
+  /** Exact durable recovery attempt that owns any post-admission identity bind. */
+  internalExecutionIdentityRecoveryAttempt: Type.Optional(Type.Integer({ minimum: 1 })),
   execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
   internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
   inputProvenance: Type.Optional(InputProvenanceSchema),
@@ -351,6 +355,7 @@ export const AgentIdentityParamsSchema = closedObject({
 export const AgentIdentityResultSchema = closedObject({
   agentId: NonEmptyString,
   name: Type.Optional(NonEmptyString),
+  nameSource: Type.Optional(Type.String({ enum: ["config", "agent", "workspace", "default"] })),
   avatar: Type.Optional(NonEmptyString),
   avatarSource: Type.Optional(NonEmptyString),
   avatarStatus: Type.Optional(Type.String({ enum: ["none", "local", "remote", "data"] })),

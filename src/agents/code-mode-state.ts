@@ -130,6 +130,27 @@ export function cancelPendingBridgeStates(pending: readonly PendingBridgeState[]
   }
 }
 
+/** Apply restored-guest cancellation to the parent-owned host operations. */
+export function cancelPendingBridgeStatesById(
+  pending: PendingBridgeState[],
+  canceledRequestIds: readonly string[],
+): void {
+  if (canceledRequestIds.length === 0) {
+    return;
+  }
+  const canceled = new Set(canceledRequestIds);
+  const retained = pending.filter((entry) => {
+    if (!canceled.has(entry.id)) {
+      return true;
+    }
+    if (!entry.settled) {
+      entry.cancel?.();
+    }
+    return false;
+  });
+  pending.splice(0, pending.length, ...retained);
+}
+
 /** Deliver bridge responses in actual settlement order, not request order. */
 export function settledBridgeRequestsInCompletionOrder(
   pending: readonly PendingBridgeState[],
@@ -256,7 +277,8 @@ export function pendingBridgeRequestsReplaySafe(
       request.method === "agentSpawn" ||
       request.method === "agentWait" ||
       request.method === "skillsList" ||
-      request.method === "skillsRead"
+      request.method === "skillsRead" ||
+      request.method === "sleep"
     ) {
       return true;
     }
@@ -271,7 +293,6 @@ export function pendingBridgeRequestsReplaySafe(
 function enforceSnapshotStateLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
-  output: unknown[];
   reservedActiveRunSlot?: boolean;
 }) {
   if (!params.reservedActiveRunSlot) {
@@ -282,6 +303,7 @@ function enforceSnapshotStateLimits(params: {
 
 export function createPendingBridgeStates(params: {
   pendingRequests: PendingBridgeRequest[];
+  config: CodeModeConfig;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
@@ -305,6 +327,7 @@ export function createPendingBridgeStates(params: {
         namespaceRuntime: params.namespaceRuntime,
         parentToolCallId: params.parentToolCallId,
         codeModeRunId: params.codeModeRunId,
+        maxOutputBytes: params.config.maxOutputBytes,
         ctx: params.ctx,
         request,
         signal,

@@ -9,13 +9,13 @@ import {
 describe("resolveSessionDisplayName", () => {
   it("uses the same friendly main-thread name for every agent", () => {
     for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
-      expect(resolveSessionDisplayName(key)).toBe("Main Thread");
+      expect(resolveSessionDisplayName(key)).toBe("Main Session");
     }
 
     expect(resolveSessionDisplayName("agent:research:main", { displayName: "Research desk" })).toBe(
       "Research desk",
     );
-    expect(resolveSessionDisplayName("agent:research:dashboard:main")).toBe("New thread");
+    expect(resolveSessionDisplayName("agent:research:dashboard:main")).toBe("New session");
     expect(resolveSessionDisplayName("agent:research:main:thread")).toBe("main:thread");
   });
 
@@ -38,6 +38,96 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("agent:main:imessage:direct:+4912")).toBe("iMessage · +4912");
   });
 
+  // Rows are shaped like the Gateway projection: displayName plus the
+  // accountId it derives from the canonical route, no user label.
+  it.each([
+    {
+      name: "an account-less direct row keeps its plain name",
+      key: "agent:main:telegram:direct:42",
+      row: { displayName: "Alice" },
+      expected: "Alice",
+    },
+    {
+      name: "an account-qualified direct row names its account",
+      key: "agent:main:telegram:cards:direct:42",
+      row: { accountId: "cards", displayName: "Alice" },
+      expected: "Alice · cards",
+    },
+    {
+      name: "a shipped dm-spelled row names its account",
+      key: "agent:main:telegram:cards:dm:42",
+      row: { accountId: "cards", displayName: "Alice" },
+      expected: "Alice · cards",
+    },
+    {
+      name: "an unnamed shipped dm row reads as a friendly peer plus account",
+      key: "agent:main:telegram:cards:dm:491234567890",
+      row: { accountId: "cards" },
+      expected: "Telegram · …567890 · cards",
+    },
+    {
+      name: "the default account adds no discriminator",
+      key: "agent:main:telegram:default:direct:42",
+      row: { accountId: "default", displayName: "Alice" },
+      expected: "Alice",
+    },
+    {
+      name: "a human label that merely looks account-shaped still gets a discriminator",
+      key: "agent:main:telegram:work:direct:42",
+      row: { accountId: "work", label: "Alice (work)" },
+      expected: "Alice (work) · work",
+    },
+    {
+      name: "a stored label that already ends in the account suffix is left alone",
+      key: "agent:main:telegram:cards:direct:42",
+      row: { accountId: "cards", label: "Alice · cards" },
+      expected: "Alice · cards",
+    },
+    {
+      name: "a canonical group key is unchanged",
+      key: "agent:main:telegram:group:-1001234567890",
+      row: undefined,
+      expected: "Telegram Group",
+    },
+    {
+      name: "an account-looking group key is not read as an account-qualified group",
+      key: "agent:main:dm:account:group:room",
+      row: undefined,
+      expected: "dm:account:group:room",
+    },
+  ])("$name", ({ key, row, expected }) => {
+    expect(resolveSessionDisplayName(key, row)).toBe(expected);
+  });
+
+  it("reads the account off the key only until the gateway row arrives", () => {
+    expect(resolveSessionDisplayName("agent:main:telegram:cards:direct:42")).toBe(
+      "Telegram · 42 · cards",
+    );
+    expect(resolveSessionDisplayName("agent:main:signal:work:dm:+4912")).toBe(
+      "Signal · +4912 · work",
+    );
+    expect(resolveSessionDisplayName("agent:main:telegram:default:direct:42")).toBe(
+      "Telegram · 42",
+    );
+  });
+
+  it("takes the account from the gateway row, not the key", () => {
+    // Only the projection carries account identity here; the key has none.
+    expect(
+      resolveSessionDisplayName("agent:main:telegram:direct:42", {
+        accountId: "cards",
+        displayName: "Alice",
+      }),
+    ).toBe("Alice · cards");
+    // When the two disagree, the route the Gateway parsed wins over the guess.
+    expect(
+      resolveSessionDisplayName("agent:main:telegram:cards:direct:42", {
+        accountId: "ops",
+        displayName: "Alice",
+      }),
+    ).toBe("Alice · ops");
+  });
+
   it("does not split UTF-16 surrogate pairs when shortening peer ids", () => {
     expect(resolveSessionDisplayName("agent:main:telegram:direct:12345😀67890")).toBe(
       "Telegram · …67890",
@@ -45,9 +135,16 @@ describe("resolveSessionDisplayName", () => {
   });
 
   it("falls back to a friendly name for dashboard sessions instead of the uuid key", () => {
+    const key = "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d";
+
+    expect(resolveSessionDisplayName(key)).toBe("New session");
     expect(
-      resolveSessionDisplayName("agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d"),
-    ).toBe("New thread");
+      resolveSessionDisplayName(key, {
+        label: undefined,
+        displayName: undefined,
+        derivedTitle: undefined,
+      }),
+    ).toBe("New session");
   });
 
   it("names unnamed work sessions after their checkout", () => {
@@ -170,9 +267,29 @@ describe("resolveChannelSessionInfo", () => {
       channel: "telegram",
       channelSession: true,
     });
-    expect(resolveChannelSessionInfo("agent:main:slack:acct-1:channel:C1")).toEqual({
+    expect(resolveChannelSessionInfo("agent:main:slack:channel:C1")).toEqual({
       channel: "slack",
       channelSession: true,
+    });
+    // Shipped pre-#11881 keys spell direct chats `dm`; they are still channel sessions.
+    expect(resolveChannelSessionInfo("agent:main:telegram:cards:dm:42")).toEqual({
+      channel: "telegram",
+      channelSession: true,
+    });
+    expect(resolveChannelSessionInfo("agent:main:dm:+123", "whatsapp")).toEqual({
+      channel: "whatsapp",
+      channelSession: true,
+    });
+    // Accounts qualify direct chats only, so these key shapes name no channel
+    // and must not be filed under one the canonical parser would reject.
+    expect(resolveChannelSessionInfo("agent:main:telegram:work:group:room")).toEqual({
+      channelSession: false,
+    });
+    expect(resolveChannelSessionInfo("agent:main:slack:acct-1:channel:C1")).toEqual({
+      channelSession: false,
+    });
+    expect(resolveChannelSessionInfo("agent:main:dm:account:group:room")).toEqual({
+      channelSession: false,
     });
     // dmScope per-peer keys have no channel segment; the row channel wins.
     expect(resolveChannelSessionInfo("agent:main:direct:+123", "whatsapp")).toEqual({

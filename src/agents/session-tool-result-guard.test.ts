@@ -754,6 +754,27 @@ describe("installSessionToolResultGuard", () => {
     expect(persistedErrors[0]?.stopReason).toBe("error");
   });
 
+  it("reports the exact persisted user entry id", () => {
+    const sm = SessionManager.inMemory();
+    const persisted: Array<{ entryId: string; message: AgentMessage }> = [];
+    installSessionToolResultGuard(sm, {
+      onUserMessagePersisted: (message, context) => {
+        persisted.push({ entryId: context.entryId, message });
+      },
+    });
+
+    const entryId = sm.appendMessage(
+      asAppendMessage({ role: "user", content: "exact admission", timestamp: 1 }),
+    );
+
+    expect(persisted).toEqual([
+      {
+        entryId,
+        message: expect.objectContaining({ role: "user", content: "exact admission" }),
+      },
+    ]);
+  });
+
   it("models a four-candidate followup fallback cascade producing exactly one user and one assistant-error entry", () => {
     const sm = SessionManager.inMemory();
     const FALLBACK_CANDIDATES = 4;

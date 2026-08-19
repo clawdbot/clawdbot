@@ -1,6 +1,12 @@
 /** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
+import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  parseComputerUseCapabilityDescriptor,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
 import type {
   PluginNodeHostCommandRegistration,
   PluginRegistry,
@@ -49,12 +55,14 @@ export function listRegisteredNodeHostCapsAndCommands(
 ): {
   caps: string[];
   commands: string[];
+  computerUse?: ComputerUseCapabilityDescriptor;
   nodePluginTools: NodePluginToolDescriptor[];
 } {
   const registry = resolveNodeHostPluginRegistry();
   return withPluginRuntimeRegistryScope(registry, () => {
     const caps = new Set<string>();
     const commands = new Set<string>();
+    let computerUse: ComputerUseCapabilityDescriptor | undefined;
     const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
     for (const entry of registry?.nodeHostCommands ?? []) {
       if (entry.command.duplex === true && options.includeDuplex === false) {
@@ -69,6 +77,9 @@ export function listRegisteredNodeHostCapsAndCommands(
         caps.add(entry.command.cap);
       }
       commands.add(entry.command.command);
+      if (entry.command.computerUse) {
+        computerUse = parseComputerUseCapabilityDescriptor(entry.command.computerUse(context));
+      }
       const agentTool = buildNodePluginToolDescriptor(entry);
       if (agentTool) {
         nodePluginTools.set(`${agentTool.pluginId}\0${agentTool.name}`, agentTool);
@@ -77,6 +88,7 @@ export function listRegisteredNodeHostCapsAndCommands(
     return {
       caps: [...caps].toSorted((left, right) => left.localeCompare(right)),
       commands: [...commands].toSorted((left, right) => left.localeCompare(right)),
+      ...(computerUse ? { computerUse } : {}),
       nodePluginTools: [...nodePluginTools.values()].toSorted(
         (left, right) =>
           left.pluginId.localeCompare(right.pluginId) || left.name.localeCompare(right.name),
@@ -110,14 +122,31 @@ export function watchRegisteredNodeHostCommandAvailability(
     });
 }
 
-function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+/** Release plugin command state before a reconnected Gateway can invoke it again. */
+export async function notifyRegisteredNodeHostCommandDisconnect(): Promise<void> {
+  const registry = resolveNodeHostPluginRegistry();
+  const callbacks = new Set(
+    (registry?.nodeHostCommands ?? [])
+      .map((entry) => entry.command.onDisconnect)
+      .filter((callback): callback is () => Promise<void> | void => callback !== undefined),
+  );
+  await withPluginRuntimeRegistryScope(registry, async () => {
+    const results = await Promise.allSettled(
+      [...callbacks].map(async (callback) => await callback()),
+    );
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length === 1) {
+      const failure = failures[0];
+      throw failure instanceof Error
+        ? failure
+        : new Error("node-host plugin disconnect cleanup failed", { cause: failure });
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "node-host plugin disconnect cleanup failed");
+    }
+  });
 }
 
 function isProviderSafeToolName(value: string): boolean {
@@ -131,13 +160,13 @@ function buildNodePluginToolDescriptor(
   if (!agentTool) {
     return null;
   }
-  const name = normalizeString(agentTool.name);
-  const description = normalizeString(agentTool.description);
+  const name = normalizeOptionalString(agentTool.name) ?? "";
+  const description = normalizeOptionalString(agentTool.description) ?? "";
   if (!isProviderSafeToolName(name) || !description) {
     return null;
   }
-  const mcpServer = normalizeString(agentTool.mcp?.server);
-  const mcpTool = normalizeString(agentTool.mcp?.tool);
+  const mcpServer = normalizeOptionalString(agentTool.mcp?.server) ?? "";
+  const mcpTool = normalizeOptionalString(agentTool.mcp?.tool) ?? "";
   return {
     pluginId: entry.pluginId,
     name,

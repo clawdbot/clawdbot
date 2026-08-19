@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ToolSearchConfig, ToolSearchMode } from "./tool-search-types.js";
+import {
+  MAX_TOOL_SEARCH_RESULTS,
+  type ToolSearchConfig,
+  type ToolSearchMode,
+} from "./tool-search-types.js";
 
 const DEFAULT_CODE_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_LIMIT = 8;
@@ -18,7 +22,7 @@ function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> 
   return isRecord(toolSearch) ? toolSearch : {};
 }
 
-function readBoolean(value: unknown, fallback: boolean): boolean {
+function resolveBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
@@ -50,10 +54,10 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
   const configured = Object.keys(raw).some((key) => key !== "enabled");
   const maxSearchLimit = Math.max(
     1,
-    Math.min(50, readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT)),
+    Math.min(MAX_TOOL_SEARCH_RESULTS, readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT)),
   );
   return {
-    enabled: readBoolean(raw.enabled, configured),
+    enabled: resolveBoolean(raw.enabled, configured),
     mode,
     codeTimeoutMs: Math.max(
       resolveMinCodeTimeoutMs(),

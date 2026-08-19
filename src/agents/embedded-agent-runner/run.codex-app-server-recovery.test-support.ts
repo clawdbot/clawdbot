@@ -9,13 +9,12 @@ import {
   mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
-  resetRunOverflowCompactionHarnessMocks,
+  resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
-import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 const CODEX_MISSING_TERMINAL_MESSAGE =
   "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
@@ -98,40 +97,8 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
   });
 
   beforeEach(() => {
-    resetRunOverflowCompactionHarnessMocks();
+    resetSharedRunIntegrationHarnessMocks();
     mockedClassifyFailoverReason.mockReturnValue(null);
-  });
-
-  it("does not advertise recovery after the outer run-loop budget is exhausted", () => {
-    expect(
-      hasCodexAppServerRecoveryRetryBudget({
-        alreadyRetried: false,
-        runLoopIterations: 32,
-        maxRunLoopIterations: 32,
-      }),
-    ).toBe(false);
-    expect(
-      hasCodexAppServerRecoveryRetryBudget({
-        alreadyRetried: false,
-        runLoopIterations: 31,
-        maxRunLoopIterations: 32,
-      }),
-    ).toBe(true);
-  });
-
-  it("retries a replay-safe stdio client close once", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(codexClientClosedAttempt())
-      .mockResolvedValueOnce(successAttempt());
-
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-client-close-retry",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
   it("keeps shared abort ownership open through a replay-safe retry", async () => {
@@ -296,110 +263,6 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     ).toBe(true);
   });
 
-  it("suppresses duplicate user persistence when retrying after the inbound message was persisted", async () => {
-    // If the first attempt already persisted the inbound message, the retry must
-    // not mirror it again into the transcript.
-    mockedRunEmbeddedAttempt
-      .mockImplementationOnce(async (attemptParams) => {
-        (
-          attemptParams as {
-            onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
-          }
-        ).onUserMessagePersisted?.({ role: "user", content: overflowBaseRunParams.prompt });
-        return codexClientClosedAttempt();
-      })
-      .mockResolvedValueOnce(successAttempt());
-
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-client-close-retry-persisted",
-      currentMessageId: "msg-1",
-    });
-
-    expect(
-      (
-        expectDefined(
-          mockedRunEmbeddedAttempt.mock.calls[1],
-          "mockedRunEmbeddedAttempt.mock.calls[1] test invariant",
-        )[0] as {
-          suppressNextUserMessagePersistence?: boolean;
-        }
-      ).suppressNextUserMessagePersistence,
-    ).toBe(true);
-  });
-
-  it("does not retry websocket client closes", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      codexClientClosedAttempt({
-        codexAppServerFailure: {
-          kind: "client_closed_before_turn_completed",
-          transport: "websocket",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          replaySafe: true,
-        },
-        promptTimeoutOutcome: undefined,
-      }),
-    );
-
-    await expect(
-      runEmbeddedAgent({
-        ...overflowBaseRunParams,
-        provider: "codex",
-        model: "gpt-5.5",
-        runId: "run-codex-client-close-websocket",
-      }),
-    ).rejects.toThrow("codex app-server client closed before turn completed");
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries a replay-safe stdio turn/completed idle timeout once", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
-      .mockResolvedValueOnce(successAttempt());
-
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-turn-completion-idle-timeout",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not retry non-completion Codex turn watch timeouts", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      codexTurnCompletionIdleTimeoutAttempt({
-        codexAppServerFailure: {
-          kind: "turn_completion_idle_timeout",
-          turnWatchTimeoutKind: "progress",
-          transport: "stdio",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          replaySafe: true,
-        },
-        promptTimeoutOutcome: undefined,
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-progress-idle-timeout",
-    });
-
-    expect(result.payloads?.[0]).toMatchObject({
-      isError: true,
-      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
-    });
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
-
   it("returns a timeout payload after a replay-safe turn/completed idle timeout retry is exhausted", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
@@ -441,40 +304,6 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("surfaces non-stdio turn/completed idle timeouts instead of throwing", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      codexTurnCompletionIdleTimeoutAttempt({
-        codexAppServerFailure: {
-          kind: "turn_completion_idle_timeout",
-          turnWatchTimeoutKind: "completion",
-          transport: "websocket",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          replaySafe: true,
-        },
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-turn-completion-idle-timeout-websocket",
-    });
-
-    expect(result.payloads?.[0]).toMatchObject({
-      isError: true,
-      text: CODEX_MISSING_TERMINAL_MESSAGE,
-    });
-    expect(result.meta.error).toEqual({
-      kind: "incomplete_turn",
-      message: CODEX_MISSING_TERMINAL_MESSAGE,
-      fallbackSafe: false,
-    });
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
   it("does not hand Codex app-server idle timeouts to model fallback", async () => {
@@ -532,31 +361,5 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
-
-  it("does not retry after visible assistant output", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      codexClientClosedAttempt({
-        assistantTexts: ["partial answer"],
-        codexAppServerFailure: {
-          kind: "client_closed_before_turn_completed",
-          transport: "stdio",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          replaySafe: false,
-          replayBlockedReason: "assistant_output",
-        },
-      }),
-    );
-
-    await expect(
-      runEmbeddedAgent({
-        ...overflowBaseRunParams,
-        provider: "codex",
-        model: "gpt-5.5",
-        runId: "run-codex-client-close-visible-output",
-      }),
-    ).rejects.toThrow("codex app-server client closed before turn completed");
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 });

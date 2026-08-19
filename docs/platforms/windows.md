@@ -148,7 +148,7 @@ openclaw gateway status --json
 For CLI-only use without a managed Gateway service:
 
 ```powershell
-openclaw onboard --non-interactive --skip-health
+openclaw onboard --non-interactive --accept-risk --skip-health
 openclaw gateway run
 ```
 

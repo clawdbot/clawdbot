@@ -123,7 +123,13 @@ export function parseVerdict(value: unknown): Verdict {
   ) {
     throw new Error("invalid guard verdict fields");
   }
-  return record as unknown as Verdict;
+  return {
+    decision: record.decision,
+    category: record.category,
+    reason: record.reason,
+    model: record.model,
+    policyVersion: record.policyVersion,
+  };
 }
 
 function guardFailure(model: string, policyVersion: string): Verdict {

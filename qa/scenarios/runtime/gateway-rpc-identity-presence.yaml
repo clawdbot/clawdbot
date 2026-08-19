@@ -1,0 +1,24 @@
+title: Gateway RPC identity and presence
+
+scenario:
+  id: gateway-rpc-identity-presence
+  surface: runtime
+  coverage:
+    primary:
+      - gateway.identity-and-presence-apis
+  objective: Prove Gateway identity, host information, presence, system-event, and heartbeat RPCs through real WebSocket clients.
+  successCriteria:
+    - Two authenticated clients observe the same stable Gateway process identity.
+    - The system information RPC returns real host and process resource data.
+    - A system event updates the presence snapshot and broadcasts the new presence to another client.
+    - Heartbeat state can be read and toggled, and the test restores heartbeats before shutdown.
+  docsRefs:
+    - docs/gateway/index.md
+  codeRefs:
+    - src/gateway/server-methods/system.ts
+    - src/infra/system-presence.ts
+    - test/e2e/qa-lab/runtime/gateway-rpc-identity-presence.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-rpc-identity-presence.e2e.test.ts
+    summary: Start a real token-authenticated Gateway and exercise identity, system information, presence, system-event, and heartbeat RPCs with two WebSocket clients.

@@ -39,9 +39,11 @@ import {
 import { readLogFileSize, readLogTextSince } from "./logs.ts";
 import {
   canConnectToLoopbackPort,
+  hasChildExited,
   resolveCommandSpawnInvocation,
   runCommand,
   runCommandInvocation,
+  waitForGatewayWithStartupMigrationRestart,
   withAllocatedGatewayPort,
 } from "./process.ts";
 import { formatError, shellEscapeForSh, sleep } from "./shared.ts";
@@ -506,6 +508,7 @@ export async function startManualGatewayFromInstalledCli(params: {
   logPath: string;
 }): Promise<GatewayHandle> {
   mkdirSync(dirname(params.logPath), { recursive: true });
+  const launchLogOffset = readLogFileSize(params.logPath);
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const invocation = resolveInstalledCliInvocation(
     params.cliPath,
@@ -529,24 +532,33 @@ export async function startManualGatewayFromInstalledCli(params: {
   child.stderr?.on("data", (chunk) => {
     gatewayLog.write(chunk);
   });
-  let logClosed = false;
-  const closeLog = async () => {
-    if (logClosed) {
-      return;
-    }
-    logClosed = true;
-    await new Promise<void>((resolvePromise) => {
+  let resolveChildClose: () => void;
+  const childClosePromise = new Promise<void>((resolvePromise) => {
+    resolveChildClose = resolvePromise;
+  });
+  let closeLogPromise: Promise<void> | undefined;
+  const closeLog = () => {
+    closeLogPromise ??= new Promise<void>((resolvePromise) => {
       gatewayLog.once("error", () => resolvePromise());
       gatewayLog.end(() => resolvePromise());
     });
+    return closeLogPromise;
   };
   child.once("close", () => {
+    resolveChildClose();
     void closeLog();
   });
   child.once("error", () => {
+    resolveChildClose();
     void closeLog();
   });
-  return { child, closeLog, logPath: params.logPath };
+  return {
+    child,
+    closeLog,
+    launchLogOffset,
+    logPath: params.logPath,
+    waitForClose: () => childClosePromise,
+  };
 }
 
 async function resolveInstalledGatewayStatusArgs(params: {
@@ -609,8 +621,37 @@ export async function waitForInstalledGateway(params: {
   lane: LaneState;
   cliPath: string;
   env: NodeJS.ProcessEnv;
+  gateway?: GatewayHandle;
+  gatewayHolder?: { current: GatewayHandle | null };
+  gatewayLogPath?: string;
   logPath: string;
 }) {
+  if (params.gatewayHolder) {
+    if (!params.gatewayLogPath) {
+      throw new Error("Gateway restart coordination requires a gateway log path.");
+    }
+    const gatewayLogPath = params.gatewayLogPath;
+    await waitForGatewayWithStartupMigrationRestart({
+      gatewayHolder: params.gatewayHolder,
+      restartGateway: () =>
+        startManualGatewayFromInstalledCli({
+          lane: params.lane,
+          cliPath: params.cliPath,
+          env: params.env,
+          logPath: gatewayLogPath,
+        }),
+      waitUntilReady: (gateway) =>
+        waitForInstalledGateway({
+          lane: params.lane,
+          cliPath: params.cliPath,
+          env: params.env,
+          gateway,
+          logPath: params.logPath,
+        }),
+    });
+    return;
+  }
+
   const statusArgs = await resolveInstalledGatewayStatusArgs({
     cliPath: params.cliPath,
     cwd: params.lane.homeDir,
@@ -619,6 +660,9 @@ export async function waitForInstalledGateway(params: {
   });
   const deadline = Date.now() + gatewayReadyDeadlineMs();
   while (Date.now() < deadline) {
+    if (params.gateway && hasChildExited(params.gateway.child)) {
+      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
+    }
     const result = await runInstalledCli({
       cliPath: params.cliPath,
       args: statusArgs,
@@ -630,6 +674,9 @@ export async function waitForInstalledGateway(params: {
     });
     if (result.exitCode === 0) {
       return;
+    }
+    if (params.gateway && hasChildExited(params.gateway.child)) {
+      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
     }
     await sleep(2_000);
   }

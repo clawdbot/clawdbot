@@ -93,3 +93,25 @@ describe("DiscordEntityCache eviction", () => {
     expect(getCalls()).toBe(2);
   });
 });
+
+describe("DiscordEntityCache gateway invalidation", () => {
+  it.each([
+    GatewayDispatchEvents.GuildMemberAdd,
+    GatewayDispatchEvents.GuildMemberRemove,
+    GatewayDispatchEvents.GuildMemberUpdate,
+  ])("invalidates member and user entries for %s", async (event) => {
+    const { cache, getCalls } = makeCache({ ttlMs: 60_000 });
+
+    await cache.fetchMember("g1", "u1");
+    await cache.fetchUser("u1");
+    await cache.fetchMember("g1", "u1");
+    await cache.fetchUser("u1");
+    expect(getCalls()).toBe(2);
+
+    cache.invalidateForGatewayEvent(event, { guild_id: "g1", user: { id: "u1" } });
+
+    await cache.fetchMember("g1", "u1");
+    await cache.fetchUser("u1");
+    expect(getCalls()).toBe(4);
+  });
+});

@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
@@ -33,6 +32,7 @@ import {
   resolveAnyEnabledFeishuToolsConfig,
   resolveFeishuToolAccount,
 } from "./tool-account.js";
+import { feishuExternalToolResult as json } from "./tool-result.js";
 
 function resolveDocToolLocalRoots(ctx: {
   workspaceDir?: string;
@@ -1258,6 +1258,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
             : undefined;
         return {
           name: "feishu_doc",
+          resultContentSource: "network",
           label: "Feishu Doc",
           description:
             "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text",
@@ -1441,6 +1442,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     api.registerTool(
       (ctx) => ({
         name: "feishu_app_scopes",
+        resultContentSource: "network",
         label: "Feishu App Scopes",
         description:
           "List current app permissions (scopes). Use to debug permission issues or check available capabilities.",

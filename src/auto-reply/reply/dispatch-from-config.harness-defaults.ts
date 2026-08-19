@@ -13,6 +13,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -20,9 +21,10 @@ import {
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import { loadSessionStoreEntry, resolveStorePath } from "./dispatch-from-config.runtime.js";
-import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import {
+  loadSessionStoreEntry,
+  resolveSessionStorePathCore,
+} from "./dispatch-from-config.runtime.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
 
@@ -95,7 +97,7 @@ function resolveHarnessDefaultParentSessionKey(params: {
 }
 
 export function resolveTurnModelOverride(
-  replyOptions: DispatchFromConfigParams["replyOptions"],
+  replyOptions: { isHeartbeat?: boolean; heartbeatModelOverride?: string } | undefined,
 ): string | undefined {
   if (replyOptions?.isHeartbeat !== true) {
     return undefined;
@@ -163,7 +165,7 @@ function resolveStoredModelCandidate(params: {
         config: params.cfg,
         fallbackAgentId: params.sessionAgentId,
       });
-      const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+      const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
       return loadSessionStoreEntry({
         agentId,
         storePath,
@@ -202,7 +204,47 @@ function resolveModelOverrideCandidate(params: {
   })?.ref;
 }
 
-export function resolveHarnessSourceVisibleRepliesDefault(params: {
+/**
+ * Resolves the configured visible-replies mode plus the guarded harness
+ * default. One owner for dispatch and synthetic-turn binding facts: both must
+ * derive the same session-stable delivery mode or CLI session bindings
+ * ping-pong across turn kinds (#121485).
+ */
+export function resolveVisibleRepliesPolicy(params: {
+  cfg: OpenClawConfig;
+  chatType?: string;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  sessionAgentId: string;
+  sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
+  turnModelOverride?: string;
+}): {
+  configuredVisibleReplies?: "automatic" | "message_tool";
+  harnessDefaultVisibleReplies?: "automatic" | "message_tool";
+} {
+  const configuredVisibleReplies =
+    params.chatType === "group" || params.chatType === "channel"
+      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+      : params.cfg.messages?.visibleReplies;
+  const harnessDefaultVisibleReplies =
+    configuredVisibleReplies === undefined &&
+    params.chatType !== "group" &&
+    params.chatType !== "channel"
+      ? resolveHarnessSourceVisibleRepliesDefault({
+          cfg: params.cfg,
+          ctx: params.ctx,
+          entry: params.entry,
+          sessionAgentId: params.sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionStore: params.sessionStore,
+          turnModelOverride: params.turnModelOverride,
+        })
+      : undefined;
+  return { configuredVisibleReplies, harnessDefaultVisibleReplies };
+}
+
+function resolveHarnessSourceVisibleRepliesDefault(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;

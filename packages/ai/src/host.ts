@@ -26,6 +26,7 @@ export interface AiProviderRequestPolicyInput {
   transport?: "stream" | "websocket" | "http" | "media-understanding";
   modelId?: string | null;
   compat?: unknown;
+  model?: object;
 }
 
 /** Context shared by plugin-owned provider stream hooks. */
@@ -36,6 +37,8 @@ export interface AiProviderStreamHookContext {
   provider: string;
   modelId: string;
   model: Model;
+  /** Wire-format API before simple completion projects an internal transport alias. */
+  sourceApi?: Api;
 }
 
 /** Narrow plugin-runtime port used by package-owned transports. */
@@ -70,7 +73,16 @@ export interface AiTransportPluginHost {
         transport: "stream" | "websocket";
       };
     },
-  ): { headers?: Record<string, string>; metadata?: Record<string, string> } | undefined;
+  ):
+    | {
+        headers?: Record<string, string>;
+        metadata?: Record<string, string>;
+        websocket?: {
+          headers?: Record<string, string>;
+          degradeCooldownMs?: number;
+        };
+      }
+    | undefined;
   wrapSimpleCompletionStream(
     this: void,
     params: {
@@ -98,6 +110,7 @@ export type AiTransformTransportMessages = (
   options?: {
     normalizeSameModelToolCallIds?: boolean;
     preserveCrossModelToolCallThoughtSignature?: boolean;
+    preserveUnframedToolResults?: boolean;
   },
 ) => Context["messages"];
 
@@ -145,8 +158,6 @@ export interface AiTransportHost {
   plugin: AiTransportPluginHost;
   /** Builds provider-owned Copilot compatibility headers for one message turn. */
   buildCopilotDynamicHeaders(messages: Context["messages"]): Record<string, string>;
-  /** Resolves endpoint classification without importing core provider registries. */
-  resolveProviderEndpointClass(baseUrl?: string): string;
   /** Resolves provider capability flags used by payload compatibility policy. */
   resolveProviderRequestCapabilities(
     input: AiProviderRequestPolicyInput,
@@ -159,6 +170,7 @@ export interface AiTransportHost {
     providerHeaders?: Record<string, string>;
     callerHeaders?: Record<string, string>;
     precedence?: "caller-wins" | "defaults-win";
+    model?: object;
   }): Record<string, string> | undefined;
   /** Returns the host-configured request timeout attached to a model. */
   resolveModelRequestTimeoutMs(model: Model): number | undefined;
@@ -170,8 +182,6 @@ export interface AiTransportHost {
   transformTransportMessages: AiTransformTransportMessages;
   /** Registers a custom transport API with the host's stream error bridge. */
   registerCustomApi(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean;
-  /** Prepares the provider-owned Google simple-completion alias when needed. */
-  prepareGoogleSimpleCompletionModel(registry: ApiRegistry, model: Model): Model;
   /**
    * Emits one transport diagnostic; build runs only when the host logs it and
    * may return null to suppress the entry (e.g. de-duplication).
@@ -232,7 +242,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
     },
   },
   buildCopilotDynamicHeaders: () => ({}),
-  resolveProviderEndpointClass: () => "default",
   resolveProviderRequestCapabilities: () => ({
     endpointClass: "default",
     knownProviderFamily: "",
@@ -251,7 +260,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   transformTransportMessages: (messages, model, normalizeToolCallId) =>
     transformMessages(messages, model, normalizeToolCallId),
   registerCustomApi: queueCustomApiRegistration,
-  prepareGoogleSimpleCompletionModel: (_registry, model) => model,
   logDebug: () => {},
   logInfo: () => {},
   logWarn: () => {},
@@ -309,6 +317,11 @@ export function resolveAiTransportHeaderSentinels(
   const host = getAiTransportHost();
   let resolvedHeaders: Record<string, string> | undefined;
   for (const [name, value] of Object.entries(headers)) {
+    if (value === null) {
+      // applyLocalNoAuthHeaderOverride marks no-auth local providers with a
+      // runtime null marker outside the public string-only Model contract.
+      continue;
+    }
     const resolved = host.resolveSecretSentinel(value);
     if (resolved !== value) {
       resolvedHeaders ??= { ...headers };

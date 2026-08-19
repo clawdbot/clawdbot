@@ -167,6 +167,38 @@ describe("iMessage sent-message echo cache", () => {
     ).toBe(true);
   });
 
+  it("does not match persisted text when both message ids differ", () => {
+    // Outbound "ok" recorded with its GUID; a user later sends "ok" with a new
+    // GUID. Same text, conflicting ids — a NEW message, not a reconnect echo.
+    const scope = "acct:imessage:+1555";
+    rememberPersistedIMessageEcho({ scope, text: "ok", messageId: "guid-agent-text" });
+
+    expect(hasPersistedIMessageEcho({ scope, text: "ok", messageId: "guid-user-text" })).toBe(
+      false,
+    );
+    // Genuine echo still matches by id, and id-less probes still match by text.
+    expect(hasPersistedIMessageEcho({ scope, text: "ok", messageId: "guid-agent-text" })).toBe(
+      true,
+    );
+    expect(hasPersistedIMessageEcho({ scope, text: "ok" })).toBe(true);
+  });
+
+  it("matches persisted self-chat text after the in-memory cache expires", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const scope = "acct:imessage:+1555";
+    const cache = createSentMessageCache();
+    const text = "Delayed self-chat echo";
+    const outboundGuid = "p:0/guid-agent-text";
+
+    rememberPersistedIMessageEcho({ scope, text, messageId: outboundGuid });
+    cache.remember(scope, { text, messageId: outboundGuid });
+    vi.advanceTimersByTime(4_001);
+
+    expect(cache.has(scope, { text, messageId: "12345" }, { skipIdShortCircuit: true })).toBe(true);
+    expect(cache.has(scope, { text, messageId: "p:0/guid-user-text" })).toBe(false);
+  });
+
   it("matches persisted media through the primary sent-message cache", () => {
     const scope = "acct:imessage:+1555";
     const media = { contentType: "image/png", kind: "image" as const };

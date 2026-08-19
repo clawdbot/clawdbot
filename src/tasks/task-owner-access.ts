@@ -1,5 +1,9 @@
 // Normalizes task owner keys and checks requester access to task records.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   findTaskByRunId,
   getTaskById,
@@ -11,38 +15,77 @@ import {
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
-function canOwnerAccessTask(task: TaskRecord, callerOwnerKey: string): boolean {
+type TaskOwnerIdentity = {
+  callerOwnerKey: string;
+  callerAgentId?: string;
+  config?: OpenClawConfig;
+};
+
+function canOwnerAccessTask(task: TaskRecord, identity: TaskOwnerIdentity): boolean {
+  if (
+    task.scopeKind !== "session" ||
+    normalizeOptionalString(task.ownerKey) !== normalizeOptionalString(identity.callerOwnerKey)
+  ) {
+    return false;
+  }
+  const callerAgentId =
+    normalizeOptionalString(identity.callerAgentId) ??
+    parseAgentSessionKey(identity.callerOwnerKey)?.agentId;
+  // Bare owner keys can collide across per-agent stores, so an unscoped caller
+  // without a trusted agent identity must fail closed.
+  if (!callerAgentId) {
+    return false;
+  }
+  let taskAgentId = task.requesterAgentId ?? parseAgentSessionKey(task.ownerKey)?.agentId;
+  if (!taskAgentId) {
+    try {
+      taskAgentId = resolveSessionAgentId({
+        sessionKey: task.ownerKey,
+        config: identity.config ?? getRuntimeConfig(),
+      });
+    } catch {
+      return false;
+    }
+  }
   return (
-    task.scopeKind === "session" &&
-    normalizeOptionalString(task.ownerKey) === normalizeOptionalString(callerOwnerKey)
+    Boolean(taskAgentId) &&
+    normalizeOptionalString(taskAgentId) === normalizeOptionalString(callerAgentId)
   );
 }
 
 export function getTaskByIdForOwner(params: {
   taskId: string;
   callerOwnerKey: string;
+  callerAgentId?: string;
+  config?: OpenClawConfig;
 }): TaskRecord | undefined {
   const task = getTaskById(params.taskId);
-  return task && canOwnerAccessTask(task, params.callerOwnerKey) ? task : undefined;
+  return task && canOwnerAccessTask(task, params) ? task : undefined;
 }
 
 export function findTaskByRunIdForOwner(params: {
   runId: string;
   callerOwnerKey: string;
+  callerAgentId?: string;
+  config?: OpenClawConfig;
 }): TaskRecord | undefined {
   const task = findTaskByRunId(params.runId);
-  return task && canOwnerAccessTask(task, params.callerOwnerKey) ? task : undefined;
+  return task && canOwnerAccessTask(task, params) ? task : undefined;
 }
 
 /** Update an owner-visible task's notification policy. */
 export function updateTaskNotifyPolicyForOwner(params: {
   taskId: string;
   callerOwnerKey: string;
+  callerAgentId?: string;
+  config?: OpenClawConfig;
   notifyPolicy: TaskNotifyPolicy;
 }): TaskRecord | null {
   const task = getTaskByIdForOwner({
     taskId: params.taskId,
     callerOwnerKey: params.callerOwnerKey,
+    callerAgentId: params.callerAgentId,
+    config: params.config,
   });
   if (!task) {
     return null;
@@ -57,12 +100,16 @@ export function updateTaskNotifyPolicyForOwner(params: {
 export function cancelTaskByIdForOwner(params: {
   taskId: string;
   callerOwnerKey: string;
+  callerAgentId?: string;
+  config?: OpenClawConfig;
   endedAt: number;
   terminalSummary?: string | null;
 }): TaskRecord | null {
   const task = getTaskByIdForOwner({
     taskId: params.taskId,
     callerOwnerKey: params.callerOwnerKey,
+    callerAgentId: params.callerAgentId,
+    config: params.config,
   });
   if (!task) {
     return null;
@@ -78,20 +125,26 @@ export function cancelTaskByIdForOwner(params: {
 export function listTasksForRelatedSessionKeyForOwner(params: {
   relatedSessionKey: string;
   callerOwnerKey: string;
+  callerAgentId?: string;
+  config?: OpenClawConfig;
 }): TaskRecord[] {
   return listTasksForRelatedSessionKey(params.relatedSessionKey).filter((task) =>
-    canOwnerAccessTask(task, params.callerOwnerKey),
+    canOwnerAccessTask(task, params),
   );
 }
 
 export function buildTaskStatusSnapshotForRelatedSessionKeyForOwner(params: {
   relatedSessionKey: string;
   callerOwnerKey: string;
+  callerAgentId?: string;
+  config?: OpenClawConfig;
 }) {
   return buildTaskStatusSnapshot(
     listTasksForRelatedSessionKeyForOwner({
       relatedSessionKey: params.relatedSessionKey,
       callerOwnerKey: params.callerOwnerKey,
+      callerAgentId: params.callerAgentId,
+      config: params.config,
     }),
   );
 }
@@ -99,6 +152,8 @@ export function buildTaskStatusSnapshotForRelatedSessionKeyForOwner(params: {
 export function findLatestTaskForRelatedSessionKeyForOwner(params: {
   relatedSessionKey: string;
   callerOwnerKey: string;
+  callerAgentId?: string;
+  config?: OpenClawConfig;
 }): TaskRecord | undefined {
   return listTasksForRelatedSessionKeyForOwner(params)[0];
 }
@@ -106,10 +161,14 @@ export function findLatestTaskForRelatedSessionKeyForOwner(params: {
 export function resolveTaskForLookupTokenForOwner(params: {
   token: string;
   callerOwnerKey: string;
+  callerAgentId?: string;
+  config?: OpenClawConfig;
 }): TaskRecord | undefined {
   const direct = getTaskByIdForOwner({
     taskId: params.token,
     callerOwnerKey: params.callerOwnerKey,
+    callerAgentId: params.callerAgentId,
+    config: params.config,
   });
   if (direct) {
     return direct;
@@ -117,6 +176,8 @@ export function resolveTaskForLookupTokenForOwner(params: {
   const byRun = findTaskByRunIdForOwner({
     runId: params.token,
     callerOwnerKey: params.callerOwnerKey,
+    callerAgentId: params.callerAgentId,
+    config: params.config,
   });
   if (byRun) {
     return byRun;
@@ -124,10 +185,12 @@ export function resolveTaskForLookupTokenForOwner(params: {
   const related = findLatestTaskForRelatedSessionKeyForOwner({
     relatedSessionKey: params.token,
     callerOwnerKey: params.callerOwnerKey,
+    callerAgentId: params.callerAgentId,
+    config: params.config,
   });
   if (related) {
     return related;
   }
   const raw = resolveTaskForLookupToken(params.token);
-  return raw && canOwnerAccessTask(raw, params.callerOwnerKey) ? raw : undefined;
+  return raw && canOwnerAccessTask(raw, params) ? raw : undefined;
 }

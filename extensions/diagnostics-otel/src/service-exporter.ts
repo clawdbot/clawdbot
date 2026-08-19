@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
-import { lowCardinalityAttr } from "./service-attributes.js";
 import {
   OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
   OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV,
@@ -10,7 +11,6 @@ import {
 import type {
   OtelHttpAgentFactory,
   OtelHttpAgentOptions,
-  OtelLogger,
   OtelSignalIdentifier,
 } from "./service-types.js";
 
@@ -19,45 +19,79 @@ export function normalizeEndpoint(endpoint?: string): string | undefined {
   return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
 }
 
-function resolveOtelUrl(endpoint: string | undefined, path: string): string | undefined {
-  if (!endpoint) {
-    return undefined;
-  }
+const SIGNAL_QUALIFIED_OTLP_PATH_PATTERN = /\/v1\/(traces|metrics|logs)$/iu;
+
+function appendOrReplaceSignalPath(value: string, path: string): string {
+  const base = value.replace(/\/+$/u, "");
+  return SIGNAL_QUALIFIED_OTLP_PATH_PATTERN.test(base)
+    ? base.replace(SIGNAL_QUALIFIED_OTLP_PATH_PATTERN, `/${path}`)
+    : `${base}/${path}`;
+}
+
+function resolveSharedOtelUrl(endpoint: string, path: string): string {
   const endpointWithoutQueryOrFragment = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
-  if (/\/v1\/(?:traces|metrics|logs)$/i.test(endpointWithoutQueryOrFragment)) {
+  const matchedSignal = endpointWithoutQueryOrFragment
+    .replace(/\/+$/u, "")
+    .match(SIGNAL_QUALIFIED_OTLP_PATH_PATTERN)?.[1];
+  const requestedSignal = path.slice(path.lastIndexOf("/") + 1);
+  if (matchedSignal?.toLowerCase() === requestedSignal.toLowerCase()) {
     return endpoint;
   }
   if (/[?#]/u.test(endpoint)) {
-    try {
-      const url = new URL(endpoint);
-      const basePath = url.pathname.replace(/\/+$/u, "");
-      url.pathname = `${basePath}/${path}`;
-      return url.toString();
-    } catch {
-      // Fall back to the historical concatenation path for non-URL test doubles.
-    }
+    const url = new URL(endpoint);
+    url.pathname = appendOrReplaceSignalPath(url.pathname, path);
+    return url.toString();
   }
-  return `${endpoint}/${path}`;
+  return appendOrReplaceSignalPath(endpoint, path);
+}
+
+function normalizeSignalEndpoint(endpoint?: string): string | undefined {
+  const trimmed = endpoint?.trim();
+  return trimmed || undefined;
 }
 
 export function resolveSignalOtelUrl(params: {
   signalEndpoint?: string;
   signalEnvEndpoint?: string;
+  sharedEnvEndpoint?: string;
   endpoint?: string;
   path: string;
 }): string | undefined {
-  return resolveOtelUrl(
-    normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint) ?? params.endpoint,
-    params.path,
-  );
+  const signalEndpoint = normalizeSignalEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint);
+  const endpoint = signalEndpoint ?? params.endpoint;
+  // OTLP parses nonblank env values verbatim even when explicit config takes precedence.
+  const signalEnvEndpoint = params.signalEnvEndpoint?.trim() ? params.signalEnvEndpoint : undefined;
+  const sharedEnvEndpoint = params.sharedEnvEndpoint?.trim() ? params.sharedEnvEndpoint : undefined;
+  const consumedSharedEnvEndpoint = signalEnvEndpoint ? undefined : sharedEnvEndpoint;
+  const appendedSharedEnvEndpoint = consumedSharedEnvEndpoint
+    ? `${consumedSharedEnvEndpoint}${consumedSharedEnvEndpoint.endsWith("/") ? "" : "/"}${params.path}`
+    : undefined;
+  const resolvedEndpoint =
+    endpoint && URL.canParse(endpoint) && !signalEndpoint
+      ? resolveSharedOtelUrl(endpoint, params.path)
+      : endpoint;
+
+  for (const candidate of [
+    endpoint,
+    signalEnvEndpoint ?? sharedEnvEndpoint,
+    appendedSharedEnvEndpoint,
+    resolvedEndpoint,
+  ]) {
+    if (candidate && !URL.canParse(candidate)) {
+      throw new Error(
+        "Configured OpenTelemetry collector endpoint is invalid; check the collector URL",
+      );
+    }
+  }
+
+  return resolvedEndpoint;
 }
 
 function readOtelEnvFile(params: {
   signalIdentifier: OtelSignalIdentifier;
   signalSuffix: "CERTIFICATE" | "CLIENT_CERTIFICATE" | "CLIENT_KEY";
   sharedEnvName: string;
-  logger: OtelLogger;
-  warning: string;
+  label: string;
 }): Buffer | undefined {
   const signalEnvName = `OTEL_EXPORTER_OTLP_${params.signalIdentifier}_${params.signalSuffix}`;
   const filePath =
@@ -67,48 +101,53 @@ function readOtelEnvFile(params: {
     return undefined;
   }
   try {
-    return readFileSync(nodePath.resolve(process.cwd(), filePath));
+    const material = readFileSync(nodePath.resolve(process.cwd(), filePath));
+    if (material.length > 0) {
+      return material;
+    }
   } catch {
-    params.logger.warn(`diagnostics-otel: ${params.warning}`);
-    return undefined;
+    // Never expose certificate paths or silently downgrade to system trust.
   }
+  throw new Error(
+    `Configured OpenTelemetry ${params.label} file is missing, empty, or unreadable; refusing insecure export`,
+  );
 }
 
 function normalizeOtelEnvValue(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return value?.trim() ? value : undefined;
 }
 
 export function resolveOtelHttpAgentOptions(params: {
   url: string | undefined;
   signalIdentifier: OtelSignalIdentifier;
-  logger: OtelLogger;
-}): OtelHttpAgentFactory | undefined {
-  const { url, signalIdentifier, logger } = params;
-  if (!url) {
-    return undefined;
-  }
+}): OtelHttpAgentFactory | OtelHttpAgentOptions | undefined {
+  const { url, signalIdentifier } = params;
   const ca = readOtelEnvFile({
     signalIdentifier,
     signalSuffix: "CERTIFICATE",
     sharedEnvName: OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
-    logger,
-    warning: "failed to read root certificate file",
+    label: "TLS root certificate",
   });
   const cert = readOtelEnvFile({
     signalIdentifier,
     signalSuffix: "CLIENT_CERTIFICATE",
     sharedEnvName: OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV,
-    logger,
-    warning: "failed to read client certificate chain file",
+    label: "mTLS client certificate",
   });
   const key = readOtelEnvFile({
     signalIdentifier,
     signalSuffix: "CLIENT_KEY",
     sharedEnvName: OTEL_EXPORTER_OTLP_CLIENT_KEY_ENV,
-    logger,
-    warning: "failed to read client certificate private key file",
+    label: "mTLS client private key",
   });
+  if ((cert === undefined) !== (key === undefined)) {
+    throw new Error(
+      "Configured OpenTelemetry mTLS requires both a client certificate and private key; refusing insecure export",
+    );
+  }
+  if (!url) {
+    return undefined;
+  }
   const agentOptions: OtelHttpAgentOptions = {
     keepAlive: true,
     ...(ca !== undefined ? { ca } : {}),
@@ -117,13 +156,13 @@ export function resolveOtelHttpAgentOptions(params: {
   };
   try {
     const agent = createNodeProxyAgent({ mode: "env", targetUrl: url, agentOptions });
-    return agent ? () => agent : undefined;
+    if (agent) {
+      return () => agent;
+    }
   } catch {
-    logger.warn(
-      `diagnostics-otel: env proxy agent unavailable for OTLP ${signalIdentifier.toLowerCase()} exporter; falling back to default Node agent`,
-    );
-    return undefined;
+    throw new Error("Configured telemetry proxy is invalid or unsupported; refusing direct export");
   }
+  return (ca || cert || key) && new URL(url).protocol === "https:" ? agentOptions : undefined;
 }
 
 export function resolveSampleRate(value: number | undefined): number | undefined {
@@ -153,55 +192,12 @@ export function formatError(err: unknown): string {
 export function errorCategory(err: unknown): string {
   try {
     if (err instanceof Error && typeof err.name === "string" && err.name.trim()) {
-      return lowCardinalityAttr(err.name, "Error");
+      return normalizeDiagnosticValue(err.name, "Error");
     }
-    return lowCardinalityAttr(typeof err, "unknown");
+    return normalizeDiagnosticValue(typeof err, "unknown");
   } catch {
     return "unknown";
   }
-}
-
-function collectNestedErrorCandidates(err: unknown): unknown[] {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current == null || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (Array.isArray(current)) {
-      for (const item of current) {
-        if (item != null && !seen.has(item)) {
-          queue.push(item);
-        }
-      }
-      continue;
-    }
-    if (typeof current !== "object") {
-      continue;
-    }
-
-    const record = current as Record<string, unknown>;
-    for (const nested of [record.cause, record.reason, record.original, record.error]) {
-      if (nested != null && !seen.has(nested)) {
-        queue.push(nested);
-      }
-    }
-    if (Array.isArray(record.errors)) {
-      for (const nested of record.errors) {
-        if (nested != null && !seen.has(nested)) {
-          queue.push(nested);
-        }
-      }
-    }
-  }
-
-  return candidates;
 }
 
 function readErrorName(err: unknown): string | undefined {
@@ -221,7 +217,17 @@ export function readErrorCode(err: unknown): string | number | undefined {
 }
 
 export function findOtlpExporterError(reason: unknown): object | undefined {
-  for (const candidate of collectNestedErrorCandidates(reason)) {
+  for (const candidate of collectErrorGraphCandidates(reason, (current) =>
+    Array.isArray(current)
+      ? current
+      : [
+          current.cause,
+          current.reason,
+          current.original,
+          current.error,
+          ...(Array.isArray(current.errors) ? current.errors : []),
+        ],
+  )) {
     if (
       readErrorName(candidate) === "OTLPExporterError" &&
       candidate &&

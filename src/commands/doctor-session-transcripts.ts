@@ -531,12 +531,26 @@ async function noteSessionSqliteMigrationHealth(params: {
     repairedGroups: 0,
     scannedStores: 0,
   };
+  let legacyMainSessionResult:
+    | Awaited<
+        ReturnType<
+          typeof import("../config/sessions/legacy-main-session-migration.js").migrateLegacyMainSessionKeys
+        >
+      >
+    | undefined;
   const runSessionSqlite = async () => {
     const report = await runDoctorSessionSqlite({
       allAgents: true,
       ...(params.cfg ? { cfg: params.cfg } : {}),
       env: params.env,
       mode: params.shouldRepair ? "import" : "dry-run",
+    });
+    const { migrateLegacyMainSessionKeys } =
+      await import("../config/sessions/legacy-main-session-migration.js");
+    legacyMainSessionResult = await migrateLegacyMainSessionKeys({
+      cfg: params.cfg ?? {},
+      env: params.env,
+      mode: params.shouldRepair ? "doctor-fix" : "detect",
     });
     canonicalKeyReport = await repairCanonicalSessionKeys({
       apply: params.shouldRepair,
@@ -597,6 +611,18 @@ async function noteSessionSqliteMigrationHealth(params: {
         ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
         : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
       "Session SQLite",
+    );
+  }
+  if (
+    legacyMainSessionResult &&
+    (legacyMainSessionResult.changes.length > 0 || legacyMainSessionResult.warnings.length > 0)
+  ) {
+    note(
+      [
+        ...legacyMainSessionResult.changes.map((change) => `- ${change}`),
+        ...legacyMainSessionResult.warnings.map((warning) => `- ${warning}`),
+      ].join("\n"),
+      "Legacy main sessions",
     );
   }
   if (

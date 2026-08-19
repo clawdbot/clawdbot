@@ -1,5 +1,6 @@
 // Mattermost plugin module implements client behavior.
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -91,6 +92,20 @@ type MattermostFileInfo = {
   mime_type?: string | null;
   size?: number | null;
 };
+
+export function parseMattermostApiStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  // Read only the provider's status prefix; upstream details can mention other HTTP statuses.
+  const match = /Mattermost API (\d{3})\b/.exec(message);
+  if (!match) {
+    return undefined;
+  }
+  const status = Number(match[1]);
+  return Number.isFinite(status) ? status : undefined;
+}
 
 export function normalizeMattermostBaseUrl(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
@@ -499,7 +514,11 @@ export async function createMattermostDirectChannelWithRetry(
 }
 
 function isRetryableError(error: Error): boolean {
-  const candidates = collectErrorCandidates(error);
+  const candidates = collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.reason,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ]);
   const messages = candidates
     .map((candidate) => normalizeLowercaseStringOrEmpty(readErrorMessage(candidate)))
     .filter((message): message is string => Boolean(message));
@@ -576,39 +595,6 @@ function isRetryableError(error: Error): boolean {
   return messages.some((message) =>
     RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern)),
   );
-}
-
-function collectErrorCandidates(error: unknown): unknown[] {
-  const queue: unknown[] = [error];
-  let queueIndex = 0;
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex];
-    queueIndex += 1;
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (typeof current !== "object") {
-      continue;
-    }
-
-    const nested = current as {
-      cause?: unknown;
-      reason?: unknown;
-      errors?: unknown;
-    };
-    queue.push(nested.cause, nested.reason);
-    if (Array.isArray(nested.errors)) {
-      queue.push(...nested.errors);
-    }
-  }
-
-  return candidates;
 }
 
 function readErrorMessage(error: unknown): string | undefined {

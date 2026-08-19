@@ -8,6 +8,7 @@ import {
   requireTaskByRunId,
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { isAcpTurnActive } from "./active-turns.js";
@@ -15,7 +16,6 @@ import {
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
-  createDeferred,
   createRuntime,
   expectRecordFields,
   expectRejectedRecord,

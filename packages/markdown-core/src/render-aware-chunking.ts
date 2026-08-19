@@ -1,3 +1,4 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { avoidTrailingHighSurrogateBreak } from "./chunk-text.js";
 // Markdown Core module implements render aware chunking behavior.
 import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
@@ -40,13 +41,6 @@ type RenderResolver<TRendered> = Pick<
   RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
   "measureRendered" | "renderChunk"
 >;
-
-function resolveIntegerOption(value: number, fallback: number, opts: { min: number }): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(opts.min, Math.trunc(value));
-}
 
 function prepareChunkForMessageBoundary<TRendered>(
   options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,

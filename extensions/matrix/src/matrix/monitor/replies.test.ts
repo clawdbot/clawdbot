@@ -451,7 +451,11 @@ describe("deliverMatrixReplies", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
-    expect(sendCall(0)[1]).toBe(text.trim());
+    expect(sendCall(0)[1]).toBe(text);
+    expect(chunkMatrixTextMock).toHaveBeenCalledWith(
+      text,
+      expect.objectContaining({ preserveWhitespace: true }),
+    );
   });
 
   it("delivers Matrix media without a reasoning-only caption", async () => {
@@ -507,6 +511,7 @@ describe("deliverMatrixReplies", () => {
       cfg: explicitCfg,
       accountId: "ops",
       tableMode: "code",
+      preserveWhitespace: true,
     });
     expect(sendCall(0)[0]).toBe("room:4");
     expect(sendCall(0)[1]).toBe("hello");

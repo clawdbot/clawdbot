@@ -78,7 +78,9 @@ export function runPluginReleasePretagPackCheck(rootDir = resolve(".")) {
     runCommand(
       process.execPath,
       [
-        "scripts/check-plugin-npm-runtime-builds.mjs",
+        "--import",
+        "tsx",
+        "scripts/check-plugin-npm-runtime-builds.mts",
         ...targets.flatMap((target) => ["--package", target.packageDir]),
       ],
       {

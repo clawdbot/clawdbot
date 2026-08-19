@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import pLimit from "p-limit";
+import {
+  asNullableRecord as readRecord,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -564,16 +568,6 @@ async function buildArtifactView(params: {
   };
 }
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function readCountRecord(value: unknown): Record<string, number> {
   const record = readRecord(value);
   if (!record) {
@@ -610,7 +604,7 @@ function readMatrixDimensionIds(params: {
       if (typeof entry === "string") {
         return entry;
       }
-      return readString(readRecord(entry)?.id);
+      return readStringValue(readRecord(entry)?.id) ?? null;
     }),
     params,
   );
@@ -667,9 +661,9 @@ function readMatrixCells(params: {
     : [];
   const entriesByCell = buildUxMatrixEvidenceEntryIndex(params.summaryEntries);
   return rawCells.flatMap((cell): QaEvidenceMatrixCellView[] => {
-    const rawSurface = readString(cell.surface);
-    const rawStage = readString(cell.stage);
-    const rawStatus = readString(cell.status) ?? "proof-gap";
+    const rawSurface = readStringValue(cell.surface) ?? null;
+    const rawStage = readStringValue(cell.stage) ?? null;
+    const rawStatus = readStringValue(cell.status) ?? "proof-gap";
     if (!rawSurface || !rawStage) {
       return [];
     }
@@ -683,7 +677,7 @@ function readMatrixCells(params: {
         repoRoot: params.repoRoot,
       });
     const readRunnerString = (value: unknown) => {
-      const text = readString(value);
+      const text = readStringValue(value);
       return text ? sanitizeCellString(text) : null;
     };
     return [
@@ -795,8 +789,8 @@ async function buildProducerContext(params: {
   const matrix = await readJsonIfExists(matrixPath, allowedRoots);
   const releaseLedger = await readJsonIfExists(releaseLedgerPath, allowedRoots);
   const run = readRecord(manifest?.run);
-  const runId = readString(run?.runId);
-  const runStatus = readString(run?.status);
+  const runId = readStringValue(run?.runId) ?? null;
+  const runStatus = readStringValue(run?.status) ?? null;
   const producerFiles = Object.fromEntries(
     await Promise.all(
       UX_MATRIX_PRODUCER_FILES.map(async (file) => [
@@ -896,50 +890,59 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
     summaryEntries: summary.entries,
   });
-  const limitArtifactView = pLimit(ARTIFACT_VIEW_CONCURRENCY);
-  const entries = await Promise.all(
-    summary.entries.map(async (entry, entryIndex): Promise<QaEvidenceGalleryEntryView> => {
-      counts[entry.result.status] += 1;
-      const sanitizeEntryText = (value: string) =>
-        sanitizeGalleryText(value, {
+  const artifactTasks = summary.entries.flatMap((entry, entryIndex) =>
+    (entry.execution?.artifacts ?? []).map(
+      (artifact, artifactIndex) => () =>
+        buildArtifactView({
+          allowedArtifactFiles,
+          artifact,
+          artifactIndex,
+          evidenceDir,
+          entryIndex,
           extraRoots: [requestedRepoRoot],
+          hrefEvidencePath,
           repoRoot,
-        });
-      return {
-        artifacts: await limitArtifactView.map(
-          entry.execution?.artifacts ?? [],
-          (artifact, artifactIndex) =>
-            buildArtifactView({
-              allowedArtifactFiles,
-              artifact,
-              artifactIndex,
-              evidenceDir,
-              entryIndex,
-              extraRoots: [requestedRepoRoot],
-              hrefEvidencePath,
-              repoRoot,
-            }),
-        ),
-        coverage: entry.coverage.map((coverage) => ({
-          id: sanitizeEntryText(coverage.id),
-          role: sanitizeEntryText(coverage.role),
-        })),
-        failureReason: entry.result.failure?.reason
-          ? sanitizeEntryText(entry.result.failure.reason)
-          : null,
-        id: sanitizeEntryText(entry.test.id),
-        kind: sanitizeEntryText(entry.test.kind),
-        sourcePath: entry.test.source?.path
-          ? displayGalleryPath(entry.test.source.path, {
-              extraRoots: [requestedRepoRoot],
-              repoRoot,
-            })
-          : null,
-        status: entry.result.status,
-        title: sanitizeEntryText(entry.test.title),
-      };
-    }),
+        }),
+    ),
   );
+  const { results: artifactViews } = await runTasksWithConcurrency({
+    tasks: artifactTasks,
+    limit: ARTIFACT_VIEW_CONCURRENCY,
+    errorMode: "continue",
+    throwOnError: true,
+  });
+  let artifactOffset = 0;
+  const entries = summary.entries.map((entry): QaEvidenceGalleryEntryView => {
+    counts[entry.result.status] += 1;
+    const artifactCount = entry.execution?.artifacts?.length ?? 0;
+    const artifacts = artifactViews.slice(artifactOffset, artifactOffset + artifactCount);
+    artifactOffset += artifactCount;
+    const sanitizeEntryText = (value: string) =>
+      sanitizeGalleryText(value, {
+        extraRoots: [requestedRepoRoot],
+        repoRoot,
+      });
+    return {
+      artifacts,
+      coverage: entry.coverage.map((coverage) => ({
+        id: sanitizeEntryText(coverage.id),
+        role: sanitizeEntryText(coverage.role),
+      })),
+      failureReason: entry.result.failure?.reason
+        ? sanitizeEntryText(entry.result.failure.reason)
+        : null,
+      id: sanitizeEntryText(entry.test.id),
+      kind: sanitizeEntryText(entry.test.kind),
+      sourcePath: entry.test.source?.path
+        ? displayGalleryPath(entry.test.source.path, {
+            extraRoots: [requestedRepoRoot],
+            repoRoot,
+          })
+        : null,
+      status: entry.result.status,
+      title: sanitizeEntryText(entry.test.title),
+    };
+  });
   return {
     counts,
     entries,

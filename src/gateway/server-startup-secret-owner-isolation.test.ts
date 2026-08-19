@@ -5,21 +5,33 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
-import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
-import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
 import {
-  getFreePort,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
+import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
+import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import {
+  connectWebchatClient,
+  getGatewayTestPort,
   installGatewayTestHooks,
-  startGatewayServer,
+  rpcReq,
+  startTestGatewayServer,
   testState,
 } from "./test-helpers.js";
+import "./server-startup-secret-diagnostics.test-support.js";
+import "./server-startup-secret-surfaces.test-support.js";
+import "./server-startup-session-migration.test-support.js";
 
 const { webSearchProviders } = vi.hoisted(() => {
   const credentialPath = "plugins.entries.google.config.webSearch.apiKey";
@@ -121,23 +133,82 @@ async function startVaultAclFixture() {
 }
 
 describe("Gateway startup SecretRef owner isolation", () => {
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
 
   afterEach(async () => {
     await server?.close();
     server = undefined;
+    setActiveDegradedSecretOwners([]);
+    resetSystemEventsForTest();
   });
 
-  it("reaches /readyz with missing TTS and unused model-provider owners", async () => {
+  it("routes secrets reload state events to the configured system agent", async () => {
+    await withEnvAsync({ SYSTEM_OWNER_SECRET: "available" }, async () => {
+      await writeConfig({
+        ...baseConfig(),
+        agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { main: { default: true }, ops: {} },
+        },
+        session: { scope: "global" },
+        secrets: { providers: { default: { source: "env" } } },
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "env", provider: "default", id: "SYSTEM_OWNER_SECRET" },
+            },
+          },
+        },
+      });
+
+      const port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port, { auth: { mode: "none" } });
+      const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      try {
+        deleteTestEnvValue("SYSTEM_OWNER_SECRET");
+        const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
+
+        expect(reload.ok, JSON.stringify(reload)).toBe(true);
+        expect(reload.payload?.warningCount).toBeGreaterThan(0);
+        expect(peekSystemEvents("global")).toEqual([
+          expect.stringContaining("[SECRETS_RELOADER_DEGRADED]"),
+        ]);
+        const events = peekSystemEventEntries("global");
+        expect(selectAgentSystemEvents(events, "ops")).toHaveLength(1);
+        expect(selectAgentSystemEvents(events, "main")).toEqual([]);
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  it("reaches /readyz while isolating every optional owner family", async () => {
     await withEnvAsync(
       {
+        GATEWAY_TOKEN_REF: "placeholder",
+        GEMINI_API_KEY: "test-gemini-api-key",
+        HEALTHY_MEMORY_KEY: "healthy-memory-key",
+        HEALTHY_SANDBOX_IDENTITY: "healthy-sandbox-identity",
+        OPENCLAW_TEST_ACTIVE_WEB_SEARCH_SECRET: undefined,
+        MISSING_MEMORY_KEY: undefined,
+        MISSING_SANDBOX_IDENTITY: undefined,
+        MISSING_SKILL_KEY: undefined,
         MISSING_TTS_KEY: undefined,
         MISSING_UNUSED_PROVIDER_KEY: undefined,
-        OPENAI_API_KEY: "placeholder",
+        MISSING_WEBHOOK_TOKEN: undefined,
       },
       async () => {
         await writeConfig({
           ...baseConfig(),
+          gateway: {
+            mode: "local",
+            bind: "loopback",
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
+            },
+          },
+          secrets: { providers: { default: { source: "env" } } },
           tts: {
             providers: {
               elevenlabs: {
@@ -158,19 +229,145 @@ describe("Gateway startup SecretRef owner isolation", () => {
               },
             },
           },
+          tools: {
+            media: {
+              models: [{ provider: "openai", capabilities: ["audio"] }],
+              audio: { enabled: true },
+            },
+            web: { search: { enabled: true, provider: "gemini" } },
+          },
+          memory: {
+            search: {
+              remote: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_KEY" },
+              },
+            },
+          },
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                backend: "ssh",
+                ssh: {
+                  target: "sandbox@example.com:22",
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_SANDBOX_IDENTITY",
+                  },
+                },
+              },
+            },
+            entries: {
+              main: {
+                default: true,
+                sandbox: {
+                  ssh: {
+                    identityData: {
+                      source: "env",
+                      provider: "default",
+                      id: "HEALTHY_SANDBOX_IDENTITY",
+                    },
+                  },
+                },
+              },
+              cold: {
+                memory: {
+                  search: {
+                    remote: {
+                      apiKey: {
+                        source: "env",
+                        provider: "default",
+                        id: "HEALTHY_MEMORY_KEY",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          cron: {
+            webhookToken: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_WEBHOOK_TOKEN",
+            },
+          },
+          skills: {
+            entries: {
+              cold: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_SKILL_KEY" },
+              },
+            },
+          },
+          plugins: {
+            enabled: true,
+            entries: {
+              google: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "OPENCLAW_TEST_ACTIVE_WEB_SEARCH_SECRET",
+                    },
+                  },
+                },
+              },
+            },
+          },
         });
+        testState.gatewayAuth = undefined;
 
-        const port = await getFreePort();
-        server = await startGatewayServer(port, { auth: { mode: "none" } });
+        const port = await getGatewayTestPort();
+        server = await startTestGatewayServer(port);
         const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
         expect(ready.status).toBe(200);
         await expect(ready.json()).resolves.toMatchObject({ ready: true });
-        expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
-          { ownerKind: "provider", ownerId: "openai", state: "unavailable" },
-          { ownerKind: "capability", ownerId: "tts", state: "unavailable" },
-        ]);
-        expect(getActiveSecretsRuntimeSnapshot()?.warnings).toEqual(
+        const active = getActiveSecretsRuntimeSnapshot();
+        expect(active?.config.gateway?.auth?.token).toBe("placeholder");
+        expect(active?.degradedOwners).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              ownerKind: "provider",
+              ownerId: "openai",
+              state: "unavailable",
+            }),
+            expect.objectContaining({
+              ownerKind: "capability",
+              ownerId: "tts",
+              state: "unavailable",
+            }),
+            expect.objectContaining({
+              ownerKind: "capability",
+              ownerId: "memory-provider:main",
+              state: "unavailable",
+            }),
+            expect.objectContaining({
+              ownerKind: "capability",
+              ownerId: "agent-sandbox:cold",
+              state: "unavailable",
+            }),
+            expect.objectContaining({
+              ownerKind: "capability",
+              ownerId: "cron-webhook",
+              state: "unavailable",
+            }),
+            expect.objectContaining({
+              ownerKind: "capability",
+              ownerId: "skill:cold",
+              state: "unavailable",
+            }),
+            expect.objectContaining({
+              ownerKind: "capability",
+              ownerId: "web-search:gemini",
+              state: "unavailable",
+            }),
+          ]),
+        );
+        expect(active?.warnings).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               code: "SECRETS_OWNER_UNAVAILABLE",
@@ -180,8 +377,54 @@ describe("Gateway startup SecretRef owner isolation", () => {
               code: "SECRETS_OWNER_UNAVAILABLE",
               path: "tts.providers.elevenlabs.apiKey",
             }),
+            expect.objectContaining({
+              code: "SECRETS_OWNER_UNAVAILABLE",
+              path: "memory.search.remote.apiKey",
+            }),
+            expect.objectContaining({
+              code: "SECRETS_OWNER_UNAVAILABLE",
+              path: "agents.defaults.sandbox.ssh.identityData",
+            }),
+            expect.objectContaining({
+              code: "SECRETS_OWNER_UNAVAILABLE",
+              path: "cron.webhookToken",
+            }),
+            expect.objectContaining({
+              code: "SECRETS_OWNER_UNAVAILABLE",
+              path: "skills.entries.cold.apiKey",
+            }),
+            expect.objectContaining({
+              code: "SECRETS_OWNER_UNAVAILABLE",
+              path: "plugins.entries.google.config.webSearch.apiKey",
+            }),
           ]),
         );
+        if (!active) {
+          throw new Error("Expected active secrets runtime snapshot");
+        }
+        expect(() => resolveMemorySearchConfig(active.config, "main")).toThrow(
+          expect.objectContaining({
+            code: "SECRET_SURFACE_UNAVAILABLE",
+            ownerKind: "capability",
+            ownerId: "memory-provider:main",
+          }),
+        );
+        await expect(
+          resolveSandboxContext({
+            config: active.config,
+            agentId: "cold",
+            sessionKey: "agent:cold:main",
+          }),
+        ).rejects.toMatchObject({
+          code: "sandbox_provisioning",
+          backendId: "ssh",
+          message: expect.stringContaining("openclaw secrets reload"),
+          cause: {
+            code: "SECRET_SURFACE_UNAVAILABLE",
+            ownerKind: "capability",
+            ownerId: "agent-sandbox:cold",
+          },
+        });
       },
     );
   });
@@ -240,8 +483,8 @@ describe("Gateway startup SecretRef owner isolation", () => {
         },
       });
 
-      const port = await getFreePort();
-      server = await startGatewayServer(port, { auth: { mode: "none" } });
+      const port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port, { auth: { mode: "none" } });
       const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
       expect(ready.status).toBe(200);
@@ -313,8 +556,8 @@ describe("Gateway startup SecretRef owner isolation", () => {
             },
           });
 
-          const port = await getFreePort();
-          server = await startGatewayServer(port, { auth: { mode: "none" } });
+          const port = await getGatewayTestPort();
+          server = await startTestGatewayServer(port, { auth: { mode: "none" } });
           const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
           expect(ready.status).toBe(200);
@@ -346,195 +589,6 @@ describe("Gateway startup SecretRef owner isolation", () => {
     } finally {
       await vault.close();
     }
-  });
-
-  it("reaches /readyz with a cold memory provider and rejects only that owner", async () => {
-    await withEnvAsync({ MISSING_MEMORY_KEY: undefined }, async () => {
-      await writeConfig({
-        ...baseConfig(),
-        memory: {
-          search: {
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_KEY" },
-            },
-          },
-        },
-
-        agents: {
-          defaults: {},
-          entries: { main: { default: true } },
-        },
-      });
-
-      const port = await getFreePort();
-      server = await startGatewayServer(port, { auth: { mode: "none" } });
-      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-
-      expect(ready.status).toBe(200);
-      const active = getActiveSecretsRuntimeSnapshot();
-      expect(active?.degradedOwners).toMatchObject([
-        {
-          ownerKind: "capability",
-          ownerId: "memory-provider:main",
-          state: "unavailable",
-        },
-      ]);
-      if (!active) {
-        throw new Error("Expected active secrets runtime snapshot");
-      }
-      let thrown: unknown;
-      try {
-        resolveMemorySearchConfig(active.config, "main");
-      } catch (error) {
-        thrown = error;
-      }
-      expect(thrown).toMatchObject({
-        code: "SECRET_SURFACE_UNAVAILABLE",
-        ownerKind: "capability",
-        ownerId: "memory-provider:main",
-      });
-    });
-  });
-
-  it("reaches /readyz with one cold media transport provider", async () => {
-    await withEnvAsync({ MISSING_MEDIA_MODEL_VALUE: undefined }, async () => {
-      await writeConfig({
-        ...baseConfig(),
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: {
-                source: "env",
-                provider: "default",
-                id: "MISSING_MEDIA_MODEL_VALUE",
-              },
-              models: [],
-            },
-          },
-        },
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "openai",
-                capabilities: ["audio"],
-              },
-            ],
-            audio: {
-              enabled: true,
-            },
-          },
-        },
-      });
-
-      const port = await getFreePort();
-      server = await startGatewayServer(port, { auth: { mode: "none" } });
-      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-
-      expect(ready.status).toBe(200);
-      expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
-        {
-          ownerKind: "provider",
-          ownerId: "openai",
-          state: "unavailable",
-        },
-      ]);
-    });
-  });
-
-  it("reaches /readyz with one cold agent sandbox and rejects that runtime", async () => {
-    await withEnvAsync({ MISSING_SANDBOX_IDENTITY: undefined }, async () => {
-      await writeConfig({
-        ...baseConfig(),
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "all",
-              backend: "ssh",
-              ssh: {
-                target: "sandbox@example.com:22",
-                identityData: {
-                  source: "env",
-                  provider: "default",
-                  id: "MISSING_SANDBOX_IDENTITY",
-                },
-              },
-            },
-          },
-          entries: { cold: {} },
-        },
-      });
-
-      const port = await getFreePort();
-      server = await startGatewayServer(port, { auth: { mode: "none" } });
-      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-
-      expect(ready.status).toBe(200);
-      const active = getActiveSecretsRuntimeSnapshot();
-      expect(active?.degradedOwners).toMatchObject([
-        {
-          ownerKind: "capability",
-          ownerId: "agent-sandbox:cold",
-          state: "unavailable",
-          paths: ["agents.defaults.sandbox.ssh.identityData"],
-        },
-      ]);
-      if (!active) {
-        throw new Error("Expected active secrets runtime snapshot");
-      }
-      await expect(
-        resolveSandboxContext({
-          config: active.config,
-          agentId: "cold",
-          sessionKey: "agent:cold:main",
-        }),
-      ).rejects.toMatchObject({
-        code: "SECRET_SURFACE_UNAVAILABLE",
-        ownerKind: "capability",
-        ownerId: "agent-sandbox:cold",
-      });
-    });
-  });
-
-  it("isolates TTS during a successful Gateway-auth SecretRef preflight", async () => {
-    await withEnvAsync(
-      {
-        GATEWAY_TOKEN_REF: "placeholder",
-        MISSING_TTS_KEY: undefined,
-      },
-      async () => {
-        await writeConfig({
-          ...baseConfig(),
-          gateway: {
-            mode: "local",
-            bind: "loopback",
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-            },
-          },
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_TTS_KEY" },
-              },
-            },
-          },
-        });
-        testState.gatewayAuth = undefined;
-
-        const port = await getFreePort();
-        server = await startGatewayServer(port);
-        const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-
-        expect(ready.status).toBe(200);
-        expect(getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth?.token).toBe("placeholder");
-        expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
-          { ownerKind: "capability", ownerId: "tts", state: "unavailable" },
-        ]);
-      },
-    );
   });
 
   it("starts with a selected provider profile cold and fails its first request before dispatch", async () => {
@@ -576,8 +630,8 @@ describe("Gateway startup SecretRef owner isolation", () => {
         );
         await writeConfig(config);
 
-        const port = await getFreePort();
-        server = await startGatewayServer(port, { auth: { mode: "none" } });
+        const port = await getGatewayTestPort();
+        server = await startTestGatewayServer(port, { auth: { mode: "none" } });
         const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
         expect(ready.status).toBe(200);
 
@@ -586,14 +640,14 @@ describe("Gateway startup SecretRef owner isolation", () => {
         expect(active?.degradedOwners).toMatchObject([
           { ownerKind: "account", ownerId, state: "unavailable" },
         ]);
-        const store = getRuntimeAuthProfileStoreSnapshot(agentDir);
+        const store = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
         if (!store || !active) {
           throw new Error("Expected activated Gateway auth profile snapshot");
         }
         const request = vi.fn();
         await expect(
           (async () => {
-            const auth = await resolveApiKeyForProvider({
+            const auth = await resolveApiKeyForProviderCore({
               provider: "openai",
               cfg: active.config,
               store,
@@ -626,77 +680,8 @@ describe("Gateway startup SecretRef owner isolation", () => {
       });
       testState.gatewayAuth = undefined;
 
-      await expect(startGatewayServer(await getFreePort())).rejects.toThrow(
+      await expect(startTestGatewayServer(await getGatewayTestPort())).rejects.toThrow(
         /Startup failed: required secrets are unavailable/,
-      );
-    });
-  });
-
-  it("reaches /readyz with cron webhook delivery isolated", async () => {
-    await withEnvAsync({ MISSING_WEBHOOK_TOKEN: undefined }, async () => {
-      await writeConfig({
-        ...baseConfig(),
-        cron: {
-          webhookToken: {
-            source: "env",
-            provider: "default",
-            id: "MISSING_WEBHOOK_TOKEN",
-          },
-        },
-      });
-
-      const port = await getFreePort();
-      server = await startGatewayServer(port, { auth: { mode: "none" } });
-      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-
-      expect(ready.status).toBe(200);
-      await expect(ready.json()).resolves.toMatchObject({ ready: true });
-      expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
-        { ownerKind: "capability", ownerId: "cron-webhook", state: "unavailable" },
-      ]);
-      expect(getActiveSecretsRuntimeSnapshot()?.warnings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "SECRETS_OWNER_UNAVAILABLE",
-            path: "cron.webhookToken",
-          }),
-        ]),
-      );
-    });
-  });
-
-  it("reaches /readyz with one skill secret isolated", async () => {
-    await withEnvAsync({ MISSING_SKILL_KEY: undefined }, async () => {
-      await writeConfig({
-        ...baseConfig(),
-        skills: {
-          entries: {
-            cold: {
-              apiKey: {
-                source: "env",
-                provider: "default",
-                id: "MISSING_SKILL_KEY",
-              },
-            },
-          },
-        },
-      });
-
-      const port = await getFreePort();
-      server = await startGatewayServer(port, { auth: { mode: "none" } });
-      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-
-      expect(ready.status).toBe(200);
-      expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
-        { ownerKind: "capability", ownerId: "skill:cold", state: "unavailable" },
-      ]);
-      expect(getActiveSecretsRuntimeSnapshot()?.warnings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "SECRETS_OWNER_UNAVAILABLE",
-            path: "skills.entries.cold.apiKey",
-          }),
-        ]),
       );
     });
   });

@@ -23,17 +23,6 @@ const MAX_ARTIFACT_FILES = 8192;
 const MAX_ARTIFACT_TOTAL_BYTES = 1024n * 1024n * 1024n;
 const READ_CHUNK_BYTES = 64 * 1024;
 const CODE_MODE_HOST_PATH_ENV = "CODEX_CODE_MODE_HOST_PATH";
-const RUNTIME_INJECTION_ENV_KEYS = new Set([
-  "NODE_PATH",
-  "LD_AUDIT",
-  "LD_LIBRARY_PATH",
-  "LD_PRELOAD",
-  "DYLD_FALLBACK_FRAMEWORK_PATH",
-  "DYLD_FALLBACK_LIBRARY_PATH",
-  "DYLD_FRAMEWORK_PATH",
-  "DYLD_INSERT_LIBRARIES",
-  "DYLD_LIBRARY_PATH",
-]);
 const SAFE_NODE_OPTIONS_BOOLEAN_FLAGS = new Set([
   "--enable-network-family-autoselection",
   "--network-family-autoselection",
@@ -242,29 +231,20 @@ function pathIsWithin(rootPath: string, candidatePath: string): boolean {
   );
 }
 
-function assertNoRuntimeInjectionEnvironment(env: NodeJS.ProcessEnv): void {
+function assertSafeNodeOptions(env: NodeJS.ProcessEnv): void {
   for (const [rawKey, value] of Object.entries(env)) {
     const key = rawKey.toUpperCase();
-    if (!value?.trim()) {
+    if (key !== "NODE_OPTIONS" || !value?.trim()) {
       continue;
     }
-    if (key === "NODE_OPTIONS") {
-      const result = attestNodeOptions(value);
-      if (result.ok) {
-        continue;
-      }
-      if (result.option) {
-        throw new Error(
-          `Codex runtime artifact cannot attest NODE_OPTIONS option ${result.option}`,
-        );
-      }
-      throw new Error("Codex runtime artifact cannot safely parse NODE_OPTIONS");
+    const result = attestNodeOptions(value);
+    if (result.ok) {
+      continue;
     }
-    if (RUNTIME_INJECTION_ENV_KEYS.has(key) || key.startsWith("DYLD_")) {
-      // These variables can load code outside the selected launcher/package.
-      // Exact setup attestation must fail instead of minting a partial identity.
-      throw new Error(`Codex runtime artifact cannot attest injected runtime environment: ${key}`);
+    if (result.option) {
+      throw new Error(`Codex runtime artifact cannot attest NODE_OPTIONS option ${result.option}`);
     }
+    throw new Error("Codex runtime artifact cannot safely parse NODE_OPTIONS");
   }
 }
 
@@ -582,7 +562,7 @@ async function captureFilesystemDescriptor(params: {
     );
   }
   const env = resolveCodexAppServerSpawnEnv(params.startOptions);
-  assertNoRuntimeInjectionEnvironment(env);
+  assertSafeNodeOptions(env);
   // child_process resolves relative launchers and PATH entries after applying cwd.
   // Attestation must use the same base or it can bind bytes that spawn never executes.
   const spawnCwd = path.resolve(params.startOptions.cwd ?? process.cwd());

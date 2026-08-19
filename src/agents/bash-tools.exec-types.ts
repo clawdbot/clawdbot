@@ -5,8 +5,8 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type {
+  ExecApprovalDecision,
   ExecAsk,
   ExecHost,
   ExecMode,
@@ -17,9 +17,11 @@ import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
+import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.js";
 
 /** Runtime defaults passed into exec/process tool factories. */
 export type ExecToolDefaults = {
@@ -40,6 +42,8 @@ export type ExecToolDefaults = {
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   reviewer?: ExecReviewerConfig;
   config?: OpenClawConfig;
+  /** Host-prepared non-secret environment and store projection exclusions. */
+  preparedRunEnvironment?: PreparedGitHubToolEnvironment;
   autoReviewer?: ExecAutoReviewer;
   agentId?: string;
   backgroundMs?: number;
@@ -52,10 +56,14 @@ export type ExecToolDefaults = {
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
+  /** Final run-local availability of the process continuation tool. */
+  processToolAvailabilityRef?: { value?: boolean };
   scopeKey?: string;
   sessionKey?: string;
   /** Stable agent run that owns any approval created by this tool. */
   runId?: string;
+  /** Exact admitted execution instance that owns secret-egress proxy access. */
+  operationalRunInstance?: OperationalRunInstanceRef;
   /** Durable session that receives detached exec completion events and approval followups. */
   notifySessionKey?: string;
   /** Ephemeral session UUID active when this exec tool was built. Regenerated

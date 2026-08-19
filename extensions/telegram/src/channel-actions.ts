@@ -13,7 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
@@ -26,6 +26,7 @@ import {
   createTelegramPollExtraToolSchemas,
   createTelegramRichSendExtraToolSchemas,
 } from "./message-tool-schema.js";
+import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
@@ -75,6 +76,7 @@ function prepareTelegramSendPayload({
   ctx,
   payload,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
+  rejectTelegramNativeButtonParams(ctx.params);
   if (
     ctx.action !== "send" ||
     (!payload.presentation && !payload.location && payload.videoAsNote !== true)
@@ -86,10 +88,7 @@ function prepareTelegramSendPayload({
     return payload;
   }
   const rawTelegramData = payload.channelData?.telegram;
-  const telegramData =
-    rawTelegramData && typeof rawTelegramData === "object" && !Array.isArray(rawTelegramData)
-      ? (rawTelegramData as Record<string, unknown>)
-      : {};
+  const telegramData = asNonArrayRecord(rawTelegramData);
   return {
     ...payload,
     channelData: {

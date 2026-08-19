@@ -1,5 +1,6 @@
 // Rate limiter for noisy websocket handshake auth logs.
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { pruneMapToMaxSize } from "../../../infra/map-size.js";
 
 /** Decision returned for a handshake auth log attempt. */
 type HandshakeAuthLogDecision = {
@@ -27,7 +28,7 @@ export class HandshakeAuthLogLimiter {
   register(key: string, nowMs = Date.now()): HandshakeAuthLogDecision {
     const entry = this.entries.get(key);
     if (!entry) {
-      this.pruneIfNeeded();
+      pruneMapToMaxSize(this.entries, this.maxEntries - 1);
       this.entries.set(key, {
         lastLoggedAtMs: nowMs,
         suppressedSinceLastLog: 0,
@@ -44,16 +45,6 @@ export class HandshakeAuthLogLimiter {
     entry.lastLoggedAtMs = nowMs;
     entry.suppressedSinceLastLog = 0;
     return { shouldLog: true, suppressedSinceLastLog };
-  }
-
-  private pruneIfNeeded(): void {
-    if (this.entries.size < this.maxEntries) {
-      return;
-    }
-    const oldestKey = this.entries.keys().next().value;
-    if (oldestKey !== undefined) {
-      this.entries.delete(oldestKey);
-    }
   }
 }
 

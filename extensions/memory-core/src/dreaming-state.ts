@@ -22,7 +22,9 @@ const DREAMING_WORKSPACE_STATE_MAX_ENTRIES = 50_000;
 export const SHORT_TERM_LOCK_MAX_ENTRIES = 4_096;
 export const SESSION_SEEN_HASHES_PER_CHUNK = 512;
 
-type MemoryCoreOpenKeyedStore = <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+export type MemoryCoreOpenKeyedStore = <T>(
+  options: OpenKeyedStoreOptions,
+) => PluginStateKeyedStore<T>;
 
 type WorkspaceValue<T> = {
   version: 1;
@@ -70,7 +72,7 @@ export function memoryCoreWorkspaceStateKey(workspaceDir: string): string {
   return createHash("sha256").update(normalizeMemoryCoreWorkspaceKey(workspaceDir)).digest("hex");
 }
 
-export function memoryCoreWorkspaceEntryKey(workspaceDir: string, logicalKey: string): string {
+function memoryCoreWorkspaceEntryKey(workspaceDir: string, logicalKey: string): string {
   const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
   const itemKey = createHash("sha256").update(logicalKey).digest("hex");
   return `${workspaceKey}:${itemKey}`;

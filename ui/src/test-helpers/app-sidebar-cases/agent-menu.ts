@@ -33,7 +33,7 @@ describe("AppSidebar agent chip", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main" }],
       },
       [],
@@ -52,6 +52,87 @@ describe("AppSidebar agent chip", () => {
     expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "main" });
   });
 
+  it("keeps the hydrated identity while the active roster row is unavailable", async () => {
+    const request = vi.fn().mockResolvedValue({
+      agentId: "main",
+      name: "Workspace Molty",
+      emoji: "🦞",
+    });
+    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const agentIdentity = createAgentIdentityCapability(gatewayHarness.gateway);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      null,
+      [],
+      agentIdentity,
+    );
+
+    sidebar.connected = true;
+    await vi.waitFor(() => {
+      expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent?.trim()).toBe(
+        "Workspace Molty",
+      );
+    });
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+    await vi.waitFor(() => {
+      expect(
+        sidebar
+          .querySelector<HTMLElement>(
+            'wa-dropdown-item[value="command:capabilities"] .sidebar-customize-menu__text',
+          )
+          ?.textContent?.trim(),
+      ).toBe("What can Workspace Molty do?");
+    });
+  });
+
+  it("keeps the configured roster label when identity hydration returns a fallback", async () => {
+    const request = vi.fn(async (_method: string, params: { agentId: string }) =>
+      params.agentId === "main"
+        ? { agentId: "main", name: "Workspace Molty", avatar: "🦞" }
+        : { agentId: "rust-claw", name: "Assistant", avatar: "🦀" },
+    );
+    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const agentIdentity = createAgentIdentityCapability(gatewayHarness.gateway);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }, { id: "rust-claw", name: "rust-claw" }],
+      },
+      [],
+      agentIdentity,
+    );
+
+    sidebar.connected = true;
+    await vi.waitFor(() => {
+      expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent?.trim()).toBe(
+        "Workspace Molty",
+      );
+    });
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "rust-claw" });
+      const labels = [
+        ...sidebar.querySelectorAll(".sidebar-agent-menu .agent-select__option-label"),
+      ].map((element) => element.textContent?.trim());
+      expect(labels).toEqual(["Workspace Molty", "rust-claw"]);
+    });
+    await vi.waitFor(() => {
+      const rustRow = [
+        ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch"),
+      ].find((row) => row.textContent?.includes("rust-claw"));
+      expect(
+        rustRow?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
+      ).toBe("🦀");
+    });
+  });
+
   it("hydrates agents added while the switcher remains open", async () => {
     const request = vi.fn(async (_method: string, params: { agentId: string }) => ({
       agentId: params.agentId,
@@ -66,7 +147,7 @@ describe("AppSidebar agent chip", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main" }],
       },
       [],
@@ -262,7 +343,7 @@ describe("AppSidebar agent chip", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
       },
     );

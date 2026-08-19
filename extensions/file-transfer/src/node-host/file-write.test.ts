@@ -164,7 +164,7 @@ describe("handleFileWrite — parent directory handling", () => {
 });
 
 describe("handleFileWrite — symlink protection", () => {
-  it("refuses to write through an existing symlink (lstat)", async () => {
+  it("rejects a final symlink by default with the canonical target", async () => {
     const real = path.join(tmpRoot, "real.txt");
     const link = path.join(tmpRoot, "link.txt");
     await fs.writeFile(real, "untouched");
@@ -175,8 +175,24 @@ describe("handleFileWrite — symlink protection", () => {
       contentBase64: b64("evil"),
       overwrite: true,
     });
+    expectFailure(r, "SYMLINK_REDIRECT");
+    expect(r.ok ? null : r.canonicalPath).toBe(real);
+    expect(await fs.readFile(real, "utf-8")).toBe("untouched");
+  });
+
+  it("refuses to write through a final symlink when followSymlinks=true", async () => {
+    const real = path.join(tmpRoot, "real.txt");
+    const link = path.join(tmpRoot, "link.txt");
+    await fs.writeFile(real, "untouched");
+    await fs.symlink(real, link);
+
+    const r = await handleFileWrite({
+      path: link,
+      contentBase64: b64("evil"),
+      overwrite: true,
+      followSymlinks: true,
+    });
     expectFailure(r, "SYMLINK_TARGET_DENIED");
-    // The original file must be unchanged.
     expect(await fs.readFile(real, "utf-8")).toBe("untouched");
   });
 

@@ -63,7 +63,6 @@ describe("DiscordThreadDeleteListener", () => {
     });
     expect(lifecycleMocks.closeDiscordThreadSessions).toHaveBeenCalledWith({
       cfg,
-      accountId: "account-2",
       threadId: "thread-42",
     });
     expect(logger.info).toHaveBeenCalledWith("Discord thread deleted — reset sessions", {
@@ -81,7 +80,6 @@ describe("DiscordThreadDeleteListener", () => {
     expect(lifecycleMocks.unbindThread).not.toHaveBeenCalled();
     expect(lifecycleMocks.closeDiscordThreadSessions).toHaveBeenCalledWith({
       cfg,
-      accountId: "account-2",
       threadId: "thread-42",
     });
   });

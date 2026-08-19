@@ -1,5 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
+import { splitAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 
@@ -81,5 +82,67 @@ describe("ToolExecutionComponent", () => {
     component.setExpanded(true);
 
     expect(component.render(80).map(normalizeTestText).join("\n")).toContain("tool output line 30");
+  });
+
+  it("sanitizes a complete OSC before applying the collapsed preview budget", () => {
+    const payload = "T08_OSC52_PREVIEW_SECRET";
+    const prefix = `${"x ".repeat(112)}x`;
+    const attack = `\x1b]52;c;${payload}\x07`;
+    const { lines } = renderToolOutput(`${prefix}${attack} visible tail`, 20);
+    const raw = lines.join("\n");
+
+    expect(raw).not.toContain(payload);
+    expect(raw).not.toContain("]52;c;");
+    expect(raw).not.toContain("\x1b]52");
+  });
+
+  it.each([
+    { route: "live", complete: false },
+    { route: "history", complete: true },
+  ])("sanitizes a hostile $route tool title before trusted styling", ({ complete }) => {
+    const attack = "\x1b]52;c;T08TOOLCLIPBOARD\x07";
+    const toolName = `T08TOOLA${attack}T08TOOLB\r\nمرحبا\tשלום`;
+    const component = new ToolExecutionComponent(toolName, {});
+    if (complete) {
+      component.setResult({ content: [] });
+    }
+
+    const raw = component.render(120).join("\n");
+    const rendered = normalizeTestText(raw);
+    expect(rendered).toContain("T08TOOLAT08TOOLB");
+    expect(rendered).toContain("مرحبا שלום");
+    expect(raw).toContain("\u2067");
+    expect(raw).toContain("\u2069");
+    expect(raw).not.toContain(attack);
+    expect(raw).not.toContain("\r\nمرحبا\tשלום");
+  });
+
+  it("parses sanitized RTL tool Markdown before isolating rendered OSC8 lines", () => {
+    const attack = "\x1b]52;c;T08_TOOL_RESULT\x07";
+    const url = "https://example.test/tui/tool-result";
+    const source = `\u202e# مرحبا\u202c\n\n\u200f> שלום\n\n\u2066- عنصر ${url}\u2069${attack}`;
+    const { lines } = renderToolOutput(source, 120);
+    const raw = lines.join("\n");
+    const normalized = normalizeTestText(raw).replace(/[\u2067\u2069]/gu, "");
+    const linkedRtl = lines.find((line) => line.includes("عنصر") && line.includes("\x1b]8;;"));
+    const targets = splitAnsiSegments(raw).flatMap((segment) => {
+      if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
+        return [];
+      }
+      const end = segment.value.endsWith("\x1b\\") ? -2 : -1;
+      const target = segment.value.slice("\x1b]8;;".length, end);
+      return target ? [target] : [];
+    });
+
+    expect(normalized).toContain("مرحبا");
+    expect(normalized).not.toContain("# مرحبا");
+    expect(normalized).toContain("│ שלום");
+    expect(normalized).toContain("- عنصر");
+    expect(raw).not.toContain(attack);
+    expect(raw).not.toMatch(/[\u200f\u202e\u2066]/u);
+    expect(targets.length).toBeGreaterThan(0);
+    expect(targets.every((target) => target === url)).toBe(true);
+    expect(linkedRtl?.indexOf("\u2067")).toBeLessThan(linkedRtl?.indexOf("\x1b]8;;") ?? -1);
+    expect(linkedRtl?.indexOf("\u2069")).toBeGreaterThan(linkedRtl?.lastIndexOf("\x1b]8;;") ?? -1);
   });
 });

@@ -5,26 +5,28 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as optionalOpenCodeString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
+import {
+  OPENCODE_SESSION_CATALOG_MAX_PAGE_LIMIT,
+  OPENCODE_SESSION_ID_PATTERN,
+} from "./session-catalog-shared.js";
 
 const LOCAL_HOST_ID = "gateway";
-const DEFAULT_PAGE_LIMIT = 20;
-const MAX_PAGE_LIMIT = 100;
 const MAX_SEARCH_LENGTH = 500;
-const MAX_CURSOR_LENGTH = 128;
 const MAX_CLI_LIST_SESSIONS = 10_000;
 const MAX_CLI_OUTPUT_BYTES = 32 * 1024 * 1024;
-const MAX_TRANSCRIPT_ITEM_BYTES = 512 * 1024;
-const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const CLI_TIMEOUT_MS = 30_000;
 const OPENCODE_QUERY_CACHE_TTL_MS = 32_000;
 const OPENCODE_QUERY_CACHE_MAX_ENTRIES = 32;
-const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 const SAFE_ENV_KEYS = [
   "APPDATA",
   "COMSPEC",
@@ -76,189 +78,21 @@ function openCodeQueryCacheKey(query: string, configIdentity: object): string {
   return `${String(identity)}\0${environment}\0${query}`;
 }
 
-export type OpenCodeSessionPage = {
+type OpenCodeSessionPage = {
   sessions: SessionCatalogSession[];
   nextCursor?: string;
 };
 
-type OpenCodeListParams = {
-  searchTerm?: string;
-  limit?: number;
-  cursor?: string;
+export const isExactOpenCodeSessionCursor = sessionCatalogPaging.isExactCursor;
+
+const OPENCODE_PARAMETER_MESSAGES = {
+  listNotObject: "OpenCode session list parameters must be an object",
+  unknownListParameter: (key: string) => `unknown OpenCode session list parameter: ${key}`,
+  invalidSearchTerm: "searchTerm is invalid",
+  readNotObject: "OpenCode session read parameters must be an object",
+  unknownReadParameter: (key: string) => `unknown OpenCode session read parameter: ${key}`,
+  invalidThreadId: "threadId is invalid",
 };
-
-type OpenCodeReadParams = {
-  threadId: string;
-  limit?: number;
-  cursor?: string;
-};
-
-function optionalOpenCodeString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
-
-function boundedLimit(value: unknown, fallback = DEFAULT_PAGE_LIMIT): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > MAX_PAGE_LIMIT) {
-    throw new Error(`limit must be an integer between 1 and ${String(MAX_PAGE_LIMIT)}`);
-  }
-  return Number(value);
-}
-
-function encodeCursor(offset: number): string {
-  return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
-}
-
-function optionalRawCursor(value: unknown): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CURSOR_LENGTH) {
-    throw new Error("cursor is invalid");
-  }
-  return value;
-}
-
-function decodeCursor(value: unknown): number {
-  const cursor = optionalRawCursor(value);
-  if (cursor === undefined) {
-    return 0;
-  }
-  try {
-    const bytes = Buffer.from(cursor, "base64url");
-    if (bytes.toString("base64url") !== cursor) {
-      throw new Error("non-canonical base64url");
-    }
-    const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
-    if (!isRecord(parsed) || !Number.isSafeInteger(parsed.offset) || Number(parsed.offset) < 0) {
-      throw new Error("invalid offset");
-    }
-    const offset = Number(parsed.offset);
-    if (encodeCursor(offset) !== cursor) {
-      throw new Error("non-canonical cursor payload");
-    }
-    return offset;
-  } catch (error) {
-    throw new Error("cursor is invalid", { cause: error });
-  }
-}
-
-export function isExactOpenCodeSessionCursor(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-  try {
-    decodeCursor(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function truncateUtf8(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return text;
-  }
-  let low = 0;
-  let high = text.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (Buffer.byteLength(text.slice(0, middle), "utf8") <= maxBytes - 3) {
-      low = middle;
-    } else {
-      high = middle - 1;
-    }
-  }
-  const end = low > 0 && /[\uD800-\uDBFF]/u.test(text.charAt(low - 1)) ? low - 1 : low;
-  return `${text.slice(0, end)}…`;
-}
-
-function transcriptPage(
-  items: SessionCatalogTranscriptItem[],
-  limit: number,
-  offset: number,
-): { items: SessionCatalogTranscriptItem[]; nextCursor?: string } {
-  const end = Math.max(0, items.length - offset);
-  const start = Math.max(0, end - limit);
-  const page: SessionCatalogTranscriptItem[] = [];
-  let pageBytes = 2;
-  for (let index = end - 1; index >= start; index -= 1) {
-    const item = items[index];
-    if (!item) {
-      continue;
-    }
-    const bounded: SessionCatalogTranscriptItem = {
-      ...item,
-      text: truncateUtf8(item.text ?? "", MAX_TRANSCRIPT_ITEM_BYTES),
-    };
-    const itemBytes = Buffer.byteLength(JSON.stringify(bounded), "utf8") + 1;
-    if (page.length > 0 && pageBytes + itemBytes > MAX_TRANSCRIPT_PAGE_BYTES) {
-      break;
-    }
-    page.unshift(bounded);
-    pageBytes += itemBytes;
-  }
-  const consumed = offset + page.length;
-  return {
-    items: page,
-    ...(consumed < items.length ? { nextCursor: encodeCursor(consumed) } : {}),
-  };
-}
-
-function parseListParams(
-  value: unknown,
-): Required<Pick<OpenCodeListParams, "limit">> & OpenCodeListParams {
-  if (value === undefined || value === null) {
-    return { limit: DEFAULT_PAGE_LIMIT };
-  }
-  if (!isRecord(value)) {
-    throw new Error("OpenCode session list parameters must be an object");
-  }
-  const unknown = Object.keys(value).find(
-    (key) => !["searchTerm", "limit", "cursor"].includes(key),
-  );
-  if (unknown) {
-    throw new Error(`unknown OpenCode session list parameter: ${unknown}`);
-  }
-  const searchTerm = optionalOpenCodeString(value.searchTerm, MAX_SEARCH_LENGTH);
-  if (value.searchTerm !== undefined && !searchTerm) {
-    throw new Error("searchTerm is invalid");
-  }
-  const cursor = optionalRawCursor(value.cursor);
-  return {
-    limit: boundedLimit(value.limit),
-    ...(searchTerm ? { searchTerm } : {}),
-    ...(cursor ? { cursor } : {}),
-  };
-}
-
-function parseReadParams(
-  value: unknown,
-): Required<Pick<OpenCodeReadParams, "threadId" | "limit">> & OpenCodeReadParams {
-  if (!isRecord(value)) {
-    throw new Error("OpenCode session read parameters must be an object");
-  }
-  const unknown = Object.keys(value).find((key) => !["threadId", "limit", "cursor"].includes(key));
-  if (unknown) {
-    throw new Error(`unknown OpenCode session read parameter: ${unknown}`);
-  }
-  const threadId = optionalOpenCodeString(value.threadId, 256);
-  if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
-    throw new Error("threadId is invalid");
-  }
-  const cursor = optionalRawCursor(value.cursor);
-  return {
-    threadId,
-    limit: boundedLimit(value.limit),
-    ...(cursor ? { cursor } : {}),
-  };
-}
 
 function resolveSpawnInvocation(args: string[]): {
   command: string;
@@ -390,7 +224,7 @@ function parseOpenCodeSession(value: unknown): SessionCatalogSession | undefined
     return undefined;
   }
   const threadId = optionalOpenCodeString(value.id, 256);
-  if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
+  if (!threadId || !OPENCODE_SESSION_ID_PATTERN.test(threadId)) {
     return undefined;
   }
   const name = optionalOpenCodeString(value.title, 1_000);
@@ -418,8 +252,11 @@ export async function listLocalOpenCodeSessionPage(
   value?: unknown,
   options: OpenCodeQueryCacheOptions = {},
 ): Promise<OpenCodeSessionPage> {
-  const params = parseListParams(value);
-  const offset = decodeCursor(params.cursor);
+  const params = sessionCatalogPaging.parseListParams(value, {
+    searchMaxLength: MAX_SEARCH_LENGTH,
+    messages: OPENCODE_PARAMETER_MESSAGES,
+  });
+  const offset = sessionCatalogPaging.decodeCursor(params.cursor);
   const requestedCount = params.searchTerm
     ? MAX_CLI_LIST_SESSIONS
     : Math.min(MAX_CLI_LIST_SESSIONS, offset + params.limit + 1);
@@ -451,9 +288,23 @@ export async function listLocalOpenCodeSessionPage(
   return {
     sessions: page,
     ...(offset + page.length < sessions.length
-      ? { nextCursor: encodeCursor(offset + page.length) }
+      ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) }
       : {}),
   };
+}
+
+export async function requireLocalOpenCodeSession(
+  threadId: string,
+): Promise<SessionCatalogSession> {
+  const page = await listLocalOpenCodeSessionPage({
+    searchTerm: threadId,
+    limit: OPENCODE_SESSION_CATALOG_MAX_PAGE_LIMIT,
+  });
+  const session = page.sessions.find((candidate) => candidate.threadId === threadId);
+  if (!session) {
+    throw new Error("OpenCode session is unavailable");
+  }
+  return session;
 }
 
 function jsonText(value: unknown, maxLength = 20_000): string | undefined {
@@ -561,10 +412,14 @@ function openCodeTranscriptItems(value: unknown): SessionCatalogTranscriptItem[]
 export async function readLocalOpenCodeTranscriptPage(
   value: unknown,
 ): Promise<SessionsCatalogReadResult> {
-  const params = parseReadParams(value);
-  const offset = decodeCursor(params.cursor);
+  const params = sessionCatalogPaging.parseReadParams(value, {
+    threadIdMaxLength: 256,
+    threadIdPattern: OPENCODE_SESSION_ID_PATTERN,
+    messages: OPENCODE_PARAMETER_MESSAGES,
+  });
+  const offset = sessionCatalogPaging.decodeCursor(params.cursor);
   const items = openCodeTranscriptItems(await exportOpenCodeSession(params.threadId));
-  const page = transcriptPage(items, params.limit, offset);
+  const page = sessionCatalogPaging.boundTranscriptPage(items, params.limit, offset);
   return {
     hostId: LOCAL_HOST_ID,
     label: "Local OpenCode",

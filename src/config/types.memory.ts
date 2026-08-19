@@ -1,44 +1,20 @@
+import type { MemoryExtraPath } from "../memory-host-sdk/host/types.js";
 /**
  * Memory config types shared by core context-engine paths and memory host/plugin runtimes.
- * Builtin memory stays core-owned; qmd settings describe the external QMD integration.
+ * Builtin memory stays core-owned.
  */
-import type { SessionSendPolicyConfig } from "./types.base.js";
 import type { SecretInput } from "./types.secrets.js";
 
-/** Memory backend family selected for retrieval and session memory features. */
-export type MemoryBackend = "builtin" | "qmd";
+export type { MemoryExtraPath } from "../memory-host-sdk/host/types.js";
+
 /** Citation rendering mode for memory-injected context. */
 export type MemoryCitationsMode = "auto" | "on" | "off";
-/** QMD search command flavor used for retrieval. */
-export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
 /** Top-level memory config block. */
 export type MemoryConfig = {
-  backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   /** Shared embedding/search defaults. Per-agent overrides live under agents.entries.*.memory.search. */
   search?: MemorySearchConfig;
-  qmd?: MemoryQmdConfig;
-};
-
-/** QMD-specific memory backend config. */
-export type MemoryQmdConfig = {
-  command?: string;
-  searchMode?: MemoryQmdSearchMode;
-  rerank?: boolean;
-  searchTool?: string;
-  includeDefaultMemory?: boolean;
-  paths?: MemoryQmdIndexPath[];
-  sessions?: MemoryQmdSessionConfig;
-  limits?: MemoryQmdLimitsConfig;
-  scope?: SessionSendPolicyConfig;
-};
-
-/** Additional QMD index path entry. */
-export type MemoryQmdIndexPath = {
-  path: string;
-  name?: string;
-  pattern?: string;
 };
 
 export type MemorySearchConfig = {
@@ -48,13 +24,8 @@ export type MemorySearchConfig = {
   rememberAcrossConversations?: boolean;
   /** Sources to index and search (default: ["memory"]). */
   sources?: Array<"memory" | "sessions">;
-  /** Extra paths to include in memory search (directories or .md files). */
-  extraPaths?: string[];
-  /** Optional QMD-specific extra collections for cross-agent search. */
-  qmd?: {
-    /** Additional QMD collections appended for this agent's search scope. */
-    extraCollections?: MemoryQmdIndexPath[];
-  };
+  /** Extra paths to include in memory search, optionally filtered by a glob. */
+  extraPaths?: MemoryExtraPath[];
   /** Optional multimodal file indexing for selected extra paths. */
   multimodal?: {
     /** Enable image/audio embeddings from extraPaths. */
@@ -94,7 +65,7 @@ export type MemorySearchConfig = {
    * Supported values today are 768, 1536, and 3072.
    */
   outputDimensionality?: number;
-  /** Local embedding settings (node-llama-cpp). */
+  /** Local embedding settings for the managed llama.cpp server. */
   local?: {
     /** GGUF model path or hf: URI. */
     modelPath?: string;
@@ -128,19 +99,4 @@ export type MemorySearchConfig = {
     /** Cache chunk embeddings in SQLite (default: true). */
     enabled?: boolean;
   };
-};
-
-/** Session export settings for QMD memory indexing. */
-export type MemoryQmdSessionConfig = {
-  enabled?: boolean;
-  exportDir?: string;
-  retentionDays?: number;
-};
-
-/** Retrieval and injection limits for QMD memory results. */
-export type MemoryQmdLimitsConfig = {
-  maxResults?: number;
-  maxSnippetChars?: number;
-  maxInjectedChars?: number;
-  timeoutMs?: number;
 };

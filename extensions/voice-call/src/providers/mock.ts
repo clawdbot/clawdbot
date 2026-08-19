@@ -18,7 +18,7 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
-import { createWebhookReplayCache, markWebhookReplay } from "../webhook-replay.js";
+import { createWebhookReplayCache, reserveWebhookReplay } from "../webhook-replay.js";
 import type { VoiceCallProvider } from "./base.js";
 
 /**
@@ -37,8 +37,7 @@ export class MockProvider implements VoiceCallProvider {
     const key = `mock:${crypto.createHash("sha256").update(requestMaterial).digest("hex")}`;
     return {
       ok: true,
-      verifiedRequestKey: key,
-      isReplay: markWebhookReplay(this.replayCache, key),
+      ...reserveWebhookReplay(this.replayCache, key),
     };
   }
 

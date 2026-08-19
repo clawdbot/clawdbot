@@ -1,7 +1,8 @@
-// Verifies plugin setup registry discovery and lookup behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+// Verifies plugin setup registry discovery and lookup behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -22,14 +23,17 @@ vi.mock("./native-module-require.js", () => ({
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 
+type SetupRegistryApi = Pick<
+  import("./types.js").OpenClawPluginApi,
+  "registerProvider" | "registerCliBackend" | "registerConfigMigration" | "registerAutoEnableProbe"
+>;
+
 let clearPluginSetupRegistryCache: typeof import("./setup-registry.test-fixtures.js").clearPluginSetupRegistryCache;
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
-let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
+let resolvePluginSetupProviderCore: typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
-let setPluginSetupRegistryModuleLoaderFactoryForTest:
-  | typeof import("./setup-registry.test-fixtures.js").setPluginSetupRegistryModuleLoaderFactoryForTest
-  | undefined;
+let setPluginSetupRegistryModuleLoaderFactoryForTest: typeof import("./setup-registry.test-fixtures.js").setPluginSetupRegistryModuleLoaderFactoryForTest;
 
 function forceNodeRuntimeVersionsForTest(): () => void {
   const originalVersions = process.versions;
@@ -171,12 +175,7 @@ async function expectNoUnhandledRejection(run: () => void | Promise<void>): Prom
   expect(unhandledRejections).toStrictEqual([]);
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCall(
   mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
@@ -202,7 +201,7 @@ function firstRecordArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unkno
 }
 
 afterEach(() => {
-  setPluginSetupRegistryModuleLoaderFactoryForTest?.(undefined);
+  setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -215,11 +214,18 @@ describe("setup-registry module loader", () => {
 
   beforeAll(async () => {
     resetRegistryJitiMocks();
+    // The non-isolated plugin shard may cache this owner through a sibling first.
+    // Refresh it once after this file's hoisted mocks, then reuse it for every case.
     vi.resetModules();
-    const module = await import("./setup-registry.js");
-    const fixtures = await import("./setup-registry.test-fixtures.js");
-    fixtures.setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
-    fixtures.clearPluginSetupRegistryCache();
+    ({
+      resolvePluginSetupRegistry,
+      resolvePluginSetupProviderCore,
+      resolvePluginSetupCliBackend,
+      runPluginSetupConfigMigrations,
+    } = await import("./setup-registry.js"));
+    ({ clearPluginSetupRegistryCache, setPluginSetupRegistryModuleLoaderFactoryForTest } =
+      await import("./setup-registry.test-fixtures.js"));
+    setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -230,7 +236,7 @@ describe("setup-registry module loader", () => {
 
     try {
       withMockedWindowsPlatform(() => {
-        module.resolvePluginSetupRegistry({
+        resolvePluginSetupRegistry({
           workspaceDir: pluginRoot,
           env: {},
         });
@@ -246,22 +252,12 @@ describe("setup-registry module loader", () => {
       filename: mockArg(mocks.createJiti, 0, 0),
       options: requireRecord(mockArg(mocks.createJiti, 0, 1)),
     };
-    fixtures.setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
+    setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
   });
 
-  beforeEach(async () => {
+  beforeEach(() => {
     resetRegistryJitiMocks();
-    vi.resetModules();
-    ({
-      resolvePluginSetupRegistry,
-      resolvePluginSetupProvider,
-      resolvePluginSetupCliBackend,
-      runPluginSetupConfigMigrations,
-    } = await import("./setup-registry.js"));
-    ({ clearPluginSetupRegistryCache, setPluginSetupRegistryModuleLoaderFactoryForTest } =
-      await import("./setup-registry.test-fixtures.js"));
     setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
-    clearPluginSetupRegistryCache();
   });
 
   it("uses the runtime-supported source-transform boundary on Windows for setup-api modules", () => {
@@ -466,11 +462,11 @@ describe("setup-registry module loader", () => {
     });
 
     const provider = requireRecord(
-      resolvePluginSetupProvider({ provider: "amazon-bedrock", env: {} }),
+      resolvePluginSetupProviderCore({ provider: "amazon-bedrock", env: {} }),
     );
     expect(provider.id).toBe("amazon-bedrock");
     expect(provider.label).toBe("Amazon Bedrock");
-    expect(resolvePluginSetupProvider({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupProviderCore({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(pluginRoot, "setup-api.js"));
   });
@@ -514,7 +510,7 @@ describe("setup-registry module loader", () => {
       });
     });
 
-    const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
+    const provider = requireRecord(resolvePluginSetupProviderCore({ provider: "openai", env: {} }));
     expect(provider.id).toBe("openai");
     expect(provider.label).toBe("OpenAI");
   });
@@ -541,7 +537,7 @@ describe("setup-registry module loader", () => {
       diagnostics: [],
     });
 
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
     const registry = resolvePluginSetupRegistry({ env: {} });
     expect(registry.providers).toEqual([]);
@@ -585,7 +581,51 @@ describe("setup-registry module loader", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
-  it("reports setup descriptor drift without rejecting runtime registrations", () => {
+  it("allows provider descriptors to remain metadata-only beside other setup hooks", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }, { id: "elevenlabs" }],
+            cliBackends: ["codex-cli"],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: SetupRegistryApi) {
+            api.registerCliBackend({
+              id: "codex-cli",
+              config: { command: "codex" },
+            });
+            api.registerConfigMigration((config) => ({
+              config,
+              changes: ["openai"],
+            }));
+            api.registerAutoEnableProbe(() => "openai configured");
+          },
+        },
+      });
+    });
+
+    const registry = resolvePluginSetupRegistry({ env: {} });
+
+    expect(registry.providers).toStrictEqual([]);
+    expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["codex-cli"]);
+    expect(registry.configMigrations).toHaveLength(1);
+    expect(registry.autoEnableProbes).toHaveLength(1);
+    expect(registry.diagnostics).toStrictEqual([]);
+  });
+
+  it("reports undeclared runtime contributions and missing CLI backends", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -627,19 +667,16 @@ describe("setup-registry module loader", () => {
 
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["anthropic"]);
     expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["claude-cli"]);
-    expect(registry.diagnostics).toHaveLength(4);
+    expect(registry.diagnostics).toHaveLength(3);
     expect(registry.diagnostics[0]?.pluginId).toBe("openai");
-    expect(registry.diagnostics[0]?.code).toBe("setup-descriptor-provider-missing-runtime");
-    expect(registry.diagnostics[0]?.declaredId).toBe("openai");
+    expect(registry.diagnostics[0]?.code).toBe("setup-descriptor-provider-runtime-undeclared");
+    expect(registry.diagnostics[0]?.runtimeId).toBe("anthropic");
     expect(registry.diagnostics[1]?.pluginId).toBe("openai");
-    expect(registry.diagnostics[1]?.code).toBe("setup-descriptor-provider-runtime-undeclared");
-    expect(registry.diagnostics[1]?.runtimeId).toBe("anthropic");
+    expect(registry.diagnostics[1]?.code).toBe("setup-descriptor-cli-backend-missing-runtime");
+    expect(registry.diagnostics[1]?.declaredId).toBe("codex-cli");
     expect(registry.diagnostics[2]?.pluginId).toBe("openai");
-    expect(registry.diagnostics[2]?.code).toBe("setup-descriptor-cli-backend-missing-runtime");
-    expect(registry.diagnostics[2]?.declaredId).toBe("codex-cli");
-    expect(registry.diagnostics[3]?.pluginId).toBe("openai");
-    expect(registry.diagnostics[3]?.code).toBe("setup-descriptor-cli-backend-runtime-undeclared");
-    expect(registry.diagnostics[3]?.runtimeId).toBe("claude-cli");
+    expect(registry.diagnostics[2]?.code).toBe("setup-descriptor-cli-backend-runtime-undeclared");
+    expect(registry.diagnostics[2]?.runtimeId).toBe("claude-cli");
   });
 
   it("does not report drift when setup descriptors match runtime registrations", () => {
@@ -682,7 +719,7 @@ describe("setup-registry module loader", () => {
 
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(workspaceRoot);
     try {
-      expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+      expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
     } finally {
       cwdSpy.mockRestore();
     }
@@ -798,7 +835,9 @@ describe("setup-registry module loader", () => {
     });
 
     await expectNoUnhandledRejection(() => {
-      const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
+      const provider = requireRecord(
+        resolvePluginSetupProviderCore({ provider: "openai", env: {} }),
+      );
       expect(provider.id).toBe("openai");
       expect(provider.label).toBe("OpenAI");
     });
@@ -832,13 +871,148 @@ describe("setup-registry module loader", () => {
     });
   });
 
+  it("records a diagnostic when the setup entry fails to load", () => {
+    const brokenRoot = makeTempDir();
+    writeSetupApiStub(brokenRoot);
+    mockSinglePlugin({ id: "broken-entry", rootDir: brokenRoot });
+    mocks.createJiti.mockImplementation(() => () => {
+      throw new Error("module parse failed");
+    });
+
+    const registry = resolvePluginSetupRegistry({ env: {} });
+
+    // A broken setup entry removes the plugin from onboarding; the reason must
+    // be recorded instead of vanishing.
+    expect(registry.providers).toStrictEqual([]);
+    expect(registry.diagnostics).toMatchObject([
+      { pluginId: "broken-entry", code: "setup-entry-load-failed" },
+    ]);
+  });
+
+  it("publishes each plugin setup registration atomically on synchronous success", () => {
+    const throwingRoot = makeTempDir();
+    const healthyRoot = makeTempDir();
+    writeSetupApiStub(throwingRoot);
+    writeSetupApiStub(healthyRoot);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "shared-plugin",
+          rootDir: throwingRoot,
+          setup: {
+            providers: [{ id: "shared-provider" }],
+            cliBackends: ["shared-cli"],
+          },
+        },
+        {
+          id: "shared-plugin",
+          rootDir: healthyRoot,
+          setup: {
+            providers: [{ id: "shared-provider" }],
+            cliBackends: ["shared-cli"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const throwingRegister = vi.fn((api: SetupRegistryApi) => {
+      api.registerProvider({ id: "shared-provider", label: "Throwing", auth: [] });
+      api.registerProvider({ id: "SHARED-PROVIDER", label: "Throwing duplicate", auth: [] });
+      api.registerCliBackend({ id: "shared-cli", config: { command: "throwing" } });
+      api.registerCliBackend({ id: "SHARED-CLI", config: { command: "throwing-duplicate" } });
+      api.registerConfigMigration((config) => ({ config, changes: ["throwing"] }));
+      api.registerAutoEnableProbe(() => "throwing");
+      throw new Error("setup registration failed");
+    });
+    const healthyRegister = vi.fn((api: SetupRegistryApi) => {
+      api.registerProvider({ id: "shared-provider", label: "Healthy", auth: [] });
+      api.registerProvider({ id: "SHARED-PROVIDER", label: "Healthy duplicate", auth: [] });
+      api.registerCliBackend({ id: "shared-cli", config: { command: "healthy" } });
+      api.registerCliBackend({ id: "SHARED-CLI", config: { command: "healthy-duplicate" } });
+      api.registerConfigMigration((config) => ({ config, changes: ["healthy"] }));
+      api.registerAutoEnableProbe(() => "healthy");
+    });
+    mocks.createJiti.mockImplementation((modulePath: string) => {
+      const register = modulePath.includes(throwingRoot) ? throwingRegister : healthyRegister;
+      return () => ({ default: { register } });
+    });
+
+    const first = resolvePluginSetupRegistry();
+    const second = resolvePluginSetupRegistry();
+
+    for (const registry of [first, second]) {
+      expect(
+        registry.providers.map(({ pluginId, provider }) => ({
+          pluginId,
+          id: provider.id,
+          label: provider.label,
+        })),
+      ).toEqual([{ pluginId: "shared-plugin", id: "shared-provider", label: "Healthy" }]);
+      expect(
+        registry.cliBackends.map(({ pluginId, backend }) => ({
+          pluginId,
+          id: backend.id,
+          command: backend.config.command,
+        })),
+      ).toEqual([{ pluginId: "shared-plugin", id: "shared-cli", command: "healthy" }]);
+      expect(registry.configMigrations).toHaveLength(1);
+      expect(registry.configMigrations[0]?.migrate({} as never)?.changes).toEqual(["healthy"]);
+      expect(registry.autoEnableProbes).toHaveLength(1);
+      expect(registry.autoEnableProbes[0]?.probe({ config: {}, env: {} } as never)).toBe("healthy");
+      // The throwing registration is recorded, not silently dropped.
+      expect(registry.diagnostics).toMatchObject([
+        { pluginId: "shared-plugin", code: "setup-registration-failed" },
+      ]);
+    }
+    expect(second).not.toBe(first);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    expect(throwingRegister).toHaveBeenCalledTimes(1);
+    expect(healthyRegister).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores setup contributions registered after the synchronous callback returns", async () => {
+    const pluginRoot = makeTempDir();
+    writeSetupApiStub(pluginRoot);
+    mockSinglePlugin({ id: "async-plugin", rootDir: pluginRoot });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: SetupRegistryApi) {
+            api.registerProvider({ id: "sync-provider", label: "Sync", auth: [] });
+            api.registerCliBackend({ id: "sync-cli", config: { command: "sync" } });
+            api.registerConfigMigration((config) => ({ config, changes: ["sync"] }));
+            api.registerAutoEnableProbe(() => "sync");
+            return Promise.resolve().then(() => {
+              api.registerProvider({ id: "async-provider", label: "Async", auth: [] });
+              api.registerCliBackend({ id: "async-cli", config: { command: "async" } });
+              api.registerConfigMigration((config) => ({ config, changes: ["async"] }));
+              api.registerAutoEnableProbe(() => "async");
+            });
+          },
+        },
+      });
+    });
+
+    const first = resolvePluginSetupRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+    const second = resolvePluginSetupRegistry();
+
+    for (const registry of [first, second]) {
+      expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["sync-provider"]);
+      expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["sync-cli"]);
+      expect(registry.configMigrations).toHaveLength(1);
+      expect(registry.autoEnableProbes).toHaveLength(1);
+    }
+  });
+
   it("fails closed when multiple plugins claim the same setup provider id", () => {
     mockDuplicateSetupClaims({
       duplicatePluginId: false,
       kind: "provider",
     });
 
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
@@ -848,7 +1022,7 @@ describe("setup-registry module loader", () => {
       kind: "provider",
     });
 
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
@@ -907,9 +1081,11 @@ describe("setup-registry module loader", () => {
     }));
     mocks.createJiti.mockImplementation(() => loadSetupModule);
 
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
-    expect(resolvePluginSetupProvider({ provider: "anthropic", env: {} })?.id).toBe("anthropic");
-    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })?.id).toBe("openai");
+    expect(resolvePluginSetupProviderCore({ provider: "anthropic", env: {} })?.id).toBe(
+      "anthropic",
+    );
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })?.id).toBe("openai");
 
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
       "codex-cli",

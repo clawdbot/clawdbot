@@ -5,7 +5,7 @@ import { vi } from "vitest";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
-  agentCommand,
+  agentCommandMock,
   cronIsolatedRun,
   embeddedRunMock,
   type GetReplyFromConfigFn,
@@ -24,6 +24,8 @@ function createEmbeddedRunMockExports() {
       embeddedRunMock.compactEmbeddedAgentSession(...args),
     isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
+    resolveEmbeddedAgentRunProgressState: (sessionId: string) =>
+      embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
@@ -38,6 +40,7 @@ function createEmbeddedRunMockExports() {
       embeddedRunMock.waitCalls.push(sessionId);
       const ended = embeddedRunMock.waitResults.get(sessionId) ?? true;
       if (ended) {
+        embeddedRunMock.activeIds.delete(sessionId);
         embeddedRunMock.endWaiters.get(sessionId)?.(true);
       } else if (embeddedRunMock.resolveEndBeforeTimeoutIds.delete(sessionId)) {
         embeddedRunMock.endWaiters.get(sessionId)?.(true);
@@ -248,9 +251,9 @@ vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("../commands/agent.js", () => ({
-  agentCommand,
-  agentCommandFromGatewayIngress: agentCommand,
-  agentCommandFromIngress: agentCommand,
+  agentCommand: agentCommandMock,
+  agentCommandFromGatewayIngress: agentCommandMock,
+  agentCommandFromIngress: agentCommandMock,
 }));
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
@@ -284,10 +287,12 @@ vi.mock("/src/auto-reply/reply.js", () => ({
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
+  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
 vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
+  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");
@@ -310,5 +315,5 @@ vi.mock("../plugins/loader.js", async () => {
     loadOpenClawPlugins: () => getTestPluginRegistry(),
   };
 });
-process.env.OPENCLAW_SKIP_CHANNELS = "1";
-process.env.OPENCLAW_SKIP_CRON = "1";
+vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "1");
+vi.stubEnv("OPENCLAW_SKIP_CRON", "1");

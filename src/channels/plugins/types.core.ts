@@ -254,7 +254,7 @@ export type ChannelGroupContext = {
 /** TTS voice delivery behavior advertised by a channel plugin. */
 /**
  * Container tokens (file-extension shape, no leading dot) that the host
- * speech-core pipeline knows how to pre-transcode synthesized audio into.
+ * TTS pipeline knows how to pre-transcode synthesized audio into.
  * Channels that benefit from a specific container — currently only
  * iMessage, which needs Apple's native voice-memo CAF descriptor — name
  * one here. Adding a new entry requires extending the host transcoder
@@ -266,6 +266,8 @@ export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
   audioFileFormats?: readonly string[];
+  /** Voice notes can carry the final reply text as a visible caption. */
+  captionedFinalText?: boolean;
   /**
    * Optional preferred audio container the channel wants for voice-memo
    * delivery. When set and the host can transcode (e.g. `afconvert` on
@@ -573,16 +575,6 @@ export type ChannelMessagingAdapter = {
     threadId?: string | null;
   }) => string | undefined;
   /**
-   * @deprecated Use `targetResolver` for target id normalization and
-   * `resolveOutboundSessionRoute` for session/thread identity. This remains for
-   * compatibility with older route parsing helpers.
-   */
-  parseExplicitTarget?: (params: { raw: string }) => {
-    to: string;
-    threadId?: string | number;
-    chatType?: ChatType;
-  } | null;
-  /**
    * Lightweight chat-type inference used before directory lookup so plugins can
    * steer peer-vs-group resolution without reimplementing host search flow.
    */
@@ -755,6 +747,8 @@ export type ChannelMessageActionAdapter = {
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
+  /** Delegate conversation-read authorization to this adapter for bundled registrations only. */
+  providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {
@@ -830,6 +824,8 @@ export type ChannelPollContext = {
   silent?: boolean;
   isAnonymous?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** @internal Refresh durable timing before recipient-visible platform I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 /** Minimal base for all channel probe results. Channel-specific probes extend this. */

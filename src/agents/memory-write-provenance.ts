@@ -1,5 +1,6 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { isMissingPathError } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import type { MemoryFlushPlan } from "../plugins/memory-state.js";
 
@@ -20,11 +21,6 @@ type ProvenanceWriteOperations = {
   remove?: (absolutePath: string) => Promise<void>;
 };
 
-function isMissingFileError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | undefined)?.code;
-  return code === "ENOENT" || code === "not-found" || String(error).includes("(path not found)");
-}
-
 export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
   operations: T,
   observer: MemoryWriteProvenanceObserver | undefined,
@@ -44,7 +40,7 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
         .readFile(absolutePath)
         .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
         .catch((error: unknown) => {
-          if (!isMissingFileError(error)) {
+          if (!isMissingPathError(error)) {
             throw error;
           }
           return "";

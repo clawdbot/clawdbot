@@ -9,6 +9,7 @@ import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronJob,
+  CronStoredJob,
 } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
@@ -17,7 +18,7 @@ import type { RunCronAgentTurnResult } from "./run.types.js";
 export type RunCronAgentTurnParams = {
   cfg: OpenClawConfig;
   deps: CliDeps;
-  job: CronJob;
+  job: CronStoredJob;
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;

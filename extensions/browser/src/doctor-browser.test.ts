@@ -28,6 +28,7 @@ describe("browser doctor readiness", () => {
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
+          extensionRelay: { allowLegacyAuth: false },
           profiles: {
             openclaw: { color: "#FF4500" },
           },
@@ -44,11 +45,38 @@ describe("browser doctor readiness", () => {
     expect(noteFn).not.toHaveBeenCalled();
   });
 
+  it("warns while legacy Browser Relay Authentication remains enabled", async () => {
+    const noteFn = vi.fn();
+    await noteChromeMcpBrowserReadiness(
+      {
+        browser: {
+          extensionRelay: { allowLegacyAuth: true },
+          profiles: {
+            openclaw: { color: "#FF4500" },
+          },
+        },
+      },
+      {
+        noteFn,
+        platform: "linux",
+        env: { DISPLAY: ":99" },
+        getUid: () => 1000,
+        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
+      },
+    );
+
+    expect(noteFn).toHaveBeenCalledWith(
+      expect.stringContaining("browser.extensionRelay.allowLegacyAuth=true"),
+      "Browser relay authentication",
+    );
+  });
+
   it("warns when managed browser profiles have no local executable", async () => {
     const noteFn = vi.fn();
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
+          extensionRelay: { allowLegacyAuth: false },
           profiles: {
             openclaw: { color: "#FF4500" },
           },
@@ -78,6 +106,7 @@ describe("browser doctor readiness", () => {
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
+          extensionRelay: { allowLegacyAuth: false },
           headless: false,
           noSandbox: false,
           profiles: {
@@ -111,6 +140,7 @@ describe("browser doctor readiness", () => {
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
+          extensionRelay: { allowLegacyAuth: false },
           profiles: {
             openclaw: { color: "#FF4500" },
           },
@@ -141,6 +171,7 @@ describe("browser doctor readiness", () => {
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
+          extensionRelay: { allowLegacyAuth: false },
           profiles: {
             clawd: { color: "#FF4500" },
             openclaw: { color: "#00AA00" },
@@ -166,6 +197,7 @@ describe("browser doctor readiness", () => {
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
+          extensionRelay: { allowLegacyAuth: false },
           defaultProfile: "user",
         },
       },
@@ -189,6 +221,7 @@ describe("browser doctor readiness", () => {
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
+          extensionRelay: { allowLegacyAuth: false },
           profiles: {
             chromeLive: {
               driver: "existing-session",
@@ -216,6 +249,7 @@ describe("browser doctor readiness", () => {
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
+          extensionRelay: { allowLegacyAuth: false },
           profiles: {
             chromeLive: {
               driver: "existing-session",
@@ -243,6 +277,7 @@ describe("browser doctor readiness", () => {
     await noteChromeMcpBrowserReadiness(
       {
         browser: {
+          extensionRelay: { allowLegacyAuth: false },
           profiles: {
             braveLive: {
               driver: "existing-session",

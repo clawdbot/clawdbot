@@ -3,8 +3,13 @@
  * websocket, and dispatching user messages into OpenClaw.
  */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
@@ -26,8 +31,7 @@ import type {
 const CLICKCLACK_EVENT_PAGE_LIMIT = 500;
 
 function payloadString(event: ClickClackEvent, key: string): string {
-  const value = event.payload?.[key];
-  return typeof value === "string" ? value : "";
+  return readStringField(event.payload, key) ?? "";
 }
 
 function eventCorrelationId(event: ClickClackEvent): string | undefined {
@@ -52,22 +56,9 @@ async function resolveEventMessage(params: {
   }
 }
 
-function decodeSocketMessage(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return Buffer.concat(data).toString("utf8");
-}
-
 function parseSocketEvent(data: RawData): ClickClackEvent | null {
   try {
-    return JSON.parse(decodeSocketMessage(data)) as ClickClackEvent;
+    return JSON.parse(rawDataToString(data)) as ClickClackEvent;
   } catch {
     return null;
   }
@@ -79,6 +70,7 @@ async function processEvent(params: {
   client: ReturnType<typeof createClickClackClient>;
   event: ClickClackEvent;
   botUserId: string;
+  buildContext?: typeof buildChannelInboundEventContext;
   log?: { info: (message: string) => void; warn?: (message: string) => void };
 }) {
   if (params.event.type !== "message.created" && params.event.type !== "thread.reply_created") {
@@ -108,9 +100,6 @@ async function processEvent(params: {
   if (message.author_id === params.botUserId) {
     return;
   }
-  if (message.author?.kind === "bot") {
-    return;
-  }
   const access = await resolveClickClackInboundAccess({
     account: params.account,
     config: params.config,
@@ -132,6 +121,7 @@ async function processEvent(params: {
     config: params.config,
     message,
     access,
+    buildContext: params.buildContext,
     ...(correlationId ? { correlationId } : {}),
   });
 }
@@ -196,6 +186,8 @@ export async function startClickClackGatewayAccount(
       client,
       event,
       botUserId: account.botUserId,
+      buildContext: (ctx.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       log: ctx.log,
     });
   if (account.commandMenu) {
@@ -289,14 +281,7 @@ export async function startClickClackGatewayAccount(
         ctx.abortSignal.addEventListener("abort", abort, { once: true });
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
         socket.on("open", () => {
-          ctx.setStatus({
-            accountId: account.accountId,
-            connected: true,
-            lifecycle: "ready",
-            lastConnectedAt: Date.now(),
-            lastError: null,
-            terminalDisconnect: undefined,
-          });
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
         });
         socket.on("message", (data) => {
           if (closing || settled) {
@@ -364,11 +349,6 @@ export async function startClickClackGatewayAccount(
       }
     }
   } finally {
-    ctx.setStatus({
-      accountId: account.accountId,
-      running: false,
-      connected: false,
-      lifecycle: "stopped",
-    });
+    ctx.setStatus(channelStoppedPatch({ accountId: account.accountId }));
   }
 }

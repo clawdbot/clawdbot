@@ -30,7 +30,8 @@ struct TerminalHubScreen: View {
                     url: url,
                     authScript: Self.terminalAuthUserScript(
                         config: config,
-                        storedOperatorToken: storedOperatorToken))
+                        storedOperatorToken: storedOperatorToken),
+                    tls: config?.tls)
                     // Recreate the web view only when the connection inputs
                     // change; SwiftUI update passes must not restart live shells.
                         .id(Self.webContentIdentity(

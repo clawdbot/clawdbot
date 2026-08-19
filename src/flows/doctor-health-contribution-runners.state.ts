@@ -1,3 +1,4 @@
+import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -8,21 +9,28 @@ const loadDoctorStateIntegrityModule = async () =>
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
-  await maybeRepairLegacyPluginManifestContracts({
+  const pluginInventoryChanged = await maybeRepairLegacyPluginManifestContracts({
     config: ctx.cfg,
     env: process.env,
     runtime: ctx.runtime,
     prompter: ctx.prompter,
   });
+  if (pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
 }
 
 export async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairPluginRegistryState } = await import("../commands/doctor-plugin-registry.js");
-  ctx.cfg = await maybeRepairPluginRegistryState({
+  const result = await maybeRepairPluginRegistryState({
     config: ctx.cfg,
     env: process.env,
     prompter: ctx.prompter,
   });
+  ctx.cfg = result.config;
+  if (result.pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
 }
 
 export async function runReleaseConfiguredPluginInstallsHealth(
@@ -40,6 +48,9 @@ export async function runReleaseConfiguredPluginInstallsHealth(
     env: ctx.env ?? process.env,
     touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
   });
+  if (result.pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
   if (result.postInstallDoctorResult) {
     ctx.postInstallDoctorResult = result.postInstallDoctorResult;
   }
@@ -90,6 +101,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
+  noteBackupDoctorHint(ctx.env ?? process.env);
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -113,15 +125,6 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
   if (result.warnings.length > 0) {
     note(result.warnings.join("\n"), "Doctor warnings");
   }
-}
-
-export async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
-  await noteSessionLockHealth({
-    shouldRepair: ctx.prompter.shouldRepair,
-    config: ctx.cfg,
-    env: ctx.env,
-  });
 }
 
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {

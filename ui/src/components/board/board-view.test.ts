@@ -772,20 +772,34 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(allow?.disabled).toBe(false));
   });
 
-  it("keeps approval controls after a failed decision and clears the error on refresh", async () => {
-    const grant = vi.fn(async () => {
-      throw new Error("approval service unavailable");
+  it("toasts failed rejection while keeping controls and leaves successful decisions quiet", async () => {
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    const grant = vi.fn(async (_name: string, decision: "granted" | "rejected") => {
+      if (decision === "rejected") {
+        throw new Error("approval service unavailable");
+      }
     });
     const source = snapshot({ widgets: [boardWidget({ grantState: "pending" })] });
     const view = await mount({ snapshot: source, callbacks: callbacks({ grant }) });
-    view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')?.click();
+    const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
+    const reject = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]');
+    allow?.click();
+    await vi.waitFor(() => expect(grant).toHaveBeenCalledWith("alpha", "granted"));
+    await vi.waitFor(() => expect(reject?.disabled).toBe(false));
+    expect(toastHost.querySelector(".app-toast")).toBeNull();
+
+    reject?.click();
     await vi.waitFor(() => {
       expect(
         view.querySelector('[data-test-id="board-widget-action-error"]')?.textContent,
       ).toContain("approval service unavailable");
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
+        "Could not reject widget access. Try again.",
+      );
     });
-    expect(view.querySelector('[data-test-id="board-grant-allow"]')).not.toBeNull();
-    expect(view.querySelector('[data-test-id="board-grant-reject"]')).not.toBeNull();
+    expect(allow?.disabled).toBe(false);
+    expect(reject?.disabled).toBe(false);
 
     view.snapshot = structuredClone({ ...source, revision: source.revision + 1 });
     await settleCells(view);
@@ -936,6 +950,32 @@ describe("openclaw-board-view", () => {
     );
     await Promise.resolve();
     expect(document.activeElement).toBe(menuButton);
+    expect(applyOps).not.toHaveBeenCalled();
+  });
+
+  it("cancels an in-progress gesture when the board becomes inactive", async () => {
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount({ callbacks: callbacks({ applyOps }) });
+    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
+    const pointerDown = new MouseEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      cancelable: true,
+      clientX: 100,
+      clientY: 100,
+    });
+    Object.defineProperty(pointerDown, "pointerId", { value: 7 });
+    handle?.dispatchEvent(pointerDown);
+    await view.updateComplete;
+    expect(view.querySelector(".board-widget--dragging")).not.toBeNull();
+
+    view.active = false;
+    await settleCells(view);
+    expect(view.querySelector(".board-widget--dragging")).toBeNull();
+
+    const pointerUp = new MouseEvent("pointerup", { bubbles: true, clientX: 200, clientY: 200 });
+    Object.defineProperty(pointerUp, "pointerId", { value: 7 });
+    window.dispatchEvent(pointerUp);
     expect(applyOps).not.toHaveBeenCalled();
   });
 

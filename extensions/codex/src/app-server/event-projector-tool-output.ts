@@ -2,8 +2,11 @@ import {
   formatToolAggregate,
   formatToolProgressOutput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  asNonArrayRecord,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { readString } from "./event-projector-values.js";
 import { isJsonObject, type CodexThreadItem } from "./protocol.js";
 
 export const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
@@ -104,10 +107,7 @@ export function toolOutputRawEchoSignature(
 }
 
 export function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as Record<string, unknown>;
+  return asNonArrayRecord(value);
 }
 
 export function collectDynamicToolContentText(

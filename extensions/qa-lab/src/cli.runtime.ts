@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements cli behavior.
+// QA Lab plugin module implements cli behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -8,7 +8,7 @@ import {
 } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseBooleanValue, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildQaAgenticParityComparison,
   buildQaRuntimeParityReport,
@@ -46,7 +46,9 @@ import {
 import { startQaLabServer } from "./lab-server.js";
 import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
+import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
+import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
@@ -66,7 +68,11 @@ import {
   type QaCredentialRecord,
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
-import { normalizeQaTransportId, type QaTransportId } from "./qa-transport-registry.js";
+import {
+  normalizeQaTransportId,
+  qaTransportSupportsModuleFlows,
+  type QaTransportId,
+} from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -188,17 +194,14 @@ function resolveQaManualLaneModels(opts: {
   primaryModel?: string;
   alternateModel?: string;
 }) {
-  const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(opts.providerMode);
-  const alternateModel = opts.alternateModel?.trim();
-  return {
-    primaryModel,
-    alternateModel:
-      alternateModel && alternateModel.length > 0
-        ? alternateModel
-        : opts.primaryModel?.trim()
-          ? primaryModel
-          : defaultQaModelForMode(opts.providerMode, true),
-  };
+  // `qa manual --model` is a one-model probe unless the operator also supplies
+  // `--alt-model`; materialize that contract before shared pair resolution.
+  const explicitPrimaryModel = opts.primaryModel?.trim();
+  return resolveQaRuntimeModelPair({
+    ...opts,
+    primaryModel: explicitPrimaryModel,
+    alternateModel: opts.alternateModel?.trim() || explicitPrimaryModel,
+  });
 }
 
 function parseQaThinkingLevel(
@@ -235,20 +238,11 @@ function parseQaModelThinkingOverrides(entries: readonly string[] | undefined) {
 }
 
 function parseQaBooleanModelOption(label: string, value: string) {
-  switch (value.trim().toLowerCase()) {
-    case "1":
-    case "on":
-    case "true":
-    case "yes":
-      return true;
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return false;
-    default:
-      throw new Error(`${label} fast must be one of true, false, on, off, yes, no, 1, 0`);
+  const parsed = parseBooleanValue(value);
+  if (parsed === undefined) {
+    throw new Error(`${label} fast must be one of true, false, on, off, yes, no, 1, 0`);
   }
+  return parsed;
 }
 
 function parseQaPositiveIntegerOption(label: string, value: number | undefined) {
@@ -662,6 +656,8 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
           ...scenarioPack.scenarios.filter((scenario) => missingScenarioIdSet.has(scenario.id)),
         ]
       : taxonomyScenarios;
+  const liveAdapterFactories =
+    profileReport.channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
   const executionSelection = resolveQaRunProfileExecutionSelection({
     scenarios: executionScenarios,
     providerMode: normalizedProviderMode,
@@ -671,6 +667,16 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       profileReport.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
     supportsChannel:
       profileReport.channelDriver === "crabline" ? isCrablineServerChannel : undefined,
+    resolveModuleFlowSupport:
+      profileReport.channelDriver === "live"
+        ? (channel) =>
+            channel
+              ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
+                  channelId: channel,
+                  driver: "live",
+                })
+              : false
+        : undefined,
   });
   if (requestedScenarioIds.length > 0 && executionSelection.excludedScenarios.length > 0) {
     const exclusions = executionSelection.excludedScenarios
@@ -701,6 +707,8 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
   );
   let evidencePath: string | undefined;
+  let expectedCells: QaProfileEvidencePlan["expectedCells"] = [];
+  let observedCells: QaProfileEvidencePlan["observedCells"] = [];
   await withTemporaryQaProfileEnv(profile, async () => {
     const suiteResult = await runQaSuiteCommand({
       repoRoot,
@@ -713,6 +721,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       fastMode: opts.fastMode,
       failFast: opts.failFast,
       scenarioIds: scenarios.map((scenario) => scenario.id),
+      explicitScenarioSelection: requestedScenarioIds.length > 0,
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
       channelDriver: profileReport.channelDriver,
@@ -720,14 +729,25 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     });
     evidencePath =
       suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
+    expectedCells = suiteResult && "expectedCells" in suiteResult ? suiteResult.expectedCells : [];
+    observedCells = suiteResult && "observedCells" in suiteResult ? suiteResult.observedCells : [];
   });
   if (!evidencePath) {
     throw new Error("qa run --qa-profile did not produce qa-evidence.json.");
   }
+  const profilePlan = qaProfileEvidencePlan.build({
+    profile,
+    membershipScenarios: taxonomyScenarios,
+    selectedScenarios: scenarios,
+    excludedScenarios: executionSelection.excludedScenarios,
+    expectedCells,
+    observedCells,
+  });
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath,
     evidenceMode: opts.evidenceMode,
     profile,
+    profilePlan,
     filters: {
       surface: opts.surface,
       category: opts.category,
@@ -815,7 +835,9 @@ function resolveQaReportOnlyOptionalScenarioNames(params: {
   scenarioIds: readonly string[];
   explicitScenarioSelection?: boolean;
 }): ReadonlySet<string> | undefined {
-  if (params.explicitScenarioSelection || params.scenarioIds.length > 0) {
+  const explicitScenarioSelection =
+    params.explicitScenarioSelection ?? params.scenarioIds.length > 0;
+  if (explicitScenarioSelection) {
     return undefined;
   }
   return resolveQaReportOnlyOptionalScenarioNamesFromCatalog(readQaScenarioPack().scenarios);
@@ -835,6 +857,19 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     parityPack: opts.parityPack,
     scenarioIds: opts.scenarioIds,
   });
+  const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
+  const liveAdapterFactories =
+    channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
+  const resolveModuleFlowSupport =
+    channelDriver === "live"
+      ? (channel?: string) =>
+          channel
+            ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
+                channelId: channel,
+                driver: "live",
+              })
+            : false
+      : undefined;
   const runtimePairLanes = parseQaRuntimePairLaneFilters(opts.runtimePairLane);
   const runtimePairLaneSelection = resolveQaRuntimePairLaneScenarioIds({
     channel: opts.channel,
@@ -846,6 +881,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     scenarioIds: explicitScenarioIds,
     runtimePairLanes,
     runtimePair: runtimePair !== undefined,
+    resolveModuleFlowSupport,
   });
   const scenarioIds = runtimePairLaneSelection.scenarioIds;
   if (runtimePair) {
@@ -865,9 +901,6 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (opts.channel?.trim() && channelDriver !== "crabline" && channelDriver !== "live") {
     throw new Error("--channel override requires --channel-driver crabline or live.");
   }
-  const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
-  const liveAdapterFactories =
-    channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
   const liveAdapterFactory = liveChannelId
     ? liveAdapterFactories?.find((factory) => factory.id === liveChannelId)
     : undefined;
@@ -1052,7 +1085,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       if (!allowFailures && blockingScenarioCount > 0) {
         process.exitCode = 1;
       }
-      return result;
+      return {
+        ...result,
+        expectedCells: runtimeResult.expectedCells,
+        observedCells: runtimeResult.observedCells,
+      };
     }
     case "flow": {
       const result = runtimeResult.result;
@@ -1073,7 +1110,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       if (!allowFailures && blockingScenarioCount > 0) {
         process.exitCode = 1;
       }
-      return result;
+      return {
+        ...result,
+        expectedCells: runtimeResult.expectedCells,
+        observedCells: runtimeResult.observedCells,
+      };
     }
   }
   return undefined;
@@ -1695,8 +1736,4 @@ export async function runQaProviderServerCommand(
   await runInterruptibleServer(standaloneCommand.serverLabel, server);
 }
 
-export const testing = {
-  resolveRepoRelativeOutputDir,
-};
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,11 +1,6 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 // Perplexity provider module implements model/runtime integration.
 import {
-  readPositiveIntegerParam,
-  readStringArrayParam,
-  readStringParam,
-} from "openclaw/plugin-sdk/provider-web-search";
-import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   isoToPerplexityDate,
@@ -14,7 +9,10 @@ import {
   normalizeToIsoDate,
   readCachedSearchPayload,
   readConfiguredSecretString,
+  readPositiveIntegerParam,
   readProviderEnvValue,
+  readStringArrayParam,
+  readStringParam,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
@@ -142,10 +140,6 @@ function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Reco
   };
 }
 
-async function readPerplexityJsonResponse<T>(response: Response, label: string): Promise<T> {
-  return await readProviderJsonResponse<T>(response, label);
-}
-
 function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: "config" | "perplexity_env" | "openrouter_env" | "none";
@@ -201,6 +195,7 @@ async function runPerplexitySearchApi(params: {
   apiKey: string;
   count: number;
   timeoutSeconds: number;
+  signal?: AbortSignal;
   country?: string;
   searchDomainFilter?: string[];
   searchRecencyFilter?: string;
@@ -243,6 +238,7 @@ async function runPerplexitySearchApi(params: {
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: buildPerplexityRequestHeaders(params.apiKey, true),
@@ -253,7 +249,7 @@ async function runPerplexitySearchApi(params: {
       if (!res.ok) {
         return await throwWebSearchApiError(res, "Perplexity Search");
       }
-      const data = await readPerplexityJsonResponse<PerplexitySearchApiResponse>(
+      const data = await readProviderJsonResponse<PerplexitySearchApiResponse>(
         res,
         "Perplexity Search",
       );
@@ -274,6 +270,7 @@ async function runPerplexitySearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
   freshness?: string;
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
@@ -289,6 +286,7 @@ async function runPerplexitySearch(params: {
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: buildPerplexityRequestHeaders(params.apiKey),
@@ -299,7 +297,7 @@ async function runPerplexitySearch(params: {
       if (!res.ok) {
         return await throwWebSearchApiError(res, "Perplexity");
       }
-      const data = await readPerplexityJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
+      const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
       return {
         content: data.choices?.[0]?.message?.content ?? "No response",
         citations: extractPerplexityCitations(data),
@@ -311,6 +309,7 @@ async function runPerplexitySearch(params: {
 export async function executePerplexitySearch(
   args: Record<string, unknown>,
   searchConfig?: SearchConfigRecord,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const perplexityConfig = resolvePerplexityConfig(searchConfig);
   const runtime = resolvePerplexityTransport(perplexityConfig);
@@ -499,6 +498,7 @@ export async function executePerplexitySearch(
               baseUrl: runtime.baseUrl,
               model: runtime.model,
               timeoutSeconds,
+              signal,
               freshness,
             });
             return {
@@ -523,6 +523,7 @@ export async function executePerplexitySearch(
             apiKey: runtime.apiKey,
             count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
             timeoutSeconds,
+            signal,
             country: country ?? undefined,
             searchDomainFilter: domainFilter,
             searchRecencyFilter: freshness,
@@ -541,6 +542,7 @@ export async function executePerplexitySearch(
     (payload as { tookMs: number }).tookMs = Date.now() - start;
   }
 
+  signal?.throwIfAborted();
   writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
   return payload;
 }
@@ -550,11 +552,6 @@ export const testing = {
   resolvePerplexityBaseUrl,
   resolvePerplexityModel,
   resolvePerplexityTransport,
-  isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
-  readPerplexityJsonResponse,
-  normalizeToIsoDate,
-  isoToPerplexityDate,
 } as const;
-export { testing as __testing };

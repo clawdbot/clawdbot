@@ -3,14 +3,15 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatAuditCounts,
   formatExtraPaths,
+  formatMemoryIndexOutcome,
   resolveMemoryPluginConfig,
-  scanMemorySources,
+  scanMemoryManagerSources,
   withMemoryCommand,
   type MemoryManager,
-  type MemorySourceName,
   type MemorySourceScan,
 } from "./cli-runtime-common.js";
 import {
@@ -30,7 +31,6 @@ import {
   type DreamingArtifactsAuditSummary,
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
-import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
@@ -43,29 +43,16 @@ const { accent, heading, info, muted, success, warn } = theme;
 type LlamaCppRuntimeStatus = {
   state?: string;
   backend?: string;
-  buildType?: string;
-  deviceNames?: string[];
-  memory?: {
-    totalBytes: number;
-    usedBytes: number;
-    freeBytes: number;
-    unifiedBytes: number;
-    observedAtMs: number;
-  };
-  offload?: {
-    supported: boolean;
-    offloadedLayers?: number;
-    totalLayers?: number;
-  };
-  context?: {
-    requestedSize: number | "auto";
-  };
+  buildInfo?: string;
+  model?: { id?: string; path?: string };
+  capabilities?: { vision?: boolean; draft?: boolean };
+  endpoints?: Record<string, string>;
   loadError?: string;
 };
 function readLlamaCppRuntimeStatus(
   status: ReturnType<MemoryManager["status"]>,
 ): LlamaCppRuntimeStatus | null {
-  const runtime = asRecord(asRecord(status.custom)?.llamaCppRuntime);
+  const runtime = asNullableRecord(asNullableRecord(status.custom)?.llamaCppRuntime);
   return runtime?.engine === "llama.cpp" ? (runtime as LlamaCppRuntimeStatus) : null;
 }
 function formatMemoryIndexIdentityWarning(
@@ -75,7 +62,7 @@ function formatMemoryIndexIdentityWarning(
   reason: string;
   fix: string;
 } | null {
-  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
   const reason =
     (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
     typeof indexIdentity.reason === "string"
@@ -88,19 +75,6 @@ function formatMemoryIndexIdentityWarning(
     reason,
     fix: `Run: openclaw memory status --index --agent ${agentId}`,
   };
-}
-function formatRuntimeBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = units[0];
-  for (let index = 1; index < units.length && value >= 1024; index += 1) {
-    value /= 1024;
-    unit = units[index];
-  }
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
@@ -257,16 +231,8 @@ export async function runMemoryStatus(
         }
       }
       const status = manager.status();
-      const sources = (status.sources?.length ? status.sources : ["memory"]) as MemorySourceName[];
+      const scan = await scanMemoryManagerSources(status, agentId);
       const workspaceDir = status.workspaceDir;
-      const scan = workspaceDir
-        ? await scanMemorySources({
-            workspaceDir,
-            agentId,
-            sources,
-            extraPaths: status.extraPaths,
-          })
-        : undefined;
       let audit: ShortTermAuditSummary | undefined;
       let repair: RepairShortTermPromotionArtifactsResult | undefined;
       let dreamingAudit: DreamingArtifactsAuditSummary | undefined;
@@ -280,18 +246,7 @@ export async function runMemoryStatus(
         if (opts.fix) {
           repair = await repairShortTermPromotionArtifacts({ workspaceDir });
         }
-        const customQmd = asRecord(asRecord(status.custom)?.qmd);
-        audit = await auditShortTermPromotionArtifacts({
-          workspaceDir,
-          qmd:
-            status.backend === "qmd"
-              ? {
-                  dbPath: status.dbPath,
-                  collections:
-                    typeof customQmd?.collections === "number" ? customQmd.collections : undefined,
-                }
-              : undefined,
-        });
+        audit = await auditShortTermPromotionArtifacts({ workspaceDir });
       }
       allResults.push({
         agentId,
@@ -331,7 +286,9 @@ export async function runMemoryStatus(
         ? `${filesIndexed}/? files · ${chunksIndexed} chunks`
         : `${filesIndexed}/${totalFiles} files · ${chunksIndexed} chunks`;
     if (opts.index) {
-      const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
+      const line = indexError
+        ? `Memory index failed: ${indexError}`
+        : formatMemoryIndexOutcome(status, scan, agentId);
       defaultRuntime.log(line);
     }
     const requestedProvider = status.requestedProvider ?? status.provider;
@@ -371,33 +328,30 @@ export async function runMemoryStatus(
     if (llamaCppRuntime) {
       const runtime = llamaCppRuntime;
       const backend = runtime.backend ?? "unknown";
-      const build = runtime.buildType ? ` (${runtime.buildType})` : "";
-      lines.push(`${label("llama.cpp")} ${info(backend)}${muted(build)}`);
-      if (runtime.deviceNames?.length) {
-        lines.push(`${label("Devices")} ${info(runtime.deviceNames.join(", "))}`);
+      const build = runtime.buildInfo ? ` (${runtime.buildInfo})` : "";
+      lines.push(`${label("llama.cpp server")} ${info(backend)}${muted(build)}`);
+      if (runtime.model?.id) {
+        lines.push(`${label("Server model")} ${info(runtime.model.id)}`);
       }
-      if (runtime.memory) {
-        const unified =
-          runtime.memory.unifiedBytes > 0
-            ? ` · ${formatRuntimeBytes(runtime.memory.unifiedBytes)} unified`
-            : "";
+      if (runtime.model?.path) {
+        lines.push(`${label("Model path")} ${info(shortenHomePath(runtime.model.path))}`);
+      }
+      if (runtime.capabilities) {
+        const capabilities = [
+          runtime.capabilities.vision ? "vision" : null,
+          runtime.capabilities.draft ? "draft" : null,
+        ].filter(Boolean);
         lines.push(
-          `${label("VRAM snapshot")} ${info(`${formatRuntimeBytes(runtime.memory.usedBytes)} used · ${formatRuntimeBytes(runtime.memory.freeBytes)} free · ${formatRuntimeBytes(runtime.memory.totalBytes)} total${unified}`)} ${muted(`(${new Date(runtime.memory.observedAtMs).toISOString()})`)}`,
+          `${label("Capabilities")} ${info(capabilities.length ? capabilities.join(", ") : "text only")}`,
         );
       }
-      if (runtime.offload) {
-        const layers =
-          typeof runtime.offload.offloadedLayers === "number" &&
-          typeof runtime.offload.totalLayers === "number"
-            ? `${runtime.offload.offloadedLayers}/${runtime.offload.totalLayers} layers`
-            : runtime.offload.supported
-              ? "supported"
-              : "unsupported";
-        lines.push(`${label("GPU offload")} ${info(layers)}`);
-      }
-      if (runtime.context) {
+      if (runtime.endpoints) {
         lines.push(
-          `${label("Requested context")} ${info(`${runtime.context.requestedSize} tokens`)}`,
+          `${label("Endpoints")} ${info(
+            Object.entries(runtime.endpoints)
+              .map(([name, state]) => `${name}=${state}`)
+              .join(" "),
+          )}`,
         );
       }
       if (runtime.loadError) {
@@ -440,7 +394,16 @@ export async function runMemoryStatus(
         lines.push(`${label(lineLabel)} ${vectorColor(state)}`);
       };
       if (status.backend === "builtin") {
-        const storeState = formatVectorState(status.vector.storeAvailable);
+        const storeState =
+          status.vector.storeAvailable === undefined && status.vector.enabled
+            ? status.vector.index?.state === "complete"
+              ? "indexed (unprobed)"
+              : status.vector.index?.state === "incomplete"
+                ? "index incomplete (unprobed)"
+                : status.vector.index?.state === "unverified"
+                  ? "index unverified (unprobed)"
+                  : formatVectorState(undefined)
+            : formatVectorState(status.vector.storeAvailable);
         formatVectorLine("Vector store", storeState);
         if (status.vector.semanticAvailable !== undefined) {
           formatVectorLine("Semantic vectors", formatVectorState(status.vector.semanticAvailable));
@@ -500,14 +463,6 @@ export async function runMemoryStatus(
       if (audit.updatedAt) {
         lines.push(`${label("Recall updated")} ${info(audit.updatedAt)}`);
       }
-      if (status.backend === "qmd" && audit.qmd) {
-        const qmdBits = [
-          audit.qmd.dbPath ? shortenHomePath(audit.qmd.dbPath) : "<unknown>",
-          typeof audit.qmd.dbBytes === "number" ? `${audit.qmd.dbBytes} bytes` : null,
-          typeof audit.qmd.collections === "number" ? `${audit.qmd.collections} collections` : null,
-        ].filter(Boolean);
-        lines.push(`${label("QMD audit")} ${info(qmdBits.join(" · "))}`);
-      }
     }
     if (dreamingAudit) {
       lines.push(
@@ -552,14 +507,8 @@ export async function runMemoryStatus(
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
       if (!opts.fix) {
-        // Only a subset of audit issues are repaired by `--fix`; a missing qmd
-        // index needs a reindex instead, so each hint is gated on the matching
-        // issue actually being present.
         if (audit.issues.some((issue) => issue.fixable)) {
           lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
-        }
-        if (audit.issues.some((issue) => issue.code === "qmd-index-missing")) {
-          lines.push(`  ${muted(`Fix: openclaw memory index --agent ${agentId}`)}`);
         }
       }
     }

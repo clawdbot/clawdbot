@@ -158,6 +158,9 @@ export function extractToolOutput(input: ResponsesInputItem[]) {
   return item ? stringifyFunctionCallOutput(item.output) : "";
 }
 
+export const extractToolOutputValue = (input: ResponsesInputItem[]) =>
+  findCurrentToolOutput(input)?.output;
+
 export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
   const item = findCurrentToolOutput(input);
   return item?.is_error === true || item?.isError === true;
@@ -264,7 +267,7 @@ export function extractSlackMpimRetainedBotNonce(
   return undefined;
 }
 
-export function extractAllInputTexts(input: ResponsesInputItem[]) {
+function extractAllInputTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {
     if (typeof item.output === "string" && item.output.trim()) {
@@ -404,7 +407,7 @@ export function countImageInputs(value: unknown): number {
   return count;
 }
 
-export function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
+function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
   const latestUserIndex = findLastUserIndex(input);
   if (latestUserIndex < 0) {
     return { text: "", imageInputCount: 0 };
@@ -426,6 +429,28 @@ export function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
       .filter(Boolean)
       .join("\n"),
     imageInputCount,
+  };
+}
+
+export function extractCurrentImageRequest(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+) {
+  // Match only the current request. Historical image prompts must not override
+  // a later non-image turn just because they remain in transcript context.
+  const imageUserTurn = extractLatestImageUserTurn(input);
+  if (imageUserTurn.imageInputCount === 0) {
+    return imageUserTurn;
+  }
+  const developerInstructions = input
+    .filter((item) => item.role === "developer" && Array.isArray(item.content))
+    .map((item) => extractInputText(item.content as unknown[]))
+    .filter(Boolean);
+  return {
+    text: [extractInstructionsText(body), ...developerInstructions, imageUserTurn.text]
+      .filter(Boolean)
+      .join("\n"),
+    imageInputCount: imageUserTurn.imageInputCount,
   };
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 
@@ -7,6 +8,7 @@ const CONTINUE_FROM_TRANSCRIPT_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 
 const BASE_RUN_PARAMS = {
+  admittedRunContext: createTestAdmittedRunContext("run-1"),
   agentId: "main",
   sessionId: "test-session",
   sessionKey: "agent:main:test-key",
@@ -23,6 +25,20 @@ const BASE_RUN_PARAMS = {
   runId: "run-1",
 } satisfies PreparedEmbeddedRunInput["runParams"];
 
+const TEST_ADMISSION = {
+  agentId: "main",
+  sessionId: BASE_RUN_PARAMS.sessionId,
+  sessionKey: BASE_RUN_PARAMS.sessionKey,
+  storePath: BASE_RUN_PARAMS.sessionTarget.storePath,
+  generation: "test-generation",
+  entryId: "msg-user-1",
+  rawSeq: 1,
+  effectiveParentId: null,
+  activeMessagePosition: 0,
+  logicalTurnId: "test-logical-turn",
+  role: "user" as const,
+};
+
 function makeUserMessage(content = BASE_RUN_PARAMS.prompt) {
   return { role: "user" as const, content, timestamp: 1 };
 }
@@ -34,6 +50,7 @@ function createRecorder(
   return {
     message: makeUserMessage(),
     resolveMessage: vi.fn(async () => makeUserMessage()),
+    getAdmissionReceipt: () => TEST_ADMISSION,
     markRuntimePersistencePending: vi.fn((pending) => {
       pendingPersistence = pending;
     }),
@@ -65,6 +82,7 @@ describe("embedded run session prompt state", () => {
   it("records canonical runtime persistence without mutating recorder lifecycle state", async () => {
     const persistedMessage = makeUserMessage();
     const persistApproved = vi.fn(async () => ({
+      admission: TEST_ADMISSION,
       sessionFile: BASE_RUN_PARAMS.sessionFile,
       sessionEntry: undefined,
       messageId: "msg-user-1",
@@ -125,6 +143,7 @@ describe("embedded run session prompt state", () => {
     };
     const persistApproved = vi.fn(async () => undefined);
     const persistBlocked = vi.fn(async () => ({
+      admission: TEST_ADMISSION,
       sessionFile: BASE_RUN_PARAMS.sessionFile,
       sessionEntry: undefined,
       messageId: "msg-user-blocked",
@@ -171,6 +190,7 @@ describe("embedded run session prompt state", () => {
     const persistedMessage = makeUserMessage();
     let resolvePersistence:
       | ((result: {
+          admission: typeof TEST_ADMISSION;
           sessionFile: string;
           sessionEntry: undefined;
           messageId: string;
@@ -180,6 +200,7 @@ describe("embedded run session prompt state", () => {
     const persistApproved = vi.fn(
       () =>
         new Promise<{
+          admission: typeof TEST_ADMISSION;
           sessionFile: string;
           sessionEntry: undefined;
           messageId: string;
@@ -207,6 +228,7 @@ describe("embedded run session prompt state", () => {
     expect(state.suppressNextUserMessagePersistence).toBe(false);
 
     resolvePersistence?.({
+      admission: TEST_ADMISSION,
       sessionFile: BASE_RUN_PARAMS.sessionFile,
       sessionEntry: undefined,
       messageId: "msg-user-delayed",
@@ -228,19 +250,19 @@ describe("embedded run session prompt state", () => {
     expect(state.suppressNextUserMessagePersistence).toBe(false);
   });
 
-  it("preserves an unpersisted reasoning continuation across precheck compaction", async () => {
+  it("keeps an internal reasoning continuation hidden across precheck compaction", async () => {
     const reasoningContinuation =
       "The previous assistant turn recorded reasoning; continue to the visible answer.";
     const state = createState();
-    state.activateInternalPrompt(reasoningContinuation, false);
+    state.activateInternalPrompt(reasoningContinuation);
 
     await state.prepareCompactedTranscriptRetry();
 
     expect(state.activePrompt).toEqual({
       override: reasoningContinuation,
-      persisted: false,
+      persisted: true,
       internal: true,
     });
-    expect(state.suppressNextUserMessagePersistence).toBe(false);
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
 });

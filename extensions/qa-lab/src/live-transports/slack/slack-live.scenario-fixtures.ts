@@ -85,7 +85,7 @@ function hasSlackCommentaryLaneMarker(
   message: { blockText?: string[]; text: string },
   marker: string,
 ) {
-  if (message.text.includes(`💬 ${marker}`)) {
+  if (message.text.includes(`💬 ${marker}`) || message.text.trim() === `_${marker}_`) {
     return true;
   }
   const blockText = message.blockText ?? [];

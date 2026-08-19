@@ -1,7 +1,8 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -25,12 +26,14 @@ type SessionChangeContext = Pick<
 type PendingSessionChange = {
   context: SessionChangeContext;
   dirty: boolean;
+  firstDeferredAt?: number;
   key: string;
   payload: SessionChangedPayload;
   timer: ReturnType<typeof setTimeout> | null;
 };
 
 const SESSIONS_CHANGED_DEBOUNCE_MS = 100;
+const SESSIONS_CHANGED_MAX_WAIT_MS = 500;
 const sessionsMutationVersions = new WeakMap<object, number>();
 const pendingChangesByContext = new WeakMap<object, Map<string, PendingSessionChange>>();
 const pendingSessionChanges = new Set<PendingSessionChange>();
@@ -51,35 +54,49 @@ function broadcastSessionsChanged(
   if (!hasSessionChangeReceivers(connIds)) {
     return;
   }
+  const cfg = context.getRuntimeConfig();
+  const unscopedOwnerAgentId = payload.sessionKey
+    ? tryResolveSessionCompatibilityOwnerAgentId(cfg, payload.sessionKey)
+    : undefined;
+  const effectiveAgentId = payload.agentId ?? unscopedOwnerAgentId;
   const sessionRow = payload.sessionKey
     ? loadGatewaySessionRow(
         payload.sessionKey,
-        payload.sessionKey === "global" && payload.agentId
-          ? { agentId: payload.agentId }
-          : undefined,
+        effectiveAgentId ? { agentId: effectiveAgentId } : undefined,
       )
     : null;
-  const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
-  const activeRunState = sessionRow
-    ? resolveVisibleActiveSessionRunState({
-        context,
-        requestedKey: payload.sessionKey ?? sessionRow.key,
-        canonicalKey: sessionRow.key,
-        sessionId: sessionRow.sessionId,
-        agentId: sessionRow.key === "global" ? payload.agentId : undefined,
-        defaultAgentId,
-      })
-    : null;
+  let rowAgentId: string | undefined;
+  if (sessionRow) {
+    try {
+      rowAgentId = resolveAgentIdFromSessionKey(sessionRow.key, effectiveAgentId);
+    } catch {
+      rowAgentId = undefined;
+    }
+  }
+  const activeRunState =
+    sessionRow &&
+    (sessionRow.key !== "global" || rowAgentId !== undefined || unscopedOwnerAgentId !== undefined)
+      ? resolveVisibleActiveSessionRunState({
+          context,
+          requestedKey: payload.sessionKey ?? sessionRow.key,
+          canonicalKey: sessionRow.key,
+          sessionId: sessionRow.sessionId,
+          agentId: rowAgentId,
+          defaultAgentId: unscopedOwnerAgentId,
+        })
+      : null;
   context.broadcastToConnIds(
     "sessions.changed",
     {
       ...payload,
+      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       ts: Date.now(),
       ...(sessionRow
         ? {
             ...buildGatewaySessionEventFields({
               sessionRow,
-              agentId: payload.agentId,
+              agentId: effectiveAgentId,
+              status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
               hasActiveRun: activeRunState?.active,
               activeRunIds: activeRunState?.runIds,
             }),
@@ -93,7 +110,7 @@ function broadcastSessionsChanged(
     },
     connIds,
     {
-      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       dropIfSlow: true,
       // Scope only to a concrete key; a `[undefined]` scope filters no connection
       // correctly and would strip draft gating, so fall back to an unscoped send.
@@ -143,12 +160,16 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
   if (pending) {
     pending.payload = payload;
     pending.dirty = true;
+    pending.firstDeferredAt ??= Date.now();
     if (pending.timer) {
       clearTimeout(pending.timer);
     }
+    // Keep resetting for a quiet-period trailing emit without letting a sustained
+    // mutation stream postpone the authoritative row forever.
+    const maxWaitRemaining = pending.firstDeferredAt + SESSIONS_CHANGED_MAX_WAIT_MS - Date.now();
     pending.timer = setTimeout(
       () => finishPendingSessionChange(pending),
-      SESSIONS_CHANGED_DEBOUNCE_MS,
+      Math.max(0, Math.min(SESSIONS_CHANGED_DEBOUNCE_MS, maxWaitRemaining)),
     );
     pending.timer.unref?.();
     return;
@@ -168,4 +189,19 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
   byKey.set(key, next);
   pendingSessionChanges.add(next);
   broadcastSessionsChanged(context, payload);
+}
+
+export function emitSessionArchived(
+  context: SessionChangeContext,
+  sessionKey: string | undefined,
+  agentId?: string,
+): void {
+  if (!sessionKey) {
+    return;
+  }
+  emitSessionsChanged(context, {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+    reason: "archive",
+  });
 }

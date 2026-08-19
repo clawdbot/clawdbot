@@ -44,13 +44,18 @@ function selectChatSendAgentReplyPayloads(params: {
   hasReturnedAgentErrorPayloads: boolean;
 }): ReplyPayload[] {
   return params.deliveredReplies
-    .filter((entry) => entry.kind === "final")
-    .map((entry) => entry.payload)
-    .filter(
-      (payload) =>
-        (!payload.isError && isSourceReplyTranscriptMirrorPayload(payload)) ||
-        (!params.hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload)),
-    );
+    .filter((entry) => {
+      const { payload } = entry;
+      if (isSourceReplyTranscriptMirrorPayload(payload)) {
+        return entry.kind === "final" && payload.isError !== true;
+      }
+      return (
+        !params.hasReturnedAgentErrorPayloads &&
+        (entry.kind === "block" || entry.kind === "final") &&
+        isReplyPayloadStatusNotice(payload)
+      );
+    })
+    .map((entry) => entry.payload);
 }
 
 /** Persist and broadcast agent-run source/status replies that bypass the normal model turn. */

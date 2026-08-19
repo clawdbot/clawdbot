@@ -7,8 +7,15 @@ import {
   formatDurationHuman as formatDurationHumanCore,
 } from "../../../src/infra/format-time/format-duration.ts";
 import { i18n, t } from "../i18n/index.ts";
+import { formatUiError } from "./format-error.ts";
 
 export { formatByteSize } from "@openclaw/normalization-core";
+
+export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = false): string {
+  const totalSeconds = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));
+  const minutes = String(Math.floor(totalSeconds / 60));
+  return `${padMinutes ? minutes.padStart(2, "0") : minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
 
 type FormatTimeAgoOptions = {
   suffix?: boolean;
@@ -20,10 +27,6 @@ type FormatRelativeTimestampOptions = {
   timezone?: string;
   fallback?: string;
   suffix?: boolean;
-};
-
-type FormatDurationCompactOptions = {
-  spaced?: boolean;
 };
 
 function formatUnit(value: number, unit: RelativeTimeUnit | "millisecond"): string {
@@ -95,11 +98,8 @@ export function formatRelativeTimestamp(
   return options.suffix === false ? formatUnit(value, unit) : formatRelative(signedValue, unit);
 }
 
-export function formatDurationCompact(
-  ms?: number | null,
-  options: FormatDurationCompactOptions = {},
-): string | undefined {
-  const coreValue = formatDurationCompactCore(ms, options);
+export function formatDurationCompact(ms?: number | null): string | undefined {
+  const coreValue = formatDurationCompactCore(ms, { spaced: true });
   if (!coreValue || ms == null || !Number.isFinite(ms) || ms <= 0) {
     return coreValue;
   }
@@ -118,7 +118,7 @@ export function formatDurationCompact(
     if (seconds > 0) {
       parts.push(formatUnit(seconds, "second"));
     }
-    return parts.join(options.spaced ? " " : "");
+    return parts.join(" ");
   }
   const hours = Math.floor(totalMinutes / 60);
   if (hours >= 24) {
@@ -128,14 +128,14 @@ export function formatDurationCompact(
     if (remainingHours > 0) {
       parts.push(formatUnit(remainingHours, "hour"));
     }
-    return parts.join(options.spaced ? " " : "");
+    return parts.join(" ");
   }
   const minutes = totalMinutes % 60;
   const parts = [formatUnit(hours, "hour")];
   if (minutes > 0) {
     parts.push(formatUnit(minutes, "minute"));
   }
-  return parts.join(options.spaced ? " " : "");
+  return parts.join(" ");
 }
 
 export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {
@@ -184,7 +184,7 @@ export function formatUnknownText(
     // Fall back when value is not JSON-serializable.
   }
   if (value instanceof Error) {
-    return value.message || value.name;
+    return formatUiError(value);
   }
   return Object.prototype.toString.call(value);
 }
@@ -283,36 +283,23 @@ export function formatCost(cost: number | null | undefined, fallback = "$0.00"):
   return `$${cost.toFixed(2)}`;
 }
 
-export function formatTokens(tokens: number | null | undefined, fallback = "0"): string {
-  if (tokens == null || !Number.isFinite(tokens)) {
-    return fallback;
-  }
-  if (tokens < 1000) {
-    return String(Math.round(tokens));
-  }
-  if (tokens < 1_000_000) {
-    const k = tokens / 1000;
-    if (k < 10) {
-      return `${k.toFixed(1)}k`;
-    }
-    const rounded = Math.round(k);
-    // 999_500..999_999 rounds to 1000k; roll it over to the M branch instead of emitting "1000k".
-    if (rounded < 1000) {
-      return `${rounded}k`;
-    }
-  }
-  const m = tokens / 1_000_000;
-  return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
-}
-
+// The one token formatter: every surface showing the same count must render the
+// same string, or a session reads "16k" in one pane and "15.6k" in another.
 export function formatCompactTokenCount(
-  tokens: number,
+  tokens: number | null | undefined,
   options: { thousandsSuffix?: string; millionsSuffix?: string; trimTrailingZero?: boolean } = {},
 ): string {
+  if (tokens == null || !Number.isFinite(tokens)) {
+    return "0";
+  }
   const thousandsSuffix = options.thousandsSuffix ?? "k";
   const millionsSuffix = options.millionsSuffix ?? "M";
   const trimTrailingZero = options.trimTrailingZero ?? true;
   const trim = (value: string) => (trimTrailingZero ? value.replace(/\.0$/, "") : value);
+  // Month-scale provider totals can cross a billion; keep the suffix ladder closed.
+  if (tokens >= 1_000_000_000) {
+    return `${trim((tokens / 1_000_000_000).toFixed(1))}B`;
+  }
   if (tokens >= 1_000_000) {
     return `${trim((tokens / 1_000_000).toFixed(1))}${millionsSuffix}`;
   }
@@ -323,5 +310,12 @@ export function formatCompactTokenCount(
     }
     return `${trim(thousands)}${thousandsSuffix}`;
   }
-  return String(tokens);
+  return String(Math.round(tokens));
+}
+
+export function formatContextTokenCapacity(tokens: number): string {
+  if (tokens < 1_000_000) {
+    return formatCompactTokenCount(tokens);
+  }
+  return `${Math.floor(tokens / 100_000) / 10}M`;
 }

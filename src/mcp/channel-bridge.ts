@@ -9,11 +9,11 @@ import {
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { VERSION } from "../version.js";
 import type {
   ApprovalDecision,
-  ApprovalKind,
   ChatHistoryResult,
   ClaudeChannelMode,
   ConversationDescriptor,
@@ -141,6 +141,7 @@ export class OpenClawChannelBridge {
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
       preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
+      tlsFingerprint: bootstrap.tlsFingerprint,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
@@ -300,7 +301,7 @@ export class OpenClawChannelBridge {
 
   /** Forward an MCP approval decision to the matching Gateway approval resolver. */
   async respondToApproval(params: {
-    kind: ApprovalKind;
+    kind: ChannelApprovalKind;
     id: string;
     decision: ApprovalDecision;
   }): Promise<Record<string, unknown>> {
@@ -456,7 +457,7 @@ export class OpenClawChannelBridge {
     }
   }
 
-  private trackApproval(kind: ApprovalKind, payload: Record<string, unknown>): void {
+  private trackApproval(kind: ChannelApprovalKind, payload: Record<string, unknown>): void {
     if (this.closed) {
       return;
     }

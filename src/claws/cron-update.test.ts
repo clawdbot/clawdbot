@@ -82,6 +82,7 @@ function plan(actions: ClawUpdatePlan["actions"]): ClawUpdatePlan {
     },
     actions,
     capabilityChanges: [],
+    readiness: { ready: true, requirements: [] },
     blockers: [],
     diagnostics: [],
   };

@@ -12,7 +12,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
@@ -70,11 +70,16 @@ function resolveWorkspaceScopeOrRespond(
   cfg: OpenClawConfig,
   respond: RespondFn,
 ): { agentId: string; workspaceDir: string; browserPath: string } | null {
-  const agentId = normalizeAgentId(params.agentId);
-  if (!new Set(listAgentIds(cfg)).has(agentId)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+  const normalized = normalizeAgentIdStrict(params.agentId);
+  if (!normalized.ok || !new Set(listAgentIds(cfg)).has(normalized.value)) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `agent "${params.agentId}" not found`),
+    );
     return null;
   }
+  const agentId = normalized.value;
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const rawPath = params.path ?? "";
   const portablePath = rawPath.replaceAll("\\", "/");

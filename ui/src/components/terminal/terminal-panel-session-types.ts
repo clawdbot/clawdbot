@@ -4,10 +4,10 @@ import type {
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
 import type { ReactiveControllerHost } from "lit";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
-import { persistTerminalSessionIds } from "./terminal-session-storage.ts";
 import type { StartupInputBuffer } from "./terminal-startup-input.ts";
 import type { TerminalTabReadinessState } from "./terminal-tab-readiness.ts";
 
@@ -35,6 +35,21 @@ export type TerminalPanelCatalogReference = {
   threadId: string;
 };
 
+export function resolveTerminalPanelOwnerSessionKey(
+  sessionKey: string | null,
+  catalog?: TerminalPanelCatalogReference,
+): string | undefined {
+  const key = sessionKey?.trim();
+  return !catalog && key && !parseCatalogSessionKey(key) ? key : undefined;
+}
+
+/** Explicit terminal work retained until it either runs or reports a visible failure. */
+export type TerminalPanelAction =
+  | { kind: "restore"; agentId: string | null }
+  | { kind: "open"; agentId: string | null }
+  | { kind: "catalog"; agentId: string | null; catalog: TerminalPanelCatalogReference }
+  | { kind: "attach"; sessionId: string; agentOwned: boolean };
+
 export type TerminalPanelSessionControllerState = {
   tabs: TerminalPanelSessionTab[];
   activeId: string | null;
@@ -45,6 +60,7 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   readonly isConnected: boolean;
   readonly client: TerminalGatewayClient | null;
   readonly agentId: string | null;
+  readonly sessionKey: string | null;
   readonly available: boolean;
   readonly themeMode: "dark" | "light";
   readonly fullscreen: boolean;
@@ -79,12 +95,4 @@ export function forceTerminalRender(controller: GhosttyTerminalController): void
     // An omitted opacity defaults to 1; repaint without inventing a visible scrollbar.
     term.renderer.render(term.wasmTerm, true, term.viewportY, term, 0);
   }
-}
-
-export function persistLiveTerminalSessions(tabs: readonly TerminalPanelSessionTab[]): void {
-  persistTerminalSessionIds(
-    tabs
-      .filter((tab) => tab.status === "live" && tab.gatewaySessionId)
-      .map((tab) => tab.gatewaySessionId),
-  );
 }

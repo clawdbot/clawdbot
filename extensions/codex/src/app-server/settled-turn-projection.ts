@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonValue } from "./protocol.js";
 import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
@@ -17,10 +17,6 @@ type ProjectedMessageGroup = {
   results: ProjectedToolReference[];
   bytes: number;
 };
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() || undefined : undefined;
-}
 
 function readBoundedText(
   value: unknown,
@@ -49,7 +45,7 @@ function responseItemBytes(item: JsonValue): number {
 }
 
 function requireCallId(value: unknown): string {
-  const callId = readNonEmptyString(value);
+  const callId = normalizeOptionalString(value);
   if (!callId || callId.length > 256) {
     throw new Error("Codex settled-turn projection found an invalid tool call id");
   }
@@ -57,7 +53,7 @@ function requireCallId(value: unknown): string {
 }
 
 function requireToolName(value: unknown): string {
-  const name = readNonEmptyString(value);
+  const name = normalizeOptionalString(value);
   if (!name || !TOOL_NAME_PATTERN.test(name)) {
     throw new Error("Codex settled-turn projection found an invalid tool name");
   }
@@ -89,10 +85,9 @@ function serializeToolArguments(value: unknown): string {
   return requireBoundedText(serialized, "tool arguments");
 }
 
-function projectUserMessage(message: AgentMessage): JsonValue[] {
-  const record = message as unknown as Record<string, unknown>;
+function projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): JsonValue[] {
   const upstreamUserText = readUpstreamUserText(message);
-  if (upstreamUserText && typeof record.content === "string") {
+  if (upstreamUserText && typeof message.content === "string") {
     return [
       {
         type: "message",
@@ -103,20 +98,22 @@ function projectUserMessage(message: AgentMessage): JsonValue[] {
       },
     ];
   }
-  if (typeof record.content === "string") {
+  if (typeof message.content === "string") {
     return [
       {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: requireBoundedText(record.content, "user message") }],
+        content: [
+          { type: "input_text", text: requireBoundedText(message.content, "user message") },
+        ],
       },
     ];
   }
-  if (!Array.isArray(record.content)) {
+  if (!Array.isArray(message.content)) {
     throw new Error("Codex settled-turn projection found unsupported user content");
   }
   const content: JsonValue[] = [];
-  for (const value of record.content) {
+  for (const value of message.content) {
     if (!isRecord(value)) {
       throw new Error("Codex settled-turn projection found malformed user content");
     }
@@ -127,9 +124,7 @@ function projectUserMessage(message: AgentMessage): JsonValue[] {
       }
       continue;
     }
-    throw new Error(
-      `Codex settled-turn projection does not support user content ${String(value.type)}`,
-    );
+    throw new Error(`Codex settled-turn projection does not support user content ${value.type}`);
   }
   if (content.length === 0) {
     throw new Error("Codex settled-turn projection found an empty user message");
@@ -137,11 +132,11 @@ function projectUserMessage(message: AgentMessage): JsonValue[] {
   return [{ type: "message", role: "user", content }];
 }
 
-function projectAssistantMessage(message: Record<string, unknown>): {
+function projectAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): {
   items: JsonValue[];
   calls: ProjectedToolReference[];
 } {
-  const values =
+  const values: unknown =
     typeof message.content === "string"
       ? [{ type: "text", text: message.content }]
       : message.content;
@@ -188,7 +183,7 @@ function projectAssistantMessage(message: Record<string, unknown>): {
   return { items, calls };
 }
 
-function projectToolResult(message: Record<string, unknown>): {
+function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): {
   item: JsonValue;
   result: ProjectedToolReference;
 } {
@@ -197,17 +192,18 @@ function projectToolResult(message: Record<string, unknown>): {
   if (!Array.isArray(message.content)) {
     throw new Error("Codex settled-turn projection found unsupported tool result content");
   }
-  if (message.isError !== undefined && typeof message.isError !== "boolean") {
+  const isErrorValue: unknown = message.isError;
+  if (isErrorValue !== undefined && typeof isErrorValue !== "boolean") {
     throw new Error("Codex settled-turn projection found invalid tool result status");
   }
-  const isError = message.isError === true;
+  const isError = isErrorValue === true;
   const parts: string[] = [];
   for (const value of message.content) {
     if (!isRecord(value)) {
       throw new Error("Codex settled-turn projection found malformed tool result content");
     }
     if (value.type === "image") {
-      const mimeType = readNonEmptyString(value.mimeType) ?? "unknown type";
+      const mimeType = normalizeOptionalString(value.mimeType) ?? "unknown type";
       // The finalizer selects by text capability. Preserve image evidence as
       // metadata without embedding an executable or oversized multimodal payload.
       parts.push(`[Image tool result: ${mimeType}]`);
@@ -241,18 +237,17 @@ function projectToolResult(message: Record<string, unknown>): {
 }
 
 function projectMessage(message: AgentMessage): ProjectedMessageGroup | undefined {
-  const record = message as unknown as Record<string, unknown>;
   let items: JsonValue[];
   let calls: ProjectedToolReference[] = [];
   let results: ProjectedToolReference[] = [];
   if (message.role === "user") {
     items = projectUserMessage(message);
   } else if (message.role === "assistant") {
-    const projected = projectAssistantMessage(record);
+    const projected = projectAssistantMessage(message);
     items = projected.items;
     calls = projected.calls;
   } else if (message.role === "toolResult") {
-    const projected = projectToolResult(record);
+    const projected = projectToolResult(message);
     items = [projected.item];
     results = [projected.result];
   } else {

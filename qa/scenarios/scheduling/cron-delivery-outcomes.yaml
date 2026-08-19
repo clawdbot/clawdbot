@@ -1,0 +1,34 @@
+title: Cron delivery outcomes
+
+scenario:
+  id: cron-delivery-outcomes
+  surface: automation
+  category: automation.cron-jobs
+  coverage:
+    primary:
+      - automation.webhook-delivery
+      - automation.failure-destinations
+      - automation.skipped-run-alerts
+      - automation.delivery-previews
+  objective: Prove cron delivery, failure routing, skipped-run alerts, and delivery previews through durable production boundaries.
+  successCriteria:
+    - A real command result reaches a loopback HTTP receiver through the production SSRF-guarded cron webhook sender.
+    - Successful webhook delivery is persisted on the cron job and authoritative task-run history.
+    - A failed command reaches its configured failure-destination webhook and keeps durable error state.
+    - A skipped isolated run emits its configured webhook alert and persists skip counters and alert timing.
+    - Persisted webhook and delivery-opt-out jobs produce the expected user-visible delivery previews.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+    - docs/cli/cron.md
+    - docs/gateway/protocol.md
+  codeRefs:
+    - src/cron/service/timer-job-runner.ts
+    - src/gateway/server-cron-notifications.ts
+    - src/cron/service/failure-alerts.ts
+    - src/cron/delivery-preview.ts
+    - src/cron/task-run-history.ts
+    - src/cron/cron-delivery-outcomes.e2e.test.ts
+  execution:
+    kind: vitest
+    path: src/cron/cron-delivery-outcomes.e2e.test.ts
+    summary: Execute real loopback webhook delivery and persist primary, failure, skipped-alert, and preview outcomes.

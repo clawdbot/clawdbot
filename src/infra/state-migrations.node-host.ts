@@ -9,6 +9,7 @@ import {
   type NodeHostConfig,
   type NodeHostGatewayConfig,
 } from "../node-host/config.js";
+import { normalizeNodeHostCloudflareAccessConfig } from "../node-host/gateway-cloudflare-access.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -159,6 +160,7 @@ function rowToCanonicalState(row: {
   gateway_tls: number | null;
   gateway_tls_fingerprint: string | null;
   gateway_context_path: string | null;
+  gateway_cloudflare_access_json: string | null;
   updated_at_ms: number;
 }): CanonicalNodeHostState {
   if (row.version !== 1 || !row.node_id.trim()) {
@@ -176,12 +178,19 @@ function rowToCanonicalState(row: {
   if (row.gateway_tls !== null && row.gateway_tls !== 0 && row.gateway_tls !== 1) {
     throw new Error("invalid canonical node-host SQLite gateway tls");
   }
+  const cloudflareAccess =
+    row.gateway_cloudflare_access_json === null
+      ? undefined
+      : normalizeNodeHostCloudflareAccessConfig(
+          JSON.parse(row.gateway_cloudflare_access_json) as unknown,
+        );
   const gateway: NodeHostGatewayConfig = {
     host: nullableNonEmptyString(row.gateway_host, "gateway_host"),
     port: row.gateway_port ?? undefined,
     tls: row.gateway_tls === null ? undefined : row.gateway_tls === 1,
     tlsFingerprint: nullableNonEmptyString(row.gateway_tls_fingerprint, "gateway_tls_fingerprint"),
     contextPath: nullableNonEmptyString(row.gateway_context_path, "gateway_context_path"),
+    ...(cloudflareAccess ? { cloudflareAccess } : {}),
   };
   return {
     config: {
@@ -202,7 +211,9 @@ function configsEqual(left: NodeHostConfig, right: NodeHostConfig): boolean {
     left.gateway?.port === right.gateway?.port &&
     left.gateway?.tls === right.gateway?.tls &&
     left.gateway?.tlsFingerprint === right.gateway?.tlsFingerprint &&
-    left.gateway?.contextPath === right.gateway?.contextPath
+    left.gateway?.contextPath === right.gateway?.contextPath &&
+    JSON.stringify(left.gateway?.cloudflareAccess) ===
+      JSON.stringify(right.gateway?.cloudflareAccess)
   );
 }
 
@@ -222,6 +233,9 @@ function writeCanonicalState(
     gateway_tls: gateway?.tls === undefined ? null : gateway.tls ? 1 : 0,
     gateway_tls_fingerprint: gateway?.tlsFingerprint ?? null,
     gateway_context_path: gateway?.contextPath ?? null,
+    gateway_cloudflare_access_json: gateway?.cloudflareAccess
+      ? JSON.stringify(gateway.cloudflareAccess)
+      : null,
     updated_at_ms: state.updatedAtMs,
   };
   const { config_key: _configKey, ...updates } = row;

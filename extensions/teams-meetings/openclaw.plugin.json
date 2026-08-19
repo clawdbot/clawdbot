@@ -2,6 +2,13 @@
   "id": "teams-meetings",
   "name": "Microsoft Teams meetings",
   "description": "Join Microsoft Teams meetings as a Chrome browser guest.",
+  "cliCommands": [
+    {
+      "name": "teamsmeetings",
+      "description": "Join and manage Microsoft Teams meeting guests",
+      "hasSubcommands": true
+    }
+  ],
   "icon": "https://res.cdn.office.net/files/fabric-cdn-prod_20230815.001/assets/brand-icons/product/svg/teams_48x1.svg",
   "enabledByDefault": true,
   "commandAliases": [{ "name": "teamsmeetings" }],
@@ -20,13 +27,17 @@
       "help": "Agent consults OpenClaw, bidi uses direct realtime voice, and transcribe observes only."
     },
     "chrome.browserProfile": { "label": "Chrome Profile", "advanced": true },
+    "chrome.audioBackend": {
+      "label": "Chrome Audio Backend",
+      "help": "Auto selects BlackHole 2ch on macOS or PipeWire-Pulse on Linux."
+    },
     "chrome.guestName": { "label": "Guest Name" },
     "chrome.waitForInCallMs": { "label": "Wait For In-Call (ms)", "advanced": true },
     "chrome.audioInputCommand": { "label": "Audio Input Command", "advanced": true },
     "chrome.audioOutputCommand": { "label": "Audio Output Command", "advanced": true },
     "chromeNode.node": {
       "label": "Chrome Node",
-      "help": "Node id/name/IP that owns Chrome, BlackHole, and SoX.",
+      "help": "Node id/name/IP that owns Chrome and the native virtual-audio backend.",
       "advanced": true
     },
     "realtime.transcriptionProvider": { "label": "Realtime Transcription Provider" },
@@ -53,8 +64,8 @@
         "properties": {
           "audioBackend": {
             "type": "string",
-            "enum": ["blackhole-2ch"],
-            "default": "blackhole-2ch"
+            "enum": ["auto", "blackhole-2ch", "pipewire-pulse"],
+            "default": "auto"
           },
           "audioFormat": {
             "type": "string",

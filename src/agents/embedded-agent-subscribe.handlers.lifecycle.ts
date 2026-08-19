@@ -1,6 +1,7 @@
 /**
  * Handles lifecycle and compaction events from subscribed embedded-agent sessions.
  */
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
@@ -16,17 +17,15 @@ import {
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
-import {
-  hasAttemptTerminalState,
-  isIncompleteTerminalAssistantTurn,
-} from "./embedded-agent-runner/run/incomplete-turn.js";
+import { hasAttemptTerminalState } from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
+import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
+import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn-classification.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   consumePendingToolMediaReply,
   hasAssistantVisibleReply,
-} from "./embedded-agent-subscribe.handlers.messages.js";
+} from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { summarizeToolValidationError } from "./tool-error-summary.js";
@@ -67,13 +66,31 @@ export function handleAgentEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt?: Extract<AgentSessionEvent, { type: "agent_end" }>,
 ): void | Promise<void> {
+  ctx.state.liveEditDiffStateById.clear();
   type BeforeTerminalDeliveryDecision = void | { suppressTerminalDelivery?: boolean };
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
-  const hasAssistantVisibleText =
+  // Terminal delivery does not depend on streamed text alone: when the streamed
+  // assistant texts are empty, payload building falls back to the completed
+  // assistant message's visible text, so such a turn still reaches the user.
+  // Classification must key on the same fact, otherwise a delivered reply is
+  // recorded here as an abandoned, replay-invalid turn. Error and abort stop
+  // reasons keep the streamed-only view because their raw text can describe an
+  // interrupted generation rather than a reply (mirrors
+  // resolveTerminalAssistantTexts).
+  const hasStreamedAssistantVisibleText =
     Array.isArray(ctx.state.assistantTexts) &&
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
+  const completedAssistantFallbackText =
+    isAssistantMessage(lastAssistant) &&
+    lastAssistant.stopReason !== "error" &&
+    lastAssistant.stopReason !== "aborted"
+      ? resolveFinalAssistantVisibleText(lastAssistant)
+      : undefined;
+  const hasAssistantVisibleText =
+    hasStreamedAssistantVisibleText ||
+    hasAssistantVisibleReply({ text: completedAssistantFallbackText ?? "" });
   const hadLivenessPreservingSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
@@ -87,6 +104,7 @@ export function handleAgentEnd(
     didSendDeterministicApprovalPrompt: ctx.state.deterministicApprovalPromptSent,
     heartbeatToolResponse: ctx.state.heartbeatToolResponse,
     lastToolError: ctx.state.lastToolError,
+    lastToolRecovery: ctx.state.lastToolRecovery,
     toolMediaUrls: [...ctx.state.pendingToolMediaUrls, ...deferredMediaUrls],
     toolAudioAsVoice:
       ctx.state.pendingToolAudioAsVoice ||

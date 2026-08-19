@@ -13,6 +13,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
 import {
   ambiguousTargetError,
+  missingTargetError,
   reservedTargetLiteralError,
   unknownTargetError,
 } from "./target-errors.js";
@@ -74,8 +75,12 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
 /** Clears cached directory entries for all channels or one channel/account scope. */
-export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: string | null }) {
-  if (!params?.channel) {
+export function resetDirectoryCache(params?: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+}) {
+  if (!params) {
     directoryCache.clear();
     return;
   }
@@ -89,7 +94,7 @@ export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: 
       return true;
     }
     return key.startsWith(`${channelKey}:${accountKey}:`);
-  });
+  }, params.cfg);
 }
 
 function normalizeQuery(value: string): string {
@@ -421,7 +426,14 @@ async function resolveMessagingTarget(params: {
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
-    return { ok: false, error: new Error("Target is required") };
+    const plugin = params.plugin ?? getChannelPlugin(params.channel);
+    return {
+      ok: false,
+      error: missingTargetError(
+        plugin?.meta?.label ?? params.channel,
+        plugin?.messaging?.targetResolver?.hint,
+      ),
+    };
   }
   const plugin = params.plugin ?? getChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;

@@ -57,7 +57,7 @@ function failOneShotExecution(
 export async function runSystemAgentWithInference(
   opts: SystemAgentCommandOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
-  onboardingOptions: Pick<OnboardOptions, "workspace" | "acceptRisk"> = {},
+  onboardingOptions: Pick<OnboardOptions, "workspace" | "agentName" | "acceptRisk"> = {},
   deps: SystemAgentWithInferenceDeps = {},
 ): Promise<void> {
   if (opts.yes && !opts.message?.trim()) {

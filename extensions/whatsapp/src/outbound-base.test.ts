@@ -365,6 +365,7 @@ describe("createWhatsAppOutboundBase", () => {
       remoteJid: "277038292303944@lid",
       fromMe: true,
       participant: "5511976136970@s.whatsapp.net",
+      lookupTargetJid: "5511976136970@s.whatsapp.net",
       messageText: "quoted from lid chat",
     });
   });

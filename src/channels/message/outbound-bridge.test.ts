@@ -115,6 +115,98 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     });
   });
 
+  it("preserves target-only routing metadata without fabricating delivery identity", async () => {
+    const target = { kind: "channel" as const, id: "route-only" };
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: vi.fn(async () => ({ target })),
+      },
+    });
+
+    const result = await adapter.send?.text?.({ cfg, to: "room-1", text: "hello" });
+
+    expect(result?.target).toEqual(target);
+    expect(result).not.toHaveProperty("messageId");
+    expect(result?.receipt.primaryPlatformMessageId).toBeUndefined();
+    expect(result?.receipt.platformMessageIds).toEqual([]);
+    expect(result?.receipt.parts).toEqual([]);
+  });
+
+  it("preserves contracted delivery facts without exposing private provider fields", async () => {
+    const sourceResult = (messageId: string) => ({
+      channel: "forged-channel",
+      messageId,
+      chatId: "chat-1",
+      channelId: "channel-1",
+      roomId: "room-1",
+      conversationId: "conversation-1",
+      toJid: "recipient@example.invalid",
+      pollId: "poll-1",
+      timestamp: 123,
+      meta: { questionActionIds: ["question:1"], questionMessageId: "question-card" },
+      receipt: {
+        primaryPlatformMessageId: messageId,
+        platformMessageIds: [messageId],
+        parts: [{ platformMessageId: messageId, kind: "text" as const, index: 0 }],
+        sentAt: 123,
+      },
+      accessToken: "private-access-token",
+      content: "private-provider-content",
+      primaryMessageId: "private-primary-id",
+      threadTs: "private-thread-ts",
+      blocks: [{ text: "private-block" }],
+      callback: { value: "private-callback" },
+      action: { value: "private-action" },
+    });
+    const onDeliveryResult = vi.fn();
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: async ({ onDeliveryResult: reportProgress }) => {
+          await reportProgress?.(sourceResult("progress-1"));
+          return sourceResult("final-1");
+        },
+      },
+    });
+
+    const result = await adapter.send?.text?.({
+      cfg,
+      to: "room-1",
+      text: "hello",
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    const progress = onDeliveryResult.mock.calls[0]?.[0];
+    for (const [delivery, messageId] of [
+      [progress, "progress-1"],
+      [result, "final-1"],
+    ] as const) {
+      expect(delivery).toMatchObject({
+        messageId,
+        chatId: "chat-1",
+        channelId: "channel-1",
+        roomId: "room-1",
+        conversationId: "conversation-1",
+        toJid: "recipient@example.invalid",
+        pollId: "poll-1",
+        timestamp: 123,
+        meta: { questionActionIds: ["question:1"], questionMessageId: "question-card" },
+      });
+      for (const privateField of [
+        "channel",
+        "accessToken",
+        "content",
+        "primaryMessageId",
+        "threadTs",
+        "blocks",
+        "callback",
+        "action",
+      ]) {
+        expect(delivery).not.toHaveProperty(privateField);
+      }
+    }
+  });
+
   it("preserves an outbound receipt instead of rebuilding it", async () => {
     const receipt: MessageReceipt = {
       primaryPlatformMessageId: "receipt-1",

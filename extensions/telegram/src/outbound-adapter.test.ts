@@ -1,7 +1,6 @@
 // Telegram tests cover outbound adapter plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { verifyDurableFinalCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
-import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
@@ -183,7 +182,11 @@ describe("telegramOutbound", () => {
     expect((firstOptions.promptContextProjectionPlan as { cursor: unknown }).cursor).toBe(
       (secondOptions.promptContextProjectionPlan as { cursor: unknown }).cursor,
     );
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-2",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it.each([
@@ -241,7 +244,11 @@ describe("telegramOutbound", () => {
 
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "- Retry");
     expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-buttons",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("forwards prompt-context sources on durable payload sends", async () => {
@@ -278,7 +285,11 @@ describe("telegramOutbound", () => {
       },
       finalPart: true,
     });
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-final", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-final",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("detaches stale prompt-context provenance after a durable hook rewrite", async () => {
@@ -333,7 +344,11 @@ describe("telegramOutbound", () => {
       gatewayClientScopes: undefined,
     });
     expect(sendMessageTelegramMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ channel: "telegram", messageId: "777", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "777",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("applies reaction payloads before sending visible text", async () => {
@@ -461,206 +476,6 @@ describe("telegramOutbound", () => {
     expect(sendMessageTelegramMock).not.toHaveBeenCalled();
   });
 
-  it("keeps presentation-only controls deliverable without duplicating labels", async () => {
-    sendMessageTelegramMock.mockResolvedValueOnce({
-      messageId: "tg-presentation-buttons",
-      chatId: "12345",
-    });
-
-    const result = await telegramOutbound.sendPayload!({
-      cfg: {} as never,
-      to: "12345",
-      text: "",
-      payload: {
-        presentation: {
-          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
-        },
-      },
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
-
-    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Choose an option.");
-    expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
-    expect(result).toEqual({
-      channel: "telegram",
-      messageId: "tg-presentation-buttons",
-      chatId: "12345",
-    });
-  });
-
-  it("renders presentation web app buttons for payload sends", async () => {
-    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-web-app", chatId: "12345" });
-    const presentation = {
-      blocks: [
-        {
-          type: "buttons" as const,
-          buttons: [
-            {
-              label: "Launch",
-              action: {
-                type: "web-app" as const,
-                url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
-              },
-            },
-          ],
-        },
-      ],
-    };
-    const rendered = await telegramOutbound.renderPresentation?.({
-      payload: { text: "Open app:" },
-      presentation,
-      ctx: { to: "12345" } as never,
-    });
-    if (!rendered) {
-      throw new Error("expected rendered Telegram presentation");
-    }
-
-    await telegramOutbound.sendPayload!({
-      cfg: {} as never,
-      to: "12345",
-      text: "",
-      payload: rendered,
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
-
-    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Open app:");
-    expect(options.buttons).toEqual([
-      [
-        {
-          text: "Launch",
-          web_app: {
-            url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
-          },
-        },
-      ],
-    ]);
-  });
-
-  it("preserves explicit Telegram buttons when rendering presentation payloads", async () => {
-    const rendered = await telegramOutbound.renderPresentation?.({
-      payload: {
-        text: "Use native buttons:",
-        channelData: {
-          telegram: {
-            buttons: [[{ text: "Native", callback_data: "native" }]],
-          },
-        },
-      },
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Generic", value: "generic" }],
-          },
-        ],
-      },
-      ctx: {} as never,
-    });
-
-    expect((rendered?.channelData?.telegram as { buttons?: unknown })?.buttons).toEqual([
-      [{ text: "Native", callback_data: "native" }],
-    ]);
-    expect(rendered?.text).toBe("Use native buttons:\n\n- Generic");
-  });
-
-  it("preserves legacy interactive buttons when rendering mixed presentation payloads", async () => {
-    sendMessageTelegramMock.mockResolvedValueOnce({
-      messageId: "tg-mixed-buttons",
-      chatId: "12345",
-    });
-    const rendered = await telegramOutbound.renderPresentation?.({
-      payload: {
-        text: "Choose:",
-        interactive: {
-          blocks: [{ type: "buttons", buttons: [{ label: "Legacy", value: "legacy" }] }],
-        },
-      },
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Generic", value: "generic" }],
-          },
-        ],
-      },
-      ctx: {} as never,
-    });
-    if (!rendered) {
-      throw new Error("expected rendered Telegram presentation");
-    }
-
-    expect((rendered.channelData?.telegram as { buttons?: unknown } | undefined)?.buttons).toEqual([
-      [{ text: "Legacy", callback_data: "legacy" }],
-    ]);
-
-    await telegramOutbound.sendPayload!({
-      cfg: {} as never,
-      to: "12345",
-      text: "",
-      payload: rendered,
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
-
-    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Choose:\n\n- Generic");
-    expect(options.buttons).toEqual([[{ text: "Legacy", callback_data: "legacy" }]]);
-  });
-
-  it("lets allow-always approval callbacks reach Telegram's callback rewrite", async () => {
-    sendMessageTelegramMock.mockResolvedValueOnce({
-      messageId: "tg-approval",
-      chatId: "12345",
-    });
-    const approvalId = "plugin:123e4567-e89b-12d3-a456-426614174000";
-    const presentation = adaptMessagePresentationForChannel({
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Allow Always",
-                value: `/approve ${approvalId} allow-always`,
-              },
-            ],
-          },
-        ],
-      },
-      capabilities: telegramOutbound.presentationCapabilities,
-    });
-
-    const rendered = await telegramOutbound.renderPresentation?.({
-      payload: { text: "Approve?" },
-      presentation,
-      ctx: {} as never,
-    });
-    if (!rendered) {
-      throw new Error("expected rendered Telegram approval presentation");
-    }
-
-    await telegramOutbound.sendPayload!({
-      cfg: {} as never,
-      to: "12345",
-      text: "",
-      payload: rendered,
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
-
-    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Approve?");
-    expect(options.buttons).toEqual([
-      [{ text: "Allow Always", callback_data: `/approve ${approvalId} always` }],
-    ]);
-  });
-
-  it("leaves long presentation text for Telegram chunking", () => {
-    const text = "👍".repeat(5000);
-    const presentation = adaptMessagePresentationForChannel({
-      presentation: { blocks: [{ type: "text", text }] },
-      capabilities: telegramOutbound.presentationCapabilities,
-    });
-
-    expect(presentation.blocks).toEqual([{ type: "text", text }]);
-  });
-
   it("forwards silent delivery options to Telegram sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-silent", chatId: "12345" });
 
@@ -675,7 +490,11 @@ describe("telegramOutbound", () => {
 
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "quiet");
     expect(options.silent).toBe(true);
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-silent", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-silent",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("does not plain-text sanitize Telegram HTML before durable delivery", async () => {
@@ -807,7 +626,11 @@ describe("telegramOutbound", () => {
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "voice caption");
     expect(options.mediaUrl).toBe("file:///tmp/note.ogg");
     expect(options.asVoice).toBe(true);
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-voice", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-voice",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("forwards videoAsNote payload media to Telegram video-note sends", async () => {
@@ -830,7 +653,7 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({
       channel: "telegram",
       messageId: "tg-video-note",
-      chatId: "12345",
+      target: { kind: "chat", id: "12345" },
     });
   });
 
@@ -904,7 +727,7 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({
       channel: "telegram",
       messageId: "tg-location",
-      chatId: "12345",
+      target: { kind: "chat", id: "12345" },
     });
   });
 
@@ -951,7 +774,7 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({
       channel: "telegram",
       messageId: "tg-location",
-      chatId: "12345",
+      target: { kind: "chat", id: "12345" },
     });
   });
 

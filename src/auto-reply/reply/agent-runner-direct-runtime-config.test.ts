@@ -1,9 +1,11 @@
 // Tests direct runtime config overrides passed into agent runner execution.
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -37,6 +39,7 @@ const createReplyMediaPathNormalizerMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
+const prepareGitCoauthorAttributionMock = vi.fn();
 const resetReplyRunSessionMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 
@@ -88,6 +91,17 @@ vi.mock("./agent-runner-execution.js", async () => {
   };
 });
 
+vi.mock("../../agents/git-coauthor-attribution.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/git-coauthor-attribution.js")>(
+    "../../agents/git-coauthor-attribution.js",
+  );
+  return {
+    ...actual,
+    prepareGitCoauthorAttribution: (...args: unknown[]) =>
+      prepareGitCoauthorAttributionMock(...args),
+  };
+});
+
 vi.mock("./agent-runner-session-reset.js", async () => {
   const actual = await vi.importActual<typeof import("./agent-runner-session-reset.js")>(
     "./agent-runner-session-reset.js",
@@ -119,13 +133,18 @@ function createTelegramSessionCtx(): TemplateContext {
   } as unknown as TemplateContext;
 }
 
-function createReplyOperation(): ReplyOperation {
+type TestReplyOperation = ReplyOperation & {
+  setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
+};
+
+function createReplyOperation(): TestReplyOperation {
   let sessionId = "session-1";
   return {
     key: "test",
     get sessionId() {
       return sessionId;
     },
+    turnKind: "visible",
     abortSignal: new AbortController().signal,
     resetTriggered: false,
     phase: "queued",
@@ -143,6 +162,10 @@ function createReplyOperation(): ReplyOperation {
     }),
     updateSessionKey: vi.fn(),
     hasOwnedSessionId: vi.fn(() => false),
+    bindToolAuthorityFingerprint: vi.fn(),
+    bindToolAuthorityProjector: vi.fn(),
+    projectToolAuthorityFingerprint: vi.fn(),
+    bindToolAuthorityRoute: vi.fn(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
     retainFailureUntilComplete: vi.fn(),
@@ -155,6 +178,7 @@ function createReplyOperation(): ReplyOperation {
     freezeAbort: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
+    supersede: vi.fn(),
     terminalRecovery: false,
     acceptedSteeredInboundAudio: false,
     markTerminalRecovery: vi.fn(),
@@ -186,7 +210,6 @@ function createDirectRuntimeReplyParams({
     shouldSteer: false,
     shouldFollowup,
     isActive,
-    isStreaming: false,
     typing: createMockTypingController(),
     sessionCtx: createTelegramSessionCtx(),
     defaultModel: "openai/gpt-5.4",
@@ -248,6 +271,7 @@ describe("runReplyAgent runtime config", () => {
     runPreflightCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
+    prepareGitCoauthorAttributionMock.mockReset();
     resetReplyRunSessionMock.mockReset();
     enqueueFollowupRunMock.mockReset();
 
@@ -261,6 +285,7 @@ describe("runReplyAgent runtime config", () => {
       runId: "runtime-config-test",
       outcome: { kind: "rejected", payload: { text: "main reply" } },
     });
+    prepareGitCoauthorAttributionMock.mockReturnValue(undefined);
     resetReplyRunSessionMock.mockResolvedValue(false);
   });
 
@@ -333,13 +358,78 @@ describe("runReplyAgent runtime config", () => {
     expect(memoryCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
   });
 
-  it("continues the main reply when memory flush reports visible maintenance errors", async () => {
+  it("forwards co-author context only for trusted profile-backed session creation", async () => {
+    const attribution =
+      "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
+    prepareGitCoauthorAttributionMock.mockImplementation((params: { currentProfileId?: string }) =>
+      params.currentProfileId === "profile-ada" ? attribution : undefined,
+    );
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    await withTestDir({ prefix: "openclaw-coauthor-owner-" }, async (tempDir) => {
+      const storePath = join(tempDir, "sessions.json");
+      const runCase = async (
+        suffix: string,
+        creation: NonNullable<TemplateContext["SessionCreation"]>,
+      ) => {
+        const { replyParams } = createDirectRuntimeReplyParams({
+          shouldFollowup: false,
+          isActive: false,
+        });
+        const sessionKey = `agent:main:chat:${suffix}`;
+        const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+        Object.assign(replyParams, {
+          sessionKey,
+          storePath,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionCtx: { ...createTelegramSessionCtx(), SessionCreation: creation },
+        });
+        await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+        await runReplyAgent(replyParams);
+        return executeAgentTurnMock.mock.calls.at(-1)?.[0];
+      };
+
+      const profileCall = await runCase("profile", {
+        via: "operator",
+        actor: { type: "human", id: "profile-ada" },
+      });
+
+      expect(prepareGitCoauthorAttributionMock).toHaveBeenLastCalledWith({
+        agentId: "main",
+        config: freshCfg,
+        currentProfileId: "profile-ada",
+        sessionKey: "agent:main:chat:profile",
+        storePath,
+      });
+      expect(profileCall).toMatchObject({
+        opts: { gitCoauthorAttribution: attribution },
+      });
+
+      const channelCall = await runCase("channel", {
+        via: "channel",
+        actor: { type: "human", id: "channel-user" },
+      });
+
+      expect(prepareGitCoauthorAttributionMock).toHaveBeenLastCalledWith({
+        agentId: "main",
+        config: freshCfg,
+        currentProfileId: undefined,
+        sessionKey: "agent:main:chat:channel",
+        storePath,
+      });
+      expect(channelCall).not.toHaveProperty("opts.gitCoauthorAttribution");
+    });
+  });
+
+  it("continues the main reply after a recorded memory-flush failure", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
       isActive: false,
     });
     const onBlockReply = vi.fn();
+    const replyOperation = createReplyOperation();
     replyParams.opts = { sourceReplyDeliveryMode: "message_tool_only", onBlockReply };
+    replyParams.replyOperation = replyOperation;
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
       ...freshCfg,
       agents: { defaults: { compaction: { notifyUser: true } } },
@@ -347,13 +437,12 @@ describe("runReplyAgent runtime config", () => {
     runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
     runMemoryFlushIfNeededMock.mockImplementation(
       async (params: {
+        replyOperation: ReplyOperation;
         onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
       }) => {
+        params.replyOperation.setPhase("memory_flushing");
         params.onVisibleErrorPayloads?.([
-          {
-            text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
-            isError: true,
-          },
+          { text: "⚠️ memory flush preparation failed", isError: true },
         ]);
         return { sessionEntry: undefined, outcome: "failed" };
       },
@@ -364,10 +453,11 @@ describe("runReplyAgent runtime config", () => {
     expect(result).toEqual({ text: "main reply" });
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(executeAgentTurnMock).toHaveBeenCalledOnce();
+    expect(replyOperation.setPhase).toHaveBeenLastCalledWith("running");
   });
 
   it("rotates, rebinds, and optionally notifies when memory flush is exhausted", async () => {
-    await withTempDir({ prefix: "openclaw-direct-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-direct-runtime-" }, async (tempDir) => {
       const { replyParams, followupRun } = createDirectRuntimeReplyParams({
         shouldFollowup: false,
         isActive: false,
@@ -417,6 +507,7 @@ describe("runReplyAgent runtime config", () => {
           };
         },
       );
+      const baselineSettlement = createDeferredCore();
       resetReplyRunSessionMock.mockImplementation(async (params: unknown) => {
         const resetParams = params as {
           activeSessionEntry?: SessionEntry;
@@ -436,6 +527,7 @@ describe("runReplyAgent runtime config", () => {
           resetParams.activeSessionStore[sessionKey] = nextEntry;
         }
         await replaceSessionEntry({ storePath, sessionKey }, nextEntry);
+        await baselineSettlement.promise;
         resetParams.followupRun.run.sessionId = nextEntry.sessionId;
         resetParams.followupRun.run.sessionFile = sessionFile;
         resetParams.onActiveSessionEntry(nextEntry);
@@ -443,7 +535,11 @@ describe("runReplyAgent runtime config", () => {
         return true;
       });
 
-      const result = await runReplyAgent(replyParams);
+      const resultPromise = runReplyAgent(replyParams);
+      await vi.waitFor(() => expect(resetReplyRunSessionMock).toHaveBeenCalledOnce());
+      expect(executeAgentTurnMock).not.toHaveBeenCalled();
+      baselineSettlement.resolve();
+      const result = await resultPromise;
 
       expect(result).toEqual({ text: "main reply" });
       expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
@@ -567,7 +663,13 @@ describe("runReplyAgent runtime config", () => {
     });
     const codexMessage =
       "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
-    runPreflightCompactionIfNeededMock.mockRejectedValue(new Error(codexMessage));
+    runPreflightCompactionIfNeededMock.mockRejectedValue(
+      new FailoverError(codexMessage, {
+        reason: "rate_limit",
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    );
     runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
 
     const result = await runReplyAgent(replyParams);

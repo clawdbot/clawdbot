@@ -9,7 +9,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
-import type { DeliverFn, RecoveryLogger } from "./delivery-queue.js";
+import type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";
 
 /** Installs Vitest hooks that provide a fresh delivery-queue state dir per case. */
 export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => string } {
@@ -84,6 +84,8 @@ export function setQueuedEntryState(
     enqueuedAt?: number;
     platformSendStartedAt?: number;
     recoveryState?: "send_attempt_started" | "unknown_after_send";
+    producerClaimId?: string;
+    availableAt?: number;
   },
 ): void {
   const entry = readQueuedEntry(tmpDir, id);
@@ -106,6 +108,12 @@ export function setQueuedEntryState(
   }
   if (state.recoveryState !== undefined) {
     entry.recoveryState = state.recoveryState;
+  }
+  if (state.producerClaimId !== undefined) {
+    entry.producerClaimId = state.producerClaimId;
+  }
+  if (state.availableAt !== undefined) {
+    entry.availableAt = state.availableAt;
   }
   const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
   db.prepare(

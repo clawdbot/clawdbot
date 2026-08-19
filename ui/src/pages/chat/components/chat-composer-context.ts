@@ -1,4 +1,7 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
@@ -31,19 +34,13 @@ type ProviderCostStats = {
   cacheRead?: number;
   cacheWrite?: number;
   provider: string | null;
-  model: string | null;
 };
-
-function readCostRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
 
 function readCostValue(
   cost: Record<string, unknown> | null,
   key: "input" | "output" | "cacheRead" | "cacheWrite",
 ) {
-  const value = cost?.[key];
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asNonNegativeFiniteNumber(cost?.[key]);
 }
 
 function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostStats | null {
@@ -55,17 +52,13 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     if (message?.role === "user") {
       return null;
     }
-    if (message?.role !== "assistant") {
+    if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
       continue;
     }
     const directCost = readCostRecord(message.cost);
     const usageCost = readCostRecord(readCostRecord(message.usage)?.cost);
     const stats: ProviderCostStats = {
       provider: typeof message.provider === "string" ? message.provider.trim() || null : null,
-      model:
-        (typeof message.responseModel === "string" ? message.responseModel.trim() : "") ||
-        (typeof message.model === "string" ? message.model.trim() : "") ||
-        null,
     };
     for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
       const cost = readCostValue(directCost, key) ?? readCostValue(usageCost, key);
@@ -128,7 +121,6 @@ function getContextNoticeViewModel(
   output: number | null;
   cost: number | null;
   provider: string | null;
-  model: string | null;
   detail: string;
   color: string;
   bg: string;
@@ -163,7 +155,6 @@ function getContextNoticeViewModel(
     output,
     cost,
     provider: session?.modelProvider?.trim() || null,
-    model: session?.model?.trim() || null,
   };
   if (!warning) {
     return {
@@ -294,19 +285,13 @@ function renderQuotaBudgetRow(budget: QuotaBudgetSummary) {
   `;
 }
 
-function renderQuotaGroup(
-  group: ProviderQuotaGroup,
-  options: { usageHref: string; showProvider: boolean },
-) {
-  const heading = options.showProvider
-    ? `${t("chat.composer.contextUsage.planUsage")} · ${group.displayName}`
-    : t("chat.composer.contextUsage.planUsage");
+function renderQuotaGroup(group: ProviderQuotaGroup, usageHref: string) {
   return html`
     <div class="context-usage__section-label context-usage__plan-header">
-      <span>${heading}</span>
+      <span>${t("chat.composer.contextUsage.planUsage")}</span>
       <a
         class="context-usage__plan-link"
-        href=${options.usageHref}
+        href=${usageHref}
         data-chat-provider-usage="true"
         aria-label=${t("chat.composer.contextUsage.openUsage")}
       >
@@ -322,6 +307,10 @@ function renderQuotaGroup(
     <div class="context-usage__limits">
       ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
       ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
+    </div>
+    <div class="context-usage__provenance" data-chat-usage-provider="true">
+      <span>${t("sessionsView.provider")}:</span>
+      <strong>${group.displayName}</strong>
     </div>
   `;
 }
@@ -353,16 +342,15 @@ export function renderContextNotice(
   const percentage = model ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
   const dashOffset = model ? RING_CIRCUMFERENCE * (1 - model.pct / 100) : RING_CIRCUMFERENCE;
   const providerCosts = model ? latestProviderCostStats(options.messages) : null;
-  const provider = providerCosts?.provider ?? model?.provider;
-  const responseModel = providerCosts?.model ?? model?.model;
-  const sessionProviderKeys = new Set(
-    [model?.provider, providerCosts?.provider]
-      .filter((value): value is string => Boolean(value))
-      .map((value) => value.trim().toLowerCase()),
-  );
-  const currentGroup = quotaGroups.find((group) =>
-    group.providers.some((id) => sessionProviderKeys.has(id.trim().toLowerCase())),
-  );
+  const findQuotaGroup = (provider: string | null | undefined) => {
+    const normalizedProvider = provider?.trim().toLowerCase();
+    return normalizedProvider
+      ? quotaGroups.find((group) =>
+          group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
+        )
+      : undefined;
+  };
+  const currentGroup = findQuotaGroup(model?.provider) ?? findQuotaGroup(providerCosts?.provider);
   const planGroups = currentGroup
     ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
     : quotaGroups;
@@ -377,7 +365,7 @@ export function renderContextNotice(
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   const renderCostStat = (label: string, value: number | undefined) =>
-    value === undefined
+    value === undefined || value <= 0
       ? nothing
       : html`
           <div>
@@ -385,6 +373,14 @@ export function renderContextNotice(
             <dd>${formatCost(value)}</dd>
           </div>
         `;
+  const hasProviderCosts = providerCosts
+    ? [
+        providerCosts.input,
+        providerCosts.output,
+        providerCosts.cacheRead,
+        providerCosts.cacheWrite,
+      ].some((value) => value !== undefined && value > 0)
+    : false;
   return html`
     <div
       class="context-usage"
@@ -463,10 +459,10 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
-          ${showCosts && providerCosts
+          ${showCosts && providerCosts && hasProviderCosts
             ? html`
                 <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
-                <dl class="context-usage__stats context-usage__stats--cost">
+                <dl class="context-usage__stats">
                   ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
                   ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
                   ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
@@ -474,28 +470,7 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
-          ${planGroups.map((group) =>
-            renderQuotaGroup(group, {
-              usageHref,
-              showProvider: planGroups.length > 1,
-            }),
-          )}
-          ${provider
-            ? html`
-                <div class="context-usage__model">
-                  <span>${t("sessionsView.provider")}:</span>
-                  <strong>${provider}</strong>
-                </div>
-              `
-            : nothing}
-          ${responseModel
-            ? html`
-                <div class="context-usage__model">
-                  <span>${t("sessionsView.model")}:</span>
-                  <strong>${responseModel}</strong>
-                </div>
-              `
-            : nothing}
+          ${planGroups.map((group) => renderQuotaGroup(group, usageHref))}
         </section>
       </details>
       ${canRenderCompact

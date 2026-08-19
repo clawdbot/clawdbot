@@ -230,6 +230,12 @@ export async function runTelegramBotTokenRuntime(
             },
           },
         },
+        // The isolated Gateway inherits VITEST, where bundled plugins are not
+        // implicitly enabled. Activate the product plugin this proof exercises.
+        plugins: {
+          allow: ["telegram"],
+          entries: { telegram: { enabled: true } },
+        },
       },
       env: {
         OPENCLAW_SKIP_CHANNELS: undefined,

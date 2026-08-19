@@ -28,11 +28,18 @@ vi.mock("./session-utils.js", async () => {
     listSessionsFromStore: hoisted.listSessionsFromStoreMock,
     resolveGatewaySessionStoreTargetWithStore:
       hoisted.resolveGatewaySessionStoreTargetWithStoreMock,
-    loadCombinedSessionStoreForGateway: hoisted.loadCombinedSessionStoreForGatewayMock,
+    loadCombinedSessionStoreForGatewayCore: hoisted.loadCombinedSessionStoreForGatewayMock,
   };
 });
 
-const { resolveSessionKeyFromResolveParams } = await import("./sessions-resolve.js");
+const { resolveSessionKeyFromResolveParams: resolveSessionKeyFromResolveParamsWithClient } =
+  await import("./sessions-resolve.js");
+
+type ResolveParams = Parameters<typeof resolveSessionKeyFromResolveParamsWithClient>[0];
+
+const resolveSessionKeyFromResolveParams = (
+  params: Omit<ResolveParams, "client"> & { client?: ResolveParams["client"] },
+) => resolveSessionKeyFromResolveParamsWithClient({ client: null, ...params });
 
 describe("resolveSessionKeyFromResolveParams", () => {
   const canonicalKey = "agent:main:canon";
@@ -51,6 +58,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     ).resolves.toEqual({
       ok: true,
       key: canonicalKey,
+      agentId: "main",
     });
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   };
@@ -185,6 +193,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     ).resolves.toEqual({
       ok: true,
       key: acpKey,
+      agentId: "claude",
     });
   });
 
@@ -255,11 +264,164 @@ describe("resolveSessionKeyFromResolveParams", () => {
       p: { sessionId: "sess-target", agentId: "main" },
     });
 
-    expect(result).toEqual({ ok: true, key: "agent:main:target" });
+    expect(result).toEqual({ ok: true, key: "agent:main:target", agentId: "main" });
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
       agentId: "main",
     });
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves an archived session by its trailing UUID prefix", async () => {
+    const key = "agent:main:thread:abcdef12-3456-4789-8abc-def012345678";
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: {
+        [key]: {
+          sessionId: "sess-short",
+          updatedAt: 10,
+          archivedAt: 20,
+          displayName: "Release monitor",
+        },
+      },
+    });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { shortId: "ABCDEF12", agentId: "main" },
+      }),
+    ).resolves.toEqual({ ok: true, key, agentId: "main" });
+  });
+
+  it("uses a display-name slug only to narrow a short-id tie", async () => {
+    const releaseKey = "agent:main:thread:12345678-0aaa-4000-8000-000000000001";
+    const deployKey = "agent:main:thread:12345678-0bbb-4000-8000-000000000002";
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: {
+        [releaseKey]: { updatedAt: 2, displayName: "Release monitor" },
+        [deployKey]: { updatedAt: 1, displayName: "Deploy monitor" },
+      },
+    });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { shortId: "12345678", slugHint: "deploy-monitor" },
+      }),
+    ).resolves.toEqual({ ok: true, key: deployKey, agentId: "main" });
+  });
+
+  it("ignores a deleted-agent short-id collision before resolving a unique match", async () => {
+    const survivingKey = "agent:main:thread:12345678-0aaa-4000-8000-000000000001";
+    const deletedKey = "agent:deleted-agent:thread:12345678-0bbb-4000-8000-000000000002";
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: {
+        [deletedKey]: { updatedAt: 2, displayName: "Deleted session" },
+        [survivingKey]: { updatedAt: 1, displayName: "Surviving session" },
+      },
+    });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { shortId: "12345678", slugHint: "deleted-session" },
+      }),
+    ).resolves.toEqual({ ok: true, key: survivingKey, agentId: "main" });
+  });
+
+  it("reports a deleted-agent-only short-id match as missing", async () => {
+    const deletedKey = "agent:deleted-agent:thread:12345678-0bbb-4000-8000-000000000002";
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: { [deletedKey]: { updatedAt: 1, displayName: "Deleted session" } },
+    });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { shortId: "12345678" },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "No session found: 12345678",
+      },
+    });
+  });
+
+  it("returns at most ten recent candidates and ignores a stale slug hint", async () => {
+    const store = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => {
+        const suffix = index.toString(16).padStart(4, "0");
+        return [
+          `agent:main:thread:12345678-${suffix}-4000-8000-000000000000`,
+          { updatedAt: 100 - index, displayName: `Candidate ${index}` },
+        ];
+      }),
+    );
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath, store });
+
+    const expectedKeys = Object.keys(store).slice(0, 10);
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { shortId: "12345678", slugHint: "renamed-session" },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      ambiguous: true,
+      candidates: expectedKeys.map((key, index) => ({
+        key,
+        agentId: "main",
+        displayName: `Candidate ${index}`,
+      })),
+    });
+  });
+
+  it("applies agent scoping to short-id matches", async () => {
+    const mainKey = "agent:main:thread:feedface-0000-4000-8000-000000000001";
+    const workKey = "agent:work:thread:feedface-0000-4000-8000-000000000002";
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: {
+        [mainKey]: { updatedAt: 1 },
+        [workKey]: { updatedAt: 2 },
+      },
+    });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: { agents: { list: [{ id: "main", default: true }, { id: "work" }] } },
+        p: { shortId: "feedface", agentId: "main" },
+      }),
+    ).resolves.toEqual({ ok: true, key: mainKey, agentId: "main" });
+  });
+
+  it("supports allowMissing for short ids", async () => {
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath, store: {} });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { shortId: "deadbeef", allowMissing: true },
+      }),
+    ).resolves.toEqual({ ok: true, missing: true });
+  });
+
+  it.each([
+    {
+      p: { shortId: "too-short" },
+      message: "shortId must be 8-32 hexadecimal characters",
+    },
+    { p: { label: "release", slugHint: "release" }, message: "slugHint requires shortId" },
+  ])("rejects invalid short reference params: $message", async ({ p, message }) => {
+    await expect(resolveSessionKeyFromResolveParams({ cfg: {}, p })).resolves.toMatchObject({
+      ok: false,
+      error: { code: ErrorCodes.INVALID_REQUEST, message },
+    });
   });
 
   it("rejects sessions belonging to a deleted agent (label-based lookup)", async () => {

@@ -40,8 +40,8 @@ import {
   readPositiveIntegerParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
-import { callGatewayTool } from "./gateway.js";
-import { resolveNode, resolveNodeId } from "./nodes-utils.js";
+import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
+import { resolveAgentNode, resolveAgentNodeId } from "./nodes-utils.js";
 
 export const MEDIA_INVOKE_ACTIONS = {
   "camera.snap": "camera_snap",
@@ -151,7 +151,7 @@ async function executeCameraSnap({
   imageSanitization,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
+  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   const facing =
@@ -185,7 +185,7 @@ async function executeCameraSnap({
   const details: Array<Record<string, unknown>> = [];
 
   for (const target of targets) {
-    const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+    const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(gatewayOpts, {
       nodeId,
       command: "camera.snap",
       params: {
@@ -243,7 +243,7 @@ async function executePhotosLatest({
   imageSanitization,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
+  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const limit = Math.min(
     readPositiveIntegerParam(params, "limit") ?? DEFAULT_PHOTOS_LIMIT,
@@ -256,7 +256,7 @@ async function executePhotosLatest({
       max: 1,
       message: "quality must be between 0 and 1",
     }) ?? DEFAULT_PHOTOS_QUALITY;
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(gatewayOpts, {
     nodeId,
     command: "photos.latest",
     params: {
@@ -331,7 +331,7 @@ async function executeCameraClip({
   gatewayOpts,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
+  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   if (facing !== "front" && facing !== "back") {
@@ -349,7 +349,7 @@ async function executeCameraClip({
       ? params.deviceId.trim()
       : undefined;
   const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", timeouts.gatewayOpts, {
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(timeouts.gatewayOpts, {
     nodeId,
     command: "camera.clip",
     params: {
@@ -384,7 +384,7 @@ async function executeScreenRecord({
   gatewayOpts,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const nodeId = await resolveNodeId(gatewayOpts, node);
+  const nodeId = await resolveAgentNodeId(gatewayOpts, node);
   const durationMs = Math.min(
     readPositiveIntegerParam(params, "durationMs") ??
       (typeof params.duration === "string" ? parseDurationMs(params.duration) : 10_000),
@@ -399,7 +399,7 @@ async function executeScreenRecord({
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
   const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", timeouts.gatewayOpts, {
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(timeouts.gatewayOpts, {
     nodeId,
     command: "screen.record",
     params: {
@@ -435,14 +435,14 @@ async function executeScreenSnapshot({
   gatewayOpts,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const nodeId = await resolveNodeId(gatewayOpts, node);
+  const nodeId = await resolveAgentNodeId(gatewayOpts, node);
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const maxWidth = readPositiveIntegerParam(params, "maxWidth");
   const outPath = normalizeOptionalString(params.outPath);
   // The node owns the encoding choice, so ask for the one the caller's filename
   // already promises instead of letting the default contradict it.
   const requestedFormat = outPath ? screenSnapshotFormatForPath(outPath) : undefined;
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(gatewayOpts, {
     nodeId,
     command: "screen.snapshot",
     params: { screenIndex, maxWidth, format: requestedFormat },

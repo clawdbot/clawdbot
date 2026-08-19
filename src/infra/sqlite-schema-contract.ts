@@ -1,5 +1,26 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  createSqliteSchemaIssue,
+  legacySqliteSchemaIssueMessages,
+  throwSqliteSchemaMismatches,
+  type SqliteSchemaCompatibility,
+  type SqliteSchemaIssue,
+  type SqliteSchemaIssueCode,
+} from "./sqlite-schema-issues.js";
+import {
+  findSqlCharacter,
+  findSqlClosingParenthesis,
+  normalizeSchemaSql,
+  normalizeSqlIdentifier,
+  normalizeSqlWhitespace,
+  quoteSqliteIdentifier,
+  readSqlToken,
+  readTableConstraintKeyword,
+  splitSqlList,
+} from "./sqlite-schema-sql.js";
+
+export type { SqliteSchemaCompatibility, SqliteSchemaIssue } from "./sqlite-schema-issues.js";
 
 type SqliteIndexListRow = {
   name: string;
@@ -66,38 +87,7 @@ export type CanonicalSqliteNamedIndexContract = {
   unique: boolean;
 };
 
-export type SqliteSchemaCompatibility = {
-  /**
-   * Canonical additive tables that may be absent until their owning feature
-   * performs its one-time lazy ensure. Present tables still require the exact
-   * canonical shape.
-   */
-  allowedMissingTables?: readonly string[];
-  /** Additive columns that may be absent until their owning feature lazily ensures them. */
-  allowedMissingColumns?: readonly string[];
-  /**
-   * Exact definitions produced by supported additive migrations when SQLite
-   * requires a temporary default that the clean schema does not retain.
-   */
-  allowedColumnDefinitions?: Readonly<Record<string, readonly string[]>>;
-  /**
-   * Exact owner-defined trigger groups that may be absent when their derived
-   * or lazily ensured schema is absent, but must be complete and canonical
-   * when present.
-   */
-  optionalCanonicalTriggerGroups?: readonly {
-    /** The trigger group is optional only while this canonical table is absent. */
-    optionalWhenTableMissing?: string;
-    tableName: string;
-    triggers: readonly {
-      name: string;
-      sql: string;
-    }[];
-  }[];
-};
-
 const schemaContractCache = new Map<string, SqliteSchemaContract>();
-const TABLE_CONSTRAINT_KEYWORDS = new Set(["CHECK", "FOREIGN", "PRIMARY", "UNIQUE"]);
 
 /**
  * Require every object from one committed schema while allowing unrelated
@@ -109,32 +99,63 @@ export function assertSqliteSchemaContains(
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
 ): void {
+  const issues = collectSqliteSchemaIssues(database, schemaSql, compatibility);
+  if (issues.length > 0) {
+    throwSqliteSchemaMismatches(databaseLabel, legacySqliteSchemaIssueMessages(issues));
+  }
+}
+
+/** Collect stable, machine-readable differences from one committed schema. */
+export function collectSqliteSchemaIssues(
+  database: DatabaseSync,
+  schemaSql: string,
+  compatibility: SqliteSchemaCompatibility = {},
+): SqliteSchemaIssue[] {
   const expected = getSqliteSchemaContract(schemaSql);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
+  const allowedMissingIndexes = new Set(compatibility.allowedMissingIndexes ?? []);
 
-  const mismatches: string[] = [];
+  const issues: SqliteSchemaIssue[] = [];
+  const add = (code: SqliteSchemaIssueCode, objectName: string, message?: string) => {
+    issues.push(createSqliteSchemaIssue(code, objectName, message));
+  };
   for (const [tableName, expectedTable] of expected) {
     const actualTable = collectSqliteTableContract(database, tableName);
     if (!actualTable) {
       if (allowedMissingTables.has(tableName)) {
         continue;
       }
-      mismatches.push(`missing table ${tableName}`);
+      add("missing-table", tableName);
       continue;
     }
 
-    const definitionMismatch = compareTableDefinitions(
-      tableName,
-      actualTable.definition,
-      expectedTable.definition,
-      compatibility,
+    issues.push(
+      ...compareTableDefinitions(
+        tableName,
+        actualTable.definition,
+        expectedTable.definition,
+        compatibility,
+        !allowedMissingTables.has(tableName),
+      ),
     );
-    if (definitionMismatch) {
-      mismatches.push(`${definitionMismatch} differ for ${tableName}`);
-    }
     for (const expectedIndex of expectedTable.indexes) {
       if (!actualTable.indexes.some((actualIndex) => isEqual(actualIndex, expectedIndex))) {
-        mismatches.push(`missing or drifted index ${expectedIndex.name ?? `on ${tableName}`}`);
+        const objectName = expectedIndex.name ?? tableName;
+        const namedIndexPresent = expectedIndex.name
+          ? actualTable.indexes.some((actualIndex) => actualIndex.name === expectedIndex.name)
+          : false;
+        if (
+          expectedIndex.name &&
+          allowedMissingIndexes.has(expectedIndex.name) &&
+          !namedIndexPresent
+        ) {
+          continue;
+        }
+        add(
+          "missing-or-drifted-index",
+          objectName,
+          `missing or drifted index ${expectedIndex.name ?? `on ${tableName}`}`,
+        );
       }
     }
     for (const actualIndex of actualTable.indexes) {
@@ -142,7 +163,12 @@ export function assertSqliteSchemaContains(
         actualIndex.unique === 1 &&
         !expectedTable.indexes.some((expectedIndex) => isEqual(actualIndex, expectedIndex))
       ) {
-        mismatches.push(`unexpected unique index ${actualIndex.name ?? `on ${tableName}`}`);
+        const objectName = actualIndex.name ?? tableName;
+        add(
+          "unexpected-unique-index",
+          objectName,
+          `unexpected unique index ${actualIndex.name ?? `on ${tableName}`}`,
+        );
       }
     }
     const optionalCanonicalTriggerGroups = collectOptionalCanonicalTriggerGroups(
@@ -165,7 +191,7 @@ export function assertSqliteSchemaContains(
         continue;
       }
       if (!actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, expectedTrigger))) {
-        mismatches.push(`missing or drifted trigger ${expectedTrigger.name}`);
+        add("missing-or-drifted-trigger", expectedTrigger.name);
       }
     }
     for (const triggerGroup of optionalCanonicalTriggerGroups) {
@@ -181,7 +207,7 @@ export function assertSqliteSchemaContains(
         if (
           !actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, canonicalTrigger))
         ) {
-          mismatches.push(`missing or drifted trigger ${canonicalTrigger.name}`);
+          add("missing-or-drifted-trigger", canonicalTrigger.name);
         }
       }
     }
@@ -194,23 +220,20 @@ export function assertSqliteSchemaContains(
           isEqual(actualTrigger, canonicalTrigger),
         )
       ) {
-        mismatches.push(`unexpected trigger ${actualTrigger.name}`);
+        add("unexpected-trigger", actualTrigger.name);
       }
     }
     if (actualTable.virtualTableSql !== expectedTable.virtualTableSql) {
-      mismatches.push(`virtual table definition differs for ${tableName}`);
+      add("virtual-table-definition-drift", tableName);
     }
     if (
       actualTable.strict !== expectedTable.strict ||
       actualTable.withoutRowid !== expectedTable.withoutRowid
     ) {
-      mismatches.push(`table options differ for ${tableName}`);
+      add("table-options-drift", tableName);
     }
   }
-
-  if (mismatches.length > 0) {
-    throwSqliteSchemaMismatches(databaseLabel, mismatches);
-  }
+  return issues;
 }
 
 /** Require stable canonical tables before a version-specific additive migration. */
@@ -233,16 +256,6 @@ export function assertSqliteSchemaTablesPresent(
   if (missingTables.length > 0) {
     throwSqliteSchemaMismatches(databaseLabel, missingTables);
   }
-}
-
-function throwSqliteSchemaMismatches(databaseLabel: string, mismatches: string[]): never {
-  const shown = mismatches.slice(0, 8);
-  if (mismatches.length > shown.length) {
-    shown.push(`${mismatches.length - shown.length} additional mismatch(es)`);
-  }
-  throw new Error(
-    `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}`,
-  );
 }
 
 /** Return every explicit named index owned by one committed schema. */
@@ -436,35 +449,65 @@ function compareTableDefinitions(
   actual: SqliteTableDefinition | null,
   expected: SqliteTableDefinition | null,
   compatibility: SqliteSchemaCompatibility,
-): "column definitions" | "table constraints" | "table definition" | null {
+  allowCompatibleAdditiveColumns: boolean,
+): SqliteSchemaIssue[] {
+  const issues: SqliteSchemaIssue[] = [];
+  const add = (code: SqliteSchemaIssueCode, objectName: string) => {
+    issues.push(createSqliteSchemaIssue(code, objectName));
+  };
   if (!actual || !expected) {
-    return actual === expected ? null : "table definition";
+    if (actual !== expected) {
+      add("table-definition-drift", tableName);
+    }
+    return issues;
   }
   const allowedMissingColumns = new Set(compatibility.allowedMissingColumns ?? []);
-  const allowedMissingCount = [...expected.columns].filter(
-    ([columnName]) =>
-      !actual.columns.has(columnName) && allowedMissingColumns.has(`${tableName}.${columnName}`),
-  ).length;
-  if (actual.columns.size + allowedMissingCount !== expected.columns.size) {
-    return "column definitions";
-  }
-  if ([...actual.columns].some(([columnName]) => !expected.columns.has(columnName))) {
-    return "column definitions";
+  for (const [columnName, definition] of actual.columns) {
+    if (!expected.columns.has(columnName)) {
+      if (
+        allowCompatibleAdditiveColumns &&
+        compatibility.allowCompatibleAdditiveColumns &&
+        isCompatibleAdditiveColumnDefinition(definition)
+      ) {
+        continue;
+      }
+      const objectName = `${tableName}.${columnName}`;
+      add("unexpected-column", objectName);
+    }
   }
   for (const [columnName, expectedDefinition] of expected.columns) {
+    const objectName = `${tableName}.${columnName}`;
     const actualDefinition = actual.columns.get(columnName);
-    if (actualDefinition === undefined && allowedMissingColumns.has(`${tableName}.${columnName}`)) {
+    if (actualDefinition === undefined) {
+      if (!allowedMissingColumns.has(objectName)) {
+        add("missing-column", objectName);
+      }
       continue;
     }
     if (actualDefinition === expectedDefinition) {
       continue;
     }
-    const allowed = compatibility.allowedColumnDefinitions?.[`${tableName}.${columnName}`] ?? [];
+    const allowed = compatibility.allowedColumnDefinitions?.[objectName] ?? [];
     if (!allowed.some((definition) => normalizeSqlWhitespace(definition) === actualDefinition)) {
-      return "column definitions";
+      add("column-definition-drift", objectName);
     }
   }
-  return isEqual(actual.constraints, expected.constraints) ? null : "table constraints";
+  if (!isEqual(actual.constraints, expected.constraints)) {
+    add("table-constraint-drift", tableName);
+  }
+  return issues;
+}
+
+const SQLITE_STRICT_DATATYPES = new Set(["ANY", "BLOB", "INT", "INTEGER", "REAL", "TEXT"]);
+
+function isCompatibleAdditiveColumnDefinition(definition: string): boolean {
+  const name = readSqlToken(definition, 0);
+  const type = name ? readSqlToken(definition, name.end) : null;
+  return Boolean(
+    type?.keyword &&
+    SQLITE_STRICT_DATATYPES.has(type.keyword) &&
+    definition.slice(type.end).trim().length === 0,
+  );
 }
 
 function parseTableDefinition(sql: string | null, tableName: string): SqliteTableDefinition {
@@ -503,59 +546,6 @@ function parseTableDefinition(sql: string | null, tableName: string): SqliteTabl
   };
 }
 
-type SqlToken = {
-  end: number;
-  keyword: string | null;
-  raw: string;
-};
-
-function readTableConstraintKeyword(sql: string, first: SqlToken): string | null {
-  let token: SqlToken | null = first;
-  if (token.keyword === "CONSTRAINT") {
-    const name = readSqlToken(sql, token.end);
-    token = name ? readSqlToken(sql, name.end) : null;
-  }
-  return token?.keyword && TABLE_CONSTRAINT_KEYWORDS.has(token.keyword) ? token.keyword : null;
-}
-
-function readSqlToken(sql: string, start: number): SqlToken | null {
-  let index = start;
-  while (index < sql.length && /\s/u.test(sql[index] ?? "")) {
-    index += 1;
-  }
-  const char = sql[index];
-  if (!char) {
-    return null;
-  }
-  if (char === '"' || char === "`") {
-    const end = skipSqlQuoted(sql, index, char);
-    return { end, keyword: null, raw: sql.slice(index, end) };
-  }
-  if (char === "[") {
-    const end = skipSqlQuoted(sql, index, char);
-    return { end, keyword: null, raw: sql.slice(index, end) };
-  }
-  let end = index;
-  while (end < sql.length && !/[\s(,]/u.test(sql[end] ?? "")) {
-    end += 1;
-  }
-  const raw = sql.slice(index, end);
-  return { end, keyword: raw.toUpperCase(), raw };
-}
-
-function normalizeSqlIdentifier(identifier: string): string {
-  if (identifier.startsWith('"') && identifier.endsWith('"')) {
-    return identifier.slice(1, -1).replaceAll('""', '"').toLowerCase();
-  }
-  if (identifier.startsWith("`") && identifier.endsWith("`")) {
-    return identifier.slice(1, -1).replaceAll("``", "`").toLowerCase();
-  }
-  if (identifier.startsWith("[") && identifier.endsWith("]")) {
-    return identifier.slice(1, -1).toLowerCase();
-  }
-  return identifier.toLowerCase();
-}
-
 function collectSqliteIndexContract(
   database: DatabaseSync,
   index: SqliteIndexListRow,
@@ -587,161 +577,6 @@ function collectSqliteIndexContract(
 
 function sqliteIndexTermKind(cid: number): SqliteIndexTermContract["kind"] {
   return cid === -2 ? "expression" : cid === -1 ? "rowid" : "column";
-}
-
-function normalizeSchemaSql(sql: string | null): string | null {
-  if (sql === null) {
-    return null;
-  }
-  const normalized = normalizeSqlWhitespace(sql).replace(/;\s*$/u, "").trim();
-  return normalized
-    .replace(/^(CREATE TABLE) IF NOT EXISTS /iu, "$1 ")
-    .replace(/^(CREATE VIRTUAL TABLE) IF NOT EXISTS /iu, "$1 ")
-    .replace(/^(CREATE UNIQUE INDEX) IF NOT EXISTS /iu, "$1 ")
-    .replace(/^(CREATE INDEX) IF NOT EXISTS /iu, "$1 ")
-    .replace(/^(CREATE TRIGGER) IF NOT EXISTS /iu, "$1 ");
-}
-
-function splitSqlList(sql: string): string[] {
-  const items: string[] = [];
-  let depth = 0;
-  let start = 0;
-  let index = 0;
-  while (index < sql.length) {
-    const next = skipSqlQuotedOrComment(sql, index);
-    if (next !== index) {
-      index = next;
-      continue;
-    }
-    const char = sql[index];
-    if (char === "(") {
-      depth += 1;
-    } else if (char === ")") {
-      depth -= 1;
-    } else if (char === "," && depth === 0) {
-      items.push(sql.slice(start, index));
-      start = index + 1;
-    }
-    index += 1;
-  }
-  items.push(sql.slice(start));
-  return items;
-}
-
-function findSqlCharacter(sql: string, character: string): number {
-  let index = 0;
-  while (index < sql.length) {
-    const next = skipSqlQuotedOrComment(sql, index);
-    if (next !== index) {
-      index = next;
-      continue;
-    }
-    if (sql[index] === character) {
-      return index;
-    }
-    index += 1;
-  }
-  return -1;
-}
-
-function findSqlClosingParenthesis(sql: string, open: number): number {
-  let depth = 0;
-  let index = open;
-  while (index < sql.length) {
-    const next = skipSqlQuotedOrComment(sql, index);
-    if (next !== index) {
-      index = next;
-      continue;
-    }
-    const char = sql[index];
-    if (char === "(") {
-      depth += 1;
-    } else if (char === ")") {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-    index += 1;
-  }
-  throw new Error("SQLite schema contains an unterminated table definition.");
-}
-
-function normalizeSqlWhitespace(sql: string): string {
-  let normalized = "";
-  let pendingSpace = false;
-  let index = 0;
-  while (index < sql.length) {
-    const quoted = skipSqlQuoted(sql, index, sql[index] ?? "");
-    if (quoted !== index) {
-      if (pendingSpace && normalized.length > 0) {
-        normalized += " ";
-      }
-      normalized += sql.slice(index, quoted);
-      pendingSpace = false;
-      index = quoted;
-      continue;
-    }
-    const comment = skipSqlComment(sql, index);
-    if (comment !== index) {
-      pendingSpace = true;
-      index = comment;
-      continue;
-    }
-    const char = sql[index] ?? "";
-    if (/\s/u.test(char)) {
-      pendingSpace = true;
-    } else {
-      if (pendingSpace && normalized.length > 0) {
-        normalized += " ";
-      }
-      normalized += char;
-      pendingSpace = false;
-    }
-    index += 1;
-  }
-  return normalized.trim();
-}
-
-function skipSqlQuotedOrComment(sql: string, index: number): number {
-  const quoted = skipSqlQuoted(sql, index, sql[index] ?? "");
-  return quoted !== index ? quoted : skipSqlComment(sql, index);
-}
-
-function skipSqlQuoted(sql: string, index: number, quote: string): number {
-  if (quote !== "'" && quote !== '"' && quote !== "`" && quote !== "[") {
-    return index;
-  }
-  const closingQuote = quote === "[" ? "]" : quote;
-  let cursor = index + 1;
-  while (cursor < sql.length) {
-    if (sql[cursor] !== closingQuote) {
-      cursor += 1;
-      continue;
-    }
-    if (quote !== "[" && sql[cursor + 1] === closingQuote) {
-      cursor += 2;
-      continue;
-    }
-    return cursor + 1;
-  }
-  return sql.length;
-}
-
-function skipSqlComment(sql: string, index: number): number {
-  if (sql.startsWith("--", index)) {
-    const newline = sql.indexOf("\n", index + 2);
-    return newline === -1 ? sql.length : newline + 1;
-  }
-  if (sql.startsWith("/*", index)) {
-    const close = sql.indexOf("*/", index + 2);
-    return close === -1 ? sql.length : close + 2;
-  }
-  return index;
-}
-
-function quoteSqliteIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll('"', '""')}"`;
 }
 
 function isEqual(left: unknown, right: unknown): boolean {

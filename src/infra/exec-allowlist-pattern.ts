@@ -1,6 +1,6 @@
 // Parses execution allowlist patterns for approval policy checks.
-import fs from "node:fs";
 import path from "node:path";
+import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp as escapeRegExpLiteral } from "../shared/regexp.js";
 import { expandHomePrefix } from "./home-dir.js";
@@ -23,14 +23,6 @@ function normalizeMatchTarget(value: string): string {
     }
   }
   return normalized;
-}
-
-function tryRealpath(value: string): string | null {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return null;
-  }
 }
 
 function hasDotPathSegment(value: string): boolean {
@@ -97,8 +89,8 @@ export function matchesExecAllowlistPattern(pattern: string, target: string): bo
   let normalizedPattern = expanded;
   let normalizedTarget = target;
   if (process.platform === "win32" && !hasWildcard) {
-    normalizedPattern = tryRealpath(expanded) ?? expanded;
-    normalizedTarget = tryRealpath(target) ?? target;
+    normalizedPattern = safeRealpathSync(expanded) ?? expanded;
+    normalizedTarget = safeRealpathSync(target) ?? target;
   }
   normalizedPattern = normalizeMatchTarget(normalizedPattern);
   normalizedTarget = normalizeMatchTarget(normalizedTarget);

@@ -21,12 +21,8 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - `suggestedTargetId` is the label when one exists, otherwise the stable `tabId` handle like `t1`.
    - Avoid relying on raw DevTools `targetId` except for immediate diagnostics; it can change under Chromium target replacement.
 3. Read before you click:
-   - For “read the page and answer X,” use `action="extract"` with `query` so only the answer returns.
-   - Prefer `selector` to scope extraction on large pages and list views; use `ignoreSelectors` to drop repeated chrome.
-   - Use `schema` when downstream work needs validated, machine-usable fields instead of prose.
-   - For virtualized lists, scroll through each segment, extract it, then merge the structured results.
-   - Use `action="snapshot"` instead when you need action refs or page structure.
-   - If extract returns `NOT_FOUND` or asks for snapshot fallback, inspect the page with a snapshot.
+   - For “read the page and answer X,” use a selector-scoped `action="snapshot"` or `act:evaluate` that returns only relevant text or structured data. Let the active agent model answer from that bounded result; use efficient snapshots for controls and action discovery because they omit most non-interactive prose.
+   - For virtualized lists, scroll through each segment, capture only the relevant rows, then merge the results.
    - Use `action="snapshot"` on the intended `targetId`.
    - Use the same `targetId` for follow-up actions so refs stay on the same tab.
    - For durable Playwright refs, request `refs="aria"` when supported. If you receive `axN` refs from `snapshotFormat="aria"`, use them only after that same snapshot call; stale or unbound `axN` refs fail fast and need a fresh snapshot.

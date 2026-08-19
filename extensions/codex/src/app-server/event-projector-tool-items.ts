@@ -80,6 +80,16 @@ export function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | u
   return undefined;
 }
 
+export function isCommandBearingToolItem(
+  item: CodexThreadItem,
+  args: Record<string, unknown> | undefined,
+): boolean {
+  if (item.type === "commandExecution") {
+    return true;
+  }
+  return typeof args?.command === "string" && args.command.trim().length > 0;
+}
+
 function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
   const action = isJsonObject(item.action) ? item.action : undefined;
   const actionType = action ? readNonEmptyString(action, "type") : undefined;

@@ -7,6 +7,7 @@ import "./run.compaction-loop-guard.test-support.js";
 import "./run.cross-provider-fallback-error-context.test-support.js";
 import "./run.empty-error-retry.test-support.js";
 import "./run.fast-mode-auto.test-support.js";
+import "./run.midturn-precheck-retry.test-support.js";
 import "./run.prompt-timeout-fallback.test-support.js";
 import "./run.timeout-triggered-compaction.test-support.js";
 import "./sessions-yield.orchestration.test-support.js";

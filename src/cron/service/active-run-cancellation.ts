@@ -1,49 +1,61 @@
 // Process-local cancellation handles for live cron task runs.
 
-type CronTaskCancelHandle = {
-  controller: AbortController;
-  onCancel?: (reason: string) => void;
-};
+import type { CronActiveJobMarker } from "../active-jobs.js";
 
-type SettlingCronTaskRun = {
-  retirementTimer?: NodeJS.Timeout;
-};
-
-const activeCronTaskRunsByRunId = new Map<string, CronTaskCancelHandle>();
-const settlingCronTaskRuns = new Map<Promise<unknown>, SettlingCronTaskRun>();
+const activeCronTaskRunsByRunId = new Map<
+  string,
+  { controller: AbortController; onCancel?: (reason: string) => void }
+>();
+const settlingCronTaskRuns = new Map<Promise<unknown>, { retirementTimer?: NodeJS.Timeout }>();
 // Restart drain may retire an abort-ignoring core after a bounded grace, but a
 // host snapshot must keep refusing readiness until that core actually settles.
 const suspensionVisibleCronTaskRuns = new Set<Promise<unknown>>();
 const DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS = 25;
 const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 
-export function startActiveCronTaskRunSettlementGrace(): void {
-  for (const [promise, entry] of settlingCronTaskRuns) {
-    if (entry.retirementTimer) {
-      continue;
-    }
-    const retirementTimer = setTimeout(() => {
-      settlingCronTaskRuns.delete(promise);
-    }, CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS);
-    retirementTimer.unref?.();
-    entry.retirementTimer = retirementTimer;
+function startActiveCronTaskRunSettlementGrace(promise: Promise<unknown>): void {
+  const entry = settlingCronTaskRuns.get(promise);
+  if (!entry || entry.retirementTimer) {
+    return;
   }
+  entry.retirementTimer = setTimeout(() => {
+    settlingCronTaskRuns.delete(promise);
+  }, CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS);
+  entry.retirementTimer.unref?.();
 }
 
 export function registerActiveCronTaskRun(params: {
   runId: string | undefined;
   controller: AbortController;
+  activeJobMarker?: CronActiveJobMarker;
   onCancel?: (reason: string) => void;
 }): (() => void) | undefined {
   const runId = params.runId?.trim();
   if (!runId) {
     return undefined;
   }
-  activeCronTaskRunsByRunId.set(runId, {
+  const handle = {
     controller: params.controller,
     onCancel: params.onCancel,
-  });
+  };
+  activeCronTaskRunsByRunId.set(runId, handle);
+  // A durable remove/disable can land after marker admission but before this
+  // controller exists; consume that exact marker's request before provider work.
+  const cancelJobRun = (reason: string) => {
+    cancelActiveCronTaskRun({ runId, reason });
+  };
+  if (params.activeJobMarker?.cancellation?.kind === "requested") {
+    cancelJobRun(params.activeJobMarker.cancellation.reason);
+  } else if (params.activeJobMarker) {
+    params.activeJobMarker.cancellation = { kind: "bound", cancel: cancelJobRun };
+  }
   return () => {
+    if (
+      params.activeJobMarker?.cancellation?.kind === "bound" &&
+      params.activeJobMarker.cancellation.cancel === cancelJobRun
+    ) {
+      delete params.activeJobMarker.cancellation;
+    }
     if (activeCronTaskRunsByRunId.get(runId)?.controller === params.controller) {
       activeCronTaskRunsByRunId.delete(runId);
     }
@@ -60,18 +72,29 @@ export function abortActiveCronTaskRuns(reason = "Gateway restarting."): number 
     handle.onCancel?.(reason);
     aborted += 1;
   }
-  if (aborted > 0) {
-    startActiveCronTaskRunSettlementGrace();
+  // Shutdown also retires main-session runs without cancellation handles.
+  for (const promise of settlingCronTaskRuns.keys()) {
+    startActiveCronTaskRunSettlementGrace(promise);
   }
   return aborted;
 }
 
-export function trackActiveCronTaskRunSettlement(promise: Promise<unknown>): void {
+export function trackActiveCronTaskRunSettlement(
+  promise: Promise<unknown>,
+  abortSignal?: AbortSignal,
+): void {
   settlingCronTaskRuns.set(promise, {});
   suspensionVisibleCronTaskRuns.add(promise);
+  // Cancellation belongs to this core only; sibling jobs must remain drain-visible.
+  const startSettlementGrace = () => startActiveCronTaskRunSettlementGrace(promise);
+  abortSignal?.addEventListener("abort", startSettlementGrace, { once: true });
+  if (abortSignal?.aborted) {
+    startSettlementGrace();
+  }
   void promise
     .catch(() => undefined)
     .finally(() => {
+      abortSignal?.removeEventListener("abort", startSettlementGrace);
       const entry = settlingCronTaskRuns.get(promise);
       if (entry?.retirementTimer) {
         clearTimeout(entry.retirementTimer);
@@ -131,7 +154,6 @@ export function cancelActiveCronTaskRun(params: {
   const reason = params.reason?.trim() || "Cancelled by operator.";
   handle.controller.abort(reason);
   handle.onCancel?.(reason);
-  startActiveCronTaskRunSettlementGrace();
   return true;
 }
 

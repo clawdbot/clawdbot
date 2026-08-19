@@ -2,7 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
+import {
+  resolveBundlePluginRoot,
+  writeBundleTextFiles,
+  writeClaudeBundleManifest,
+} from "../../plugins/bundle-mcp.test-support.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
@@ -106,6 +112,79 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(prepared.mcpResumeHash).toMatch(/^[0-9a-f]{64}$/);
 
     await prepared.cleanup?.();
+  });
+
+  it("carries Agent Plugins data-dir and transport contracts into external projections", async () => {
+    const pluginId = "agent-cli-projection";
+    const pluginRoot = resolveBundlePluginRoot(cliBundleMcpHarness.bundleProbeHomeDir, pluginId);
+    await writeBundleTextFiles(pluginRoot, {
+      "plugin.json": JSON.stringify({
+        $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        name: pluginId,
+      }),
+      "mcp.json": JSON.stringify({
+        $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+        mcpServers: {
+          local: { type: "stdio", command: "node" },
+          remote: { type: "streamable-http", url: "https://example.test/mcp" },
+          legacy: { type: "sse", url: "https://example.test/sse" },
+        },
+      }),
+    });
+    const agentDataDir = path.join(
+      cliBundleMcpHarness.bundleProbeHomeDir,
+      ".openclaw",
+      "plugin-data",
+      pluginId,
+    );
+    const userDataPath = path.join(
+      cliBundleMcpHarness.bundleProbeHomeDir,
+      "user-data-must-not-exist",
+    );
+    clearPluginMetadataLifecycleCaches();
+
+    const prepared = await withEnvAsync(
+      { HOME: cliBundleMcpHarness.bundleProbeHomeDir },
+      async () =>
+        await prepareCliBundleMcpConfig({
+          enabled: true,
+          mode: "gemini-system-settings",
+          backend: { command: "gemini" },
+          workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+          config: {
+            plugins: { entries: { [pluginId]: { enabled: true } } },
+            mcp: {
+              servers: {
+                user: {
+                  command: "node",
+                  env: { PLUGIN_ROOT: "/user/plugin", PLUGIN_DATA: userDataPath },
+                },
+              },
+            },
+          },
+        }),
+    );
+
+    expect((await fs.stat(agentDataDir)).isDirectory()).toBe(true);
+    await expect(fs.stat(userDataPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const raw = JSON.parse(
+      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf8"),
+    ) as {
+      mcpServers?: Record<string, { type?: string; transport?: string; url?: string }>;
+    };
+    expect(raw.mcpServers?.remote).toMatchObject({
+      type: "http",
+      url: "https://example.test/mcp",
+    });
+    expect(raw.mcpServers?.legacy).toMatchObject({
+      type: "sse",
+      url: "https://example.test/sse",
+    });
+    expect(raw.mcpServers?.remote?.transport).toBeUndefined();
+    expect(raw.mcpServers?.legacy?.transport).toBeUndefined();
+    await prepared.cleanup?.();
+    await fs.rm(pluginRoot, { recursive: true, force: true });
+    clearPluginMetadataLifecycleCaches();
   });
 
   it("projects session MCP tool denials into Claude disallowed tools", async () => {

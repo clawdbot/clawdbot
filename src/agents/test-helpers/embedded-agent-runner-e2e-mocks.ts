@@ -29,7 +29,7 @@ type EmbeddedRunnerBackoffMockOptions = {
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
-function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
+export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
   return {
     policyHash: "",
     ...(workspaceDir !== undefined ? { workspaceDir } : {}),
@@ -81,6 +81,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
     ...(input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {}),
     activeProjectKeys: [],
     config: input.config,
+    authModes: {},
     metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
     pluginRegistry: createEmptyPluginRegistry(),
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
@@ -120,6 +121,23 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       dispose: async () => undefined,
     })),
     resolveContextEngineOwnerPluginId: vi.fn(() => undefined),
+    resolveLogicalTurnContextEngines: vi.fn(async () => {
+      const engine = {
+        info: { id: "legacy", name: "Legacy Context Engine" },
+        async ingest() {
+          return { ingested: false };
+        },
+        async assemble({ messages }: { messages: unknown[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+        async dispose() {},
+      };
+      const ref = { engine, registeredId: "legacy" };
+      return { configured: ref, configuredId: "legacy", fallback: ref };
+    }),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
     loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()),
@@ -148,6 +166,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     };
   });
   vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
+    attachModelProviderRuntimePluginHandle: (model: unknown) => model,
     prepareProviderExtraParams: vi.fn(() => undefined),
     resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
@@ -167,12 +186,16 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     provider?: string;
     agentHarnessId?: string;
     agentHarnessRuntimeOverride?: string;
-  }) => ({
-    id: resolveMockHarnessId(params),
-    label: "Mock agent harness",
-    supports: vi.fn(() => ({ supported: false })),
-    runAttempt: vi.fn(),
-  });
+  }) => {
+    const id = resolveMockHarnessId(params);
+    return {
+      id,
+      label: "Mock agent harness",
+      ...(id === "codex" ? { authBootstrap: "harness" as const } : {}),
+      supports: vi.fn(() => ({ supported: false })),
+      runAttempt: vi.fn(),
+    };
+  };
   vi.doMock("../harness/selection.js", () => ({
     agentHarnessBuildsOpenClawTools: vi.fn(
       (harnessId: string) => harnessId === "codex" || harnessId === "copilot",
@@ -277,17 +300,21 @@ export function installEmbeddedRunnerFastRunE2eMocks(
             : undefined;
           const matchingRequestedProfileId =
             requestedCredential?.provider === authProvider ? requestedProfileId : undefined;
-          const lockedProfileId =
+          const userPinnedProfileId =
             params.sessionAuthProfileSource === "user" ? matchingRequestedProfileId : undefined;
-          const orderedProfileIds = lockedProfileId
-            ? [lockedProfileId]
-            : resolveAuthProfileOrder({
-                cfg: params.config,
-                store,
-                provider: authProvider,
-                preferredProfile: matchingRequestedProfileId,
-                forModel: params.modelId,
-              });
+          const resolvedProfileIds = resolveAuthProfileOrder({
+            cfg: params.config,
+            store,
+            provider: authProvider,
+            preferredProfile: matchingRequestedProfileId,
+            forModel: params.modelId,
+          });
+          const orderedProfileIds = userPinnedProfileId
+            ? [
+                userPinnedProfileId,
+                ...resolvedProfileIds.filter((profileId) => profileId !== userPinnedProfileId),
+              ]
+            : resolvedProfileIds;
           const profileIds = orderedProfileIds.length > 0 ? orderedProfileIds : [undefined];
           const attempts = profileIds.map((profileId, index) => {
             const credential = profileId ? store.profiles[profileId] : undefined;
@@ -300,7 +327,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
                 ? {
                     forwardedAuthProfileId: profileId,
                     forwardedAuthProfileSource:
-                      lockedProfileId === profileId ? ("user" as const) : ("auto" as const),
+                      userPinnedProfileId === profileId ? ("user" as const) : ("auto" as const),
                     forwardedAuthProfileCandidateIds: profileIds
                       .slice(index)
                       .filter((candidate): candidate is string => Boolean(candidate)),

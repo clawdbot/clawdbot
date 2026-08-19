@@ -16,8 +16,6 @@ export const collectGoogleChatMutableAllowlistWarnings =
     detector: isGoogleChatMutableAllowEntry,
     collectLists: (scope) =>
       collectStandardAllowlistLists(scope, {
-        includeAllowFrom: false,
-        includeDm: true,
         includeGroups: true,
         groupField: "users",
       }),

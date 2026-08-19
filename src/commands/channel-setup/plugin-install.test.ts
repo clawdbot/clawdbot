@@ -1,6 +1,11 @@
 // Channel setup plugin install tests cover install decisions, registry reloads, scoped snapshots, and trust boundaries.
 import path from "node:path";
-import { bundledPluginRoot, bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  createRequireRecord,
+  bundledPluginRoot,
+  bundledPluginRootAt,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs", async () => {
@@ -52,9 +57,9 @@ vi.mock("../../channels/plugins/catalog.js", () => {
   };
 });
 
-const loadPluginManifestRegistry = vi.fn();
+const loadPluginManifestRegistryCore = vi.fn();
 vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistry(...args),
+  loadPluginManifestRegistryCore: (...args: unknown[]) => loadPluginManifestRegistryCore(...args),
 }));
 
 vi.mock("../../plugins/bundled-sources.js", () => ({
@@ -160,7 +165,7 @@ function mockActivationOnlyPlugin(plugin: {
   id: string;
   origin?: "bundled" | "global" | "workspace";
 }) {
-  loadPluginManifestRegistry.mockReturnValue({
+  loadPluginManifestRegistryCore.mockReturnValue({
     plugins: [
       createManifestRecord({
         id: plugin.id,
@@ -226,7 +231,7 @@ beforeEach(() => {
   discoverOpenClawPlugins.mockReturnValue({ candidates: [], diagnostics: [] });
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
   listChannelPluginCatalogEntries.mockReturnValue([]);
-  loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+  loadPluginManifestRegistryCore.mockReturnValue({ plugins: [], diagnostics: [] });
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -310,16 +315,7 @@ function expectPluginLoadedFromLocalPath(
   expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -854,7 +850,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("scopes snapshots by a unique discovered manifest match when catalog mapping is missing", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         createManifestRecord({
           id: "custom-external-chat-plugin",
@@ -898,7 +894,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       ],
       diagnostics: [],
     });
-    loadPluginManifestRegistry.mockImplementation((args: unknown) => {
+    loadPluginManifestRegistryCore.mockImplementation((args: unknown) => {
       if (
         isRecord(args) &&
         args.config === cfg &&
@@ -948,9 +944,9 @@ describe("ensureChannelSetupPluginInstalled", () => {
       workspaceDir: "/tmp/openclaw-workspace",
     });
 
-    expect(loadPluginManifestRegistry).toHaveBeenCalled();
+    expect(loadPluginManifestRegistryCore).toHaveBeenCalled();
     expect(
-      loadPluginManifestRegistry.mock.calls.every(
+      loadPluginManifestRegistryCore.mock.calls.every(
         ([params]) => !Object.hasOwn(params ?? {}, "cache"),
       ),
     ).toBe(true);

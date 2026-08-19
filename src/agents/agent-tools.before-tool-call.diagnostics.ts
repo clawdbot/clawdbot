@@ -25,6 +25,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -44,10 +45,10 @@ import type {
   ToolOutcomeObserver,
 } from "./agent-tools.before-tool-call.types.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
-import { BEFORE_TOOL_CALL_SOURCE_TOOL } from "./before-tool-call-metadata.js";
+import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
@@ -78,10 +79,7 @@ export function resolveToolTerminalPresentation(params: {
   result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
 }): string | undefined {
   try {
-    const taggedTool = params.tool as unknown as Record<symbol, unknown>;
-    const sourceTool = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
-    const presentationTool =
-      sourceTool && typeof sourceTool === "object" ? (sourceTool as AnyAgentTool) : params.tool;
+    const presentationTool = getBeforeToolCallSourceTool(params.tool) ?? params.tool;
     const text = getToolTerminalPresentation(presentationTool)?.(
       params.toolParams,
       params.result,
@@ -118,13 +116,7 @@ export function rememberPendingTerminalPresentation(params: {
     toolParams: structuredClone(params.toolParams),
     toolCallOrdinal: params.toolCallOrdinal,
   });
-  while (pendingTerminalPresentationByToolCall.size > MAX_PENDING_TERMINAL_PRESENTATIONS) {
-    const oldestKey = pendingTerminalPresentationByToolCall.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    pendingTerminalPresentationByToolCall.delete(oldestKey);
-  }
+  pruneMapToMaxSize(pendingTerminalPresentationByToolCall, MAX_PENDING_TERMINAL_PRESENTATIONS);
 }
 
 /** Finalizes a trusted terminal summary after harness result middleware. */
@@ -396,7 +388,7 @@ export function findSkillUsageMatch(params: {
 }): SkillUsageMatch | undefined {
   const command = params.ctx?.skillCommand;
   if (command) {
-    const commandToolName = normalizeToolName(command.toolName ?? params.toolName);
+    const commandToolName = normalizeToolPolicyName(command.toolName ?? params.toolName);
     if (!commandToolName || commandToolName === params.toolName) {
       const skillSource = resolveSkillTelemetrySourceValue(command.skillSource);
       const snapshotMatch = findResolvedSkillUsageMatch({
@@ -581,12 +573,7 @@ export function shouldEmitLoopWarning(
     return false;
   }
   state.toolLoopWarningBuckets.set(warningKey, bucket);
-  if (state.toolLoopWarningBuckets.size > MAX_LOOP_WARNING_KEYS) {
-    const oldest = state.toolLoopWarningBuckets.keys().next().value;
-    if (oldest) {
-      state.toolLoopWarningBuckets.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(state.toolLoopWarningBuckets, MAX_LOOP_WARNING_KEYS);
   return true;
 }
 

@@ -5,12 +5,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentRuntimeConfig } from "../agents/agent-runtime-config.js";
 import { resolveSession } from "../agents/command/session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 type ConfigSnapshotForWrite = {
   snapshot: { valid: boolean; resolved: OpenClawConfig };
-  writeOptions: Record<string, never>;
+  writeOptions: { basePluginMetadataSnapshot?: PluginMetadataSnapshot };
 };
 
 type ResolveCommandConfigParams = {
@@ -88,19 +89,26 @@ const setRuntimeConfigSnapshotMock = vi.hoisted(() =>
   vi.fn<(cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => void>(),
 );
 vi.mock("../config/runtime-snapshot.js", () => ({
+  registerRuntimeConfigSnapshotPreparer: vi.fn(),
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
 const getActiveSecretsRuntimeSnapshotMock = vi.hoisted(() => vi.fn<() => object | null>());
 const prepareSecretsRuntimeSnapshotMock = vi.hoisted(() =>
-  vi.fn(async (params: { config: OpenClawConfig; assignmentConfig: OpenClawConfig }) => ({
-    sourceConfig: params.config,
-    config: params.assignmentConfig,
-    authStores: [],
-    authStoreCredentialsRevision: 0,
-    warnings: [],
-    webTools: {},
-  })),
+  vi.fn(
+    async (params: {
+      config: OpenClawConfig;
+      assignmentConfig: OpenClawConfig;
+      pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
+    }) => ({
+      sourceConfig: params.config,
+      config: params.assignmentConfig,
+      authStores: [],
+      authStoreCredentialsRevision: 0,
+      warnings: [],
+      webTools: {},
+    }),
+  ),
 );
 const activateSecretsRuntimeSnapshotMock = vi.hoisted(() => vi.fn());
 vi.mock("../secrets/runtime.js", () => ({
@@ -154,7 +162,9 @@ function mockConfig(home: string, storePath: string): OpenClawConfig {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getActiveSecretsRuntimeSnapshotMock.mockReturnValue({});
+  getActiveSecretsRuntimeSnapshotMock.mockImplementation(() => ({
+    sourceConfig: loadConfigMock(),
+  }));
   readConfigFileSnapshotForWriteMock.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
     writeOptions: {},
@@ -167,9 +177,13 @@ describe("agentCommand runtime config", () => {
       const store = path.join(home, "sessions.json");
       const loadedConfig = mockConfig(home, store);
       const sourceConfig = { ...loadedConfig, secrets: { providers: {} } } as OpenClawConfig;
+      const pluginMetadataSnapshot = {
+        plugins: [],
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      } as unknown as PluginMetadataSnapshot;
       readConfigFileSnapshotForWriteMock.mockResolvedValue({
         snapshot: { valid: true, resolved: sourceConfig },
-        writeOptions: {},
+        writeOptions: { basePluginMetadataSnapshot: pluginMetadataSnapshot },
       });
       getActiveSecretsRuntimeSnapshotMock.mockReturnValue(null);
 
@@ -179,7 +193,11 @@ describe("agentCommand runtime config", () => {
         config: sourceConfig,
         assignmentConfig: loadedConfig,
         includeConfigRefs: false,
+        pluginMetadataSnapshot,
       });
+      expect(prepareSecretsRuntimeSnapshotMock.mock.calls[0]?.[0].pluginMetadataSnapshot).toBe(
+        pluginMetadataSnapshot,
+      );
       expect(activateSecretsRuntimeSnapshotMock).toHaveBeenCalledWith(
         expect.objectContaining({ sourceConfig, config: loadedConfig }),
       );
@@ -239,6 +257,7 @@ describe("agentCommand runtime config", () => {
         snapshot: { valid: true, resolved: sourceConfig },
         writeOptions: {},
       });
+      getActiveSecretsRuntimeSnapshotMock.mockReturnValue({ sourceConfig });
       resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
         resolvedConfig,
         effectiveConfig: resolvedConfig,
@@ -407,10 +426,11 @@ describe("agentCommand runtime config", () => {
 
       const prepared = await resolveAgentRuntimeConfig(runtime);
 
-      expect(readConfigFileSnapshotForWriteMock).toHaveBeenCalledTimes(1);
+      expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
-      expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(loadedConfig, loadedConfig);
+      expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
       expect(prepared.cfg).toBe(loadedConfig);
+      expect(prepared.sourceConfig).toBe(loadedConfig);
     });
   });
 

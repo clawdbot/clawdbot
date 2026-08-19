@@ -1,7 +1,5 @@
 // Session Log Mentions tests cover session log mentions script behavior.
-import { mkdtempSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,24 +7,13 @@ import {
   countSessionLogMentions,
   readSessionLogMentionLimits,
 } from "../../scripts/e2e/lib/session-log-mentions.ts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
-
-function makeTempRoot() {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-session-log-mentions-"));
-  tempRoots.push(root);
-  return root;
-}
-
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 describe("session log mention scanner", () => {
   it("counts mentions across bounded session logs", async () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-session-log-mentions-");
     await fs.writeFile(path.join(root, "one.jsonl"), "API.read MCP.fixture API.read\n");
     await fs.writeFile(path.join(root, "two.jsonl"), "MCP.fixture\n");
     await fs.writeFile(path.join(root, "ignored.txt"), "API.read\n");
@@ -46,7 +33,7 @@ describe("session log mention scanner", () => {
   });
 
   it("does not count user prompt lines as runtime mention proof", async () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-session-log-mentions-");
     await fs.writeFile(
       path.join(root, "prompts.jsonl"),
       [
@@ -88,7 +75,7 @@ describe("session log mention scanner", () => {
   });
 
   it("counts mentions from SQLite transcript rows", async () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-session-log-mentions-");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     const sqlitePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
     await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
@@ -151,7 +138,7 @@ describe("session log mention scanner", () => {
   });
 
   it("rejects oversized SQLite transcript rows before counting them", async () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-session-log-mentions-");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     const sqlitePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
     await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
@@ -190,7 +177,7 @@ describe("session log mention scanner", () => {
   it("returns zero counts when the sessions directory is absent", async () => {
     await expect(
       countSessionLogMentions({
-        sessionsDir: path.join(makeTempRoot(), "missing"),
+        sessionsDir: path.join(tempRoots.make("openclaw-session-log-mentions-"), "missing"),
         needles: {
           apiFileRead: "API.read",
         },
@@ -201,7 +188,7 @@ describe("session log mention scanner", () => {
   });
 
   it("rejects oversized session log files before loading them", async () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-session-log-mentions-");
     await fs.writeFile(path.join(root, "huge.jsonl"), "x".repeat(64));
 
     await expect(
@@ -219,7 +206,7 @@ describe("session log mention scanner", () => {
   });
 
   it("rejects aggregate session log scans that exceed the total ceiling", async () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-session-log-mentions-");
     await fs.writeFile(path.join(root, "one.jsonl"), "x".repeat(24));
     await fs.writeFile(path.join(root, "two.jsonl"), "x".repeat(24));
 

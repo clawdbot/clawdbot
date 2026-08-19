@@ -1,6 +1,6 @@
-// Qa Lab tests cover lab server plugin behavior.
+// QA Lab tests cover lab server plugin behavior.
 import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -146,20 +146,22 @@ const captureMock = vi.hoisted(() => {
   };
 
   return {
+    acquire: vi.fn(() => ({
+      store,
+      release: store.close,
+    })),
     store,
     reset() {
       sessions.splice(0);
       events.splice(0);
+      captureMock.acquire.mockClear();
       store.close.mockClear();
     },
   };
 });
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  acquireDebugProxyCaptureStore: () => ({
-    store: captureMock.store,
-    release: captureMock.store.close,
-  }),
+  acquireDebugProxyCaptureStore: captureMock.acquire,
   getDebugProxyCaptureStore: () => captureMock.store,
   resolveDebugProxySettings: () => ({
     proxyUrl: process.env.OPENCLAW_DEBUG_PROXY_URL ?? "",
@@ -400,6 +402,21 @@ async function createQaLabSuiteResultFixture(params?: {
 }
 
 describe("qa-lab server", () => {
+  it("returns a 500 JSON response when a shared bus route rejects", async () => {
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => await lab.stop());
+    const requestError = new Error("combined snapshot unavailable");
+    lab.state.getSnapshot = () => {
+      throw requestError;
+    };
+
+    const response = await fetch(`${lab.baseUrl}/v1/state`, {
+      signal: AbortSignal.timeout(1_000),
+    });
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: requestError.message });
+  });
+
   it("dispatches explicit mixed-kind selections through the suite planner", async () => {
     const lab = await startQaLabServerForTest();
     cleanups.push(async () => {
@@ -407,6 +424,8 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "suite",
+      expectedCells: [],
+      observedCells: [],
       result: await createQaLabSuiteResultFixture(),
     });
 
@@ -457,6 +476,7 @@ describe("qa-lab server", () => {
       expect.objectContaining({
         alternateModel: "openai/gpt-5.6-luna",
         channelDriver: "crabline",
+        controlUiEnabled: true,
         primaryModel: "openai/gpt-5.6-luna",
         providerMode: "live-frontier",
         scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
@@ -493,7 +513,12 @@ describe("qa-lab server", () => {
       const result = await createQaLabSuiteResultFixture({
         scenarios: [{ name: "Channel chat baseline", status, steps: [] }],
       });
-      suiteLaunchMock.runQaSuite.mockResolvedValue({ executionKind: "flow", result });
+      suiteLaunchMock.runQaSuite.mockResolvedValue({
+        executionKind: "flow",
+        expectedCells: [],
+        observedCells: [],
+        result,
+      });
 
       const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
         method: "POST",
@@ -560,7 +585,12 @@ describe("qa-lab server", () => {
       });
       const result = await createQaLabSuiteResultFixture();
       await writeFile(result.summaryPath, invalidResult.summary, "utf8");
-      suiteLaunchMock.runQaSuite.mockResolvedValue({ executionKind: "flow", result });
+      suiteLaunchMock.runQaSuite.mockResolvedValue({
+        executionKind: "flow",
+        expectedCells: [],
+        observedCells: [],
+        result,
+      });
 
       const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
         method: "POST",
@@ -600,7 +630,12 @@ describe("qa-lab server", () => {
         },
       ],
     });
-    suiteLaunchMock.runQaSuite.mockResolvedValue({ executionKind: "flow", result });
+    suiteLaunchMock.runQaSuite.mockResolvedValue({
+      executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
+      result,
+    });
 
     const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
       method: "POST",
@@ -629,6 +664,8 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
       result: await createQaLabSuiteResultFixture({ watchUrl: "http://runtime-watch.invalid" }),
     });
 
@@ -692,6 +729,8 @@ describe("qa-lab server", () => {
     expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1);
     finishSuite?.({
       executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
       result: await createQaLabSuiteResultFixture(),
     });
     await vi.waitFor(async () => {
@@ -726,6 +765,8 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
       result: await createQaLabSuiteResultFixture({ watchUrl: lab.baseUrl }),
     });
 
@@ -839,7 +880,7 @@ describe("qa-lab server", () => {
     expect(suiteLaunchMock.runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("cleans up capture state when embedded gateway setup fails", async () => {
+  it("does not open capture state when embedded gateway setup fails", async () => {
     qaChannelMock.resolveAccount.mockImplementationOnce(() => {
       throw new Error("embedded setup failed");
     });
@@ -851,10 +892,11 @@ describe("qa-lab server", () => {
       }),
     ).rejects.toThrow("embedded setup failed");
 
-    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+    expect(captureMock.acquire).not.toHaveBeenCalled();
+    expect(captureMock.store.close).not.toHaveBeenCalled();
   });
 
-  it("closes the server and capture state when embedded gateway stop fails", async () => {
+  it("closes the server and acquired capture state when embedded gateway stop fails", async () => {
     qaChannelMock.startAccount.mockImplementationOnce(
       async ({ abortSignal }: { abortSignal?: AbortSignal }) =>
         await new Promise<void>((_resolve, reject) => {
@@ -875,10 +917,80 @@ describe("qa-lab server", () => {
       host: "127.0.0.1",
       port: 0,
     });
+    await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`);
 
     await expect(lab.stop()).rejects.toThrow("gateway stop failed");
 
+    expect(captureMock.acquire).toHaveBeenCalledTimes(1);
     expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+    await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
+  });
+
+  it("keeps the bus available until the embedded gateway finishes stopping", async () => {
+    let markGatewayStopping = () => {};
+    const gatewayStopping = new Promise<void>((resolve) => {
+      markGatewayStopping = resolve;
+    });
+    let finishGatewayStop = () => {};
+    const gatewayStopped = new Promise<void>((resolve) => {
+      finishGatewayStop = resolve;
+    });
+    qaChannelMock.startAccount.mockImplementationOnce(
+      async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        markGatewayStopping();
+        await gatewayStopped;
+      },
+    );
+
+    const lab = await startQaLabServer({ host: "127.0.0.1", port: 0 });
+    const waitForCursorAdvance = lab.state.waitForCursorAdvance.bind(lab.state);
+    let pollWaiterStarted = false;
+    let pollWaiterSettled = false;
+    lab.state.waitForCursorAdvance = async (...args) => {
+      pollWaiterStarted = true;
+      try {
+        return await waitForCursorAdvance(...args);
+      } finally {
+        pollWaiterSettled = true;
+      }
+    };
+    const poll = fetch(`${lab.listenUrl}/v1/poll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "cleanup", cursor: 0, timeoutMs: 30_000 }),
+    }).catch(() => undefined);
+    const inboundBody = JSON.stringify({
+      conversation: { id: "late-room", kind: "direct" },
+      senderId: "late-sender",
+      text: "must not survive shutdown",
+    });
+    const slowInbound = httpRequest(new URL("/api/inbound/message", lab.listenUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(inboundBody),
+      },
+    });
+    slowInbound.on("response", (response) => response.resume());
+    slowInbound.on("error", () => undefined);
+    slowInbound.write(inboundBody.slice(0, 1));
+    await vi.waitFor(() => expect(pollWaiterStarted).toBe(true));
+    const stopping = lab.stop();
+    await gatewayStopping;
+    try {
+      await expect(fetch(`${lab.baseUrl}/healthz`)).resolves.toMatchObject({ status: 200 });
+      expect(pollWaiterSettled).toBe(false);
+    } finally {
+      finishGatewayStop();
+      setTimeout(() => slowInbound.end(inboundBody.slice(1)), 50);
+      await stopping;
+    }
+    await poll;
+    expect(pollWaiterSettled).toBe(true);
+    expect(lab.state.getSnapshot()).toMatchObject({ events: [], messages: [] });
     await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 
@@ -1720,14 +1832,22 @@ describe("qa-lab server", () => {
       host: "127.0.0.1",
       port: 0,
     });
+    let stopped = false;
     cleanups.push(async () => {
-      await lab.stop();
+      if (!stopped) {
+        await lab.stop();
+      }
     });
+
+    await fetchWithRetry(`${lab.baseUrl}/healthz`);
+    await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
+    expect(captureMock.acquire).not.toHaveBeenCalled();
 
     const sessions = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`)
     ).json()) as { sessions: Array<{ id: string }> };
     expect(sessions.sessions.map((session) => session.id)).toContain("qa-capture-session");
+    expect(captureMock.acquire).toHaveBeenCalledTimes(1);
 
     const events = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/events?sessionId=qa-capture-session`)
@@ -1779,6 +1899,11 @@ describe("qa-lab server", () => {
     expect(query.rows).toHaveLength(1);
     expect(query.rows[0]?.host).toBe("api.example.com");
     expect(query.rows[0]?.duplicateCount).toBe(2);
+    expect(captureMock.acquire).toHaveBeenCalledTimes(1);
+
+    await lab.stop();
+    stopped = true;
+    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

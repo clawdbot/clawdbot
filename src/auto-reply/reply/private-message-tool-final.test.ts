@@ -1,15 +1,23 @@
 // Tests private message-tool final delivery and visibility suppression.
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { describe, expect, it } from "vitest";
-import { estimateStringChars } from "../../utils/cjk-chars.js";
-import { shouldWarnAboutPrivateMessageToolFinal } from "./private-message-tool-final.js";
+import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
 
 const base = {
   sourceReplyDeliveryMode: "message_tool_only" as const,
   sendPolicyDenied: false,
   successfulSourceReplyDelivery: false,
+  isHeartbeat: false,
+  isRoomEvent: false,
   finalText:
     "Here is the answer the user asked for. It includes enough detail to look like a visible response rather than an internal no-op note.",
 };
+
+function shouldWarnAboutPrivateMessageToolFinal(
+  params: Parameters<typeof classifyPrivateMessageToolFinal>[0],
+): boolean {
+  return classifyPrivateMessageToolFinal(params) === "substantive";
+}
 
 describe("shouldWarnAboutPrivateMessageToolFinal", () => {
   it("flags a multi-sentence private final that was never delivered via the message tool (#85714)", () => {
@@ -141,5 +149,10 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
 
   it("does not flag when delivery was intentionally denied by send policy", () => {
     expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, sendPolicyDenied: true })).toBe(false);
+  });
+
+  it("does not flag heartbeat or room-event non-delivery", () => {
+    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, isHeartbeat: true })).toBe(false);
+    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, isRoomEvent: true })).toBe(false);
   });
 });

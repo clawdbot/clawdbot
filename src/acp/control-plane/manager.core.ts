@@ -10,10 +10,11 @@ import { logVerbose } from "../../globals.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
-import { runManagerCancelSession } from "./manager.cancel-session.js";
+import { cancelManagerActiveTurn, runManagerCancelSession } from "./manager.cancel-session.js";
 import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import { runManagerInitializeSession } from "./manager.initialize-session.js";
+import { registerAcpSessionManagerDisposer } from "./manager.lifecycle.js";
 import {
   applyManagerRuntimeControls,
   resolveManagerRuntimeCapabilities,
@@ -79,6 +80,21 @@ export class AcpSessionManager {
 
   constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
     this.deps = deps;
+    registerAcpSessionManagerDisposer(this, async (reason) => {
+      await Promise.all(
+        [...this.activeTurnBySession.values()].map(async (activeTurn) => {
+          try {
+            await cancelManagerActiveTurn({ activeTurn, reason });
+          } catch (error) {
+            logVerbose(
+              `acp-manager: active runtime cancel failed for ${activeTurn.handle.sessionKey}: ${String(error)}`,
+            );
+          }
+        }),
+      );
+      await this.runtimeHandles.closeAll({ actorQueue: this.actorQueue, reason });
+      this.activeTurnBySession.clear();
+    });
   }
 
   resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution {

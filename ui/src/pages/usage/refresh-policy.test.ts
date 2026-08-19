@@ -1,81 +1,74 @@
-// @vitest-environment node
-import { describe, expect, it } from "vitest";
-import { decideUsageRefresh } from "./refresh-policy.ts";
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UsageRefreshPolicy } from "./refresh-policy.ts";
 
-// Mirrors the module-private default TTL; the tests assert that contract.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
-
 const NOW_MS = 1_000_000;
 
-describe("decideUsageRefresh", () => {
-  it("skips a reconnect while the cached payload is within the TTL", () => {
-    expect(
-      decideUsageRefresh({
-        reason: "reconnect",
-        visible: true,
-        interrupted: false,
-        nowMs: NOW_MS,
-        lastLoadedAtMs: NOW_MS - USAGE_PAYLOAD_TTL_MS + 1,
-      }),
-    ).toBe("skip");
+function createPolicy(isLoading = () => false) {
+  const reload = vi.fn();
+  return { policy: new UsageRefreshPolicy({ isLoading, reload }), reload };
+}
+
+describe("UsageRefreshPolicy", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW_MS);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   });
 
-  it("defers a stale reconnect until the page is visible", () => {
-    const stale = {
-      nowMs: NOW_MS,
-      lastLoadedAtMs: NOW_MS - USAGE_PAYLOAD_TTL_MS,
-    };
-    expect(
-      decideUsageRefresh({ reason: "reconnect", visible: false, interrupted: false, ...stale }),
-    ).toBe("defer");
-    expect(
-      decideUsageRefresh({ reason: "focus", visible: true, interrupted: false, ...stale }),
-    ).toBe("fetch");
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("skips automatic refresh while the cached payload is within the TTL", () => {
+    const { policy, reload } = createPolicy();
+    policy.setLastLoadedAtMs(NOW_MS - USAGE_PAYLOAD_TTL_MS + 1);
+
+    policy.request("reconnect");
+    policy.request("poll");
+
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("defers stale work until the page is visible", () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const { policy, reload } = createPolicy();
+    policy.setLastLoadedAtMs(NOW_MS - USAGE_PAYLOAD_TTL_MS);
+
+    policy.request("reconnect");
+    expect(reload).not.toHaveBeenCalled();
+
+    visibility.mockReturnValue("visible");
+    policy.request("focus");
+    expect(reload).toHaveBeenCalledOnce();
   });
 
   it("always fetches for a manual refresh", () => {
-    expect(
-      decideUsageRefresh({
-        reason: "manual",
-        visible: false,
-        interrupted: false,
-        nowMs: NOW_MS,
-        lastLoadedAtMs: NOW_MS,
-      }),
-    ).toBe("fetch");
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const { policy, reload } = createPolicy();
+    policy.setLastLoadedAtMs(NOW_MS);
+
+    policy.request("manual");
+
+    expect(reload).toHaveBeenCalledOnce();
   });
 
-  it("fetches on a visible reconnect after the TTL", () => {
-    expect(
-      decideUsageRefresh({
-        reason: "reconnect",
-        visible: true,
-        interrupted: false,
-        nowMs: NOW_MS,
-        lastLoadedAtMs: NOW_MS - USAGE_PAYLOAD_TTL_MS,
-      }),
-    ).toBe("fetch");
-  });
-  it("defers interrupted work while hidden, then fetches once active despite a fresh payload", () => {
-    const fresh = {
-      reason: "reconnect" as const,
-      nowMs: NOW_MS,
-      lastLoadedAtMs: NOW_MS,
-      interrupted: true,
-    };
-    expect(decideUsageRefresh({ ...fresh, visible: false })).toBe("defer");
-    expect(decideUsageRefresh({ ...fresh, reason: "focus", visible: true })).toBe("fetch");
-  });
+  it("retries interrupted work once active despite a fresh payload", () => {
+    let loading = true;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const { policy, reload } = createPolicy(() => loading);
+    policy.setLastLoadedAtMs(NOW_MS);
+    policy.interrupt();
+    loading = false;
 
-  it("applies the same TTL to automatic settle polling", () => {
-    expect(
-      decideUsageRefresh({
-        reason: "poll",
-        visible: true,
-        interrupted: false,
-        nowMs: NOW_MS,
-        lastLoadedAtMs: NOW_MS - USAGE_PAYLOAD_TTL_MS + 1,
-      }),
-    ).toBe("skip");
+    policy.request("reconnect");
+    expect(reload).not.toHaveBeenCalled();
+
+    visibility.mockReturnValue("visible");
+    policy.request("focus");
+    expect(reload).toHaveBeenCalledOnce();
   });
 });

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../../config/config.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getServiceActionPreflightFailure } from "./lifecycle-action-preflight.js";
 
 afterEach(() => {
@@ -11,9 +11,9 @@ afterEach(() => {
 });
 
 async function withIsolatedLifecycleState(
-  run: (params: { agentDir: string }) => Promise<void>,
+  run: (params: { agentDir: string; configPath: string }) => Promise<void>,
 ): Promise<void> {
-  await withTempDir({ prefix: "openclaw-lifecycle-action-preflight-" }, async (root) => {
+  await withTestDir({ prefix: "openclaw-lifecycle-action-preflight-" }, async (root) => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -23,7 +23,10 @@ async function withIsolatedLifecycleState(
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     resetConfigRuntimeState();
-    await run({ agentDir });
+    await run({ agentDir, configPath });
+    await expect(fs.access(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 }
 
@@ -59,6 +62,28 @@ describe("getServiceActionPreflightFailure", () => {
     async (action) => {
       await withIsolatedLifecycleState(async () => {
         await expect(getServiceActionPreflightFailure(action)).resolves.toBeNull();
+      });
+    },
+  );
+
+  it.each(["start", "restart"] as const)(
+    "renders actionable invalid-config diagnostics before %s",
+    async (action) => {
+      await withIsolatedLifecycleState(async ({ configPath }) => {
+        await fs.writeFile(
+          configPath,
+          '{\n  meta: { lastTouchedVersion: "9999.1.1" },\n  gateway: { mode: "nope" },\n}\n',
+        );
+        resetConfigRuntimeState();
+
+        const failure = await getServiceActionPreflightFailure(action);
+
+        expect(failure?.message).toContain(
+          'openclaw.json:3 — gateway.mode: Invalid input (allowed: "local", "remote"), got: "nope"',
+        );
+        expect(failure?.message).toContain(
+          "Config was last written by OpenClaw 9999.1.1, but you are running",
+        );
       });
     },
   );

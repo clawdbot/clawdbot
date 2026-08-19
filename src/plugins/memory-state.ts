@@ -1,5 +1,6 @@
 /** Registry state for plugin memory runtimes, prompt supplements, and flush planning. */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
@@ -126,7 +127,7 @@ function buildSynchronousMemoryPromptSection(params: MemoryPromptSectionParams):
   supplements: Array<{ pluginId: string; lines: string[] }>;
 } {
   const registry = requireActivePluginRegistry();
-  const primary = normalizeMemoryPromptLines(
+  const primary = filterStringEntries(
     resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.promptBuilder?.(
       params,
     ) ?? [],
@@ -136,7 +137,7 @@ function buildSynchronousMemoryPromptSection(params: MemoryPromptSectionParams):
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
     .map((registration) => ({
       pluginId: registration.pluginId,
-      lines: normalizeMemoryPromptLines(registration.builder(params)),
+      lines: filterStringEntries(registration.builder(params)),
     }));
   return { primary, supplements };
 }
@@ -193,7 +194,7 @@ export async function prepareMemoryPromptSection(
   const preparedSupplements = await Promise.all(
     preparationRegistrations.map(async (registration) => ({
       pluginId: registration.pluginId,
-      lines: normalizeMemoryPromptLines(
+      lines: filterStringEntries(
         await registration.prepare(cloneMemoryPromptSectionParams(runParams)),
       ),
     })),
@@ -243,13 +244,6 @@ export function buildMemoryPromptSection(
   return [...synchronous.primary, ...synchronous.supplements.flatMap((entry) => entry.lines)];
 }
 
-function normalizeMemoryPromptLines(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((line): line is string => typeof line === "string");
-}
-
 export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
   return [...requireActivePluginRegistry().memoryPromptSupplements];
 }
@@ -266,8 +260,15 @@ export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return getMemoryCapability()?.capability.runtime;
 }
 
+let standaloneMemoryManagerActive = false;
+
+// Standalone managers are intentionally absent from the active plugin registry.
+export function setStandaloneMemoryManagerActive(active: boolean): void {
+  standaloneMemoryManagerActive = active;
+}
+
 export function hasMemoryRuntime(): boolean {
-  return getMemoryRuntime() !== undefined;
+  return standaloneMemoryManagerActive || getMemoryRuntime() !== undefined;
 }
 
 function cloneMemoryPublicArtifact(

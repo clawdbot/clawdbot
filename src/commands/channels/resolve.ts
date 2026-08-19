@@ -4,7 +4,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelResolveKind,
   ChannelResolveResult,
@@ -21,6 +20,7 @@ import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin
 import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
 
 export type ChannelsResolveOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   kind?: "auto" | "user" | "group" | "channel";
@@ -124,6 +124,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     config: loadedRaw,
     commandName: "channels resolve",
     targetIds: getChannelsCommandSecretTargetIds(),
+    agentId: opts.agent,
     mode: "read_only_operational",
     runtime,
     autoEnable: true,
@@ -140,6 +141,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     ? await resolveInstallableChannelPlugin({
         cfg,
         runtime,
+        agentId: opts.agent,
         rawChannel: explicitChannel,
         allowInstall: false,
         supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
@@ -161,14 +163,14 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   const selection = explicitChannel
     ? {
         channel: resolvedExplicit?.channelId,
+        plugin: resolvedExplicit?.plugin,
       }
     : await resolveMessageChannelSelection({
         cfg,
         channel: opts.channel ?? null,
+        agentId: opts.agent,
       });
-  const plugin =
-    (explicitChannel ? resolvedExplicit?.plugin : undefined) ??
-    (selection.channel ? getChannelPlugin(selection.channel) : undefined);
+  const plugin = selection.plugin;
   if (!plugin?.resolver?.resolveTargets) {
     const channelText = selection.channel ?? explicitChannel ?? "";
     throw new Error(

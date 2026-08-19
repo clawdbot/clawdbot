@@ -73,6 +73,7 @@ describe("buildStatusAllReportLines", () => {
         channelsStatus: null,
         channelIssues: [],
         deliveryDiagnostics: null,
+        exporterDiagnostics: null,
         gatewayReachable: false,
         health: null,
         nodeOnlyGateway: null,

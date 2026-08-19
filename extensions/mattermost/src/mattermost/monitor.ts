@@ -136,15 +136,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const botUserId = botUser.id;
   const botUsername = normalizeOptionalString(botUser.username);
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
-  await registerMattermostMonitorSlashCommands({
-    client,
-    cfg,
-    runtime,
-    account,
-    baseUrl,
-    botUserId,
-  });
-  const slashEnabled = getSlashCommandState(account.accountId) != null;
 
   // Derive a stable HMAC secret so CLI and gateway validate the same callbacks.
   setInteractionSecret(account.accountId, botToken);
@@ -230,6 +221,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       allowedInteractionSourceIps.length > 0 ? allowedInteractionSourceIps : ["127.0.0.1", "::1"],
     handleModelPickerInteraction: createMattermostModelPickerInteractionHandler(monitor),
   });
+  try {
+    await registerMattermostMonitorSlashCommands({
+      client,
+      cfg,
+      runtime,
+      account,
+      baseUrl,
+      botUserId,
+    });
+  } catch (error) {
+    // The callback route must exist before remote slash setup, but not outlive failed startup.
+    unregisterInteractions();
+    throw error;
+  }
+  const slashEnabled = getSlashCommandState(account.accountId) != null;
   const handlePost = createMattermostPostHandler(monitor);
   const handleReactionEvent = createMattermostReactionHandler(monitor);
 
@@ -367,7 +373,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
   } finally {
     await ingress.stop();
-    unregisterInteractions?.();
+    unregisterInteractions();
   }
   const slashShutdownCleanupPromise = slashShutdownCleanup;
   if (slashShutdownCleanupPromise) {

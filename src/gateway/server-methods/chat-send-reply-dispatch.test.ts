@@ -130,12 +130,16 @@ describe("createChatSendReplyDispatch", () => {
     dispatcher.sendToolResult({ mediaUrl: "https://example.test/tool.png" });
     dispatcher.sendFinalReply({ mediaUrl: "https://example.test/final.png" });
     dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
 
     expect(dispatch.deliveredReplies).toEqual([]);
     expect(dispatch.hasAppendedWebchatAgentMedia()).toBe(false);
     expect(markBlocked).not.toHaveBeenCalled();
-    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 1, block: 1, final: 1 });
+    expect(receipt?.counts).toMatchObject({
+      tool: { cancelled: 1 },
+      block: { cancelled: 1 },
+      final: { cancelled: 1 },
+    });
   });
 
   it("finalizes media inside the admission without masking dispatch errors", async () => {

@@ -1,8 +1,13 @@
 /** Query helpers for discovering secret target registry entries. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 import { getPath } from "./path-utils.js";
-import { getCoreSecretTargetRegistry, getSecretTargetRegistry } from "./target-registry-data.js";
+import {
+  buildSecretTargetRegistryFromPlugins,
+  getCoreSecretTargetRegistry,
+  getSecretTargetRegistry,
+} from "./target-registry-data.js";
 import {
   compileTargetRegistryEntry,
   expandPathTokens,
@@ -78,18 +83,15 @@ function buildConfigTargetIdIndex(
   return byId;
 }
 
-function getCompiledSecretTargetRegistryState() {
-  if (compiledSecretTargetRegistryState) {
-    return compiledSecretTargetRegistryState;
-  }
-  const compiledSecretTargetRegistry = getSecretTargetRegistry().map(compileTargetRegistryEntry);
+function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[]) {
+  const compiledSecretTargetRegistry = registry.map(compileTargetRegistryEntry);
   const openClawCompiledSecretTargets = compiledSecretTargetRegistry.filter(
     (entry) => entry.configFile === "openclaw.json",
   );
   const authProfilesCompiledSecretTargets = compiledSecretTargetRegistry.filter(
     (entry) => entry.configFile === "auth-profiles.json",
   );
-  compiledSecretTargetRegistryState = {
+  return {
     authProfilesCompiledSecretTargets,
     authProfilesTargetsById: buildConfigTargetIdIndex(authProfilesCompiledSecretTargets),
     compiledSecretTargetRegistry,
@@ -98,7 +100,26 @@ function getCompiledSecretTargetRegistryState() {
     openClawTargetsById: buildConfigTargetIdIndex(openClawCompiledSecretTargets),
     targetsByType: buildTargetTypeIndex(compiledSecretTargetRegistry),
   };
+}
+
+function getCompiledSecretTargetRegistryState() {
+  if (compiledSecretTargetRegistryState) {
+    return compiledSecretTargetRegistryState;
+  }
+  compiledSecretTargetRegistryState = compileSecretTargetRegistryState(getSecretTargetRegistry());
   return compiledSecretTargetRegistryState;
+}
+
+function getConfiguredSecretTargetRegistryState(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">,
+) {
+  return compileSecretTargetRegistryState(
+    manifestRegistry
+      ? buildSecretTargetRegistryFromPlugins(manifestRegistry.plugins)
+      : getSecretTargetRegistry({ config, env }),
+  );
 }
 
 function getCompiledCoreOpenClawTargetState() {
@@ -176,10 +197,31 @@ function configHasPluginEntries(config: OpenClawConfig): boolean {
 
 function getConfiguredChannelOpenClawTargets(
   config: OpenClawConfig,
-): CompiledTargetRegistryEntry[] {
-  return Object.keys(config.channels ?? {}).flatMap(
-    (channelId) => getCompiledChannelOpenClawTargets(channelId) ?? [],
-  );
+  env: NodeJS.ProcessEnv,
+): CompiledTargetRegistryEntry[] | null {
+  const entries: CompiledTargetRegistryEntry[] = [];
+  for (const channelId of Object.keys(config.channels ?? {})) {
+    if (channelId === "defaults" || channelId === "modelByChannel" || channelId === "tools") {
+      continue;
+    }
+    const contract = loadChannelSecretContractApi({
+      channelId,
+      config,
+      env,
+      bundledOnly: true,
+    });
+    if (!contract) {
+      // External/custom channels may have multiple manifest owners. Only the full registry can
+      // prove their target set is complete; a config-scoped first-contract lookup cannot.
+      return null;
+    }
+    entries.push(
+      ...(contract.secretTargetRegistryEntries
+        ?.filter((entry) => entry.configFile === "openclaw.json")
+        .map(compileTargetRegistryEntry) ?? []),
+    );
+  }
+  return entries;
 }
 
 function resolveDiscoveryEntries(params: {
@@ -384,7 +426,7 @@ function resolvePlanTargetAgainstEntries(
 /**
  * Resolves a plan-capable secret target by owning config document and concrete path.
  */
-export function resolveSecretPlanTargetByPath(params: {
+export function resolveSecretPlanTargetByPathCore(params: {
   configFile: SecretTargetConfigFile;
   pathSegments: string[];
 }): ResolvedPlanTarget | null {
@@ -463,13 +505,15 @@ export function resolveConfigSecretTargetByPath(pathSegments: string[]): Resolve
   return null;
 }
 
-/**
- * Discovers configured secret-bearing values in openclaw.json using the full registry.
- */
+/** Discovers configured secret-bearing values in openclaw.json. */
 export function discoverConfigSecretTargets(
   config: OpenClawConfig,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  } = {},
 ): DiscoveredConfigSecretTarget[] {
-  return discoverConfigSecretTargetsByIds(config);
+  return discoverConfigSecretTargetsByIds(config, undefined, options);
 }
 
 /**
@@ -478,25 +522,36 @@ export function discoverConfigSecretTargets(
 export function discoverConfigSecretTargetsByIds(
   config: OpenClawConfig,
   targetIds?: Iterable<string>,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  } = {},
 ): DiscoveredConfigSecretTarget[] {
+  const env = options.env ?? process.env;
   const allowedTargetIds = normalizeAllowedTargetIds(targetIds);
   const coreState = getCompiledCoreOpenClawTargetState();
   const hasOnlyCoreTargetIds =
     allowedTargetIds !== null &&
     Array.from(allowedTargetIds).every((targetId) => coreState.knownTargetIds.has(targetId));
+  const configuredChannelEntries =
+    !options.manifestRegistry && !hasOnlyCoreTargetIds && !configHasPluginEntries(config)
+      ? getConfiguredChannelOpenClawTargets(config, env)
+      : null;
   const configuredEntries = hasOnlyCoreTargetIds
     ? coreState.openClawCompiledSecretTargets
-    : allowedTargetIds !== null && !configHasPluginEntries(config)
-      ? [...coreState.openClawCompiledSecretTargets, ...getConfiguredChannelOpenClawTargets(config)]
+    : configuredChannelEntries
+      ? [...coreState.openClawCompiledSecretTargets, ...configuredChannelEntries]
       : null;
   const configuredEntriesById = configuredEntries
     ? buildConfigTargetIdIndex(configuredEntries)
     : null;
   const canUseConfiguredEntries =
     configuredEntries !== null &&
-    allowedTargetIds !== null &&
-    Array.from(allowedTargetIds).every((targetId) => configuredEntriesById?.has(targetId));
-  const registryState = canUseConfiguredEntries ? null : getCompiledSecretTargetRegistryState();
+    (allowedTargetIds === null ||
+      Array.from(allowedTargetIds).every((targetId) => configuredEntriesById?.has(targetId)));
+  const registryState = canUseConfiguredEntries
+    ? null
+    : getConfiguredSecretTargetRegistryState(config, env, options.manifestRegistry);
   const discoveryEntries = resolveDiscoveryEntries({
     allowedTargetIds,
     defaultEntries: configuredEntries ?? registryState?.openClawCompiledSecretTargets ?? [],

@@ -64,7 +64,7 @@ describe("taxonomy profile scenario selection", () => {
 
     expect(liveTelegram).toContain("telegram-help-command");
     expect(liveTelegram).not.toContain("telegram-assistant-transcript-role-boundary");
-    expect(mockTelegram).toContain("telegram-assistant-transcript-role-boundary");
+    expect(mockTelegram).not.toContain("telegram-assistant-transcript-role-boundary");
     expect(mockTelegram).not.toContain("discord-canary");
   });
 

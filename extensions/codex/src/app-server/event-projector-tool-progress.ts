@@ -1,12 +1,14 @@
 import {
   inferToolMetaFromArgs,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
+  auditNativeToolTerminalStatus,
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
   isSideEffectingNativeToolItem,
@@ -18,6 +20,7 @@ import {
   itemOutputText,
   itemToolArgs,
   itemToolError,
+  isCommandBearingToolItem,
   nativeToolActionFingerprint,
 } from "./event-projector-tool-items.js";
 import {
@@ -33,13 +36,16 @@ import {
   toolOutputRawEchoSignature,
   truncateToolTranscriptText,
 } from "./event-projector-tool-output.js";
-import { readString } from "./event-projector-values.js";
+import { codexApprovalTimeoutText, type CodexApprovalKind } from "./plugin-approval-roundtrip.js";
 import type {
   CodexDynamicToolCallOutputContentItem,
   CodexThreadItem,
   JsonObject,
 } from "./protocol.js";
-import { resolveCodexToolProgressDetailMode } from "./tool-progress-normalization.js";
+import {
+  isCodexCommandBearingToolCall,
+  resolveCodexToolProgressDetailMode,
+} from "./tool-progress-normalization.js";
 
 const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "message",
@@ -72,6 +78,7 @@ export type ToolTranscriptResultInput = {
 };
 
 type ToolProgressRawSignature = { length: number; prefix: string };
+type NativeToolStatus = ReturnType<typeof itemStatus>;
 type ToolProgressEchoState = {
   displayTexts: string[];
   streamedDisplayText?: string;
@@ -95,6 +102,7 @@ export class CodexToolProgressProjection {
   private readonly sideEffectingNativeIds = new Set<string>();
   private readonly sideEffectingDynamicIds = new Set<string>();
   private readonly transcriptProgressCallIds = new Set<string>();
+  readonly approvalTimeoutKinds = new Map<string, CodexApprovalKind>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
 
   constructor(private readonly params: EmbeddedRunAttemptParams) {}
@@ -117,6 +125,11 @@ export class CodexToolProgressProjection {
 
   get hasPotentialSideEffects(): boolean {
     return this.sideEffectingNativeIds.size > 0 || this.sideEffectingDynamicIds.size > 0;
+  }
+
+  approvalTimeoutExplanation(itemId: string, status: NativeToolStatus): string | undefined {
+    const kind = isNonSuccessItemStatus(status) && this.approvalTimeoutKinds.get(itemId);
+    return kind ? codexApprovalTimeoutText(kind) : undefined;
   }
 
   setLastToolError(error: EmbeddedRunAttemptResult["lastToolError"]): void {
@@ -167,7 +180,7 @@ export class CodexToolProgressProjection {
       toolName: existing?.toolName ?? params.tool,
       ...(existing?.meta ? { meta: existing.meta } : {}),
       ...(params.asyncStarted === true ? { asyncStarted: true } : {}),
-      ...(!params.success ? { isError: true } : {}),
+      isError: !params.success,
     });
     if (params.terminalResolution) {
       this.lastNativeToolError = params.terminalResolution.lastToolError;
@@ -255,15 +268,27 @@ export class CodexToolProgressProjection {
     item: CodexThreadItem;
     name: string;
     meta?: string;
-    status: ReturnType<typeof itemStatus>;
+    status: NativeToolStatus;
   }): void {
     const executionStarted = params.status !== "blocked";
     const mutatingAction = executionStarted && isMutatingNativeToolItem(params.item);
     const actionFingerprint = mutatingAction ? nativeToolActionFingerprint(params.item) : undefined;
     const isFailure = isNonSuccessItemStatus(params.status);
+    const approvalTimeoutExplanation = this.approvalTimeoutExplanation(
+      params.item.id,
+      params.status,
+    );
     const error = isFailure
-      ? itemToolError(params.item, params.status, this.output.textByItem)
+      ? (approvalTimeoutExplanation ??
+        itemToolError(params.item, params.status, this.output.textByItem))
       : undefined;
+    const failure = error
+      ? {
+          ...(approvalTimeoutExplanation ? { errorCode: "approval_timeout" as const } : {}),
+          error,
+          ...(approvalTimeoutExplanation ? { timedOut: true } : {}),
+        }
+      : {};
     const terminalResolution = this.params.observeToolTerminal?.({
       toolCallId: params.item.id,
       toolName: params.name,
@@ -271,7 +296,7 @@ export class CodexToolProgressProjection {
       ...(params.meta ? { meta: params.meta } : {}),
       executionStarted,
       outcome: isFailure ? "failure" : "success",
-      ...(isFailure ? { failure: error ? { error } : {} } : {}),
+      ...(isFailure ? { failure } : {}),
       nativeMutation: {
         mutatingAction,
         replaySafe: !mutatingAction,
@@ -286,7 +311,7 @@ export class CodexToolProgressProjection {
       this.lastNativeToolError = {
         toolName: params.name,
         ...(params.meta ? { meta: params.meta } : {}),
-        ...(error ? { error } : {}),
+        ...failure,
         ...(mutatingAction ? { mutatingAction: true } : {}),
         ...(actionFingerprint ? { actionFingerprint } : {}),
       };
@@ -303,13 +328,18 @@ export class CodexToolProgressProjection {
       return;
     }
     const toolName = itemName(item);
-    if (!toolName || !shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
+    const args = itemToolArgs(item);
+    if (!toolName || !shouldEmitTranscriptToolProgress(toolName, args)) {
       return;
     }
     this.resultSummaryItemIds.add(item.id);
+    const meta =
+      this.shouldEmitToolOutput() || !isCommandBearingToolItem(item, args)
+        ? itemMeta(item, this.toolProgressDetailMode())
+        : undefined;
     this.emitToolResultMessage({
       itemId: item.id,
-      text: formatToolSummary(toolName, itemMeta(item, this.toolProgressDetailMode())),
+      text: formatToolSummary(toolName, meta),
     });
   }
 
@@ -347,13 +377,21 @@ export class CodexToolProgressProjection {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
-    const status = itemStatus(item);
     const existing = this.metas.get(item.id);
+    const terminalStatus = auditNativeToolTerminalStatus(item);
+    const isError =
+      typeof existing?.isError === "boolean"
+        ? existing.isError
+        : terminalStatus === "completed"
+          ? false
+          : terminalStatus === "failed" || terminalStatus === "blocked"
+            ? true
+            : undefined;
     this.metas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
       ...(existing?.asyncStarted ? { asyncStarted: true } : {}),
-      ...(status !== "running" && isNonSuccessItemStatus(status) ? { isError: true } : {}),
+      ...(isError === undefined ? {} : { isError }),
     });
   }
 
@@ -451,9 +489,12 @@ export class CodexToolProgressProjection {
     }
     this.transcriptProgressCallIds.add(params.id);
     const args = normalizeToolTranscriptArguments(params.arguments);
-    const meta = inferToolMetaFromArgs(params.name, args, {
-      detailMode: this.toolProgressDetailMode(),
-    });
+    const meta =
+      this.shouldEmitToolOutput() || !isCodexCommandBearingToolCall(params.name, args)
+        ? inferToolMetaFromArgs(params.name, args, {
+            detailMode: this.toolProgressDetailMode(),
+          })
+        : undefined;
     if (
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||

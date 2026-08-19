@@ -1,9 +1,9 @@
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
-import { rawDataToString } from "../infra/ws.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 

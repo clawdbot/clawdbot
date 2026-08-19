@@ -59,8 +59,9 @@ Playback conversion is lazy:
    unplayable-media fallback and keep the download action available.
 
 Transcoding accepts sources up to 20 minutes and never raises the normal audio
-or video byte cap. Cached playback renditions are pruned by normal media-store
-maintenance.
+or video byte cap. Cached playback renditions use a fixed seven-day retention
+that Gateway maintenance enforces at startup and hourly, independently of
+`attachments.ttlHours`.
 
 ## Managed attachments and access
 

@@ -1,9 +1,10 @@
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveExecApprovalsFromFile,
   type ExecApprovalsFile,
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type {
   CodexAppServerApprovalPolicy,
   CodexAppServerApprovalsReviewer,
@@ -85,34 +86,26 @@ export function resolveApprovalsReviewer(
 }
 
 function resolveOpenClawExecPolicyFromConfig(params: {
-  config?: unknown;
+  config?: OpenClawConfig;
   agentId?: string;
 }): OpenClawExecPolicy {
-  const root = readRecord(params.config);
-  const globalExec = readRecord(readRecord(root?.tools)?.exec);
+  const globalExec = readRecord(params.config?.tools?.exec);
   const globalPolicy = applyOpenClawExecPolicyLayer(createDefaultOpenClawExecPolicy(), globalExec);
   const agentId = params.agentId?.trim();
-  if (!agentId) {
-    return globalPolicy;
-  }
-  const agents = readRecord(root?.agents);
-  const agentList = Array.isArray(agents?.list) ? agents.list : [];
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const agentEntry = agentList.find((entry) => {
-    const id = readRecord(entry)?.id;
-    return typeof id === "string" && normalizeAgentId(id) === normalizedAgentId;
-  });
-  const agentExec = readRecord(readRecord(readRecord(agentEntry)?.tools)?.exec);
+  const agentExec = agentId
+    ? readRecord(resolveAgentConfig(params.config ?? {}, agentId)?.tools?.exec)
+    : undefined;
   return applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
 }
 
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   execOverrides?: {
+    mode?: unknown;
     security?: unknown;
     ask?: unknown;
   };
   approvals?: ExecApprovalsFile;
-  config?: unknown;
+  config?: OpenClawConfig;
   agentId?: string;
 }): OpenClawExecPolicyForCodexAppServer {
   const basePolicy = resolveOpenClawExecPolicyFromConfig({
@@ -161,8 +154,7 @@ export function assertCodexAppServerAllowedForOpenClawExecMode(
 
 function createDefaultOpenClawExecPolicy(): OpenClawExecPolicy {
   return {
-    security: "full",
-    ask: "off",
+    ...resolveOpenClawExecPolicyForMode("full"),
     touched: false,
   };
 }

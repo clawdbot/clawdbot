@@ -1,5 +1,5 @@
 // Unit coverage for the active-job accounting the heartbeat busy guard depends on.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearCronJobActive,
   hasActiveCronJobs,
@@ -8,6 +8,7 @@ import {
   noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
   noteActiveCronJobTriggerMutation,
+  onCronJobInactive,
   resetCronActiveJobs,
 } from "./active-jobs.js";
 
@@ -50,6 +51,19 @@ describe("hasActiveCronJobsExceptMarker", () => {
 });
 
 describe("active cron schedule ownership", () => {
+  it("notifies only the removed marker when a same-id run replaces it", () => {
+    const removedMarker = markCronJobActive("reused-job");
+    const onRemovedInactive = vi.fn();
+    onCronJobInactive(noteActiveCronJobRemoval("reused-job"), onRemovedInactive);
+    const replacementMarker = markCronJobActive("reused-job");
+
+    clearCronJobActive("reused-job", replacementMarker);
+    expect(onRemovedInactive).not.toHaveBeenCalled();
+
+    clearCronJobActive("reused-job", removedMarker);
+    expect(onRemovedInactive).toHaveBeenCalledOnce();
+  });
+
   it("records durable job removal without releasing the active run marker", () => {
     const marker = markCronJobActive("removed-job");
 
@@ -57,6 +71,10 @@ describe("active cron schedule ownership", () => {
 
     expect(marker?.scheduleMutated).toBe(true);
     expect(marker?.jobRemoved).toBe(true);
+    expect(marker?.cancellation).toEqual({
+      kind: "requested",
+      reason: "Cron job removed by operator.",
+    });
     expect(hasActiveCronJobs()).toBe(true);
   });
 

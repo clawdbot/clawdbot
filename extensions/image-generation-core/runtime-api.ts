@@ -4,4 +4,4 @@ export {
   listRuntimeImageGenerationProviders,
   type GenerateImageParams,
   type GenerateImageRuntimeResult,
-} from "./src/runtime.js";
+} from "openclaw/plugin-sdk/image-generation-runtime";

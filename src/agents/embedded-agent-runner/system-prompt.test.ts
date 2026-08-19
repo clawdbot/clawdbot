@@ -10,6 +10,8 @@ import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 describe("applySystemPromptToSession", () => {
@@ -117,8 +119,7 @@ describe("buildEmbeddedSystemPrompt", () => {
       userDate: "2026-01-05",
     });
 
-    expect(prompt).toContain("## Sub-Agent Delegation");
-    expect(prompt).toContain("Mode: prefer");
+    expect(prompt).toContain("## Delegation");
   });
 
   it("uses deferred capability names without listing them as visible tools", () => {
@@ -150,8 +151,7 @@ describe("buildEmbeddedSystemPrompt", () => {
       userDate: "2026-01-05",
     });
 
-    expect(prompt).toContain("## Sub-Agent Delegation");
-    expect(prompt).toContain("Mode: prefer");
+    expect(prompt).toContain("## Delegation");
     expect(prompt).not.toContain("- sessions_spawn: spawn an isolated sub-agent session");
   });
 

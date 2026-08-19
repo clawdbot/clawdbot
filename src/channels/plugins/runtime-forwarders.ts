@@ -3,6 +3,7 @@
  *
  * Creates directory and outbound adapters whose methods delegate to lazily resolved runtimes.
  */
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { ChannelDirectoryAdapter, ChannelOutboundAdapter } from "./types.adapters.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -26,16 +27,29 @@ type SendPayloadParams = Parameters<NonNullable<ChannelOutboundAdapter["sendPayl
 async function resolveForwardedMethod<Runtime, Fn>(params: {
   getRuntime: () => MaybePromise<Runtime>;
   resolve: (runtime: Runtime) => Fn | null | undefined;
+  notDispatched?: boolean;
   unavailableMessage?: string;
 }): Promise<Fn> {
-  const runtime = await params.getRuntime();
-  const method = params.resolve(runtime);
-  if (method) {
-    return method;
+  try {
+    const runtime = await params.getRuntime();
+    const method = params.resolve(runtime);
+    if (method) {
+      return method;
+    }
+    // Fail at call time instead of registration time so optional runtime methods
+    // can stay absent until the caller actually invokes that capability.
+    throw new Error(params.unavailableMessage ?? "Runtime method is unavailable");
+  } catch (error) {
+    if (!params.notDispatched || error instanceof PlatformMessageNotDispatchedError) {
+      throw error;
+    }
+    const message =
+      params.unavailableMessage ??
+      (error instanceof Error && error.message.trim()
+        ? error.message
+        : "Runtime method is unavailable");
+    throw new PlatformMessageNotDispatchedError(message, { cause: error });
   }
-  // Fail at call time instead of registration time so optional runtime methods
-  // can stay absent until the caller actually invokes that capability.
-  throw new Error(params.unavailableMessage ?? "Runtime method is unavailable");
 }
 
 /**
@@ -134,6 +148,7 @@ export function createRuntimeOutboundDelegates<Runtime>(params: {
           await (
             await resolveForwardedMethod({
               getRuntime: params.getRuntime,
+              notDispatched: true,
               resolve: params.sendPayload!.resolve,
               unavailableMessage: params.sendPayload!.unavailableMessage,
             })
@@ -144,6 +159,7 @@ export function createRuntimeOutboundDelegates<Runtime>(params: {
           await (
             await resolveForwardedMethod({
               getRuntime: params.getRuntime,
+              notDispatched: true,
               resolve: params.sendText!.resolve,
               unavailableMessage: params.sendText!.unavailableMessage,
             })
@@ -154,6 +170,7 @@ export function createRuntimeOutboundDelegates<Runtime>(params: {
           await (
             await resolveForwardedMethod({
               getRuntime: params.getRuntime,
+              notDispatched: true,
               resolve: params.sendMedia!.resolve,
               unavailableMessage: params.sendMedia!.unavailableMessage,
             })
@@ -164,6 +181,7 @@ export function createRuntimeOutboundDelegates<Runtime>(params: {
           await (
             await resolveForwardedMethod({
               getRuntime: params.getRuntime,
+              notDispatched: true,
               resolve: params.sendPoll!.resolve,
               unavailableMessage: params.sendPoll!.unavailableMessage,
             })

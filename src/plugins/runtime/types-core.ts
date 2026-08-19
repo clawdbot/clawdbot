@@ -6,14 +6,16 @@ import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
-import type {
-  ListSpeechVoices,
-  PrepareTtsRequest,
-  TextToSpeech,
-  TextToSpeechStream,
-  TextToSpeechTelephony,
-} from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
+
+type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
+type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
+type PrepareTtsRequest = (
+  ...args: Parameters<TtsRuntimeApi["prepareTtsRequest"]>
+) => Promise<ReturnType<TtsRuntimeApi["prepareTtsRequest"]>>;
+type TextToSpeech = typeof import("../../tts/tts.js").textToSpeech;
+type TextToSpeechStream = TtsRuntimeApi["textToSpeechStream"];
+type TextToSpeechTelephony = TtsRuntimeApi["textToSpeechTelephony"];
 
 type RuntimeRequestHeartbeatOptions = Parameters<
   typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
@@ -95,6 +97,8 @@ type RuntimeCreateSessionEntryBaseParams = {
   agentId?: string;
   label?: string;
   spawnedCwd?: string;
+  sessionRoot?: string;
+  permissionMode?: RuntimeSessionEntry["permissionMode"];
   /** Bind the created session's CLI execution to this paired node. */
   execNode?: string;
   /** Working directory interpreted only by execNode. */
@@ -294,8 +298,13 @@ export type LlmCompleteResult = {
   };
 };
 
+type RuntimeRunEmbeddedAgentParams = Omit<
+  import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  "admittedRunContext" | "preparedRunAdmission" | "skillWorkshopCollectionReconcile"
+>;
+
 type RuntimeRunEmbeddedAgent = (
-  params: import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  params: RuntimeRunEmbeddedAgentParams,
 ) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */
@@ -327,6 +336,8 @@ export type PluginRuntimeCore = {
     resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
     resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
+    /** Resolve an allowed catalog create target through canonical agent model/runtime policy. */
+    resolveSessionCatalogCreateTarget: typeof import("./runtime-agent-session-catalog.js").resolveAgentCatalogCreateTarget;
     resolveThinkingDefault: (params: {
       cfg: import("../../config/types.openclaw.js").OpenClawConfig;
       provider: string;
@@ -340,8 +351,6 @@ export type PluginRuntimeCore = {
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
     runEmbeddedAgent: RuntimeRunEmbeddedAgent;
-    /** @deprecated Use runEmbeddedAgent. */
-    runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     /**
      * Shares the embedded runner's CLI-backend dispatch eligibility (route,
@@ -351,7 +360,7 @@ export type PluginRuntimeCore = {
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
-      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
@@ -382,9 +391,8 @@ export type PluginRuntimeCore = {
     requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
     /**
      * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
-     * Accepts an optional `heartbeat` config override so callers can force
-     * delivery to the last active channel — the same pattern the cron service
-     * uses to avoid the default `target: "none"` suppression.
+     * Accepts an optional `heartbeat` config override so callers can choose
+     * an explicit destination or opt into internal-only `target: "none"` runs.
      */
     runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => Promise<HeartbeatRunResult>;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
@@ -467,7 +475,6 @@ export type PluginRuntimeCore = {
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
-    withLease: import("../../plugin-state/plugin-state-lease.types.js").PluginStateLeaseRunner;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
     ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<

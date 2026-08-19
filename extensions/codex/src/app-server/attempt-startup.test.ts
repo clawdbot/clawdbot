@@ -6,19 +6,22 @@ import path from "node:path";
 import {
   AgentHarnessPreflightError,
   type CodexBundleMcpThreadConfig,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import { CodexAppServerClient, isCodexAppServerRequestTimeoutError } from "./client.js";
+import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   type CodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
 } from "./config.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
@@ -58,9 +61,10 @@ function createAttemptPaths(): AttemptPaths {
 
 function createAttemptParams(paths: AttemptPaths): EmbeddedRunAttemptParams {
   return {
+    hostCapabilities: createCodexTestHostCapabilities(),
     prompt: "hello",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey: "agent:agent-1:session-1",
     agentDir: paths.agentDir,
     sessionFile: paths.sessionFile,
     effectiveCwd: paths.cwd,
@@ -87,6 +91,8 @@ const bundleMcpThreadConfig = {
   diagnostics: [],
   evaluated: false,
   fingerprint: undefined,
+  staticServerNames: [],
+  userStaticServerNames: [],
 } satisfies CodexBundleMcpThreadConfig;
 
 const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
@@ -113,6 +119,8 @@ function startThreadWithHarness(
     runtimeArtifactRequest?: Parameters<
       typeof startCodexAttemptThread
     >[0]["runtimeArtifactRequest"];
+    sandbox?: Parameters<typeof startCodexAttemptThread>[0]["sandbox"];
+    sandboxExecServerEnabled?: boolean;
   },
 ) {
   const harness = overrides?.harness ?? createClientHarness();
@@ -150,8 +158,8 @@ function startThreadWithHarness(
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
     nativeProviderWebSearchSupport: "supported",
-    sandboxExecServerEnabled: false,
-    sandbox: null,
+    sandboxExecServerEnabled: overrides?.sandboxExecServerEnabled ?? false,
+    sandbox: overrides?.sandbox ?? null,
     contextEngineProjection: undefined,
     startupTimeoutMs,
     signal,
@@ -176,7 +184,7 @@ async function captureExpectedRuntimeArtifact(
     before,
     startOptions: appServer.start,
     spawnIdentity,
-    runtimeIdentity: { serverVersion: "0.146.0", userAgent: "openclaw/0.146.0 (macOS; test)" },
+    runtimeIdentity: { serverVersion: "0.147.0", userAgent: "openclaw/0.147.0 (macOS; test)" },
   });
 }
 
@@ -186,7 +194,7 @@ async function answerInitialize(harness: ClientHarness): Promise<void> {
     timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.146.0 (macOS; test)" } });
+  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.147.0 (macOS; test)" } });
 }
 
 async function waitForRequest(
@@ -212,38 +220,7 @@ async function waitForThreadStart(harness: ClientHarness): Promise<{ id?: number
 }
 
 function threadStartResult(threadId = "thread-1") {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: "/repo",
-      cliVersion: "0.146.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: "/repo",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
+  return createThreadStartResult(threadId, "/repo");
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -708,6 +685,29 @@ describe("startCodexAttemptThread", () => {
     expect(clientFactory).not.toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: expect.anything() }),
     );
+  });
+
+  it("requires app-server environment support for remote-exec placement", async () => {
+    const sandbox = {
+      ...createSandboxContext({}),
+      placementExecutionMode: "remote-exec" as const,
+    };
+    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      sandbox,
+    });
+    await answerInitialize(harness);
+    const environmentAdd = await waitForRequest(harness, "environment/add");
+    harness.send({
+      id: environmentAdd.id,
+      error: { code: -32601, message: "unknown variant environment/add" },
+    });
+
+    await expect(run).rejects.toThrow(
+      "Codex app-server did not register an OpenClaw sandbox exec-server environment.",
+    );
+    expect(
+      readHarnessMessages(harness.writes).some((entry) => entry.method === "thread/start"),
+    ).toBe(false);
   });
 
   it("closes a startup client that arrives after startup timeout", async () => {

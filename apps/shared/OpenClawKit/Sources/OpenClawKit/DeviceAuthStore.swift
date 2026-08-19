@@ -139,6 +139,7 @@ public enum DeviceAuthStore {
             .appendingPathComponent("openclaw.sqlite", isDirectory: false)
         guard let identity = try? DeviceIdentitySQLiteStore.loadExisting(
             databaseURL: databaseURL,
+            destinationStateDirURL: stateDirectoryURL,
             profile: profile)
         else { return }
         try? self.withStore(profile: profile) { database in

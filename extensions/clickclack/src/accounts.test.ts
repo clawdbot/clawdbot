@@ -134,10 +134,12 @@ describe("ClickClack account resolution", () => {
         env: { CLICKCLACK_SERVICE_TOKEN: "  test-token-placeholder  " },
       }),
     ).toEqual({
+      allowBots: false,
       allowFrom: ["*"],
       accountId: "service",
       apiEndpoint: "https://app.clickclack.chat",
       baseUrl: "https://app.clickclack.chat",
+      botLoopProtection: undefined,
       config: {
         allowFrom: ["*"],
         baseUrl: "https://app.clickclack.chat",
@@ -162,6 +164,7 @@ describe("ClickClack account resolution", () => {
       mentionPatterns: [],
       model: undefined,
       name: undefined,
+      nativeProgress: false,
       reconnectMs: 1_500,
       replyMode: "agent",
       requireMention: false,
@@ -240,11 +243,13 @@ describe("ClickClack account resolution", () => {
     } satisfies CoreConfig;
 
     expect(resolveClickClackAccount({ cfg, accountId: "peter" })).toEqual({
+      allowBots: false,
       allowFrom: ["*"],
       accountId: "peter",
       agentId: "peter-bot",
       apiEndpoint: "https://app.clickclack.chat",
       baseUrl: "https://app.clickclack.chat",
+      botLoopProtection: undefined,
       config: {
         agentId: "peter-bot",
         allowFrom: ["*"],
@@ -272,6 +277,7 @@ describe("ClickClack account resolution", () => {
       mentionPatterns: [],
       model: "openai/gpt-5.4-mini",
       name: undefined,
+      nativeProgress: false,
       reconnectMs: 1_500,
       replyMode: "model",
       requireMention: false,

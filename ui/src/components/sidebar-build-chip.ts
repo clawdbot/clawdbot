@@ -3,6 +3,7 @@ import { property } from "lit/decorators.js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   formatBuildChipText,
@@ -10,18 +11,6 @@ import {
   renderSidebarServerDetails,
 } from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
-
-function shouldHandleNavigationClick(event: MouseEvent): boolean {
-  // Preserve browser behavior for modified clicks and non-primary buttons.
-  return (
-    !event.defaultPrevented &&
-    event.button === 0 &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
-  );
-}
 
 class SidebarBuildChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";

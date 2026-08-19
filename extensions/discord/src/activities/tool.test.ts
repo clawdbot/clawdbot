@@ -366,7 +366,7 @@ describe("show_widget", () => {
     }
 
     expect(tool.name).toBe("show_widget");
-    expect(tool.description).toMatch(/^Show an interactive, self-contained HTML widget/);
+    expect(tool.description).toMatch(/^Visual helps\? Make widget\. Do not wait for ask\./);
     expect((tool.parameters as { properties?: Record<string, unknown> }).properties).toMatchObject({
       title: expect.any(Object),
       widget_code: expect.any(Object),

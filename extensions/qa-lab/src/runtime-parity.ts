@@ -62,6 +62,7 @@ export type RuntimeParityCell = {
   runtimeErrorClass?: string;
   bootStateLines: string[];
   sentinelFindings?: GatewayLogSentinelFinding[];
+  modelSwitchEvidence?: Record<string, unknown>;
 };
 
 type RuntimeParityResultCell = RuntimeParityCell & {
@@ -154,6 +155,7 @@ type QaSuiteScenarioLike = {
   details?: string;
   status: "pass" | "fail" | "skip";
   steps?: Array<{ details?: string; status?: "pass" | "fail" | "skip" }>;
+  modelSwitchEvidence?: Record<string, unknown>;
 };
 
 type RuntimeParityCaptureParams = {
@@ -1510,6 +1512,9 @@ export async function captureRuntimeParityCell(
       : {}),
     bootStateLines: extractBootStateLines(gatewayLogs),
     ...(sentinelFindings.length > 0 ? { sentinelFindings } : {}),
+    ...(params.scenarioResult.modelSwitchEvidence
+      ? { modelSwitchEvidence: params.scenarioResult.modelSwitchEvidence }
+      : {}),
   };
 }
 

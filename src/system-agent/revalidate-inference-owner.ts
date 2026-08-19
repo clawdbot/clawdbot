@@ -22,7 +22,7 @@ export async function revalidateSetupInferenceOwner(params: {
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   const configuredHarnessId =
     params.route.runner === "embedded"
-      ? params.route.agentHarnessRuntimeOverride.trim()
+      ? params.route.agentHarnessRuntimeOverride?.trim()
       : undefined;
   const successfulHarnessId =
     params.auth.agentHarnessId?.trim() ||

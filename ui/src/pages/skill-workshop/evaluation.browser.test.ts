@@ -70,6 +70,7 @@ const evaluation: SkillWorkshopEvaluation = {
 
 const proposal: SkillWorkshopProposal = {
   key: "proposal-1",
+  kind: "update",
   slug: "inbox-cleaner",
   name: "Inbox Cleaner",
   oneLine: "Clean inbox triage",
@@ -83,16 +84,25 @@ const proposal: SkillWorkshopProposal = {
   recencyGroup: "today",
   ageLabel: "now",
   supportFiles: [],
+  bodyLoaded: true,
   isNew: false,
 };
 
 function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
   return {
+    access: {
+      canEvaluate: true,
+      canApply: true,
+      canRevise: true,
+      canReject: true,
+      canScanHistory: true,
+    },
     loading: false,
     error: null,
     inspectingKey: null,
     proposals: [proposal],
     selectedKey: proposal.key,
+    appliedDiffMode: "changes",
     statusFilter: "pending",
     query: "",
     filePreviewKey: null,
@@ -103,6 +113,7 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     actionNotice: null,
     revisionKey: null,
     revisionDraft: "",
+    revisionRecoveryActive: false,
     assistantName: "OpenClaw",
     workshopAgentName: "Research",
     selfLearning: null,
@@ -115,6 +126,7 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     onQueueWidthChange: vi.fn(),
     onModeChange: vi.fn(),
     onSelect: vi.fn(),
+    onAppliedDiffModeChange: vi.fn(),
     onPrev: vi.fn(),
     onNext: vi.fn(),
     onApply: vi.fn(),

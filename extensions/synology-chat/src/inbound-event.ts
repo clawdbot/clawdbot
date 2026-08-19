@@ -85,7 +85,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
       : {}),
     adapter: {
       ingest: (msg) => ({
-        id: `${params.account.accountId}:${msg.from}`,
+        id: msg.messageId,
         timestamp: Date.now(),
         rawText: msg.body,
         textForAgent: msg.body,
@@ -97,9 +97,17 @@ export async function dispatchSynologyChatInboundEvent(params: {
           params.msg.chatType === "group" || params.msg.chatType === "channel"
             ? params.msg.chatType
             : "direct";
+        const channelIngress = await params.msg.resolveChannelIngress({
+          agentId: resolved.route.agentId,
+          sessionKey: resolved.sessionKey,
+          messageId: input.id,
+          inboundEventKind: "user_request",
+        });
         const msgCtx = resolved.rt.channel.inbound.buildContext({
+          channelIngress,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
+          messageId: input.id,
           timestamp: input.timestamp,
           from: `synology-chat:${params.msg.from}`,
           sender: {

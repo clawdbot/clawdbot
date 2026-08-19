@@ -5,7 +5,7 @@ function isIncompleteWizardConfig(value: unknown): boolean {
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    Object.keys(value).every((key) => key === "securityAcknowledgedAt")
+    Object.keys(value).every((key) => key === "securityAcknowledgedAt" || key === "accessMode")
   );
 }
 

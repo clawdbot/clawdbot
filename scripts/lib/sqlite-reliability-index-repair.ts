@@ -27,7 +27,9 @@ type WorkerExit = IndexRepairProof["exit"];
 const INDEX_REPAIR_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-index-repair-worker.ts", import.meta.url),
 );
-const INDEX_REPAIR_ROWS = 32_768;
+// Keep enough index pages to spill both rollback-journal and WAL transactions
+// before the worker reports its explicit crash point.
+const INDEX_REPAIR_ROWS = 16_384;
 const INDEX_REPAIR_TIMEOUT_MS = 30_000;
 
 function fileSize(filePath: string): number {

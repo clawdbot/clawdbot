@@ -45,7 +45,7 @@ export function resolveCurrentSelfUser({
 export function userProfileAvatarUrl(
   gatewayUrl: string,
   profileId: string,
-  updatedAt: number,
+  revision: string | number,
   documentHref = globalThis.location?.href,
 ): string | null {
   if (!documentHref) {
@@ -66,7 +66,7 @@ export function userProfileAvatarUrl(
     url.username = "";
     url.password = "";
     url.pathname = `/api/users/${encodeURIComponent(profileId)}/avatar`;
-    url.search = `?v=${updatedAt}`;
+    url.search = `?v=${revision}`;
     url.hash = "";
     return url.href;
   } catch {

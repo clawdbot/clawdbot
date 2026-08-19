@@ -222,7 +222,10 @@ describe("buildProviderReplayFamilyHooks", () => {
         ctx: {
           provider: "anthropic-vertex",
           modelApi: "anthropic-messages",
-          modelId: "claude-sonnet-4-6",
+          modelId: "prod-opus",
+          model: {
+            params: { canonicalModelId: "claude-opus-5" },
+          },
         },
         match: {
           validateAnthropicTurns: true,

@@ -1,9 +1,12 @@
 // QA Lab mock provider tool planning and memory fixtures.
 import { createHash } from "node:crypto";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 
 let mockFunctionCallSequence = 0;
+
+export const QA_TOOL_SEARCH_SECONDARY_TARGET = "fake_plugin_tool_01";
 
 function normalizePromptPathCandidate(candidate: string) {
   const trimmed = candidate.trim().replace(/^`+|`+$/g, "");
@@ -216,6 +219,21 @@ export function extractToolSearchTarget(text: string): string | null {
   return match?.[1]?.trim() || null;
 }
 
+export function toolSearchOutputHasCandidate(output: unknown, targetTool: string): boolean {
+  if (!isRecord(output) || !Array.isArray(output.results)) {
+    return false;
+  }
+  return output.results.some(
+    (result) =>
+      isRecord(result) &&
+      Array.isArray(result.candidates) &&
+      result.candidates.some(
+        (candidate) =>
+          isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
+      ),
+  );
+}
+
 export function buildQaToolSearchArgs(
   targetTool: string,
   failureMode: boolean,
@@ -314,6 +332,17 @@ export function buildQaToolSearchArgs(
         },
       ],
       timeoutSeconds: 60,
+    };
+  }
+  if (targetTool === "llm-task") {
+    return {
+      prompt: 'Remember this fact and reply exactly `{"status":"ok"}`.',
+      input: { secret: "qa-plugin-usage-secret-sentinel" },
+      schema: {
+        type: "object",
+        required: ["status"],
+        properties: { status: { const: "ok" } },
+      },
     };
   }
   if (targetTool === "session_status") {

@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   const mode = cfg.memory?.citations;
@@ -36,32 +35,6 @@ function formatCitation(entry: MemorySearchResult): string {
       ? `#L${entry.startLine}`
       : `#L${entry.startLine}-L${entry.endLine}`;
   return `${entry.path}${lineRange}`;
-}
-
-export function clampResultsByInjectedChars(
-  results: MemorySearchResult[],
-  budget?: number,
-): MemorySearchResult[] {
-  if (!budget || budget <= 0) {
-    return results;
-  }
-  let remaining = budget;
-  const clamped: MemorySearchResult[] = [];
-  for (const entry of results) {
-    if (remaining <= 0) {
-      break;
-    }
-    const snippet = entry.snippet ?? "";
-    if (snippet.length <= remaining) {
-      clamped.push(entry);
-      remaining -= snippet.length;
-    } else {
-      const trimmed = truncateUtf16Safe(snippet, remaining);
-      clamped.push({ ...entry, snippet: trimmed });
-      break;
-    }
-  }
-  return clamped;
 }
 
 export function shouldIncludeCitations(params: {

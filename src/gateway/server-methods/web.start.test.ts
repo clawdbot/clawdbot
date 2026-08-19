@@ -9,7 +9,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
-  resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn(),
+  resolveMissingOfficialExternalChannelPluginRepairHints: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -17,8 +17,8 @@ vi.mock("../../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
-  resolveMissingOfficialExternalChannelPluginRepairHint:
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHints:
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints,
 }));
 
 import { webHandlers } from "./web.js";
@@ -80,21 +80,23 @@ function createRunningWhatsappContext() {
 describe("webHandlers web.login.start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
   });
 
   it("surfaces the missing official external plugin hint when no web-login provider is loaded", async () => {
     mocks.listChannelPlugins.mockReturnValue([]);
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
-      pluginId: "whatsapp",
-      channelId: "whatsapp",
-      label: "WhatsApp",
-      installSpec: "clawhub:@openclaw/whatsapp",
-      installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
-      doctorFixCommand: "openclaw doctor --fix",
-      repairHint:
-        "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
-    });
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([
+      {
+        pluginId: "whatsapp",
+        channelId: "whatsapp",
+        label: "WhatsApp",
+        installSpec: "clawhub:@openclaw/whatsapp",
+        installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
+        doctorFixCommand: "openclaw doctor --fix",
+        repairHint:
+          "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
+      },
+    ]);
     const respond = vi.fn();
 
     await expectDefined(
@@ -118,39 +120,45 @@ describe("webHandlers web.login.start", () => {
           "web login provider is not available. Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
       }),
     );
-    expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHint).toHaveBeenCalledWith({
+    expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHints).toHaveBeenCalledWith({
       config: { channels: { whatsapp: { enabled: true } } },
-      channelId: "whatsapp",
+      channelIds: ["whatsapp"],
     });
   });
 
   it("joins multiple missing official external plugin hints when more than one configured channel is missing", async () => {
     mocks.listChannelPlugins.mockReturnValue([]);
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockImplementation(
-      ({ channelId }) =>
-        channelId === "whatsapp"
-          ? {
-              pluginId: "whatsapp",
-              channelId: "whatsapp",
-              label: "WhatsApp",
-              installSpec: "clawhub:@openclaw/whatsapp",
-              installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
-              doctorFixCommand: "openclaw doctor --fix",
-              repairHint:
-                "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
-            }
-          : channelId === "signal"
-            ? {
-                pluginId: "signal",
-                channelId: "signal",
-                label: "Signal",
-                installSpec: "clawhub:@openclaw/signal",
-                installCommand: "openclaw plugins install clawhub:@openclaw/signal",
-                doctorFixCommand: "openclaw doctor --fix",
-                repairHint:
-                  "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/signal, or run: openclaw doctor --fix.",
-              }
-            : null,
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockImplementation(
+      ({ channelIds }) =>
+        channelIds.flatMap((channelId: string) =>
+          channelId === "whatsapp"
+            ? [
+                {
+                  pluginId: "whatsapp",
+                  channelId: "whatsapp",
+                  label: "WhatsApp",
+                  installSpec: "clawhub:@openclaw/whatsapp",
+                  installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
+                  doctorFixCommand: "openclaw doctor --fix",
+                  repairHint:
+                    "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
+                },
+              ]
+            : channelId === "signal"
+              ? [
+                  {
+                    pluginId: "signal",
+                    channelId: "signal",
+                    label: "Signal",
+                    installSpec: "clawhub:@openclaw/signal",
+                    installCommand: "openclaw plugins install clawhub:@openclaw/signal",
+                    doctorFixCommand: "openclaw doctor --fix",
+                    repairHint:
+                      "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/signal, or run: openclaw doctor --fix.",
+                  },
+                ]
+              : [],
+        ),
     );
     const respond = vi.fn();
 
@@ -300,7 +308,7 @@ describe("webHandlers web.login.start", () => {
 describe("webHandlers web.login.wait", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
   });
 
   it("passes refreshed QR payloads back to the client while login is still pending", async () => {

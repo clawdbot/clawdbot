@@ -3,12 +3,12 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveAnyEnabledFeishuToolsConfig, resolveFeishuToolAccount } from "./tool-account.js";
+import { feishuExternalToolResult as json } from "./tool-result.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
 type LarkResponse<T = unknown> = { code?: number; msg?: string; data?: T };
@@ -621,6 +621,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     api.registerTool(
       (ctx) => ({
         name: params.name,
+        resultContentSource: "network",
         label: params.label,
         description: params.description,
         parameters: params.parameters,

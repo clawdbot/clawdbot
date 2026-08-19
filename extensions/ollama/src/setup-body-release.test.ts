@@ -5,7 +5,7 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchOllamaModels, readOllamaModelShowInfo } from "./provider-models.js";
 import { pullOllamaModel } from "./setup-pull.js";
-import { checkOllamaCloudAuth } from "./setup.js";
+import { checkOllamaCloudAuth } from "./setup.runtime.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 

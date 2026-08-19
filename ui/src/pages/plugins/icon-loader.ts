@@ -1,11 +1,12 @@
 import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
+  CONTROL_UI_LINK_FAVICON_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
 } from "../../../../src/gateway/control-ui-contract.js";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 
-const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml"]);
+const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml", "image/x-icon"]);
 const PLUGIN_ICON_RASTER_SIZE = 256;
 const PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS = 5_000;
 const PLUGIN_ICON_SVG_MAX_ELEMENTS = 4;
@@ -93,6 +94,11 @@ function pluginIconRouteUrl(basePath: string, pluginId: string): string {
 function catalogIconRouteUrl(basePath: string, iconUrl: string): string {
   const normalizedBasePath = normalizeRouteBasePath(basePath);
   return `${normalizedBasePath}${CONTROL_UI_CATALOG_ICON_PATH_PREFIX}/${encodeURIComponent(iconUrl)}`;
+}
+
+function linkFaviconRouteUrl(basePath: string, hostname: string): string {
+  const normalizedBasePath = normalizeRouteBasePath(basePath);
+  return `${normalizedBasePath}${CONTROL_UI_LINK_FAVICON_PATH_PREFIX}/${encodeURIComponent(hostname)}`;
 }
 
 function parseSvgNumber(value: string): number | null {
@@ -194,7 +200,7 @@ async function loadSvgImage(url: string): Promise<HTMLImageElement> {
   return image;
 }
 
-function parseSvgDimensions(root: SVGSVGElement): { width: number; height: number } | null {
+function parseSvgDimensions(root: Element): { width: number; height: number } | null {
   const viewBox = root.getAttribute("viewBox");
   if (viewBox) {
     const values = viewBox
@@ -278,7 +284,7 @@ async function sanitizeSvgForRasterization(
   if (pathCommands > PLUGIN_ICON_SVG_MAX_PATH_COMMANDS) {
     return null;
   }
-  const dimensions = parseSvgDimensions(root as unknown as SVGSVGElement);
+  const dimensions = parseSvgDimensions(root);
   if (!dimensions) {
     return null;
   }
@@ -331,6 +337,14 @@ type FetchProxiedIconParams = {
   signal: AbortSignal;
 };
 
+function cancelUnreadResponseBody(response: Response): void {
+  if (!response.bodyUsed) {
+    // Cancellation is best-effort cleanup; a stalled stream must not block
+    // auth fallback or completion of the rejected icon request.
+    void response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function fetchProxiedIconBlobUrl(
   params: FetchProxiedIconParams,
   routeUrl: string,
@@ -354,6 +368,9 @@ async function fetchProxiedIconBlobUrl(
       signal: params.signal,
     });
     if (!response.ok) {
+      // Retry and rejection paths never consume the stream. Release it without
+      // delaying the auth fallback or the rejected icon result.
+      cancelUnreadResponseBody(response);
       if (response.status === 401 || response.status === 403) {
         continue;
       }
@@ -361,6 +378,7 @@ async function fetchProxiedIconBlobUrl(
     }
     const contentType = normalizeMimeType(response.headers.get("content-type"));
     if (!ALLOWED_PLUGIN_ICON_MIME_TYPES.has(contentType)) {
+      cancelUnreadResponseBody(response);
       return null;
     }
     const source = await response.blob();
@@ -380,4 +398,10 @@ export function fetchCatalogIconBlobUrl(
   params: FetchProxiedIconParams & { iconUrl: string },
 ): Promise<string | null> {
   return fetchProxiedIconBlobUrl(params, catalogIconRouteUrl(params.basePath, params.iconUrl));
+}
+
+export function fetchLinkFaviconBlobUrl(
+  params: FetchProxiedIconParams & { hostname: string },
+): Promise<string | null> {
+  return fetchProxiedIconBlobUrl(params, linkFaviconRouteUrl(params.basePath, params.hostname));
 }

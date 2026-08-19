@@ -11,12 +11,19 @@ export const SessionCatalogLocatorSchema = closedObject({
   catalogId: NonEmptyString,
   hostId: NonEmptyString,
   threadId: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sourceHomeId: Type.Optional(NonEmptyString),
 });
 
 export const SessionCatalogCapabilitiesSchema = closedObject({
   continueSession: Type.Boolean(),
   archive: Type.Boolean(),
-  createSession: Type.Optional(closedObject({ model: NonEmptyString })),
+  createSession: Type.Optional(
+    closedObject({
+      model: NonEmptyString,
+      startTerminal: Type.Optional(Type.Boolean()),
+    }),
+  ),
   openTerminal: Type.Optional(Type.Boolean()),
 });
 
@@ -42,6 +49,7 @@ export const SessionCatalogPullRequestSummarySchema = closedObject({
 
 export const SessionCatalogSessionSchema = closedObject({
   threadId: NonEmptyString,
+  sourceHomeId: Type.Optional(NonEmptyString),
   name: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
   status: NonEmptyString,
@@ -154,6 +162,24 @@ export const SessionsCatalogArchiveParamsSchema = closedObject({
 
 export const SessionsCatalogArchiveResultSchema = closedObject({ ok: Type.Literal(true) });
 
+export const SessionsCatalogStartTerminalParamsSchema = closedObject({
+  catalogId: NonEmptyString,
+  hostId: Type.Optional(NonEmptyString),
+  agentId: NonEmptyString,
+  cwd: NonEmptyString,
+  initialMessage: Type.Optional(Type.String()),
+});
+
+// Mirrors terminal.open so callers can hand the new session to the same terminal UI.
+export const SessionsCatalogStartTerminalResultSchema = closedObject({
+  sessionId: NonEmptyString,
+  agentId: NonEmptyString,
+  shell: NonEmptyString,
+  cwd: NonEmptyString,
+  confined: Type.Boolean(),
+  title: Type.Optional(NonEmptyString),
+});
+
 export type SessionCatalogCapabilities = Static<typeof SessionCatalogCapabilitiesSchema>;
 export type SessionCatalogLocator = Static<typeof SessionCatalogLocatorSchema>;
 export type SessionCatalogDescriptor = Static<typeof SessionCatalogDescriptorSchema>;
@@ -173,3 +199,9 @@ export type SessionsCatalogContinueParams = Static<typeof SessionsCatalogContinu
 export type SessionsCatalogContinueResult = Static<typeof SessionsCatalogContinueResultSchema>;
 export type SessionsCatalogArchiveParams = Static<typeof SessionsCatalogArchiveParamsSchema>;
 export type SessionsCatalogArchiveResult = Static<typeof SessionsCatalogArchiveResultSchema>;
+export type SessionsCatalogStartTerminalParams = Static<
+  typeof SessionsCatalogStartTerminalParamsSchema
+>;
+export type SessionsCatalogStartTerminalResult = Static<
+  typeof SessionsCatalogStartTerminalResultSchema
+>;

@@ -24,16 +24,6 @@ export function setupBrowserPanelTestCleanup(): void {
   });
 }
 
-export function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
 export function createBrowserClient(
   handleRequest: (envelope: BrowserRequestEnvelope) => Promise<unknown>,
 ) {
@@ -161,8 +151,22 @@ class TestBrowserImage extends EventTarget {
   }
 }
 
+class TestBrowserFileReader extends EventTarget {
+  result: string | ArrayBuffer | null = null;
+  error: DOMException | null = null;
+
+  readAsDataURL(blob: Blob): void {
+    void blob.arrayBuffer().then((buffer) => {
+      const binary = String.fromCharCode(...new Uint8Array(buffer));
+      this.result = `data:${blob.type};base64,${btoa(binary)}`;
+      this.dispatchEvent(new Event("load"));
+    });
+  }
+}
+
 export function stubScreenshotMedia(): void {
   vi.stubGlobal("Image", TestBrowserImage);
+  vi.stubGlobal("FileReader", TestBrowserFileReader);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request) => {

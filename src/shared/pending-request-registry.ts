@@ -1,4 +1,4 @@
-import { createDeferred, type Deferred } from "./deferred.js";
+import { createDeferredCore, type Deferred } from "./deferred.js";
 
 export type PendingRequestEntry<TResult, TValue> = Deferred<TResult> & { value: TValue };
 
@@ -34,7 +34,7 @@ export function createPendingRequestRegistry<TKey, TResult, TValue>() {
       return undefined;
     }
     const entry: StoredPendingRequest<TResult, TValue> = {
-      ...createDeferred<TResult>(),
+      ...createDeferredCore<TResult>(),
       value: options.value,
       dispose: options.dispose,
     };

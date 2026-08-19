@@ -1,6 +1,7 @@
 /** Applies model override tokens embedded in reset/new command text. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
   buildAllowedModelSetWithFallbacks,
@@ -15,7 +16,7 @@ import {
   sessionModelOverrideChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   modelKey,
@@ -120,6 +121,9 @@ function buildSelectionFromExplicit(params: {
 }
 
 async function applySelectionToSession(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  defaultProvider: string;
   selection: ModelDirectiveSelection;
   sessionEntry?: SessionEntry;
   sessionEntryHandle?: ReplySessionEntryHandle;
@@ -134,8 +138,14 @@ async function applySelectionToSession(params: {
   }
   const initialSessionEntry = { ...sessionEntry };
   const nextSessionEntry = { ...sessionEntry };
-  applyModelOverrideToSessionEntry({
+  applyModelOverrideWithAuthProfileCompatibility({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
     entry: nextSessionEntry,
+    currentProvider:
+      sessionEntry.providerOverride?.trim() ||
+      sessionEntry.modelProvider?.trim() ||
+      params.defaultProvider,
     selection,
   });
   let appliedEntry = nextSessionEntry;
@@ -294,6 +304,11 @@ export async function applyResetModelOverride(params: {
   params.sessionCtx.BodyForCommands = cleanedBody;
 
   const selectionApplied = await applySelectionToSession({
+    cfg: params.cfg,
+    agentDir:
+      params.agentDir ??
+      resolveAgentDir(params.cfg, params.agentId ?? resolveDefaultAgentId(params.cfg)),
+    defaultProvider: params.defaultProvider,
     selection,
     sessionEntry: params.sessionEntry,
     sessionEntryHandle: params.sessionEntryHandle,

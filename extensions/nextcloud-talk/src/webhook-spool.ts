@@ -179,13 +179,12 @@ export function createNextcloudTalkWebhookSpool(options: {
       await options.deliver(message, lifecycle);
     },
     pollIntervalMs: options.pollIntervalMs ?? NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS,
-    // Preserve Nextcloud Talk's existing one-drain-at-a-time delivery cycle.
-    waitForDeliveryIdleBeforeRepump: true,
     retention: {
       completedMaxEntries: 10_000,
       failedMaxEntries: 10_000,
     },
     drain: {
+      startLimit: 32, // Keep the shared drain's active-delivery ceiling across repumps.
       resolveNonRetryableFailure,
       ...(options.adoptionStallTimeoutMs === undefined
         ? {}

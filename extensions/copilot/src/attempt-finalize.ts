@@ -45,6 +45,7 @@ export async function completeCopilotAttempt(params: {
   timedOut: boolean;
   timedOutDuringCompaction: boolean;
   yieldDetected: boolean;
+  yieldAcknowledgment?: string;
 }): Promise<AgentHarnessAttemptResult> {
   const {
     aborted,
@@ -73,6 +74,7 @@ export async function completeCopilotAttempt(params: {
     timedOut,
     timedOutDuringCompaction,
     yieldDetected,
+    yieldAcknowledgment,
   } = params;
   const snap = bridge?.snapshot();
   const assistantTexts = bridge?.finalizeAssistantTexts() ?? [];
@@ -121,6 +123,7 @@ export async function completeCopilotAttempt(params: {
     messagesSnapshot,
     assistantTranscriptOwned: transcript?.assistantTranscriptOwned,
     assistantTranscriptIdempotencyKey: transcript?.assistantTranscriptIdempotencyKey,
+    contextEngineTerminalAnchor: transcript?.terminalAnchor,
     nativeReplayInvalid: transcript?.replayInvalid === true || nativeSessionHistoryUnvalidated,
     now,
     promptError,
@@ -132,6 +135,7 @@ export async function completeCopilotAttempt(params: {
     toolMetas: snap ? [...snap.toolMetas] : [],
     usage: snap?.usage,
     yieldDetected,
+    yieldAcknowledgment,
   });
   if (sentTurnStarted && !settledToolFinalization && !transcriptJournal?.hasFailed()) {
     runAgentHarnessLlmOutputHook({

@@ -37,4 +37,3 @@ export {
   readRequestBodyWithLimit,
 } from "openclaw/plugin-sdk/webhook-ingress";
 export { isTrustedProxyAddress, resolveClientIp } from "openclaw/plugin-sdk/core";
-export { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";

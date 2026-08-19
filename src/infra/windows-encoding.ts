@@ -216,6 +216,7 @@ function decodeWindowsBufferWithFallback(params: {
 /** Creates a streaming decoder for subprocess output chunks that may split multibyte characters. */
 export function createWindowsOutputDecoder(params?: {
   platform?: NodeJS.Platform;
+  preserveUtf8Bom?: boolean;
   windowsEncoding?: string | null;
 }): {
   decode(chunk: Buffer | string): string;
@@ -229,9 +230,17 @@ export function createWindowsOutputDecoder(params?: {
     platform === "win32" && encoding && normalizedEncoding !== "utf-8"
       ? new TextDecoder(encoding)
       : null;
+  const preserveUtf8Bom = params?.preserveUtf8Bom === true;
   const utf8Decoder =
-    platform === "win32" && legacyDecoder ? new TextDecoder("utf-8", { fatal: true }) : null;
-  const streamingUtf8Decoder = legacyDecoder ? null : new TextDecoder("utf-8");
+    platform === "win32" && legacyDecoder
+      ? new TextDecoder("utf-8", {
+          fatal: true,
+          ...(preserveUtf8Bom ? { ignoreBOM: true } : {}),
+        })
+      : null;
+  const streamingUtf8Decoder = legacyDecoder
+    ? null
+    : new TextDecoder("utf-8", preserveUtf8Bom ? { ignoreBOM: true } : undefined);
   let useLegacyDecoder = false;
   let pendingUtf8Bytes = Buffer.alloc(0);
 

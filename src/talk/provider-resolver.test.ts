@@ -17,6 +17,7 @@ function attachInternalRealtimeVoiceProviderApi(
     }) => boolean;
     resolveBrowserSessionCapabilities?: (ctx: {
       providerConfig: Record<string, unknown>;
+      agentId?: string;
       model?: string;
     }) => object;
     isGatewayRelayConfigured?: (ctx: {
@@ -73,6 +74,56 @@ describe("realtime voice provider resolver", () => {
         enabled: true,
         resolved: true,
       },
+    });
+  });
+
+  it("passes the host-selected agent to public provider readiness", () => {
+    const isConfigured = vi.fn(({ agentId }) => agentId === "molty");
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "agent-scoped",
+      label: "Agent scoped",
+      isConfigured,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+
+    expect(
+      resolveConfiguredRealtimeVoiceProvider({
+        cfg: {},
+        agentId: "molty",
+        providers: [provider],
+      }).provider,
+    ).toBe(provider);
+    expect(isConfigured).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "molty",
+      providerConfig: {},
+    });
+  });
+
+  it("passes the requested agent scope to explicitly selected provider checks", () => {
+    const isConfigured = vi.fn(() => true);
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "agent-scoped",
+      label: "Agent scoped",
+      isConfigured,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+
+    resolveConfiguredRealtimeVoiceProvider({
+      agentId: "voice-agent",
+      cfg: {},
+      configuredProviderId: provider.id,
+      providers: [provider],
+    });
+
+    expect(isConfigured).toHaveBeenCalledWith({
+      agentId: "voice-agent",
+      cfg: {},
+      providerConfig: {},
     });
   });
 
@@ -289,11 +340,12 @@ describe("realtime voice provider resolver", () => {
     };
     attachInternalRealtimeVoiceProviderApi(provider, {
       isBrowserSessionConfigured: () => true,
-      resolveBrowserSessionCapabilities: ({ providerConfig, model }) => ({
+      resolveBrowserSessionCapabilities: ({ providerConfig, agentId, model }) => ({
         transports: ["webrtc"],
         inputAudioFormats: [],
         outputAudioFormats: [],
         supportsVideoFrames: providerConfig.authMode !== "native" && model === "gpt-live-1",
+        supportsGatewayControl: agentId === "molty",
       }),
     });
 
@@ -305,13 +357,22 @@ describe("realtime voice provider resolver", () => {
         surface: "browser-session",
       })?.supportsVideoFrames,
     ).toBe(false);
+    const scopedCapabilities = resolveRealtimeVoiceProviderCapabilities({
+      provider,
+      providerConfig: { authMode: "oauth" },
+      agentId: "molty",
+      model: "gpt-live-1",
+      surface: "browser-session",
+    });
+    expect(scopedCapabilities?.supportsVideoFrames).toBe(true);
+    expect(scopedCapabilities?.supportsGatewayControl).toBe(true);
     expect(
       resolveRealtimeVoiceProviderCapabilities({
         provider,
         providerConfig: { authMode: "oauth" },
         model: "gpt-live-1",
         surface: "browser-session",
-      })?.supportsVideoFrames,
-    ).toBe(true);
+      })?.supportsGatewayControl,
+    ).toBe(false);
   });
 });

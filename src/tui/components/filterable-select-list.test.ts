@@ -166,4 +166,50 @@ describe("FilterableSelectList", () => {
 
     expect(list.getSelectedItem()?.value).toBe("codex");
   });
+
+  it("sanitizes rendered fields without changing filtering or the selected value", () => {
+    const attacks = [
+      "\u001b[38;5;201m",
+      "\u001b[3J",
+      "\u001b]0;filter-title\u0007",
+      "\u001b]52;c;filter-clipboard\u0007",
+      "\u009b2K",
+      "\u009d0;filter-c1-title\u009c",
+    ];
+    const rawValue = `fv-start${attacks[1]}fv-end\r\nمرحبا\tשלום`;
+    const description = `fd-start${attacks[3]}fd-end\n東京`;
+    const list = new FilterableSelectList(
+      [
+        { value: "decoy", label: "decoy" },
+        {
+          value: rawValue,
+          label: attacks.join(""),
+          description,
+          searchText: "raw-filter-target",
+        },
+      ],
+      5,
+      mockTheme,
+    );
+    let selectedValue: string | undefined;
+    list.onSelect = (item) => {
+      selectedValue = item.value;
+    };
+
+    typeInput(list, "raw-filter-target");
+    const rendered = list.render(160).join("\n");
+
+    expect(rendered).toContain("fv-startfv-end");
+    expect(rendered).toContain("مرحبا שלום");
+    expect(rendered).toContain("fd-startfd-end 東京");
+    expect(rendered).toContain("\u2067");
+    expect(rendered).toContain("\u2069");
+    for (const attack of attacks) {
+      expect(rendered).not.toContain(attack);
+    }
+    expect(rendered).not.toContain("fv-end\r\nمرحبا\tשלום");
+
+    list.handleInput("\r");
+    expect(selectedValue).toBe(rawValue);
+  });
 });

@@ -20,8 +20,12 @@ import {
   withGatewayServer,
   withGatewayTempConfig,
 } from "./server-http.test-harness.js";
-import { createTestRegistry } from "./server/__tests__/test-utils.js";
-import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
+import {
+  createGatewayPluginRequestHandler,
+  isPluginAuthenticatedRoutePath,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -97,15 +101,25 @@ const PROBE_CASES = [
   { path: "/healthz", status: "live" },
   { path: "/ready", status: "ready" },
   { path: "/readyz", status: "ready" },
+  { path: "/startup", status: "started" },
+  { path: "/startupz", status: "started" },
 ] as const;
 
 async function expectProbeRoutesHealthy(server: Parameters<typeof sendRequest>[0]) {
   for (const probeCase of PROBE_CASES) {
     const response = await sendRequest(server, { path: probeCase.path });
     expect(response.res.statusCode, probeCase.path).toBe(200);
-    expect(response.getBody(), probeCase.path).toBe(
-      JSON.stringify({ ok: true, status: probeCase.status }),
-    );
+    const body = JSON.parse(response.getBody());
+    if (probeCase.status === "started") {
+      expect(body, probeCase.path).toMatchObject({
+        ok: true,
+        status: "started",
+        version: expect.any(String),
+        uptimeMs: expect.any(Number),
+      });
+    } else {
+      expect(body, probeCase.path).toEqual({ ok: true, status: probeCase.status });
+    }
   }
 }
 
@@ -119,7 +133,7 @@ function createRuntimeScopeRecorderHandler(params: {
   match?: "exact" | "prefix";
 }) {
   return createGatewayPluginRequestHandler({
-    registry: createTestRegistry({
+    registry: createGatewayTestRegistry({
       httpRoutes: [
         {
           pluginId: params.pluginId,
@@ -453,6 +467,90 @@ describe("gateway plugin HTTP auth boundary", () => {
         });
         expect(authenticatedRouted.res.statusCode).toBe(200);
         expect(authenticatedRouted.getBody()).toContain('"route":"routed"');
+      },
+    });
+  });
+
+  test("routes unattributable proxy traffic only to plugin-authenticated webhooks", async () => {
+    const observedClientIps: Array<string | undefined> = [];
+    const registry = createGatewayTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "googlechat",
+          source: "googlechat-webhook",
+          path: "/googlechat",
+          auth: "plugin",
+          match: "exact",
+          handler: async (_req: IncomingMessage, res: ServerResponse) => {
+            observedClientIps.push(getPluginRuntimeGatewayRequestScope()?.client?.clientIp);
+            res.statusCode = 200;
+            res.end("ok");
+            return true;
+          },
+        },
+        {
+          pluginId: "diffs",
+          source: "diffs-viewer",
+          path: "/plugins/diffs",
+          auth: "plugin",
+          match: "prefix",
+          handler: async (_req: IncomingMessage, res: ServerResponse) =>
+            respondJsonRoute(res, "plugin-prefix"),
+        },
+      ],
+    });
+    const handlePluginRequest = createGatewayPluginRequestHandler({
+      registry,
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    });
+    const handleHooksRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      if (!req.url?.startsWith("/plugins/diffs")) {
+        return false;
+      }
+      return respondJsonRoute(res, "hooks");
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-unattributable-webhook-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        handleHooksRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          shouldEnforceGatewayAuthForPluginPath(registry, pathContext),
+        isPluginAuthenticatedRoute: (pathContext) =>
+          isPluginAuthenticatedRoutePath(registry, pathContext),
+      },
+      run: async (server) => {
+        const dispatchProxyRequest = async (path: string, method = "GET") => {
+          const response = createResponse();
+          await dispatchRequest(
+            server,
+            createRequest({
+              path,
+              method,
+              remoteAddress: "127.0.0.1",
+              headers: { "x-forwarded-for": "198.51.100.20" },
+            }),
+            response.res,
+          );
+          return response;
+        };
+
+        const webhook = await dispatchProxyRequest("/googlechat", "POST");
+        expect(webhook.res.statusCode).toBe(200);
+        expect(observedClientIps).toEqual(["127.0.0.1"]);
+
+        const overlappingPrefix = await dispatchProxyRequest("/plugins/diffs/view");
+        expect(overlappingPrefix.res.statusCode).toBe(200);
+        expect(overlappingPrefix.getBody()).toContain('"route":"plugin-prefix"');
+        expect(handleHooksRequest).not.toHaveBeenCalled();
+
+        const gatewayRoute = await dispatchProxyRequest("/ready");
+        expect(gatewayRoute.res.statusCode).toBe(403);
+        expect(gatewayRoute.getBody()).toContain("proxy_attribution_required");
       },
     });
   });

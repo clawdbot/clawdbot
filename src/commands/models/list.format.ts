@@ -22,7 +22,7 @@ export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
   isRichTerminal() && !opts?.json && !opts?.plain;
 
 /** Pads a table cell to a fixed terminal visible width. */
-export const pad = (value: string, size: number) => {
+export const padTerminalCell = (value: string, size: number) => {
   const remaining = size - visibleWidth(value);
   return remaining > 0 ? `${value}${" ".repeat(remaining)}` : value;
 };

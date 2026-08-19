@@ -534,6 +534,62 @@ describe("telegram doctor", () => {
     expect(warnings[1]).toContain(DOCTOR_FIX_COMMAND);
   });
 
+  it("warns only when a selected webhook account uses the reserved health path", async () => {
+    listTelegramAccountIdsMock.mockReturnValue(["ops"]);
+    const cfg = {
+      channels: {
+        telegram: {
+          enabled: true,
+          webhookUrl: "https://example.test/healthz",
+          webhookPath: "/healthz",
+          accounts: {
+            ops: {
+              botToken: "123:abc",
+              webhookUrl: "https://example.test/ops",
+              webhookPath: "/ops",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect((await collectPreviewWarnings(cfg)).join("\n")).not.toContain("reserved");
+
+    cfg.channels.telegram.accounts.ops.webhookUrl = "https://example.test/healthz";
+    cfg.channels.telegram.accounts.ops.webhookPath = "/healthz";
+
+    expect((await collectPreviewWarnings(cfg)).join("\n")).toContain(
+      'Telegram account "ops" resolves webhookPath to /healthz, which is reserved',
+    );
+
+    const disabledCfg = {
+      ...cfg,
+      channels: { telegram: { ...cfg.channels.telegram, enabled: false } },
+    } satisfies OpenClawConfig;
+    expect((await collectPreviewWarnings(disabledCfg)).join("\n")).not.toContain("reserved");
+  });
+
+  it("identifies an explicit default account in the webhook path warning", async () => {
+    listTelegramAccountIdsMock.mockReturnValue(["default"]);
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "123:abc",
+              webhookUrl: "https://example.test/healthz",
+              webhookPath: "/healthz",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect((await collectPreviewWarnings(cfg)).join("\n")).toContain(
+      'Telegram account "default" resolves webhookPath to /healthz, which is reserved',
+    );
+  });
+
   it("warns and repairs Telegram apiRoot values that include the bot endpoint", async () => {
     const cfg = {
       channels: {
@@ -662,6 +718,24 @@ describe("telegram doctor", () => {
         } as unknown as OpenClawConfig)
       ).join("\n"),
     ).not.toContain("selected quote replies");
+  });
+
+  it("warns for selected quotes when explicit preview overrides inherited block delivery", async () => {
+    const warnings = await collectPreviewWarnings({
+      channels: {
+        telegram: {
+          replyToMode: "first",
+          streaming: { mode: "partial" },
+        },
+      },
+      agents: {
+        defaults: {
+          blockStreamingDefault: "on",
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(warnings.join("\n")).toContain("selected quote replies");
   });
 
   it("wires apiRoot preview warnings and repair through the doctor adapter", async () => {

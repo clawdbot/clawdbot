@@ -21,6 +21,5 @@ export {
   loadGatewayStartupPluginPlan,
   loadGatewayStartupPluginPlanWithMetadata,
   resolveChannelPluginIds,
-  resolveGatewayStartupPluginIds,
   resolveGatewayStartupPluginIdsFromRegistry,
 } from "./gateway-startup-plugin-loader.js";

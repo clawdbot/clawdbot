@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 export async function discoverGatewayName(
   client: GatewayBrowserClient | null,

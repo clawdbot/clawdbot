@@ -177,6 +177,9 @@ export function createWebSendApi(params: {
         remoteJid: sendOptions?.quotedMessageKey?.remoteJid,
         fromMe: sendOptions?.quotedMessageKey?.fromMe,
         participant: sendOptions?.quotedMessageKey?.participant,
+        destinationJid: jid,
+        requestedJid: toWhatsappJid(to),
+        lookupTargetJid: sendOptions?.quotedMessageKey?.lookupTargetJid,
         messageText: sendOptions?.quotedMessageKey?.messageText,
         media: sendOptions?.quotedMessageKey?.media,
       });

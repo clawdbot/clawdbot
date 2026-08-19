@@ -373,6 +373,31 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it.each(["sendMessage", "editMessage"] as const)(
+    "preserves indented Markdown when handling %s",
+    async (action) => {
+      const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+      const markdown = "    @room";
+
+      await handleMatrixAction(
+        {
+          action,
+          to: "room:!room:example",
+          roomId: "!room:example",
+          messageId: "$original",
+          content: markdown,
+        },
+        cfg,
+      );
+
+      const providerCall =
+        action === "sendMessage"
+          ? mocks.sendMatrixMessage.mock.lastCall?.[1]
+          : mocks.editMatrixMessage.mock.lastCall?.[2];
+      expect(providerCall).toBe(markdown);
+    },
+  );
+
   it("returns the authorized room and thread with message reads", async () => {
     const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
     const result = await handleMatrixAction(

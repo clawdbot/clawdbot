@@ -206,6 +206,30 @@ describe("assertSandboxPath", () => {
       await fs.rm(parent, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves final-symlink unlink policy through a root alias",
+    async () => {
+      await withSandboxRoot(async (parent) => {
+        const realRoot = path.join(parent, "real-workspace");
+        const linkedRoot = path.join(parent, "linked-workspace");
+        const outside = path.join(parent, "outside.txt");
+        await fs.mkdir(realRoot);
+        await fs.writeFile(outside, "outside", "utf8");
+        await fs.symlink(realRoot, linkedRoot);
+        await fs.symlink(outside, path.join(realRoot, "link"));
+
+        await expect(
+          assertSandboxPath({
+            filePath: "link",
+            cwd: linkedRoot,
+            root: linkedRoot,
+            allowFinalSymlinkForUnlink: true,
+          }),
+        ).resolves.toMatchObject({ relative: "link" });
+      });
+    },
+  );
 });
 
 describe("resolveSandboxedMediaSource", () => {
@@ -317,15 +341,18 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
-  it("maps file:// URLs under /workspace into sandbox root", async () => {
-    await withSandboxRoot(async (sandboxDir) => {
-      const result = await resolveSandboxedMediaSource({
-        media: "file:///workspace/media/pic.png",
-        sandboxRoot: sandboxDir,
+  it.each(["file:///workspace/media/pic.png", "FILE:/workspace/media/pic.png"])(
+    "maps %s under /workspace into sandbox root",
+    async (media) => {
+      await withSandboxRoot(async (sandboxDir) => {
+        const result = await resolveSandboxedMediaSource({
+          media,
+          sandboxRoot: sandboxDir,
+        });
+        expect(result).toBe(path.join(sandboxDir, "media", "pic.png"));
       });
-      expect(result).toBe(path.join(sandboxDir, "media", "pic.png"));
-    });
-  });
+    },
+  );
 
   it("preserves remote mxc:// media sources", async () => {
     await withSandboxRoot(async (sandboxDir) => {

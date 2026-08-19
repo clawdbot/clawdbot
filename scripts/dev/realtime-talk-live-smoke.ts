@@ -9,6 +9,7 @@ import {
   previewForDevToolLog,
   redactJsonValueForDevToolLog,
 } from "../lib/dev-tooling-safety.ts";
+import { toErrorObject as toLintErrorObject } from "../lib/error-format.mts";
 
 const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2.1";
@@ -135,7 +136,7 @@ async function readBoundedText(
   signal?: AbortSignal,
 ): Promise<string> {
   return await readBoundedResponseText(response, label, maxBytes, {
-    createTooLargeError: (message) => new Error(message),
+    createTooLargeError: (message: string) => new Error(message),
     signal,
   });
 }
@@ -1170,17 +1171,3 @@ export const testing = {
   transcriptIncludesMarker,
   usage,
 };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

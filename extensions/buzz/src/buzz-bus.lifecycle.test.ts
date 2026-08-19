@@ -125,10 +125,40 @@ const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const SECOND_CHANNEL_ID = "45cedd86-f853-45b7-8fea-812b7fe63d7a";
 const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
 const SENDER_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")));
+const SENDER_SECRET_KEY = Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex"));
 const RELAY_PUBLIC_KEY = "f".repeat(64);
 const tempDirs = new Set<string>();
 let previousStateDir: string | undefined;
 let stateDir: string;
+
+function startTestBus(
+  overrides: Partial<Parameters<typeof startBuzzBus>[0]> = {},
+): Promise<BuzzBus> {
+  return startBuzzBus({
+    accountId: ACCOUNT_ID,
+    relayUrl: "wss://buzz.example.com",
+    privateKey: PRIVATE_KEY,
+    channelIds: [CHANNEL_ID],
+    onMessage: async () => {},
+    ...overrides,
+  });
+}
+
+function sendTestTextOneShot(
+  overrides: Partial<Parameters<typeof sendBuzzTextOneShot>[0]> = {},
+): Promise<string> {
+  return sendBuzzTextOneShot({
+    relayUrl: "wss://buzz.example.com",
+    privateKey: PRIVATE_KEY,
+    channelId: CHANNEL_ID,
+    text: "hello",
+    ...overrides,
+  });
+}
+
+function signSenderEvent(template: Parameters<typeof finalizeEvent>[0]): Event {
+  return finalizeEvent(template, SENDER_SECRET_KEY);
+}
 
 function subscriptionIncludesKind(
   subscription: (typeof relayMocks.subscriptions)[number],
@@ -204,12 +234,8 @@ describe("Buzz bus lifecycle", () => {
 
   it("rejects an over-capacity room set before opening the relay", async () => {
     await expect(
-      startBuzzBus({
-        accountId: ACCOUNT_ID,
-        relayUrl: "wss://buzz.example.com",
-        privateKey: PRIVATE_KEY,
+      startTestBus({
         channelIds: Array.from({ length: 1_021 }, (_, index) => `room-${index}`),
-        onMessage: async () => {},
       }),
     ).rejects.toThrow("Buzz supports at most 1020 configured rooms per account");
 
@@ -231,15 +257,7 @@ describe("Buzz bus lifecycle", () => {
       ),
     );
 
-    await expect(
-      startBuzzBus({
-        accountId: ACCOUNT_ID,
-        relayUrl: "wss://buzz.example.com",
-        privateKey: PRIVATE_KEY,
-        channelIds: [CHANNEL_ID],
-        onMessage: async () => {},
-      }),
-    ).rejects.toThrow("auth rejected");
+    await expect(startTestBus()).rejects.toThrow("auth rejected");
 
     expect(relayMocks.connect).toHaveBeenCalledOnce();
     expect(relayMocks.close).toHaveBeenCalledOnce();
@@ -262,13 +280,7 @@ describe("Buzz bus lifecycle", () => {
           }),
       ),
     );
-    const start = startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
-    });
+    const start = startTestBus();
     const rejection = expect(start).rejects.toThrow("Timed out setting up Buzz relay session");
 
     await vi.advanceTimersByTimeAsync(20_000);
@@ -282,11 +294,7 @@ describe("Buzz bus lifecycle", () => {
   it("publishes and closes a standalone authenticated send", async () => {
     relayMocks.auth.mockResolvedValue("ok");
 
-    const messageId = await sendBuzzTextOneShot({
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelId: CHANNEL_ID,
-      text: "hello",
+    const messageId = await sendTestTextOneShot({
       threadId: "root-id",
       replyToId: "parent-id",
     });
@@ -307,13 +315,7 @@ describe("Buzz bus lifecycle", () => {
 
   it("sends room and thread typing without waiting for a relay acknowledgement", async () => {
     relayMocks.auth.mockResolvedValue("ok");
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
-    });
+    const bus = await startTestBus();
 
     await bus.sendTyping({
       channelId: CHANNEL_ID,
@@ -346,13 +348,7 @@ describe("Buzz bus lifecycle", () => {
 
   it("drops typing while the active relay is disconnected", async () => {
     relayMocks.auth.mockResolvedValue("ok");
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
-    });
+    const bus = await startTestBus();
     relayMocks.connected = false;
     relayMocks.send.mockClear();
 
@@ -374,12 +370,8 @@ describe("Buzz bus lifecycle", () => {
       ],
     });
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
+    const bus = await startTestBus({
       channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID],
-      onMessage: async () => {},
     });
 
     expect(relayMocks.subscriptions[0]?.filter.kinds).toEqual([39_000]);
@@ -415,23 +407,17 @@ describe("Buzz bus lifecycle", () => {
       ],
     });
     relayMocks.roomHistoryEvents = [
-      finalizeEvent(
-        {
-          kind: 9,
-          created_at: 1_700_000_000,
-          content: "historical message",
-          tags: [["h", CHANNEL_ID]],
-        },
-        Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
-      ),
+      signSenderEvent({
+        kind: 9,
+        created_at: 1_700_000_000,
+        content: "historical message",
+        tags: [["h", CHANNEL_ID]],
+      }),
     ];
     relayMocks.stallRoomEoseChannelId = SECOND_CHANNEL_ID;
     const onMessage = vi.fn(async (_message: BuzzInboundMessage) => {});
 
-    const start = startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
+    const start = startTestBus({
       channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID],
       onMessage,
     });
@@ -465,11 +451,7 @@ describe("Buzz bus lifecycle", () => {
     });
     const onFatalError = vi.fn();
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
+    const bus = await startTestBus({
       onMessage,
       onFatalError,
     });
@@ -524,11 +506,7 @@ describe("Buzz bus lifecycle", () => {
         });
       },
     );
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
+    const bus = await startTestBus({
       onMessage,
     });
 
@@ -543,13 +521,7 @@ describe("Buzz bus lifecycle", () => {
 
   it("leaves room subscription shutdown to the relay", async () => {
     relayMocks.auth.mockResolvedValue("ok");
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
-    });
+    const bus = await startTestBus();
     const roomSubscription = relayMocks.subscriptions.find((entry) =>
       subscriptionIncludesKind(entry, 9),
     );
@@ -577,12 +549,7 @@ describe("Buzz bus lifecycle", () => {
         ],
       },
     ];
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
+    const bus = await startTestBus({
       onRoomDirectoryChanged,
     });
     await vi.waitFor(() => expect(bus.directory.listGroups({})[0]?.name).toBe("Engineering"));
@@ -664,12 +631,7 @@ describe("Buzz bus lifecycle", () => {
     };
     const onFatalError = vi.fn();
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
+    const bus = await startTestBus({
       onFatalError,
     });
 
@@ -686,18 +648,15 @@ describe("Buzz bus lifecycle", () => {
   it("loads room metadata and current member profiles on the active bus", async () => {
     relayMocks.auth.mockResolvedValue("ok");
     relayMocks.profileEvents = [
-      finalizeEvent(
-        {
-          kind: 0,
-          created_at: 1_700_000_000,
-          content: JSON.stringify({
-            display_name: "Alice",
-            picture: "https://example.com/alice.png",
-          }),
-          tags: [],
-        },
-        Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
-      ),
+      signSenderEvent({
+        kind: 0,
+        created_at: 1_700_000_000,
+        content: JSON.stringify({
+          display_name: "Alice",
+          picture: "https://example.com/alice.png",
+        }),
+        tags: [],
+      }),
     ];
     relayMocks.roomMetadataEvents = [
       {
@@ -714,13 +673,8 @@ describe("Buzz bus lifecycle", () => {
       },
     ];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
+    const bus = await startTestBus({
       profileName: "OpenClaw",
-      onMessage: async () => {},
     });
 
     await vi.waitFor(() =>
@@ -764,13 +718,7 @@ describe("Buzz bus lifecycle", () => {
         Uint8Array.from(Buffer.from(joinedPrivateKey, "hex")),
       ),
     ];
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
-    });
+    const bus = await startTestBus();
     expect(bus.directory.listPeers({}).map((entry) => entry.id)).not.toContain(joinedPublicKey);
 
     relayMocks.membershipEvents = [
@@ -815,14 +763,7 @@ describe("Buzz bus lifecycle", () => {
     relayMocks.auth.mockResolvedValue("ok");
     relayMocks.publish.mockRejectedValue(new Error("rejected"));
 
-    await expect(
-      sendBuzzTextOneShot({
-        relayUrl: "wss://buzz.example.com",
-        privateKey: PRIVATE_KEY,
-        channelId: CHANNEL_ID,
-        text: "hello",
-      }),
-    ).rejects.toThrow("rejected");
+    await expect(sendTestTextOneShot()).rejects.toThrow("rejected");
 
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
@@ -830,22 +771,13 @@ describe("Buzz bus lifecycle", () => {
   it("deduplicates replayed relay events by event id", async () => {
     relayMocks.auth.mockResolvedValue("ok");
     const onMessage = vi.fn(async (_message: BuzzInboundMessage) => {});
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage,
+    const bus = await startTestBus({ onMessage });
+    const event = signSenderEvent({
+      kind: 9,
+      created_at: 1_700_000_000,
+      content: "hello",
+      tags: [["h", CHANNEL_ID]],
     });
-    const event = finalizeEvent(
-      {
-        kind: 9,
-        created_at: 1_700_000_000,
-        content: "hello",
-        tags: [["h", CHANNEL_ID]],
-      },
-      Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
-    );
 
     const messageSubscription = relayMocks.subscriptions.find((entry) =>
       subscriptionIncludesKind(entry, 9),
@@ -863,13 +795,7 @@ describe("Buzz bus lifecycle", () => {
     const onMessage = vi.fn(async (message: BuzzInboundMessage) => {
       receivedKinds.push(message.kind);
     });
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage,
-    });
+    const bus = await startTestBus({ onMessage });
     const messageSubscription = relayMocks.subscriptions.find((entry) =>
       subscriptionIncludesKind(entry, 9),
     );
@@ -877,28 +803,22 @@ describe("Buzz bus lifecycle", () => {
       [...BUZZ_INBOUND_MESSAGE_KINDS],
     );
 
-    const richEvent = finalizeEvent(
-      {
-        kind: BUZZ_RICH_MESSAGE_KIND,
-        created_at: 1_700_000_000,
-        content: "**rich**",
-        tags: [["h", CHANNEL_ID]],
-      },
-      Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
-    );
-    const diffEvent = finalizeEvent(
-      {
-        kind: BUZZ_DIFF_MESSAGE_KIND,
-        created_at: 1_700_000_001,
-        content: "@@ -1 +1 @@\n-old\n+new",
-        tags: [
-          ["h", CHANNEL_ID],
-          ["repo", "https://github.com/openclaw/openclaw"],
-          ["commit", "abcdef1"],
-        ],
-      },
-      Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
-    );
+    const richEvent = signSenderEvent({
+      kind: BUZZ_RICH_MESSAGE_KIND,
+      created_at: 1_700_000_000,
+      content: "**rich**",
+      tags: [["h", CHANNEL_ID]],
+    });
+    const diffEvent = signSenderEvent({
+      kind: BUZZ_DIFF_MESSAGE_KIND,
+      created_at: 1_700_000_001,
+      content: "@@ -1 +1 @@\n-old\n+new",
+      tags: [
+        ["h", CHANNEL_ID],
+        ["repo", "https://github.com/openclaw/openclaw"],
+        ["commit", "abcdef1"],
+      ],
+    });
 
     messageSubscription?.handlers.onevent(richEvent);
     messageSubscription?.handlers.onevent(diffEvent);
@@ -924,11 +844,7 @@ describe("Buzz bus lifecycle", () => {
     const onMessageError = vi.fn();
     const onFatalError = vi.fn();
     const onProfilePublished = vi.fn();
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
+    const bus = await startTestBus({
       onMessage: async () => {
         throw new Error("dispatch failed");
       },
@@ -937,15 +853,12 @@ describe("Buzz bus lifecycle", () => {
       onFatalError,
       onProfilePublished,
     });
-    const event = finalizeEvent(
-      {
-        kind: 9,
-        created_at: 1_700_000_000,
-        content: "hello",
-        tags: [["h", CHANNEL_ID]],
-      },
-      Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
-    );
+    const event = signSenderEvent({
+      kind: 9,
+      created_at: 1_700_000_000,
+      content: "hello",
+      tags: [["h", CHANNEL_ID]],
+    });
 
     relayMocks.subscriptions
       .find((entry) => subscriptionIncludesKind(entry, 9))
@@ -972,12 +885,7 @@ describe("Buzz bus lifecycle", () => {
     relayMocks.stallProfileQueryEose = true;
     const onFatalError = vi.fn();
     const onProfileError = vi.fn();
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
+    const bus = await startTestBus({
       profileName: "Configured Agent Name",
       onFatalError,
       onProfileError,
@@ -1005,23 +913,14 @@ describe("Buzz bus lifecycle", () => {
 
   it("deduplicates replayed events after the bus restarts", async () => {
     relayMocks.auth.mockResolvedValue("ok");
-    const event = finalizeEvent(
-      {
-        kind: 9,
-        created_at: Math.floor(Date.now() / 1000),
-        content: "hello",
-        tags: [["h", CHANNEL_ID]],
-      },
-      Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")),
-    );
-    const firstOnMessage = vi.fn(async () => {});
-    const firstBus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: firstOnMessage,
+    const event = signSenderEvent({
+      kind: 9,
+      created_at: Math.floor(Date.now() / 1000),
+      content: "hello",
+      tags: [["h", CHANNEL_ID]],
     });
+    const firstOnMessage = vi.fn(async () => {});
+    const firstBus = await startTestBus({ onMessage: firstOnMessage });
     relayMocks.subscriptions
       .find((entry) => subscriptionIncludesKind(entry, 9))
       ?.handlers.onevent(event);
@@ -1029,13 +928,7 @@ describe("Buzz bus lifecycle", () => {
     await firstBus.close();
 
     const secondOnMessage = vi.fn(async () => {});
-    const secondBus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: secondOnMessage,
-    });
+    const secondBus = await startTestBus({ onMessage: secondOnMessage });
     relayMocks.subscriptions
       .findLast((entry) => subscriptionIncludesKind(entry, 9))
       ?.handlers.onevent(event);

@@ -1,6 +1,4 @@
 // Line tests cover setup surface plugin behavior.
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import {
   createStartAccountContext,
   installChannelDmPolicyContractSuite,
@@ -11,8 +9,6 @@ import {
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import ts from "typescript";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
@@ -42,125 +38,6 @@ afterAll(() => {
 });
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
-const LINE_SRC_PREFIX = `../../${bundledPluginRoot("line")}/src/`;
-
-function normalizeModuleSpecifier(specifier: string): string | null {
-  if (specifier.startsWith("./src/")) {
-    return specifier;
-  }
-  if (specifier.startsWith(LINE_SRC_PREFIX)) {
-    return `./src/${specifier.slice(LINE_SRC_PREFIX.length)}`;
-  }
-  return null;
-}
-
-function collectModuleExportNames(filePath: string): string[] {
-  const sourcePath = filePath.replace(/\.js$/, ".ts");
-  const sourceText = readFileSync(sourcePath, "utf8");
-  const sourceFile = ts.createSourceFile(sourcePath, sourceText, ts.ScriptTarget.Latest, true);
-  const names = new Set<string>();
-
-  for (const statement of sourceFile.statements) {
-    if (
-      ts.isExportDeclaration(statement) &&
-      statement.exportClause &&
-      ts.isNamedExports(statement.exportClause)
-    ) {
-      for (const element of statement.exportClause.elements) {
-        if (!element.isTypeOnly) {
-          names.add(element.name.text);
-        }
-      }
-      continue;
-    }
-
-    const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
-    const isExported = modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
-    if (!isExported) {
-      continue;
-    }
-
-    if (ts.isVariableStatement(statement)) {
-      for (const declaration of statement.declarationList.declarations) {
-        if (ts.isIdentifier(declaration.name)) {
-          names.add(declaration.name.text);
-        }
-      }
-      continue;
-    }
-
-    if (
-      ts.isFunctionDeclaration(statement) ||
-      ts.isClassDeclaration(statement) ||
-      ts.isEnumDeclaration(statement)
-    ) {
-      if (statement.name) {
-        names.add(statement.name.text);
-      }
-    }
-  }
-
-  return Array.from(names).toSorted();
-}
-
-function collectRuntimeApiPreExports(runtimeApiPath: string): string[] {
-  const runtimeApiSource = readFileSync(runtimeApiPath, "utf8");
-  const runtimeApiFile = ts.createSourceFile(
-    runtimeApiPath,
-    runtimeApiSource,
-    ts.ScriptTarget.Latest,
-    true,
-  );
-  const preExports = new Set<string>();
-  let pluginSdkLineRuntimeSeen = false;
-  const removedLineRuntimeSpecifier = ["openclaw", "plugin-sdk", "line-runtime"].join("/");
-
-  for (const statement of runtimeApiFile.statements) {
-    if (!ts.isExportDeclaration(statement)) {
-      continue;
-    }
-    const moduleSpecifier =
-      statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
-        ? statement.moduleSpecifier.text
-        : undefined;
-    if (!moduleSpecifier) {
-      continue;
-    }
-    if (moduleSpecifier === removedLineRuntimeSpecifier) {
-      pluginSdkLineRuntimeSeen = true;
-      break;
-    }
-    const normalized = normalizeModuleSpecifier(moduleSpecifier);
-    if (!normalized) {
-      continue;
-    }
-
-    if (!statement.exportClause) {
-      for (const name of collectModuleExportNames(
-        path.join(process.cwd(), "extensions", "line", normalized),
-      )) {
-        preExports.add(name);
-      }
-      continue;
-    }
-
-    if (!ts.isNamedExports(statement.exportClause)) {
-      continue;
-    }
-
-    for (const element of statement.exportClause.elements) {
-      if (!element.isTypeOnly) {
-        preExports.add(element.name.text);
-      }
-    }
-  }
-
-  if (!pluginSdkLineRuntimeSeen) {
-    return [];
-  }
-
-  return Array.from(preExports).toSorted();
-}
 
 describe("line setup wizard", () => {
   it("configures token and secret for the default account", async () => {
@@ -303,14 +180,6 @@ describe("linePlugin status.probeAccount", () => {
       ...directResult,
       elapsedMs: expect.any(Number),
     });
-  });
-});
-
-describe("line runtime api", () => {
-  it("keeps the LINE runtime barrel self-contained", () => {
-    const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
-    expect(collectRuntimeApiPreExports(runtimeApiPath)).toStrictEqual([]);
-    expect(collectRuntimeApiPreExports(runtimeApiPath)).toStrictEqual([]);
   });
 });
 

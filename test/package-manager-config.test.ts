@@ -6,7 +6,7 @@ import {
   mergeOverrides,
   parsePnpmPackageKey,
   readNpmLockOverrides,
-} from "../scripts/generate-npm-package-lock.mjs";
+} from "../scripts/generate-npm-package-lock.mts";
 
 type PnpmBuildConfig = {
   allowBuilds?: Record<string, boolean>;
@@ -20,7 +20,9 @@ type RootPackageJson = {
   pnpm?: PnpmBuildConfig;
 };
 
-type WorkspaceConfig = PnpmBuildConfig;
+type WorkspaceConfig = PnpmBuildConfig & {
+  verifyDepsBeforeRun?: boolean;
+};
 
 function readJson(filePath: string): unknown {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
@@ -51,8 +53,8 @@ describe("package manager build policy", () => {
 
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
-    expect(workspace.allowBuilds?.["node-llama-cpp"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
+    expect(workspace.verifyDepsBeforeRun).toBe(false);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
 
@@ -68,8 +70,11 @@ describe("package manager build policy", () => {
     expect(packageJson.files).toEqual(
       expect.arrayContaining([
         "scripts/crabbox-wrapper.mjs",
-        "scripts/crabbox-wrapper-providers.mjs",
-        "scripts/testbox-lease-freshness.mjs",
+        "scripts/crabbox-wrapper.mts",
+        "scripts/crabbox-wrapper-providers.mts",
+        "scripts/crabbox-routing-policy.mts",
+        "scripts/testbox-lease-freshness.mts",
+        "scripts/lib/tsx-cli-shim.mjs",
       ]),
     );
   });

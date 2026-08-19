@@ -138,6 +138,19 @@ fi
 
 openclaw_live_init_profile_mount
 
+ensure_live_build_extension() {
+  local extension="$1"
+  local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
+  case " ${current//,/ } " in
+    *" $extension "*) ;;
+    *) export OPENCLAW_DOCKER_BUILD_EXTENSIONS="${current:+$current }$extension" ;;
+  esac
+}
+
+if [[ "$CLI_PROVIDER" == "claude-cli" ]]; then
+  ensure_live_build_extension anthropic
+fi
+
 openclaw_live_collect_auth_for_providers "$CLI_PROVIDER"
 if [[ "${CLAUDE_SUBSCRIPTION_AUTH_SOURCE:-}" == "env-token" ]]; then
   retained_auth_files=()
@@ -296,7 +309,7 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
-node scripts/test-live.mjs -- src/gateway/gateway-cli-backend.live.test.ts
+node --import tsx scripts/test-live.mts -- src/gateway/gateway-cli-backend.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
@@ -372,6 +385,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS="${OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV="${OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG="$CLI_DISABLE_MCP_CONFIG" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE:-}" \

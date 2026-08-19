@@ -20,8 +20,8 @@ type StoredSlackManagedThreadState = {
 
 export function createSlackAgentViewState(params: {
   accountId: string;
-  teamId: string;
-  apiAppId: string;
+  getTeamId: () => string;
+  getApiAppId: () => string;
   warn: (action: string, error: unknown) => void;
 }) {
   let enabled = false;
@@ -81,13 +81,17 @@ export function createSlackAgentViewState(params: {
     }
   };
 
-  const workspaceStateKey = params.apiAppId
-    ? JSON.stringify(["workspace", params.accountId, params.teamId, params.apiAppId])
-    : undefined;
+  const workspaceStateKey = () => {
+    const apiAppId = params.getApiAppId();
+    return apiAppId
+      ? JSON.stringify(["workspace", params.accountId, params.getTeamId(), apiAppId])
+      : undefined;
+  };
   const record = async () => {
     enabled = true;
     loaded = true;
-    if (persisted || !workspaceStateKey) {
+    const stateKey = workspaceStateKey();
+    if (persisted || !stateKey) {
       return;
     }
     const openedStore = openWorkspaceStore();
@@ -95,7 +99,7 @@ export function createSlackAgentViewState(params: {
       return;
     }
     try {
-      await openedStore.register(workspaceStateKey, {
+      await openedStore.register(stateKey, {
         experience: "agent",
         observedAt: Date.now(),
       });
@@ -112,7 +116,8 @@ export function createSlackAgentViewState(params: {
     if (loaded) {
       return false;
     }
-    if (!workspaceStateKey) {
+    const stateKey = workspaceStateKey();
+    if (!stateKey) {
       loaded = true;
       return false;
     }
@@ -121,7 +126,7 @@ export function createSlackAgentViewState(params: {
       return false;
     }
     try {
-      const stored = await openedStore.lookup(workspaceStateKey);
+      const stored = await openedStore.lookup(stateKey);
       loaded = true;
       enabled = stored?.experience === "agent";
       persisted = enabled;
@@ -134,17 +139,19 @@ export function createSlackAgentViewState(params: {
 
   const managedThreadKey = (channelId: string, threadTs: string) =>
     JSON.stringify([channelId, threadTs]);
-  const managedThreadStateKey = (channelId: string, threadTs: string) =>
-    params.apiAppId
+  const managedThreadStateKey = (channelId: string, threadTs: string) => {
+    const apiAppId = params.getApiAppId();
+    return apiAppId
       ? JSON.stringify([
           "thread",
           params.accountId,
-          params.teamId,
-          params.apiAppId,
+          params.getTeamId(),
+          apiAppId,
           channelId,
           threadTs,
         ])
       : undefined;
+  };
   const rememberManagedThread = (key: string) => {
     managedThreads.delete(key);
     managedThreads.set(key, true);

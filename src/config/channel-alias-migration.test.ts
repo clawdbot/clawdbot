@@ -8,19 +8,19 @@ function cfgWith(channelId: string, entry: Record<string, unknown>): OpenClawCon
 }
 
 describe("defineChannelAliasMigration message generation", () => {
-  it("generates preview-chunk channel messages (discord shape)", () => {
+  it("generates preview-chunk channel messages with an absent-object default", () => {
     const migration = defineChannelAliasMigration({
-      channelId: "discord",
+      channelId: "preview",
       streaming: { defaultMode: "off", absentObjectDefault: "progress", includePreviewChunk: true },
     });
 
     expect(migration.legacyConfigRules.map((rule) => rule.message)).toEqual([
-      'channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
-      'channels.discord.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
+      'channels.preview.streamMode, channels.preview.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.preview.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
+      'channels.preview.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.preview.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
     ]);
     expect(migration.legacyConfigRules.map((rule) => rule.path)).toEqual([
-      ["channels", "discord"],
-      ["channels", "discord", "accounts"],
+      ["channels", "preview"],
+      ["channels", "preview", "accounts"],
     ]);
   });
 
@@ -114,9 +114,9 @@ describe("defineChannelAliasMigration rule matching", () => {
 });
 
 describe("defineChannelAliasMigration normalizeChannelConfig", () => {
-  it("migrates root and account aliases with dm normalization", () => {
+  it("migrates preview root and account aliases with dm normalization", () => {
     const migration = defineChannelAliasMigration({
-      channelId: "discord",
+      channelId: "preview",
       streaming: { defaultMode: "off", absentObjectDefault: "progress", includePreviewChunk: true },
       accountStreamingReplacesRoot: true,
       dm: { root: true, accounts: true },
@@ -124,7 +124,7 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
 
     const changes: string[] = [];
     const result = migration.normalizeChannelConfig({
-      cfg: cfgWith("discord", {
+      cfg: cfgWith("preview", {
         streamMode: "block",
         dm: { policy: "open" },
         accounts: { work: { draftChunk: { minChars: 9 } } },
@@ -133,7 +133,7 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
     });
 
     expect(result.changes).toBe(changes);
-    expect((result.config.channels as Record<string, unknown>).discord).toEqual({
+    expect((result.config.channels as Record<string, unknown>).preview).toEqual({
       dmPolicy: "open",
       streaming: { mode: "block" },
       accounts: {
@@ -143,11 +143,11 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
       },
     });
     expect(changes).toEqual([
-      "Moved channels.discord.dm.policy → channels.discord.dmPolicy.",
-      "Removed empty channels.discord.dm after migration.",
-      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
-      "Moved channels.discord.accounts.work.draftChunk → channels.discord.accounts.work.streaming.preview.chunk.",
-      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
+      "Moved channels.preview.dm.policy → channels.preview.dmPolicy.",
+      "Removed empty channels.preview.dm after migration.",
+      "Moved channels.preview.streamMode → channels.preview.streaming.mode (block).",
+      "Moved channels.preview.accounts.work.draftChunk → channels.preview.accounts.work.streaming.preview.chunk.",
+      "Copied channels.preview.streaming into channels.preview.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 

@@ -3,7 +3,12 @@ import { digestClawPackageRef } from "./package-update-provenance.js";
 import { applyClawPackageUpdate } from "./package-update.js";
 import { installClawPackages } from "./packages.js";
 import { CLAW_PACKAGE_REF_SCHEMA_VERSION, type PersistedClawPackageRef } from "./provenance.js";
-import { CLAW_OUTPUT_STABILITY, type ClawAddPlan, type ClawManifest } from "./types.js";
+import {
+  CLAW_OUTPUT_STABILITY,
+  type ClawAddPlan,
+  type ClawManifest,
+  type ResolvedClawPackage,
+} from "./types.js";
 import { CLAW_UPDATE_PLAN_SCHEMA_VERSION, type ClawUpdatePlan } from "./update-plan.js";
 
 function ref(kind: "skill" | "plugin", name: string, version: string): PersistedClawPackageRef {
@@ -50,6 +55,7 @@ function plan(actions: ClawUpdatePlan["actions"]): ClawUpdatePlan {
     },
     actions,
     capabilityChanges: [],
+    readiness: { ready: true, requirements: [] },
     blockers: [],
     diagnostics: [],
   };
@@ -130,6 +136,101 @@ const addPlan: ClawAddPlan = {
 };
 
 describe("applyClawPackageUpdate", () => {
+  it("hashes only persisted package provenance from enriched status records", () => {
+    const persisted = ref("plugin", "audit", "1.0.0");
+    expect(
+      digestClawPackageRef({
+        ...persisted,
+        state: "present",
+        extensionCompatibility: { state: "compatible" },
+      } as typeof persisted),
+    ).toBe(digestClawPackageRef(persisted));
+  });
+
+  it("adds extension metadata to a reused v1 plugin edge without changing ownership", async () => {
+    const previous = ref("plugin", "audit", "1.0.0");
+    const extension = {
+      id: "audit-tools",
+      format: "claude" as const,
+      detectedFormat: "claude" as const,
+      mapped: ["skills"],
+      unavailable: ["agents"],
+      adapterIdentity: "openclaw/test",
+    };
+    const targetPlan: ClawAddPlan = {
+      ...addPlan,
+      actions: [
+        {
+          kind: "package",
+          id: "plugin:audit",
+          action: "install",
+          target: "clawhub:audit@1.0.0",
+          blocked: false,
+          details: {
+            kind: "plugin",
+            source: "clawhub",
+            ref: "audit",
+            version: "1.0.0",
+            integrity: previous.integrity,
+            ownerAction: "reuse",
+            installId: "audit",
+            extension,
+          },
+        },
+      ],
+    };
+    const replaceExpected = vi.fn();
+    const installPackages = vi.fn(
+      async (current: ClawAddPlan, options: Parameters<typeof installClawPackages>[1]) => {
+        const persisted = options?.deps?.persistPackageRef;
+        if (!persisted) {
+          throw new Error("expected package provenance adapter");
+        }
+        return [
+          persisted(current, current.actions[0]!.details as ResolvedClawPackage, {
+            status: "complete",
+            relationship: "referenced",
+            origin: "pre-existing",
+            independentOwner: true,
+          }),
+        ];
+      },
+    );
+
+    await applyClawPackageUpdate(
+      plan([
+        {
+          kind: "package",
+          id: "plugin:audit",
+          action: "change",
+          target: "clawhub:audit@1.0.0",
+          blocked: false,
+          reason: "relocated",
+          currentDigest: digestClawPackageRef(previous),
+        },
+      ]),
+      { ...manifest, packages: [] },
+      targetPlan,
+      {
+        installPackages,
+        readRefs: () => [previous],
+        replaceExpected,
+        nowMs: 20,
+      },
+    );
+
+    expect(replaceExpected).toHaveBeenCalledWith(
+      previous,
+      expect.objectContaining({
+        extension,
+        origin: "claw-introduced",
+        independentOwner: false,
+        installedAtMs: 10,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("updates exact references but reports retained artifacts on rollback", async () => {
     const oldSkill = ref("skill", "triage", "1.0.0");
     const legacy = ref("plugin", "legacy", "1.0.0");

@@ -62,37 +62,49 @@ class CronJobBindingStaleError extends Error {
   }
 }
 
-/**
- * Disables every enabled cron job bound to a session, used when the session is
- * archived so schedules stop targeting a lane that rejects new work.
- * Returns the disabled job ids.
- */
-export async function disableCronJobsBoundToSession(params: {
+/** Disables enabled jobs bound to any archived session with one job-list scan. */
+export async function disableCronJobsBoundToSessions(params: {
   cron: Pick<CronServiceContract, "list" | "updateWithPrecondition" | "getDefaultAgentId">;
   cfg: OpenClawConfig;
-  sessionKey: string;
-}): Promise<string[]> {
+  sessionKeys: readonly string[];
+}): Promise<Map<string, string[]>> {
+  const sessionKeys = [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))];
+  const disabledBySession = new Map(sessionKeys.map((sessionKey) => [sessionKey, [] as string[]]));
+  if (sessionKeys.length === 0) {
+    return disabledBySession;
+  }
+  const targetKeys = new Set(sessionKeys);
   const jobs = await params.cron.list();
   const defaultAgentId = params.cron.getDefaultAgentId();
-  const boundToSession = (job: CronJobSessionBinding & Pick<CronJob, "enabled">) =>
-    job.enabled &&
-    resolveCronJobBoundSessionKeys(job, { cfg: params.cfg, defaultAgentId }).has(params.sessionKey);
-  const disabled: string[] = [];
+  const matchingSessionKeys = (job: CronJobSessionBinding & Pick<CronJob, "enabled">) => {
+    if (!job.enabled) {
+      return [];
+    }
+    const boundKeys = resolveCronJobBoundSessionKeys(job, {
+      cfg: params.cfg,
+      defaultAgentId,
+    });
+    return [...boundKeys].filter((sessionKey) => targetKeys.has(sessionKey));
+  };
   const failures: unknown[] = [];
   for (const job of jobs) {
-    if (!boundToSession(job)) {
+    if (matchingSessionKeys(job).length === 0) {
       continue;
     }
     try {
       // Re-check the binding under the store lock: a job retargeted after the
       // list snapshot must not be disabled, and one failing/removed job must
       // not abort the remaining bound jobs.
+      let lockedMatches: string[] = [];
       await params.cron.updateWithPrecondition(job.id, { enabled: false }, (currentJob) => {
-        if (!boundToSession(currentJob)) {
+        lockedMatches = matchingSessionKeys(currentJob);
+        if (lockedMatches.length === 0) {
           throw new CronJobBindingStaleError();
         }
       });
-      disabled.push(job.id);
+      for (const sessionKey of lockedMatches) {
+        disabledBySession.get(sessionKey)?.push(job.id);
+      }
     } catch (error) {
       if (error instanceof CronJobBindingStaleError) {
         continue;
@@ -101,10 +113,14 @@ export async function disableCronJobsBoundToSession(params: {
     }
   }
   if (failures.length > 0) {
+    const subject =
+      sessionKeys.length === 1
+        ? `bound to ${sessionKeys[0]}`
+        : `bound to ${sessionKeys.length} archived sessions`;
     throw new AggregateError(
       failures,
-      `failed to disable ${failures.length} cron job(s) bound to ${params.sessionKey}`,
+      `failed to disable ${failures.length} cron job(s) ${subject}`,
     );
   }
-  return disabled;
+  return disabledBySession;
 }

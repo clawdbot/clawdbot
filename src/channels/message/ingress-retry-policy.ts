@@ -119,24 +119,3 @@ export function resolveIngressFailureDisposition(params: {
   }
   return { kind: "release", attempt, message };
 }
-
-/** Abortable delay used by drain retry/backoff loops. */
-export function sleepIngressRetryDelay(ms: number, abortSignal?: AbortSignal): Promise<void> {
-  const abortError = () =>
-    abortSignal?.reason instanceof Error ? abortSignal.reason : new Error("ingress-aborted");
-  if (abortSignal?.aborted) {
-    return Promise.reject(abortError());
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      abortSignal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    timer.unref?.();
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(abortError());
-    };
-    abortSignal?.addEventListener("abort", onAbort, { once: true });
-  });
-}

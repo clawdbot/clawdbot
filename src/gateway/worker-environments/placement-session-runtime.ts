@@ -2,11 +2,14 @@ import {
   isDefaultAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayAgentRuntime } from "../../shared/session-types.js";
+import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 
 export function resolveWorkerPlacementSessionRuntime(params: {
   cfg: OpenClawConfig;
@@ -28,6 +31,31 @@ export function resolveWorkerPlacementSessionRuntime(params: {
   });
 }
 
-export function isWorkerPlacementSessionRuntimeSupported(runtime: string): boolean {
-  return runtime === OPENCLAW_AGENT_RUNTIME_ID;
+export function resolveWorkerPlacementExecutionMode(
+  runtime: string,
+): WorkerPlacementExecutionMode | undefined {
+  const runtimeId = runtime.trim();
+  if (runtimeId === OPENCLAW_AGENT_RUNTIME_ID) {
+    return "worker-turn";
+  }
+  const harness = getRegisteredAgentHarness(runtimeId)?.harness as
+    | { cloudPlacement?: { mode: "remote-exec" } }
+    | undefined;
+  return harness?.cloudPlacement?.mode;
+}
+
+export function projectWorkerPlacementAgentRuntime(
+  runtime: GatewayAgentRuntime,
+): GatewayAgentRuntime & {
+  cloudPlacementSupported: boolean;
+  devicePlacementSupported: boolean;
+} {
+  const { source, ...identity } = runtime;
+  const executionMode = resolveWorkerPlacementExecutionMode(runtime.id);
+  return {
+    ...identity,
+    cloudPlacementSupported: executionMode !== undefined,
+    devicePlacementSupported: executionMode === "worker-turn",
+    source,
+  };
 }

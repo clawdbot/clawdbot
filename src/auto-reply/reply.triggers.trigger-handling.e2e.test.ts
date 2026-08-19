@@ -16,6 +16,7 @@ import {
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { renderControlUiAgentFailureCopy } from "../agents/failover/user-copy.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
   loadExactSessionEntry,
@@ -24,7 +25,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
-import { buildControlUiAgentFailureText } from "./reply/agent-runner-failure-copy.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -65,7 +65,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       if (/context window exceeded/i.test(message)) {
         return "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
       }
-      return buildControlUiAgentFailureText(message);
+      return renderControlUiAgentFailureCopy(message);
     };
     const stripHeartbeat = (text?: string) => {
       const trimmed = text?.trim();
@@ -284,6 +284,7 @@ function mockSuccessfulCompaction() {
       summary: "summary",
       firstKeptEntryId: "x",
       tokensBefore: 12000,
+      tokensAfter: 1000,
     },
   });
 }
@@ -360,7 +361,7 @@ describe("trigger handling", () => {
   for (const testCase of [
     {
       error: "sandbox is not defined.",
-      expected: buildControlUiAgentFailureText("sandbox is not defined."),
+      expected: renderControlUiAgentFailureCopy("sandbox is not defined."),
     },
     {
       error: "Context window exceeded",
@@ -544,13 +545,17 @@ describe("trigger handling", () => {
       const storePath = join(home, "compact-main.sessions.json");
       const cfg = makeCfg(home);
       cfg.session = { ...cfg.session, store: storePath };
-      mockSuccessfulCompaction();
-
       const request = {
         Body: "/compact focus on decisions",
         From: "+1003",
         To: "+2000",
       };
+      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-main-session", updatedAt: Date.now() },
+      );
+      mockSuccessfulCompaction();
 
       const res = await getReplyFromConfig(
         {
@@ -561,9 +566,8 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
       expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
     });
   });
@@ -573,13 +577,19 @@ describe("trigger handling", () => {
       getCompactEmbeddedAgentSessionMock().mockReset();
       mockSuccessfulCompaction();
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "compact-worker.sessions.json") };
+      const storePath = join(home, "compact-worker.sessions.json");
+      const sessionKey = "agent:worker1:telegram:12345";
+      cfg.session = { ...cfg.session, store: storePath };
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-worker-session", updatedAt: Date.now() },
+      );
       const res = await getReplyFromConfig(
         {
           Body: "/compact",
           From: "+1004",
           To: "+2000",
-          SessionKey: "agent:worker1:telegram:12345",
+          SessionKey: sessionKey,
           CommandAuthorized: true,
         },
         {},
@@ -587,7 +597,7 @@ describe("trigger handling", () => {
       );
 
       const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
       const call = firstMockCallArg(
         getCompactEmbeddedAgentSessionMock(),

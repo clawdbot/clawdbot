@@ -2,7 +2,7 @@
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import * as harness from "./bot.media.e2e-harness.js";
+import * as harness from "./bot.media.e2e.test-harness.js";
 
 type StickerSpy = Mock<(...args: unknown[]) => unknown>;
 

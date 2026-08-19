@@ -212,6 +212,27 @@ describe("GatewayProtocolClient socket factory recovery", () => {
 });
 
 describe("GatewayClient socket factory recovery", () => {
+  it("accepts uppercase WSS URLs with a TLS fingerprint", () => {
+    const onConnectError = vi.fn<(error: Error) => void>();
+    const beforeConnect = vi.fn(() => {
+      throw new Error("stop after transport policy");
+    });
+    const client = new GatewayClient({
+      url: "WSS://gateway.example:18789",
+      tlsFingerprint: "ab".repeat(32),
+      onConnectError,
+      hostDeps: { beforeConnect },
+    });
+
+    client.start();
+
+    expect(beforeConnect).toHaveBeenCalledOnce();
+    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "stop after transport policy" }),
+    );
+    client.stop();
+  });
+
   it("retries transient node-host setup failures without requiring another start", async () => {
     vi.useFakeTimers();
     const onConnectError = vi.fn<(error: Error) => void>();
@@ -256,6 +277,12 @@ describe("GatewayClient socket factory recovery", () => {
       url: "ws://127.0.0.1:18789",
       tlsFingerprint: "deadbeef",
       expectedMessage: "gateway tls fingerprint requires wss:// gateway url",
+    },
+    {
+      label: "invalid TLS fingerprint",
+      url: "wss://gateway.example:18789",
+      tlsFingerprint: "deadbeef",
+      expectedMessage: "gateway tls fingerprint must be a SHA-256 fingerprint",
     },
   ])("does not retry $label", async ({ url, tlsFingerprint, expectedMessage }) => {
     vi.useFakeTimers();

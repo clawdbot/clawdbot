@@ -14,6 +14,7 @@ import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harne
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEvent } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { TalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import type { RelayToolCallLedger } from "./talk-realtime-relay-tool-call-ledger.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -122,6 +123,7 @@ export type CreateTalkRealtimeRelaySessionParams = {
   context: GatewayRequestContext;
   connId: string;
   cfg?: OpenClawConfig;
+  consultAuthority?: TalkAgentConsultAuthority;
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   instructions: string;
@@ -186,23 +188,30 @@ export function broadcastToOwner(
   context: GatewayRequestContext,
   connId: string,
   event: TalkRealtimeRelayEvent,
-  options: { dropIfSlow?: boolean } = { dropIfSlow: true },
 ): void {
-  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), options);
+  // Classify the materialized Talk event so final results cannot be mistaken
+  // for transient tool progress by individual provider callback paths.
+  const delivery = relayEventDeliveryOptions(event, event.talkEvent);
+  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), delivery);
 }
 
-export function relayEventDeliveryOptions(event: TalkRealtimeRelayEventPayload): {
+function relayEventDeliveryOptions(
+  event: TalkRealtimeRelayEventPayload,
+  talkEvent?: TalkEvent,
+): {
   dropIfSlow?: boolean;
 } {
   switch (event.type) {
-    case "ready":
-    case "error":
-    case "close":
-    case "mark":
-    case "toolCallCancelled":
-      return { dropIfSlow: false };
-    default:
+    case "audio":
+    case "inputAudio":
       return { dropIfSlow: true };
+    case "transcript":
+      return { dropIfSlow: !event.final };
+    case "toolProgress":
+    case "toolResult":
+      return { dropIfSlow: talkEvent?.final !== true };
+    default:
+      return { dropIfSlow: false };
   }
 }
 

@@ -23,6 +23,7 @@ export async function handleBuzzInbound(params: {
   bus: BuzzBus;
   message: BuzzInboundMessage;
   signal: AbortSignal;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getBuzzRuntime();
   const { account, cfg, bus, message, signal } = params;
@@ -59,6 +60,12 @@ export async function handleBuzzInbound(params: {
       id: channelId,
       threadId: message.threadId,
     },
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: message.id,
+      inboundEventKind: "user_request",
+    },
     mentionFacts: { canDetectMention: true, wasMentioned },
     groupPolicy: account.config.groupPolicy,
     groupAllowFrom: account.config.groupAllowFrom,
@@ -87,7 +94,8 @@ export async function handleBuzzInbound(params: {
     timestamp: new Date(message.createdAt * 1000),
     body: textForAgent,
   });
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress: access,
     channel: "buzz",
     accountId: route.accountId ?? account.accountId,
     messageId: message.id,

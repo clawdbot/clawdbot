@@ -10,10 +10,11 @@ import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded
 import {
   type AuthProfileStore,
   isProfileInCooldown,
+  markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
-import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
+import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -21,11 +22,13 @@ import {
 } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
+import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import {
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   MissingProviderAuthError,
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
+import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import {
   applyPreparedRuntimeAuthToModel,
@@ -36,6 +39,8 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
+import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
+import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -63,7 +68,7 @@ export function resolveEmbeddedAuthCooldownProbePolicy(params: {
   lockedProfileId?: string;
   modelId: string;
   allowTransientCooldownProbe: boolean;
-}): { allowProbe: boolean; unavailableReason: FailoverReason | null } {
+}): { probeProfileIds: ReadonlySet<string>; unavailableReason: FailoverReason | null } {
   const autoProfileCandidates = params.profileCandidates.filter(
     (candidate): candidate is string =>
       typeof candidate === "string" && candidate.length > 0 && candidate !== params.lockedProfileId,
@@ -79,13 +84,24 @@ export function resolveEmbeddedAuthCooldownProbePolicy(params: {
         profileIds: autoProfileCandidates,
       }) ?? "unknown")
     : null;
-  return {
-    allowProbe:
-      params.allowTransientCooldownProbe &&
-      allAutoProfilesInCooldown &&
-      shouldUseTransientCooldownProbeSlot(unavailableReason),
-    unavailableReason,
-  };
+  const probeProfileIds = new Set<string>();
+  if (
+    params.allowTransientCooldownProbe &&
+    allAutoProfilesInCooldown &&
+    shouldUseTransientCooldownProbeSlot(unavailableReason)
+  ) {
+    for (const candidate of autoProfileCandidates) {
+      const candidateReason =
+        resolveProfilesUnavailableReason({
+          store: params.authStore,
+          profileIds: [candidate],
+        }) ?? "unknown";
+      if (shouldUseTransientCooldownProbeSlot(candidateReason)) {
+        probeProfileIds.add(candidate);
+      }
+    }
+  }
+  return { probeProfileIds, unavailableReason };
 }
 
 /**
@@ -105,6 +121,9 @@ export function createEmbeddedRunAuthController(params: {
   attemptedThinking: Set<ThinkLevel>;
   fallbackConfigured: boolean;
   allowTransientCooldownProbe: boolean;
+  authProfileFailurePolicy?: AuthProfileFailurePolicy;
+  authProfileStateMode?: "read-write" | "read-only";
+  runId?: string;
   getProvider(): string;
   getModelId(): string;
   getRuntimeModel(): Model;
@@ -386,6 +405,49 @@ export function createEmbeddedRunAuthController(params: {
     return classified ?? "auth";
   };
 
+  const recordOAuthRefreshFailure = async (
+    candidate: string | undefined,
+    error: unknown,
+  ): Promise<void> => {
+    if (!(error instanceof OAuthRefreshFailureError)) {
+      return;
+    }
+    const profileId = error.profileId ?? candidate;
+    const provider = error.provider || params.getProvider();
+    const errorText = formatErrorMessage(error);
+    params.log.warn(
+      `auth profile "${profileId ?? "(unknown)"}" failed for provider "${provider}": ${errorText}`,
+    );
+    if (!profileId || params.authProfileStateMode === "read-only") {
+      return;
+    }
+    const reason = resolveAuthProfileFailureReason({
+      failoverReason: resolveAuthProfileFailoverReason({
+        allInCooldown: false,
+        message: errorText,
+      }),
+      policy: params.authProfileFailurePolicy,
+    });
+    if (!reason) {
+      return;
+    }
+    try {
+      await markAuthProfileFailure({
+        store: params.authStore,
+        profileId,
+        reason,
+        cfg: params.config,
+        agentDir: params.agentDir,
+        runId: params.runId,
+        modelId: params.getModelId(),
+      });
+    } catch (markError) {
+      params.log.warn(
+        `auth profile "${profileId}" failure bookkeeping failed for provider "${provider}": ${formatErrorMessage(markError)}`,
+      );
+    }
+  };
+
   const throwAuthProfileFailover = (failoverParams: {
     allInCooldown: boolean;
     message?: string;
@@ -403,14 +465,19 @@ export function createEmbeddedRunAuthController(params: {
     });
     const message =
       failoverParams.message?.trim() ||
-      formatAuthProfileFailureMessage({
+      renderAuthProfileFailoverCopy({
         reason,
         provider,
         allInCooldown: failoverParams.allInCooldown,
-        cause: failoverParams.error,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
+        causeText: failoverParams.error
+          ? formatErrorMessage(failoverParams.error).trim()
+          : undefined,
+        recoveryHint: buildProviderAuthRecoveryHint({
+          provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+        }),
       });
     if (params.fallbackConfigured) {
       const authMode =
@@ -443,7 +510,7 @@ export function createEmbeddedRunAuthController(params: {
     model = params.getRuntimeModel(),
     allowAuthProfileFallback?: boolean,
   ) => {
-    return getApiKeyForModel({
+    return getApiKeyForModelCore({
       model,
       cfg: params.config,
       profileId: candidate,
@@ -564,22 +631,20 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const advanceAuthProfile = async (): Promise<boolean> => {
-    if (params.lockedProfileId) {
-      return false;
-    }
     let nextIndex = params.getProfileIndex() + 1;
     while (nextIndex < params.profileCandidates.length) {
-      const candidate = params.profileCandidates[nextIndex];
+      const candidateIndex = nextIndex++;
+      const candidate = params.profileCandidates[candidateIndex];
+      // Candidate exhaustion is run-local and never depends on a cooldown write.
+      params.setProfileIndex(candidateIndex);
       if (
         candidate &&
         isProfileInCooldown(params.authStore, candidate, undefined, params.getModelId())
       ) {
-        nextIndex += 1;
         continue;
       }
       try {
-        await applyApiKeyInfo(candidate, nextIndex);
-        params.setProfileIndex(nextIndex);
+        await applyApiKeyInfo(candidate, candidateIndex);
         params.setThinkLevel(params.initialThinkLevel);
         params.attemptedThinking.clear();
         return true;
@@ -587,12 +652,10 @@ export function createEmbeddedRunAuthController(params: {
         if (err instanceof SecretSurfaceUnavailableError) {
           throw err;
         }
-        if (candidate && candidate === params.lockedProfileId) {
-          throw err;
-        }
-        nextIndex += 1;
+        await recordOAuthRefreshFailure(candidate, err);
       }
     }
+    params.setProfileIndex(params.profileCandidates.length);
     return false;
   };
 
@@ -611,11 +674,13 @@ export function createEmbeddedRunAuthController(params: {
       while (params.getProfileIndex() < params.profileCandidates.length) {
         const candidate = params.profileCandidates[params.getProfileIndex()];
         const inCooldown =
-          candidate &&
-          candidate !== params.lockedProfileId &&
-          isProfileInCooldown(params.authStore, candidate, undefined, modelId);
+          candidate && isProfileInCooldown(params.authStore, candidate, undefined, modelId);
         if (inCooldown) {
-          if (cooldownProbePolicy.allowProbe && !didTransientCooldownProbe) {
+          const canProbeCandidate =
+            !didTransientCooldownProbe && cooldownProbePolicy.probeProfileIds.has(candidate);
+          // Spend the single probe slot only on a transiently cooled candidate;
+          // persistent failures must leave it available for later profiles.
+          if (canProbeCandidate) {
             didTransientCooldownProbe = true;
             params.log.warn(
               `probing cooldowned auth profile for ${params.getProvider()}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
@@ -638,9 +703,7 @@ export function createEmbeddedRunAuthController(params: {
       if (err instanceof FailoverError || err instanceof SecretSurfaceUnavailableError) {
         throw err;
       }
-      if (params.profileCandidates[params.getProfileIndex()] === params.lockedProfileId) {
-        throwAuthProfileFailover({ allInCooldown: false, error: err });
-      }
+      await recordOAuthRefreshFailure(params.profileCandidates[params.getProfileIndex()], err);
       const advanced = await advanceAuthProfile();
       if (!advanced) {
         throwAuthProfileFailover({ allInCooldown: false, error: err });

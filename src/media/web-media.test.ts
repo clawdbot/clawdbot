@@ -602,6 +602,47 @@ describe("loadWebMedia", () => {
     expect(unboundedReadCalled).toBe(false);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects local media when an allowed ancestor symlink retargets before open",
+    async () => {
+      const base = await fs.mkdtemp(path.join(fixtureRoot, "ancestor-race-"));
+      const allowedRoot = path.join(base, "allowed");
+      const insideDir = path.join(allowedRoot, "inside");
+      const outsideDir = path.join(base, "outside");
+      const aliasDir = path.join(allowedRoot, "slot");
+      const mediaPath = path.join(aliasDir, "image.png");
+      await fs.mkdir(insideDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(insideDir, "image.png"), TINY_PNG_BUFFER);
+      await fs.writeFile(
+        path.join(outsideDir, "image.png"),
+        createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 }),
+      );
+      await fs.symlink(insideDir, aliasDir);
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: async (filePath) => {
+          if (filePath !== mediaPath) {
+            return;
+          }
+          await fs.rm(aliasDir);
+          await fs.symlink(outsideDir, aliasDir);
+        },
+      });
+
+      try {
+        await expect(
+          loadWebMediaRaw(mediaPath, {
+            maxBytes: 1024 * 1024,
+            localRoots: [allowedRoot],
+            optimizeImages: false,
+          }),
+        ).rejects.toMatchObject({ code: "path-not-allowed" });
+      } finally {
+        await fs.rm(base, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("keeps the one-argument contract for custom local readers", async () => {
     const maxBytes = 1024 * 1024;
     const readFile = vi.fn(async (_filePath: string) => Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -1384,6 +1425,48 @@ describe("loadWebMedia", () => {
     }
   });
 
+  // Swap at open 2 trips the hardlink guard (invalid-path); swap at open 3 trips
+  // the fs-safe pre-open identity re-check, an access denial (path-not-allowed).
+  it.runIf(process.platform !== "win32").each([
+    [2, "invalid-path"],
+    [3, "path-not-allowed"],
+  ] as const)(
+    "rejects an inbound media store URI swapped to a hardlink on guarded open %s",
+    async (swapOpen, expectedCode) => {
+      const id = `signal-hardlink-race-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
+      const filePath = path.join(stateDir, "media", "inbound", id);
+      const outsidePath = path.join(fixtureRoot, `${id}.outside`);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "inside");
+      await fs.writeFile(outsidePath, "outside-secret");
+      let matchingOpens = 0;
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: async (openedPath) => {
+          if (path.basename(openedPath) !== id) {
+            return;
+          }
+          matchingOpens += 1;
+          if (matchingOpens !== swapOpen) {
+            return;
+          }
+          await fs.rm(filePath);
+          await fs.link(outsidePath, filePath);
+        },
+      });
+
+      try {
+        await expectLoadWebMediaErrorCode(
+          loadWebMediaRaw(`media://inbound/${id}`, { maxBytes: 1024 }),
+          expectedCode,
+        );
+        expect(matchingOpens).toBe(swapOpen);
+      } finally {
+        await fs.rm(filePath, { force: true });
+        await fs.rm(outsidePath, { force: true });
+      }
+    },
+  );
+
   it("accepts legacy MEDIA prefixes around inbound media store URIs", async () => {
     const id = `signal-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
     const filePath = path.join(stateDir, "media", "inbound", id);
@@ -1421,6 +1504,54 @@ describe("loadWebMedia", () => {
     } finally {
       await fs.rm(filePath, { force: true });
     }
+  });
+
+  it("bounds explicit-cap image fetches at the optimize headroom, not the document cap", async () => {
+    // 30MB declared original: over the 24MB image-optimize headroom but well
+    // under the old 100MB document bound. The Content-Length precheck must
+    // reject before any body bytes are read.
+    const declaredBytes = 30 * 1024 * 1024;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(new ReadableStream<Uint8Array>(), {
+          status: 200,
+          headers: {
+            "content-type": "image/png",
+            "content-length": String(declaredBytes),
+          },
+        }),
+    );
+
+    await expect(
+      loadWebMedia("https://example.test/huge.png", {
+        maxBytes: 5 * 1024 * 1024,
+        fetchImpl,
+        ssrfPolicy: { allowedHostnames: ["example.test"] },
+      }),
+    ).rejects.toThrow(/exceeds maxBytes/);
+  });
+
+  it("keeps compression headroom above an explicit cap for oversized originals", async () => {
+    // A 10MB-declared image is over the caller's 5MB cap but inside the
+    // optimize headroom: the fetch must proceed so compression can shrink it
+    // under the delivery cap.
+    const original = createSolidPngBuffer(64, 64, { r: 12, g: 34, b: 56 });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Buffer.from(original), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+
+    const result = await loadWebMedia("https://example.test/photo.png", {
+      maxBytes: 5 * 1024 * 1024,
+      fetchImpl,
+      ssrfPolicy: { allowedHostnames: ["example.test"] },
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeLessThanOrEqual(5 * 1024 * 1024);
   });
 
   it("applies the shared remote read idle timeout for raw web media loads", async () => {

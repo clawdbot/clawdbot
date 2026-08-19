@@ -13,13 +13,12 @@ export function sessionMessagesContainIdempotencyKey(
 
 export function reconcilePrePersistedCurrentUserTurn(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  currentUserTurnMessage: AgentMessage | undefined;
   durableUserTurnMessage: AgentMessage | undefined;
-  preparedUserTurnMessage: AgentMessage | undefined;
   userTurnAlreadyPersisted: boolean;
 }): boolean {
-  const idempotencyKey = (
-    params.preparedUserTurnMessage as { idempotencyKey?: unknown } | undefined
-  )?.idempotencyKey;
+  const idempotencyKey = (params.currentUserTurnMessage as { idempotencyKey?: unknown } | undefined)
+    ?.idempotencyKey;
   if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
     return false;
   }

@@ -4,12 +4,21 @@ import { readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * @param {unknown} condition
+ * @param {string} message
+ * @returns {asserts condition}
+ */
 function check(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
 }
 
+/**
+ * @param {string} reportDir
+ * @returns {string}
+ */
 export function selectKovaReport(reportDir) {
   const root = realpathSync(reportDir);
   const reports = readdirSync(root, { withFileTypes: true })
@@ -23,10 +32,16 @@ export function selectKovaReport(reportDir) {
     reports.length === 1,
     `expected exactly one full Kova JSON report; found ${reports.length}`,
   );
-  check(statSync(reports[0]).size > 0, "full Kova JSON report is empty");
-  return reports[0];
+  const report = reports[0];
+  check(report, "full Kova JSON report is missing");
+  check(statSync(report).size > 0, "full Kova JSON report is empty");
+  return report;
 }
 
+/**
+ * @param {readonly string[]} argv
+ * @returns {void}
+ */
 function runCli(argv) {
   check(argv.length === 2 && argv[0] === "--report-dir", "usage: --report-dir <directory>");
   console.log(selectKovaReport(argv[1]));

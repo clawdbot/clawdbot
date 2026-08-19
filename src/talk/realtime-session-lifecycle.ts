@@ -5,12 +5,14 @@ type RealtimeVoiceAudioOverflowPolicy = "drop-oldest" | "reject-newest";
 
 export type RealtimeVoiceAudioQueue = {
   clear: () => void;
+  dequeue: () => Buffer | undefined;
   drain: () => Buffer[];
   enqueue: (audio: Buffer) => boolean;
 };
 
 export function createRealtimeVoiceAudioQueue(
   overflowPolicy: RealtimeVoiceAudioOverflowPolicy,
+  onOverflow?: () => void,
 ): RealtimeVoiceAudioQueue {
   let chunks: Buffer[] = [];
   let bytes = 0;
@@ -22,6 +24,13 @@ export function createRealtimeVoiceAudioQueue(
 
   return {
     clear,
+    dequeue: () => {
+      const chunk = chunks.shift();
+      if (chunk) {
+        bytes -= chunk.byteLength;
+      }
+      return chunk;
+    },
     drain: () => {
       const drained = chunks;
       clear();
@@ -29,6 +38,7 @@ export function createRealtimeVoiceAudioQueue(
     },
     enqueue: (audio) => {
       if (audio.byteLength > REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES) {
+        onOverflow?.();
         return false;
       }
       if (
@@ -36,12 +46,14 @@ export function createRealtimeVoiceAudioQueue(
         (chunks.length >= REALTIME_VOICE_MAX_PENDING_AUDIO_CHUNKS ||
           bytes + audio.byteLength > REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES)
       ) {
+        onOverflow?.();
         return false;
       }
       while (
         chunks.length >= REALTIME_VOICE_MAX_PENDING_AUDIO_CHUNKS ||
         bytes + audio.byteLength > REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES
       ) {
+        onOverflow?.();
         const dropped = chunks.shift();
         if (!dropped) {
           return false;
@@ -88,6 +100,7 @@ type RealtimeVoiceConnectAttempt = {
   reject: (error: Error) => void;
   rejectStartup: (error: Error) => boolean;
   resolve: (providerReady?: boolean) => void;
+  startTimeout: () => void;
 };
 
 type RealtimeVoiceConnectAttemptOptions = {
@@ -101,9 +114,26 @@ type RealtimeVoiceConnectAttemptOptions = {
 export class RealtimeVoiceSessionLifecycle {
   private state: RealtimeVoiceIdleState | RealtimeVoiceConnectionState = { phase: "idle" };
   private connectPromise: Promise<void> | undefined;
-  private readonly pendingAudio = createRealtimeVoiceAudioQueue("reject-newest");
+  private readonly pendingAudio: RealtimeVoiceAudioQueue;
+  private pendingAudioOverflowReported = false;
 
-  constructor(private readonly label: string) {}
+  constructor(
+    private readonly label: string,
+    options: {
+      pendingAudioOverflowPolicy?: RealtimeVoiceAudioOverflowPolicy;
+      onPendingAudioOverflow?: () => void;
+    } = {},
+  ) {
+    this.pendingAudio = createRealtimeVoiceAudioQueue(
+      options.pendingAudioOverflowPolicy ?? "reject-newest",
+      () => {
+        if (!this.pendingAudioOverflowReported) {
+          this.pendingAudioOverflowReported = true;
+          options.onPendingAudioOverflow?.();
+        }
+      },
+    );
+  }
 
   connect(start: (connection: RealtimeVoiceSessionConnection) => Promise<void>): Promise<void> {
     if (this.isReady()) {
@@ -174,8 +204,11 @@ export class RealtimeVoiceSessionLifecycle {
       rejectPromise = reject;
     });
     let removeAbortListener = () => {};
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
-      clearTimeout(timeout);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
       removeAbortListener();
     };
     const resolve = (providerReady = false) => {
@@ -203,17 +236,22 @@ export class RealtimeVoiceSessionLifecycle {
       reject(error);
       return true;
     };
-    const timeout = setTimeout(() => {
-      if (
-        this.isCurrent(options.connection) &&
-        !ready &&
-        this.terminalOutcome(options.connection) !== "completed"
-      ) {
-        startupFailed = true;
-        options.onTimeout();
-        reject(options.timeoutError());
+    const startTimeout = () => {
+      if (settled || timeout) {
+        return;
       }
-    }, options.timeoutMs);
+      timeout = setTimeout(() => {
+        if (
+          this.isCurrent(options.connection) &&
+          !ready &&
+          this.terminalOutcome(options.connection) !== "completed"
+        ) {
+          startupFailed = true;
+          options.onTimeout();
+          reject(options.timeoutError());
+        }
+      }, options.timeoutMs);
+    };
     const onAbort = () => {
       const outcome = this.terminalOutcome(options.connection);
       options.onAbort(outcome);
@@ -243,6 +281,7 @@ export class RealtimeVoiceSessionLifecycle {
       reject,
       rejectStartup,
       resolve,
+      startTimeout,
     };
   }
 
@@ -252,7 +291,7 @@ export class RealtimeVoiceSessionLifecycle {
       return false;
     }
     this.connectPromise = undefined;
-    this.pendingAudio.clear();
+    this.clearPendingAudio();
     if (!("controller" in state)) {
       this.state = { phase: "terminal", terminalOutcome: "completed" };
       return true;
@@ -268,7 +307,7 @@ export class RealtimeVoiceSessionLifecycle {
     if (!state || state.terminalOutcome) {
       return false;
     }
-    this.pendingAudio.clear();
+    this.clearPendingAudio();
     state.phase = "terminal";
     state.terminalOutcome = "error";
     state.controller.abort(new Error(`${this.label} realtime voice session failed`));
@@ -283,7 +322,7 @@ export class RealtimeVoiceSessionLifecycle {
     if (!state) {
       return undefined;
     }
-    this.pendingAudio.clear();
+    this.clearPendingAudio();
     if (!state.terminalOutcome) {
       state.phase = "terminal";
       state.terminalOutcome = outcome;
@@ -328,7 +367,14 @@ export class RealtimeVoiceSessionLifecycle {
   }
 
   drainPendingAudio(): Buffer[] {
-    return this.pendingAudio.drain();
+    const drained = this.pendingAudio.drain();
+    this.pendingAudioOverflowReported = false;
+    return drained;
+  }
+
+  private clearPendingAudio(): void {
+    this.pendingAudio.clear();
+    this.pendingAudioOverflowReported = false;
   }
 
   private createFreshConnection(): RealtimeVoiceSessionConnection {

@@ -1,6 +1,6 @@
 // Extension Source Classifier tests cover extension source classifier script behavior.
 import { describe, expect, it } from "vitest";
-import { classifyBundledExtensionSourcePath } from "../../scripts/lib/extension-source-classifier.mjs";
+import { classifyBundledExtensionSourcePath } from "../../scripts/lib/extension-source-classifier.mts";
 
 function expectClassification(
   filePath: string,

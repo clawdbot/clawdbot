@@ -18,10 +18,19 @@ import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcr
 
 let cleanup: (() => Promise<void>) | undefined;
 
-async function createRealtimeServer(onRequest: (url: URL) => void) {
+async function createRealtimeServer(
+  onRequest: (url: URL) => void,
+  options?: {
+    initialEvent?: Record<string, unknown>;
+    events?: readonly Record<string, unknown>[];
+    eventsByConnection?: readonly (readonly Record<string, unknown>[])[];
+    closeAfterEvents?: boolean;
+  },
+) {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const clients = new Set<WebSocket>();
+  let connectionCount = 0;
   server.on("upgrade", (request, socket, head) => {
     onRequest(new URL(request.url ?? "/", "http://127.0.0.1"));
     wss.handleUpgrade(request, socket, head, (ws) => {
@@ -29,7 +38,15 @@ async function createRealtimeServer(onRequest: (url: URL) => void) {
       ws.on("close", () => {
         clients.delete(ws);
       });
-      ws.send(JSON.stringify({ message_type: "session_started" }));
+      ws.send(JSON.stringify(options?.initialEvent ?? { message_type: "session_started" }));
+      const events = options?.eventsByConnection?.[connectionCount] ?? options?.events ?? [];
+      connectionCount += 1;
+      for (const event of events) {
+        ws.send(JSON.stringify(event));
+      }
+      if (options?.closeAfterEvents) {
+        ws.close();
+      }
     });
   });
   await new Promise<void>((resolve) => {
@@ -170,6 +187,226 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(requests[0]?.searchParams.get("audio_format")).toBe("ulaw_8000");
     expect(requests[0]?.searchParams.get("commit_strategy")).toBe("vad");
     expect(requests[0]?.searchParams.get("language_code")).toBe("en");
+  });
+
+  it.each([
+    ["rate_limited", "rate limit exceeded"],
+    ["quota_exceeded", "quota exhausted"],
+    ["queue_overflow", "provider queue is full"],
+    ["commit_throttled", "commit was throttled"],
+  ])("reports the ready-state %s provider error exactly once", async (messageType, message) => {
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      events: [{ message_type: messageType, error: message }],
+    });
+    const onError = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
+    });
+    session.close();
+  });
+
+  it("rejects pre-ready provider errors with their original actionable detail", async () => {
+    const message = "rate limit exceeded; retry after account reset";
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      initialEvent: { message_type: "rate_limited", error: message },
+      closeAfterEvents: true,
+    });
+    const onError = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+    });
+
+    await expect(session.connect()).rejects.toThrow(message);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
+  });
+
+  it("preserves legacy named provider errors without a structured error field", async () => {
+    const message = "legacy provider rejected the input";
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      events: [{ message_type: "input_error", message }],
+    });
+    const onError = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
+    });
+    session.close();
+  });
+
+  it("keeps ordinary partial and committed transcripts outside error dispatch", async () => {
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      events: [
+        { message_type: "partial_transcript", text: "hello" },
+        { message_type: "committed_transcript", text: "hello there" },
+      ],
+    });
+    const onError = vi.fn();
+    const onPartial = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onPartial,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onPartial).toHaveBeenCalledExactlyOnceWith("hello");
+      expect(onTranscript).toHaveBeenCalledExactlyOnceWith("hello there");
+    });
+    expect(onError).not.toHaveBeenCalled();
+    session.close();
+  });
+
+  it.each([
+    {
+      name: "delivers identical committed words from separate speech turns",
+      events: [
+        { message_type: "partial_transcript", text: "yes" },
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "partial_transcript", text: "yes" },
+        { message_type: "committed_transcript", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "treats adjacent identical committed transcripts as separate segments",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "suppresses a matching timestamp companion for the same committed segment",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes"],
+    },
+    {
+      name: "consumes the timestamp companion at most once",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "preserves identical consecutive timestamp-only segments",
+      events: [
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "emits a timestamp-only segment without an earlier plain commit",
+      events: [{ message_type: "committed_transcript_with_timestamps", text: "yes" }],
+      transcripts: ["yes"],
+    },
+    {
+      name: "does not suppress a timestamp transcript that differs from its commit",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "no" },
+      ],
+      transcripts: ["yes", "no"],
+    },
+    {
+      name: "preserves a delayed timestamp companion across an interleaved partial",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "partial_transcript", text: "next turn" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "keeps timestamp companions attached to alternating committed segments",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+        { message_type: "committed_transcript", text: "no" },
+        { message_type: "committed_transcript_with_timestamps", text: "no" },
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes", "no", "yes"],
+    },
+  ])("$name", async ({ events, transcripts }) => {
+    const deliveryMarker = "transcript frames delivered";
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      events: [...events, { message_type: "partial_transcript", text: deliveryMarker }],
+    });
+    const onError = vi.fn();
+    const onPartial = vi.fn();
+    const onSpeechStart = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onPartial,
+      onSpeechStart,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith(deliveryMarker));
+    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(transcripts);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onSpeechStart).not.toHaveBeenCalled();
+    session.close();
+  });
+
+  it("does not suppress a timestamp-only transcript from a replacement session", async () => {
+    const firstMarker = "first session delivered";
+    const secondMarker = "replacement session delivered";
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      eventsByConnection: [
+        [
+          { message_type: "committed_transcript", text: "yes" },
+          { message_type: "partial_transcript", text: firstMarker },
+        ],
+        [
+          { message_type: "committed_transcript_with_timestamps", text: "yes" },
+          { message_type: "partial_transcript", text: secondMarker },
+        ],
+      ],
+    });
+    const onPartial = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onPartial,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith(firstMarker));
+    expect(onTranscript).toHaveBeenCalledExactlyOnceWith("yes");
+
+    await session.connect();
+    await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith(secondMarker));
+    expect(onTranscript.mock.calls).toEqual([["yes"], ["yes"]]);
+    session.close();
   });
 
   it("rejects whitespace-only environment keys before session creation", () => {

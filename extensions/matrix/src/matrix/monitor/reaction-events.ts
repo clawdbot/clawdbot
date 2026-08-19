@@ -1,5 +1,7 @@
 // Matrix plugin module implements reaction events behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
@@ -21,7 +23,7 @@ const loadApprovalReactionAuth = createLazyRuntimeModule(
 );
 
 const loadExecApprovalResolver = createLazyRuntimeModule(
-  () => import("../../exec-approval-resolver.js"),
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
 );
 
 const loadMatrixSend = createLazyRuntimeModule(() => import("../send.js"));
@@ -50,7 +52,7 @@ async function retireMatrixApprovalReactionTargets(params: {
   roomId: string;
   targetEventId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   result: ApprovalResolveResult;
   logVerboseMessage: (message: string) => void;
 }): Promise<void> {
@@ -120,13 +122,15 @@ async function maybeResolveMatrixApprovalReaction(params: {
   ) {
     return false;
   }
-  const { isApprovalNotFoundError, resolveMatrixApproval } = await loadExecApprovalResolver();
+  const { resolveApprovalOverGateway } = await loadExecApprovalResolver();
   try {
-    const result = await resolveMatrixApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: params.target.approvalId,
       approvalKind: params.target.approvalKind,
       decision: params.target.decision,
+      channel: "matrix",
+      accountId: params.accountId,
       senderId: params.senderId,
     });
     // Retire every delivered anchor; losing surfaces also need the canonical

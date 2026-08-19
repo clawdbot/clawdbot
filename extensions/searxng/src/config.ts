@@ -4,6 +4,7 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInput,
 } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type SearxngPluginConfig = {
   webSearch?: {
@@ -35,14 +36,6 @@ function readInlineEnvSecretRefValue(value: unknown, env: NodeJS.ProcessEnv): st
     return undefined;
   }
   return normalizeSecretInput(env[record.id]);
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
 }
 
 function normalizeBaseUrl(value: string | undefined): string | undefined {
@@ -78,9 +71,9 @@ export function resolveSearxngBaseUrl(
 }
 
 export function resolveSearxngCategories(config?: OpenClawConfig): string | undefined {
-  return normalizeTrimmedString(resolveSearxngWebSearchConfig(config)?.categories);
+  return normalizeOptionalString(resolveSearxngWebSearchConfig(config)?.categories);
 }
 
 export function resolveSearxngLanguage(config?: OpenClawConfig): string | undefined {
-  return normalizeTrimmedString(resolveSearxngWebSearchConfig(config)?.language);
+  return normalizeOptionalString(resolveSearxngWebSearchConfig(config)?.language);
 }

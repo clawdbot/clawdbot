@@ -392,6 +392,7 @@ async function runExaSearch(params: {
   type: ExaSearchType;
   contents?: ExaContentsArgs;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<ExaSearchResult[]> {
   const body: Record<string, unknown> = {
     query: params.query,
@@ -413,6 +414,7 @@ async function runExaSearch(params: {
     {
       url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -471,6 +473,7 @@ function buildExaCacheKey(params: {
 export async function executeExaWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
@@ -570,8 +573,10 @@ export async function executeExaWebSearchProviderTool(
     type,
     contents,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal,
   });
 
+  signal?.throwIfAborted();
   const payload = {
     query,
     provider: "exa",
@@ -616,12 +621,9 @@ export async function executeExaWebSearchProviderTool(
 }
 
 export const testing = {
-  normalizeExaResults,
-  normalizeExaFreshness,
   parseExaContents,
   buildExaCacheKey,
   resolveExaApiKey,
-  resolveExaConfig,
   resolveExaDescription,
   resolveExaSearchCount,
   resolveExaSearchEndpoint,
@@ -629,4 +631,3 @@ export const testing = {
   readExaErrorDetail,
   readExaSearchResults,
 } as const;
-export { testing as __testing };

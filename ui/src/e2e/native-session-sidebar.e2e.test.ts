@@ -1,19 +1,15 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const available = canRunPlaywrightChromium(executablePath);
-const allowMissing = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const suite = available || !allowMissing ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "native session sidebar",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
+
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 const uiProofArtifactDir = path.join(
@@ -23,25 +19,9 @@ const uiProofArtifactDir = path.join(
   "native-session-discovery",
 );
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-suite("native session sidebar", () => {
-  beforeAll(async () => {
-    if (!available) {
-      throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("hides empty native hosts and the empty Coding section", async () => {
-    const page = await browser.newPage({
+    const page = await suite.browser.newPage({
       deviceScaleFactor: 2,
       viewport: { height: 1100, width: 1440 },
     });
@@ -110,7 +90,7 @@ suite("native session sidebar", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await page.evaluate(() => {
         document.documentElement.setAttribute("data-theme", "openknot");
         document.documentElement.setAttribute("data-theme-mode", "dark");

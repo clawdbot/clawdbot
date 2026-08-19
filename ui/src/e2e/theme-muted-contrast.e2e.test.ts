@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -53,9 +53,12 @@ type RenderedColor = {
 
 function parseRenderedColor(color: string): RenderedColor {
   const trimmed = color.trim();
-  const hex = /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/iu.exec(trimmed);
+  const shortHex = /^#([a-f\d])([a-f\d])([a-f\d])$/iu.exec(trimmed);
+  const hex = shortHex ?? /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/iu.exec(trimmed);
   if (hex) {
-    const channels = hex.slice(1).map((channel) => Number.parseInt(channel, 16));
+    const channels = hex
+      .slice(1)
+      .map((channel) => Number.parseInt(shortHex ? channel.repeat(2) : channel, 16));
     const [red, green, blue] = channels;
     if (red !== undefined && green !== undefined && blue !== undefined) {
       return { alpha: 1, blue, green, red };
@@ -81,7 +84,7 @@ function parseRenderedColor(color: string): RenderedColor {
     }
   }
 
-  throw new Error(`Expected a browser-rendered RGB or six-digit theme color, received ${color}`);
+  throw new Error(`Expected a browser-rendered RGB or theme hex color, received ${color}`);
 }
 
 function compositeColor(foreground: RenderedColor, background: RenderedColor): RenderedColor {
@@ -139,14 +142,17 @@ suite.define(() => {
       });
       const initialFamily = family === "claw" ? "knot" : "claw";
       await context.addInitScript(
-        ({ initialMode, initialTheme }) => {
-          const gatewayUrl = "ws://127.0.0.1:18789";
+        ({ gatewayUrl, initialMode, initialTheme }) => {
           localStorage.setItem(
             `openclaw.control.settings.v1:${gatewayUrl}`,
             JSON.stringify({ gatewayUrl, theme: initialTheme, themeMode: initialMode }),
           );
         },
-        { initialMode: mode, initialTheme: initialFamily },
+        {
+          gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+          initialMode: mode,
+          initialTheme: initialFamily,
+        },
       );
 
       const page = await context.newPage();
@@ -303,95 +309,94 @@ suite.define(() => {
   );
 
   it("keeps the actual Skill Workshop Today view within a 390px mobile viewport", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 844, width: 390 },
-    });
-    const page = await context.newPage();
-    const updatedAt = "2026-07-29T10:00:00.000Z";
-    const proposal = {
-      createdAt: updatedAt,
-      description: "Clean inbox triage",
-      id: "proposal-1",
-      kind: "create",
-      scanState: "clean",
-      skillKey: "inbox-cleaner",
-      skillName: "Inbox Cleaner",
-      status: "pending",
-      title: "Inbox Cleaner",
-      updatedAt,
-    };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "config.get": themeConfigResponse("claw", "light"),
-        "skills.proposals.inspect": {
-          content: "Review unread mail and archive low-priority threads.",
-          record: {
-            createdAt: updatedAt,
-            description: proposal.description,
-            id: proposal.id,
-            kind: proposal.kind,
-            proposedVersion: "v1",
-            status: proposal.status,
-            target: { skillKey: proposal.skillKey, skillName: proposal.skillName },
-            title: proposal.title,
-            updatedAt,
-          },
-          supportFiles: [],
-        },
-        "skills.proposals.list": {
-          proposals: [proposal],
-          schema: "openclaw.skill-workshop.proposals-manifest.v1",
-          updatedAt,
-        },
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 844, width: 390 },
       },
-    });
-
-    try {
-      const response = await page.goto(`${suite.server.baseUrl}skills/workshop`);
-      expect(response?.status()).toBe(200);
-      await gateway.waitForRequest("skills.proposals.list");
-
-      const todayTab = page.locator("#skill-workshop-mode-tab-today");
-      await todayTab.waitFor({ state: "visible" });
-      await todayTab.click();
-
-      const today = page.locator(".sw-today");
-      await today.waitFor({ state: "visible" });
-      const rendered = await today.evaluate((element) => {
-        const styles = getComputedStyle(element);
-        return {
-          bodyWidth: document.body.scrollWidth,
-          boxSizing: styles.boxSizing,
-          clientWidth: element.clientWidth,
-          parentWidth: element.parentElement?.clientWidth ?? 0,
-          scrollWidth: element.scrollWidth,
-          viewportWidth: window.innerWidth,
-          width: element.getBoundingClientRect().width,
+      async ({ page }) => {
+        const updatedAt = "2026-07-29T10:00:00.000Z";
+        const proposal = {
+          createdAt: updatedAt,
+          description: "Clean inbox triage",
+          id: "proposal-1",
+          kind: "create",
+          scanState: "clean",
+          skillKey: "inbox-cleaner",
+          skillName: "Inbox Cleaner",
+          status: "pending",
+          title: "Inbox Cleaner",
+          updatedAt,
         };
-      });
-
-      expect(rendered.viewportWidth).toBe(390);
-      expect(rendered.boxSizing).toBe("border-box");
-      expect(rendered.width).toBeLessThanOrEqual(rendered.parentWidth);
-      expect(rendered.scrollWidth).toBeLessThanOrEqual(rendered.clientWidth);
-      expect(rendered.bodyWidth).toBeLessThanOrEqual(rendered.viewportWidth);
-
-      if (captureUiProof) {
-        await mkdir(proofDirectory, { recursive: true });
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(proofDirectory, "skill-workshop-today-mobile.png"),
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": themeConfigResponse("claw", "light"),
+            "skills.proposals.inspect": {
+              content: "Review unread mail and archive low-priority threads.",
+              record: {
+                createdAt: updatedAt,
+                description: proposal.description,
+                id: proposal.id,
+                kind: proposal.kind,
+                proposedVersion: "v1",
+                status: proposal.status,
+                target: { skillKey: proposal.skillKey, skillName: proposal.skillName },
+                title: proposal.title,
+                updatedAt,
+              },
+              supportFiles: [],
+            },
+            "skills.proposals.list": {
+              proposals: [proposal],
+              schema: "openclaw.skill-workshop.proposals-manifest.v1",
+              updatedAt,
+            },
+          },
         });
-        await writeFile(
-          path.join(proofDirectory, "skill-workshop-today-mobile.json"),
-          `${JSON.stringify(rendered, null, 2)}\n`,
-        );
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+
+        const response = await page.goto(`${suite.server.baseUrl}skills/workshop`);
+        expect(response?.status()).toBe(200);
+        await gateway.waitForRequest("skills.proposals.list");
+
+        const todayTab = page.locator("#skill-workshop-mode-tab-today");
+        await todayTab.waitFor({ state: "visible" });
+        await todayTab.click();
+
+        const today = page.locator(".sw-today");
+        await today.waitFor({ state: "visible" });
+        const rendered = await today.evaluate((element) => {
+          const styles = getComputedStyle(element);
+          return {
+            bodyWidth: document.body.scrollWidth,
+            boxSizing: styles.boxSizing,
+            clientWidth: element.clientWidth,
+            parentWidth: element.parentElement?.clientWidth ?? 0,
+            scrollWidth: element.scrollWidth,
+            viewportWidth: window.innerWidth,
+            width: element.getBoundingClientRect().width,
+          };
+        });
+
+        expect(rendered.viewportWidth).toBe(390);
+        expect(rendered.boxSizing).toBe("border-box");
+        expect(rendered.width).toBeLessThanOrEqual(rendered.parentWidth);
+        expect(rendered.scrollWidth).toBeLessThanOrEqual(rendered.clientWidth);
+        expect(rendered.bodyWidth).toBeLessThanOrEqual(rendered.viewportWidth);
+
+        if (captureUiProof) {
+          await mkdir(proofDirectory, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(proofDirectory, "skill-workshop-today-mobile.png"),
+          });
+          await writeFile(
+            path.join(proofDirectory, "skill-workshop-today-mobile.json"),
+            `${JSON.stringify(rendered, null, 2)}\n`,
+          );
+        }
+      },
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ import {
   runDatabaseVerifyWorker,
 } from "./openclaw-database-verify.impl.js";
 import {
+  type OpenClawDatabaseVerifyResult,
   type OpenClawDatabaseVerifyTarget,
   verifyOpenClawDatabases,
 } from "./openclaw-database-verify.worker.js";
@@ -44,6 +45,39 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
         cleanup();
       }
     }
+  });
+});
+
+async function captureDatabaseVerifyWorkerSendFailure(failure: unknown): Promise<Error> {
+  return await runDatabaseVerifyWorker([], {
+    onWorker: (worker) => {
+      if (!worker) {
+        return;
+      }
+      worker.send = ((...args: unknown[]) => {
+        const callback = args.at(-1);
+        if (typeof callback === "function") {
+          callback(failure);
+        }
+        return true;
+      }) as ChildProcess["send"];
+    },
+  }).then(
+    () => {
+      throw new Error("expected database verification worker failure");
+    },
+    (rejection: unknown) => rejection as Error,
+  );
+}
+
+describe("database verification error coercion", () => {
+  it("preserves structured send failures across the database-worker boundary", async () => {
+    const failure = { code: "SQLITE_IOERR", database: "state" };
+
+    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
+
+    expect(error).toMatchObject({ message: "[object Object]", code: "SQLITE_IOERR" });
+    expect(error.cause).toBe(failure);
   });
 });
 
@@ -105,6 +139,21 @@ async function copyHealthyDatabase(sourcePath: string, targetPath: string): Prom
 
 function quarantineStorePath(stateDir: string): string {
   return path.join(stateDir, "state", "openclaw-quarantine.sqlite");
+}
+
+function terminalVerificationResult(pathname: string): OpenClawDatabaseVerifyResult {
+  return {
+    path: pathname,
+    ok: false,
+    error: "prepared terminal integrity failure",
+    terminal: true,
+  };
+}
+
+function preparedVerificationResults(
+  targets: readonly OpenClawDatabaseVerifyTarget[],
+): OpenClawDatabaseVerifyResult[] {
+  return targets.map((target) => terminalVerificationResult(target.path));
 }
 
 function readLinuxPosixLocksForPath(pathname: string): string[] {
@@ -188,8 +237,8 @@ describe("OpenClaw database integrity verifier", () => {
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
     ];
 
-    const directResults = await verifyOpenClawDatabases(targets);
-    expect(directResults).toEqual([
+    const results = await runDatabaseVerifyWorker(targets);
+    expect(results).toEqual([
       {
         path: agentPath,
         ok: false,
@@ -197,11 +246,10 @@ describe("OpenClaw database integrity verifier", () => {
         terminal: true,
       },
     ]);
-    await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual(directResults);
 
     applyOpenClawDatabaseVerificationResults({
       env,
-      results: directResults,
+      results,
       targets,
     });
     const quarantine = readOpenClawDatabaseQuarantine(agentPath, { env });
@@ -243,14 +291,7 @@ describe("OpenClaw database integrity verifier", () => {
     const targets: OpenClawDatabaseVerifyTarget[] = [
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
     ];
-    const results = await verifyOpenClawDatabases(targets);
-    expect(results).toEqual([
-      expect.objectContaining({
-        path: agentPath,
-        ok: false,
-        terminal: true,
-      }),
-    ]);
+    const results = preparedVerificationResults(targets);
 
     fs.renameSync(agentPath, corruptArchivePath);
     fs.renameSync(healthyReplacementPath, agentPath);
@@ -273,7 +314,7 @@ describe("OpenClaw database integrity verifier", () => {
       const targets: OpenClawDatabaseVerifyTarget[] = [
         { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
       ];
-      const results = await verifyOpenClawDatabases(targets);
+      const results = preparedVerificationResults(targets);
 
       fs.renameSync(agent.path, corruptArchivePath);
       fs.renameSync(healthyReplacementPath, agent.path);
@@ -298,7 +339,7 @@ describe("OpenClaw database integrity verifier", () => {
       const targets: OpenClawDatabaseVerifyTarget[] = [
         { kind: "state", label: "OpenClaw state database", path: state.path },
       ];
-      const results = await verifyOpenClawDatabases(targets);
+      const results = preparedVerificationResults(targets);
 
       fs.renameSync(state.path, corruptArchivePath);
       fs.renameSync(healthyReplacementPath, state.path);
@@ -320,7 +361,7 @@ describe("OpenClaw database integrity verifier", () => {
     const targets: OpenClawDatabaseVerifyTarget[] = [
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
     ];
-    const results = await verifyOpenClawDatabases(targets);
+    const results = preparedVerificationResults(targets);
 
     applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
@@ -342,8 +383,7 @@ describe("OpenClaw database integrity verifier", () => {
     const targets: OpenClawDatabaseVerifyTarget[] = [
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
     ];
-    const results = await verifyOpenClawDatabases(targets);
-    expect(results[0]).toEqual(expect.objectContaining({ ok: false, terminal: true }));
+    const results = preparedVerificationResults(targets);
 
     repairUnsafeIndexDrift(agentPath);
     await expect(verifyOpenClawDatabases(targets)).resolves.toEqual([

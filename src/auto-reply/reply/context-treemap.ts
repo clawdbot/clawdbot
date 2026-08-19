@@ -4,9 +4,9 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
+import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 
 /** PNG treemap renderer for visualizing prompt context size by section. */
 type Rect = {
@@ -341,7 +341,7 @@ function buildGroups(params: {
 }): TreemapGroup[] {
   const { report } = params;
   const injectedTotal = report.injectedWorkspaceFiles.reduce(
-    (sum, file) => sum + file.injectedChars,
+    (sum, file) => (file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars),
     0,
   );
   const projectFrameChars = Math.max(0, report.systemPrompt.projectContextChars - injectedTotal);
@@ -360,10 +360,12 @@ function buildGroups(params: {
       name: "Workspace files",
       color: rgba(58, 145, 91),
       leaves: [
-        ...report.injectedWorkspaceFiles.map((file) => ({
-          name: file.name,
-          value: file.injectedChars,
-        })),
+        ...report.injectedWorkspaceFiles
+          .filter((file) => file.injectionStatus !== "native_unverified")
+          .map((file) => ({
+            name: file.name,
+            value: file.injectedChars,
+          })),
         { name: "Project context frame", value: projectFrameChars },
       ],
     }),

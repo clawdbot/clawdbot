@@ -1,4 +1,4 @@
-import type { Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Model } from "@openclaw/llm-core";
 /**
  * Tests Anthropic Messages transport streaming.
  * Covers request construction, SSE parsing, aborts, tool calls, usage, and
@@ -11,6 +11,7 @@ import {
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
+import { createCompactionCapture } from "./anthropic-compaction-replay.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
@@ -339,7 +340,6 @@ describe("anthropic transport stream", () => {
       ...coreTransportHost,
       buildModelFetch: buildGuardedModelFetchMock,
       redactSecrets: redactTestSecrets,
-      resolveProviderEndpointClass: resolveTestEndpointClass,
       resolveProviderRequestCapabilities: (input) => {
         const endpointClass = resolveTestEndpointClass(input.baseUrl);
         return {
@@ -352,7 +352,20 @@ describe("anthropic transport stream", () => {
         };
       },
     });
-    guardedFetchMock.mockResolvedValue(createSseResponse());
+    guardedFetchMock.mockResolvedValue(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_default", usage: { input_tokens: 0, output_tokens: 0 } },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 0, output_tokens: 0 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
   });
 
   afterEach(() => {
@@ -365,7 +378,7 @@ describe("anthropic transport stream", () => {
 
   it.each([
     {
-      name: "keeps aggregate cache billing buckets out of the context total",
+      name: "includes compaction iterations in billed usage while keeping final context usage",
       id: "msg_usage",
       model: "claude-fable-5",
       initial: {
@@ -398,11 +411,11 @@ describe("anthropic transport stream", () => {
       },
       content: true,
       expected: {
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
+        input: 24,
+        output: 16_104,
+        cacheRead: 968_523,
         cacheWrite: 93_130,
-        totalTokens: 927_907,
+        totalTokens: 1_077_781,
       },
       context: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
     },
@@ -530,6 +543,152 @@ describe("anthropic transport stream", () => {
     expect(result.usage.contextUsage).toEqual(testCase.context);
   });
 
+  it("captures and replays streamed compaction summaries", async () => {
+    guardedFetchMock
+      .mockResolvedValueOnce(
+        createSseResponse([
+          {
+            type: "message_start",
+            message: {
+              id: "msg_compaction",
+              model: "claude-sonnet-4-6",
+              usage: { input_tokens: 50_001, output_tokens: 0 },
+            },
+          },
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "compaction", content: null },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "compaction_delta", content: "summary checkpoint" },
+          },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "text", text: "Done." },
+          },
+          { type: "content_block_stop", index: 1 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse([
+          {
+            type: "message_start",
+            message: { id: "msg_replay", usage: { input_tokens: 1, output_tokens: 0 } },
+          },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]),
+      );
+    const model = makeAnthropicTransportModel();
+    const replayOptions = {
+      apiKey: "sk-ant-api",
+      anthropicServerCompaction: true,
+      authProfileId: "anthropic:work",
+      sessionId: "session-1",
+    } as unknown as AnthropicStreamOptions;
+    const firstUser = { role: "user" as const, content: "old question" };
+    const first = await runTransportStream(
+      model,
+      { messages: [firstUser] } as AnthropicStreamContext,
+      replayOptions,
+    );
+
+    expect(first.providerReplay).toMatchObject({
+      type: "anthropic-compaction",
+      data: "summary checkpoint",
+      replayIndex: 0,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [firstUser, first, { role: "user", content: "new question" }],
+      } as AnthropicStreamContext,
+      replayOptions,
+    );
+
+    const replayMessages = latestAnthropicRequest().payload.messages as Array<
+      Record<string, unknown>
+    >;
+    expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expect(replayMessages[0]?.content).toEqual([
+      { type: "compaction", content: "summary checkpoint" },
+      { type: "text", text: "Done." },
+    ]);
+  });
+
+  it("records suppression when Anthropic rejects a replayed compaction block", async () => {
+    const model = makeAnthropicTransportModel();
+    const replayIdentity = {
+      authProfileId: "anthropic:work",
+      sessionId: "session-1",
+    };
+    const checkpoint: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "answer after compaction" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    const capture = createCompactionCapture(checkpoint, model, replayIdentity);
+    capture.begin(0, { type: "compaction", content: "summary checkpoint" }, 0);
+    capture.complete(0);
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { message: "context_management compaction block is invalid" } }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const result = await runTransportStream(
+      model,
+      {
+        messages: [
+          { role: "user", content: "old question" },
+          checkpoint,
+          { role: "user", content: "new question" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        anthropicServerCompaction: true,
+        ...replayIdentity,
+      } as unknown as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.providerReplay).toMatchObject({
+      type: "anthropic-compaction-suppression",
+      data: "rejected",
+    });
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("prices one-hour cache writes at the same rate as the direct Anthropic provider", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
@@ -617,7 +776,6 @@ describe("anthropic transport stream", () => {
     // Despite stop_reason=end_turn, the turn carries a toolCall, so the narration
     // text must be tagged commentary (phase:commentary) and route to 💬.
     const textBlock = findRecord(result.content, (record) => record.type === "text");
-    expect(textBlock.textSignature).toBeDefined();
     expect(String(textBlock.textSignature)).toContain('"phase":"commentary"');
     expect(result.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
       true,
@@ -1618,6 +1776,75 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
   });
 
+  it("rejects ordinary Anthropic output when the stream ends before message_stop", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_partial", usage: { input_tokens: 3, output_tokens: 0 } },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "truncated answer" },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 3, output_tokens: 2 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
+  });
+
+  it("accepts proxy provider streams that end without message_stop", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_proxy", usage: { input_tokens: 3, output_tokens: 0 } },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "proxy answer" },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 3, output_tokens: 2 },
+        },
+      ]),
+    );
+
+    // Proxy identity: non-anthropic provider through a custom endpoint is not
+    // held to the first-party message_stop framing contract.
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "openrouter",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-proxy" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.errorMessage).toBeUndefined();
+  });
+
   it("defers a pre-tool text block's text_end until it carries the commentary phase", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
@@ -1817,6 +2044,7 @@ describe("anthropic transport stream", () => {
           delta: { stop_reason: "tool_use" },
           usage: { input_tokens: 10, output_tokens: 5 },
         },
+        { type: "message_stop" },
       ]),
     );
     const model = makeAnthropicTransportModel({
@@ -2171,7 +2399,7 @@ describe("anthropic transport stream", () => {
     {
       label: "the stream ends before content_block_stop",
       response: () => createSseResponse(createInterruptedThinkingEvents()),
-      stopReason: "stop",
+      stopReason: "error",
     },
     {
       label: "the provider errors before content_block_stop",

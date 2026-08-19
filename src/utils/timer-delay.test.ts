@@ -1,6 +1,7 @@
 // Timer delay tests cover safe timeout clamping and scheduling behavior.
 import { describe, expect, it, vi } from "vitest";
-import { MAX_SAFE_TIMEOUT_DELAY_MS, setSafeTimeout } from "./timer-delay.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
+import { setSafeTimeout } from "./timer-delay.js";
 
 describe("setSafeTimeout", () => {
   it("arms setTimeout with the clamped delay", () => {

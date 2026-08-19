@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isStringRecord as isRecordOfStrings } from "@openclaw/normalization-core/record-coerce";
 import { acquireFileLockSyncWithRetry } from "../infra/file-lock-sync.js";
 import {
   executeSqliteQuerySync,
@@ -25,6 +26,10 @@ type AuthProfileTargetDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "auth_profile_store" | "auth_profile_state"
 >;
+type SharedAuthProfileTargetDatabase = Pick<
+  OpenClawStateDatabase,
+  "auth_profile_stores" | "auth_profile_state"
+>;
 
 export type AuthProfileMigrationSourceReceipt = {
   sourceKey: string;
@@ -36,7 +41,8 @@ export type AuthProfileMigrationSourceReceipt = {
   /** In-memory migration snapshot; never serialized into the receipt ledger or diagnostics. */
   sourceBytes?: Buffer;
   targetDatabasePath: string;
-  targetTable: "auth_profile_store" | "auth_profile_state";
+  targetTable: "auth_profile_store" | "auth_profile_stores" | "auth_profile_state";
+  targetStoreKey?: "primary" | "shared";
   archivePath: string;
   expectedProfileSha256?: Record<string, string>;
   expectedStateSha256?: string;
@@ -54,6 +60,7 @@ export function createAuthProfileMigrationSourceReceipt(params: {
   sourceRecordCount: number;
   targetDatabasePath: string;
   targetTable: AuthProfileMigrationSourceReceipt["targetTable"];
+  targetStoreKey?: AuthProfileMigrationSourceReceipt["targetStoreKey"];
   now?: Date;
   env?: NodeJS.ProcessEnv;
 }): AuthProfileMigrationSourceReceipt {
@@ -71,6 +78,7 @@ export function createAuthProfileMigrationSourceReceipt(params: {
     sourceBytes: Buffer.from(params.sourceBytes),
     targetDatabasePath: path.resolve(params.targetDatabasePath),
     targetTable: params.targetTable,
+    ...(params.targetStoreKey ? { targetStoreKey: params.targetStoreKey } : {}),
     archivePath: `${sourcePath}.migrated-${stamp}-${randomUUID()}`,
     ...(params.env ? { env: params.env } : {}),
   };
@@ -82,6 +90,7 @@ function reportJson(receipt: AuthProfileMigrationSourceReceipt): string {
     archivePath: receipt.archivePath,
     targetDatabasePath: receipt.targetDatabasePath,
     targetTable: receipt.targetTable,
+    targetStoreKey: receipt.targetStoreKey ?? "primary",
     expectedProfileSha256: receipt.expectedProfileSha256,
     expectedStateSha256: receipt.expectedStateSha256,
     completionStatus: receipt.completionStatus ?? "completed",
@@ -261,15 +270,24 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
   }
   const db = openNodeSqliteDatabase(receipt.targetDatabasePath, { readOnly: true });
   try {
-    const kysely = getNodeSqliteKysely<AuthProfileTargetDatabase>(db);
+    const targetStoreKey = receipt.targetStoreKey ?? "primary";
     if (hasExpectedProfiles && receipt.expectedProfileSha256) {
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("auth_profile_store")
-          .select("store_json")
-          .where("store_key", "=", "primary"),
-      );
+      const row =
+        targetStoreKey === "shared"
+          ? executeSqliteQueryTakeFirstSync(
+              db,
+              getNodeSqliteKysely<SharedAuthProfileTargetDatabase>(db)
+                .selectFrom("auth_profile_stores")
+                .select("store_json")
+                .where("store_key", "=", "shared"),
+            )
+          : executeSqliteQueryTakeFirstSync(
+              db,
+              getNodeSqliteKysely<AuthProfileTargetDatabase>(db)
+                .selectFrom("auth_profile_store")
+                .select("store_json")
+                .where("store_key", "=", "primary"),
+            );
       const store = typeof row?.store_json === "string" ? JSON.parse(row.store_json) : null;
       for (const [profileId, expectedSha256] of Object.entries(receipt.expectedProfileSha256)) {
         if (digestAuthProfileMigrationValue(store?.profiles?.[profileId]) !== expectedSha256) {
@@ -278,13 +296,22 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
       }
     }
     if (receipt.expectedStateSha256) {
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("auth_profile_state")
-          .select("state_json")
-          .where("state_key", "=", "primary"),
-      );
+      const row =
+        targetStoreKey === "shared"
+          ? executeSqliteQueryTakeFirstSync(
+              db,
+              getNodeSqliteKysely<SharedAuthProfileTargetDatabase>(db)
+                .selectFrom("auth_profile_state")
+                .select("state_json")
+                .where("store_key", "=", "shared"),
+            )
+          : executeSqliteQueryTakeFirstSync(
+              db,
+              getNodeSqliteKysely<AuthProfileTargetDatabase>(db)
+                .selectFrom("auth_profile_state")
+                .select("state_json")
+                .where("state_key", "=", "primary"),
+            );
       const state = typeof row?.state_json === "string" ? JSON.parse(row.state_json) : null;
       if (digestAuthProfileMigrationValue(state) !== receipt.expectedStateSha256) {
         throw new Error("auth profile migration target verification failed");
@@ -345,7 +372,9 @@ export function resumePendingAuthProfileMigrationArchives(env?: NodeJS.ProcessEn
       typeof row.source_record_count !== "number" ||
       typeof report.archivePath !== "string" ||
       typeof report.targetDatabasePath !== "string" ||
-      (row.target_table !== "auth_profile_store" && row.target_table !== "auth_profile_state")
+      (row.target_table !== "auth_profile_store" &&
+        row.target_table !== "auth_profile_stores" &&
+        row.target_table !== "auth_profile_state")
     ) {
       throw new Error("invalid pending auth profile migration receipt");
     }
@@ -358,6 +387,7 @@ export function resumePendingAuthProfileMigrationArchives(env?: NodeJS.ProcessEn
       sourceRecordCount: row.source_record_count,
       targetDatabasePath: report.targetDatabasePath,
       targetTable: row.target_table,
+      targetStoreKey: report.targetStoreKey === "shared" ? "shared" : "primary",
       archivePath: report.archivePath,
       ...(isRecordOfStrings(report.expectedProfileSha256)
         ? { expectedProfileSha256: report.expectedProfileSha256 }
@@ -427,15 +457,6 @@ export function resumePendingAuthProfileMigrationArchives(env?: NodeJS.ProcessEn
     changes.push(`Finalized interrupted auth profile archive -> ${receipt.archivePath}`);
   }
   return changes;
-}
-
-function isRecordOfStrings(value: unknown): value is Record<string, string> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.values(value).every((entry) => typeof entry === "string")
-  );
 }
 
 export function hasTerminalAuthProfileMigrationReceipt(

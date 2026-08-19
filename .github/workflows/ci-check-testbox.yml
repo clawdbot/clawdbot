@@ -45,17 +45,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
+          # Dispatch hydrates the pinned workflow ref; changed-gate sync later
+          # reconstructs its exact base and final tree. PR validation keeps both commits.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '1' }}
           persist-credentials: false
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
           install-trufflehog: "true"
-          # Real Testbox hydration reuses the protected dependency snapshot.
-          # Pull-request validation runs on GitHub-hosted runners instead.
-          sticky-disk: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
-          use-actions-cache: ${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}
+          # Testbox hydration uses the ordinary pnpm store cache. Canonical CI
+          # owns the exact dependency archive and never delegates here.
+          use-actions-cache: "true"
       - name: Ensure Testbox base commit
         if: github.event_name == 'pull_request'
         uses: ./.github/actions/ensure-base-commit
@@ -65,7 +66,7 @@ jobs:
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:
-          base-ref: ${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}
+          base-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}
 
       - name: Hydrate Testbox provider env helper
         shell: bash

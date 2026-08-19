@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
-import { root } from "../../infra/fs-safe.js";
+import { FsSafeError, root, type ReadResult } from "../../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -179,6 +179,15 @@ function isStoredProposalVisible(row: SkillProposalRow, scope: SkillProposalLook
   );
 }
 
+export class SkillProposalDraftMissingError extends Error {
+  constructor(
+    readonly proposalId: string,
+    options?: ErrorOptions,
+  ) {
+    super(`Skill proposal draft is missing: ${proposalId}. Reject and re-propose it.`, options);
+  }
+}
+
 export async function readSkillProposal(
   proposalId: string,
   options: SkillWorkshopStoreOptions = {},
@@ -197,14 +206,19 @@ export async function readSkillProposal(
     return null;
   }
   const stateRoot = await root(resolveSkillWorkshopStateDir(options));
-  const draft = await stateRoot.read(
-    path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE),
-    {
+  let draft: ReadResult;
+  try {
+    draft = await stateRoot.read(path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE), {
       hardlinks: "reject",
       maxBytes: MAX_PROPOSAL_BYTES,
       symlinks: "reject",
-    },
-  );
+    });
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "not-found") {
+      throw new SkillProposalDraftMissingError(proposalId, { cause: error });
+    }
+    throw error;
+  }
   return {
     record: stored.record,
     revisionHash: hashSkillProposalRevision(stored.record),
@@ -216,12 +230,15 @@ export async function readSkillProposalRecord(
   proposalId: string,
   options: SkillWorkshopStoreOptions = {},
   scope: SkillProposalLookupScope = {},
+  readOptions: SkillProposalReadOptions = {},
 ): Promise<SkillProposalRecord | null> {
   let stored = readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
   }
-  await reconcileInterruptedApply(proposalId, options);
+  if (readOptions.reconcile !== false) {
+    await reconcileInterruptedApply(proposalId, options, readOptions.config);
+  }
   stored = readStoredProposal(proposalId, options);
   return stored && isStoredProposalVisible(stored.row, scope) ? stored.record : null;
 }

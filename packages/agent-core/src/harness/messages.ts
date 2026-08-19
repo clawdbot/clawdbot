@@ -1,5 +1,6 @@
 // Agent Core module implements messages behavior.
 import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
+import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -27,14 +28,6 @@ export type HarnessMessage =
 // boundary even though these message roles are part of AgentMessage.
 export function asAgentMessage(message: HarnessMessage): AgentMessage {
   return message as AgentMessage;
-}
-
-function parseSessionTimestampMs(value: unknown): number | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function requireSessionTimestampMs(value: string, label: string): number {

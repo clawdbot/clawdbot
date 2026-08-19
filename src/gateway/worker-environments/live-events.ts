@@ -18,6 +18,7 @@ import {
   registerAgentRunContext,
   releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerLiveTrajectoryRecorder,
@@ -722,12 +723,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       // Refresh recency first so a re-fenced environment keeps its newest stale-owner epoch.
       fencedEnvironmentEpochs.delete(environmentId);
       fencedEnvironmentEpochs.set(environmentId, fencedEpoch);
-      if (fencedEnvironmentEpochs.size > MAX_FENCED_ENVIRONMENTS) {
-        const oldestEnvironmentId = fencedEnvironmentEpochs.keys().next().value;
-        if (oldestEnvironmentId) {
-          fencedEnvironmentEpochs.delete(oldestEnvironmentId);
-        }
-      }
+      pruneMapToMaxSize(fencedEnvironmentEpochs, MAX_FENCED_ENVIRONMENTS);
     }
   };
 

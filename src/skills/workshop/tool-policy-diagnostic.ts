@@ -205,7 +205,6 @@ export function resolveSkillWorkshopToolPolicyAvailability(params: {
     config: params.config,
     conversationCapabilityProfile: params.conversationCapabilityProfile,
     warn: () => {},
-    toolPolicyAuditLogLevel: "debug",
     onFilter: (event) => {
       if (
         !exclusion &&

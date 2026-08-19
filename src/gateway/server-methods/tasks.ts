@@ -9,23 +9,22 @@ import {
   validateTasksCancelParams,
   validateTasksGetParams,
   validateTasksListParams,
+  validateTasksRecoveryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  dismissSubagentCompletionDelivery,
+  retrySubagentCompletionDelivery,
+} from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
-import { createAbortError } from "../../infra/abort-signal.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
-import { isTerminalTaskStatus } from "../../tasks/task-executor-policy.js";
-import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import { isChatAbortControllerEntryAbortable } from "../chat-abort.js";
+import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { mapTaskSummary } from "./task-summary.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
-const CLI_TASK_CANCEL_SETTLE_TIMEOUT_MS = 10_000;
-const CLI_TASK_CANCEL_POLL_MS = 20;
 
 type TaskLedgerStatus = TaskSummary["status"];
 
@@ -59,88 +58,6 @@ function parseCursor(cursor: string | undefined): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-async function waitForCliTaskCancellationSettlement(params: {
-  taskId: string;
-  runId: string;
-  expectedController: AbortController;
-  context: GatewayRequestContext;
-  timeoutMs?: number;
-}): Promise<TaskRecord | null> {
-  const deadline = Date.now() + (params.timeoutMs ?? CLI_TASK_CANCEL_SETTLE_TIMEOUT_MS);
-  while (true) {
-    const current = getTaskById(params.taskId);
-    const active = params.context.chatAbortControllers.get(params.runId);
-    if (
-      current &&
-      isTerminalTaskStatus(current.status) &&
-      active?.controller !== params.expectedController
-    ) {
-      return current;
-    }
-    if (Date.now() >= deadline) {
-      return null;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, CLI_TASK_CANCEL_POLL_MS);
-    });
-  }
-}
-
-async function cancelGatewayCliTask(params: {
-  task: TaskRecord;
-  reason?: string;
-  context: GatewayRequestContext;
-}): Promise<{ found: true; cancelled: boolean; reason?: string; task: TaskRecord }> {
-  const runId = params.task.runId?.trim();
-  const active = runId ? params.context.chatAbortControllers.get(runId) : undefined;
-  if (!runId || !active || active.kind !== "agent") {
-    return {
-      found: true,
-      cancelled: false,
-      reason: "CLI task has no active gateway cancellation handle.",
-      task: params.task,
-    };
-  }
-  if (!isChatAbortControllerEntryAbortable(active)) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: active.controller.signal.aborted
-        ? "CLI task cancellation is already in progress."
-        : "CLI task runtime rejected cancellation.",
-      task: params.task,
-    };
-  }
-
-  active.abortStopReason = "rpc";
-  active.controller.abort(
-    createAbortError(params.reason?.trim() || "CLI task cancellation requested by operator."),
-  );
-  const settled = await waitForCliTaskCancellationSettlement({
-    taskId: params.task.taskId,
-    runId,
-    expectedController: active.controller,
-    context: params.context,
-  });
-  if (!settled) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: `CLI task received cancellation but did not terminate within ${CLI_TASK_CANCEL_SETTLE_TIMEOUT_MS}ms.`,
-      task: getTaskById(params.task.taskId) ?? params.task,
-    };
-  }
-  if (settled.status !== "cancelled") {
-    return {
-      found: true,
-      cancelled: false,
-      reason: `CLI task became ${settled.status} while cancellation was in progress.`,
-      task: settled,
-    };
-  }
-  return { found: true, cancelled: true, task: settled };
-}
-
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
@@ -160,15 +77,23 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    const cfg = context.getRuntimeConfig();
     let sessionKey: string | undefined;
+    let sessionAgentId: string | undefined;
     if (requestedSessionKey) {
-      const cfg = context.getRuntimeConfig();
+      const sessionOwner = resolveRequestedSessionAgentId(
+        cfg,
+        requestedSessionKey,
+        normalizeOptionalString(params.agentId),
+      );
+      if (!sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
+        return;
+      }
+      sessionAgentId = sessionOwner.agentId;
       sessionKey = canonicalizeMainSessionAlias({
         cfg,
-        agentId:
-          parseAgentSessionKey(requestedSessionKey)?.agentId ??
-          normalizeOptionalString(params.agentId) ??
-          resolveDefaultAgentId(cfg),
+        agentId: sessionOwner.agentId,
         sessionKey: requestedSessionKey,
       });
     }
@@ -179,8 +104,10 @@ export const tasksHandlers: GatewayRequestHandlers = {
       offset: cursor,
       limit,
       statuses: statusFilter ? [...statusFilter] : undefined,
-      agentId: params.agentId,
+      agentId: sessionKey ? undefined : params.agentId,
       sessionKey,
+      sessionAgentId,
+      cfg,
     });
     const nextOffset = cursor + page.tasks.length;
     respond(true, {
@@ -212,20 +139,9 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
-    const task = getTaskById(taskId);
-    if (task?.runtime === "cli" && !isTerminalTaskStatus(task.status)) {
-      const result = await cancelGatewayCliTask({ task, reason, context });
-      respond(true, {
-        found: result.found,
-        cancelled: result.cancelled,
-        ...(result.reason ? { reason: result.reason } : {}),
-        task: mapTaskSummary(result.task),
-      });
-      return;
-    }
-    const { cancelDetachedTaskRunById } =
+    const { cancelDetachedTaskRunByIdCore } =
       await import("../../tasks/task-executor-cancel.runtime.js");
-    const result = await cancelDetachedTaskRunById({
+    const result = await cancelDetachedTaskRunByIdCore({
       cfg: context.getRuntimeConfig(),
       taskId,
       ...(reason ? { reason } : {}),
@@ -237,9 +153,41 @@ export const tasksHandlers: GatewayRequestHandlers = {
       ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
     });
   },
+  "tasks.retry": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.retry", respond)) {
+      return;
+    }
+    const results = [];
+    for (const taskId of params.taskIds) {
+      const result = await retrySubagentCompletionDelivery(taskId);
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.duplicateRisk ? { duplicateRisk: true } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
+  },
+  "tasks.dismiss": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.dismiss", respond)) {
+      return;
+    }
+    const { discardSubagentTerminalDelivery } =
+      await import("../../agents/subagents/registry/subagent-registry.js");
+    const results = [];
+    for (const taskId of params.taskIds) {
+      const result = await dismissSubagentCompletionDelivery(taskId, {
+        discardTerminalDelivery: discardSubagentTerminalDelivery,
+      });
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
+  },
 };
-
-export const testApi = {
-  mapTaskSummary,
-};
-export { testApi as __test };

@@ -25,7 +25,7 @@ export type QaScenarioRuntimeEnv<
   transport: TTransport;
 };
 
-type QaScenarioRuntimeDeps = {
+export type QaScenarioRuntimeDeps = {
   fs: typeof NodeFs;
   path: typeof NodePath;
   sleep: (ms?: number) => Promise<unknown>;
@@ -41,7 +41,6 @@ type QaScenarioRuntimeDeps = {
   fetchJson: QaScenarioRuntimeFunction;
   waitForGatewayHealthy: QaScenarioRuntimeFunction;
   waitForTransportReady: QaScenarioRuntimeFunction;
-  waitForQaChannelReady: QaScenarioRuntimeFunction;
   browserRequest: QaScenarioRuntimeFunction;
   waitForBrowserReady: QaScenarioRuntimeFunction;
   browserOpenTab: QaScenarioRuntimeFunction;
@@ -68,6 +67,7 @@ type QaScenarioRuntimeDeps = {
   assertNoGatewayLogSentinels: QaScenarioRuntimeFunction;
   readSessionTranscriptSummary: QaScenarioRuntimeFunction;
   runQaCli: QaScenarioRuntimeFunction;
+  inspectQaExecutionIdentityStorage: QaScenarioRuntimeFunction;
   extractMediaPathFromText: QaScenarioRuntimeFunction;
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
   startAgentRun: QaScenarioRuntimeFunction;
@@ -95,12 +95,15 @@ type QaScenarioRuntimeDeps = {
   formatErrorMessage: QaScenarioRuntimeFunction;
   liveTurnTimeoutMs: QaScenarioRuntimeFunction;
   resolveQaLiveTurnTimeoutMs: QaScenarioRuntimeFunction;
+  normalizeModelRef: QaScenarioRuntimeFunction;
   splitModelRef: QaScenarioRuntimeFunction;
   hasDiscoveryLabels: QaScenarioRuntimeFunction;
   reportsDiscoveryScopeLeak: QaScenarioRuntimeFunction;
   reportsMissingDiscoveryFiles: QaScenarioRuntimeFunction;
   hasModelSwitchContinuitySignal: QaScenarioRuntimeFunction;
 };
+
+type QaScenarioRuntimeApiDeps = Pick<QaScenarioRuntimeDeps, "sleep" | "waitForTransportReady">;
 
 type QaScenarioRuntimeConstants = {
   imageUnderstandingPngBase64: string;
@@ -110,90 +113,17 @@ type QaScenarioRuntimeConstants = {
 
 type QaScenarioRuntimeApi<
   TEnv extends QaScenarioRuntimeEnv = QaScenarioRuntimeEnv,
-  TDeps extends QaScenarioRuntimeDeps = QaScenarioRuntimeDeps,
-> = {
+  TDeps extends QaScenarioRuntimeApiDeps = QaScenarioRuntimeDeps,
+> = TDeps & {
   env: TEnv;
   lab: TEnv["lab"];
   transport: TEnv["transport"];
   state: TEnv["transport"]["state"];
   scenario: QaSeedScenarioWithSource;
   config: Record<string, unknown>;
-  fs: typeof NodeFs;
-  path: typeof NodePath;
-  sleep: (ms?: number) => Promise<unknown>;
-  randomUUID: () => string;
-  runScenario: TDeps["runScenario"];
   waitForCondition: TEnv["transport"]["waitForCondition"];
-  waitForOutboundMessage: TDeps["waitForOutboundMessage"];
-  waitForNoOutbound: TDeps["waitForNoOutbound"];
-  waitForNoTransportOutbound: TDeps["waitForNoTransportOutbound"];
-  recentOutboundSummary: TDeps["recentOutboundSummary"];
-  formatConversationTranscript: TDeps["formatConversationTranscript"];
-  readTransportTranscript: TDeps["readTransportTranscript"];
-  formatTransportTranscript: TDeps["formatTransportTranscript"];
-  fetchJson: TDeps["fetchJson"];
-  waitForGatewayHealthy: TDeps["waitForGatewayHealthy"];
-  waitForTransportReady: TDeps["waitForTransportReady"];
   waitForChannelReady: TDeps["waitForTransportReady"];
-  waitForQaChannelReady: TDeps["waitForQaChannelReady"];
-  browserRequest: TDeps["browserRequest"];
-  waitForBrowserReady: TDeps["waitForBrowserReady"];
-  browserOpenTab: TDeps["browserOpenTab"];
-  browserSnapshot: TDeps["browserSnapshot"];
-  browserAct: TDeps["browserAct"];
-  webOpenPage: TDeps["webOpenPage"];
-  webWait: TDeps["webWait"];
-  webType: TDeps["webType"];
-  webSnapshot: TDeps["webSnapshot"];
-  webEvaluate: TDeps["webEvaluate"];
-  waitForConfigRestartSettle: TDeps["waitForConfigRestartSettle"];
-  patchConfig: TDeps["patchConfig"];
-  applyConfig: TDeps["applyConfig"];
-  readConfigSnapshot: TDeps["readConfigSnapshot"];
-  restartGatewayWithConfigPatch: TDeps["restartGatewayWithConfigPatch"];
-  createSession: TDeps["createSession"];
-  readEffectiveTools: TDeps["readEffectiveTools"];
-  readSkillStatus: TDeps["readSkillStatus"];
-  readRawQaSessionStore: TDeps["readRawQaSessionStore"];
-  seedQaSessionTranscript: TDeps["seedQaSessionTranscript"];
-  readGatewayLogs: TDeps["readGatewayLogs"];
-  markGatewayLogCursor: TDeps["markGatewayLogCursor"];
-  scanGatewayLogSentinels: TDeps["scanGatewayLogSentinels"];
-  assertNoGatewayLogSentinels: TDeps["assertNoGatewayLogSentinels"];
-  readSessionTranscriptSummary: TDeps["readSessionTranscriptSummary"];
-  runQaCli: TDeps["runQaCli"];
-  extractMediaPathFromText: TDeps["extractMediaPathFromText"];
-  resolveGeneratedImagePath: TDeps["resolveGeneratedImagePath"];
-  startAgentRun: TDeps["startAgentRun"];
-  waitForAgentRun: TDeps["waitForAgentRun"];
-  waitForAgentHistoryReply: TDeps["waitForAgentHistoryReply"];
-  listCronJobs: TDeps["listCronJobs"];
-  findManagedDreamingCronJob: TDeps["findManagedDreamingCronJob"];
-  waitForCronRunCompletion: TDeps["waitForCronRunCompletion"];
-  readDoctorMemoryStatus: TDeps["readDoctorMemoryStatus"];
-  forceMemoryIndex: TDeps["forceMemoryIndex"];
-  findSkill: TDeps["findSkill"];
-  writeWorkspaceSkill: TDeps["writeWorkspaceSkill"];
-  callPluginToolsMcp: TDeps["callPluginToolsMcp"];
-  runAgentPrompt: TDeps["runAgentPrompt"];
-  ensureImageGenerationConfigured: TDeps["ensureImageGenerationConfigured"];
-  handleQaAction: TDeps["handleQaAction"];
-  runRuntimeToolFixture: TDeps["runRuntimeToolFixture"];
-  extractQaToolPayload: TDeps["extractQaToolPayload"];
-  formatMemoryDreamingDay: TDeps["formatMemoryDreamingDay"];
-  resolveSessionTranscriptsDirForAgent: TDeps["resolveSessionTranscriptsDirForAgent"];
-  activeMemoryToggleKey: TDeps["activeMemoryToggleKey"];
-  setActiveMemorySessionDisabled: TDeps["setActiveMemorySessionDisabled"];
-  buildAgentSessionKey: TDeps["buildAgentSessionKey"];
-  normalizeLowercaseStringOrEmpty: TDeps["normalizeLowercaseStringOrEmpty"];
-  formatErrorMessage: TDeps["formatErrorMessage"];
-  liveTurnTimeoutMs: TDeps["liveTurnTimeoutMs"];
-  resolveQaLiveTurnTimeoutMs: TDeps["resolveQaLiveTurnTimeoutMs"];
-  splitModelRef: TDeps["splitModelRef"];
-  hasDiscoveryLabels: TDeps["hasDiscoveryLabels"];
-  reportsDiscoveryScopeLeak: TDeps["reportsDiscoveryScopeLeak"];
-  reportsMissingDiscoveryFiles: TDeps["reportsMissingDiscoveryFiles"];
-  hasModelSwitchContinuitySignal: TDeps["hasModelSwitchContinuitySignal"];
+  waitForQaChannelReady: TDeps["waitForTransportReady"];
   imageUnderstandingPngBase64: string;
   imageUnderstandingLargePngBase64: string;
   imageUnderstandingValidPngBase64: string;
@@ -208,7 +138,7 @@ type QaScenarioRuntimeApi<
 
 export function createQaScenarioRuntimeApi<
   TEnv extends QaScenarioRuntimeEnv,
-  TDeps extends QaScenarioRuntimeDeps,
+  TDeps extends QaScenarioRuntimeApiDeps,
 >(params: {
   env: TEnv;
   scenario: QaSeedScenarioWithSource;
@@ -223,88 +153,16 @@ export function createQaScenarioRuntimeApi<
   };
 
   return {
+    ...params.deps,
     env: params.env,
     lab: params.env.lab,
     transport,
     state: transportState,
     scenario: params.scenario,
     config: params.scenario.execution.config ?? {},
-    fs: params.deps.fs,
-    path: params.deps.path,
-    sleep: params.deps.sleep,
-    randomUUID: params.deps.randomUUID,
-    runScenario: params.deps.runScenario,
     waitForCondition: transport.waitForCondition,
-    waitForOutboundMessage: params.deps.waitForOutboundMessage,
-    waitForNoOutbound: params.deps.waitForNoOutbound,
-    waitForNoTransportOutbound: params.deps.waitForNoTransportOutbound,
-    recentOutboundSummary: params.deps.recentOutboundSummary,
-    formatConversationTranscript: params.deps.formatConversationTranscript,
-    readTransportTranscript: params.deps.readTransportTranscript,
-    formatTransportTranscript: params.deps.formatTransportTranscript,
-    fetchJson: params.deps.fetchJson,
-    waitForGatewayHealthy: params.deps.waitForGatewayHealthy,
-    waitForTransportReady: params.deps.waitForTransportReady,
     waitForChannelReady: params.deps.waitForTransportReady,
-    waitForQaChannelReady: params.deps.waitForQaChannelReady,
-    browserRequest: params.deps.browserRequest,
-    waitForBrowserReady: params.deps.waitForBrowserReady,
-    browserOpenTab: params.deps.browserOpenTab,
-    browserSnapshot: params.deps.browserSnapshot,
-    browserAct: params.deps.browserAct,
-    webOpenPage: params.deps.webOpenPage,
-    webWait: params.deps.webWait,
-    webType: params.deps.webType,
-    webSnapshot: params.deps.webSnapshot,
-    webEvaluate: params.deps.webEvaluate,
-    waitForConfigRestartSettle: params.deps.waitForConfigRestartSettle,
-    patchConfig: params.deps.patchConfig,
-    applyConfig: params.deps.applyConfig,
-    readConfigSnapshot: params.deps.readConfigSnapshot,
-    restartGatewayWithConfigPatch: params.deps.restartGatewayWithConfigPatch,
-    createSession: params.deps.createSession,
-    readEffectiveTools: params.deps.readEffectiveTools,
-    readSkillStatus: params.deps.readSkillStatus,
-    readRawQaSessionStore: params.deps.readRawQaSessionStore,
-    seedQaSessionTranscript: params.deps.seedQaSessionTranscript,
-    readGatewayLogs: params.deps.readGatewayLogs,
-    markGatewayLogCursor: params.deps.markGatewayLogCursor,
-    scanGatewayLogSentinels: params.deps.scanGatewayLogSentinels,
-    assertNoGatewayLogSentinels: params.deps.assertNoGatewayLogSentinels,
-    readSessionTranscriptSummary: params.deps.readSessionTranscriptSummary,
-    runQaCli: params.deps.runQaCli,
-    extractMediaPathFromText: params.deps.extractMediaPathFromText,
-    resolveGeneratedImagePath: params.deps.resolveGeneratedImagePath,
-    startAgentRun: params.deps.startAgentRun,
-    waitForAgentRun: params.deps.waitForAgentRun,
-    waitForAgentHistoryReply: params.deps.waitForAgentHistoryReply,
-    listCronJobs: params.deps.listCronJobs,
-    findManagedDreamingCronJob: params.deps.findManagedDreamingCronJob,
-    waitForCronRunCompletion: params.deps.waitForCronRunCompletion,
-    readDoctorMemoryStatus: params.deps.readDoctorMemoryStatus,
-    forceMemoryIndex: params.deps.forceMemoryIndex,
-    findSkill: params.deps.findSkill,
-    writeWorkspaceSkill: params.deps.writeWorkspaceSkill,
-    callPluginToolsMcp: params.deps.callPluginToolsMcp,
-    runAgentPrompt: params.deps.runAgentPrompt,
-    ensureImageGenerationConfigured: params.deps.ensureImageGenerationConfigured,
-    handleQaAction: params.deps.handleQaAction,
-    runRuntimeToolFixture: params.deps.runRuntimeToolFixture,
-    extractQaToolPayload: params.deps.extractQaToolPayload,
-    formatMemoryDreamingDay: params.deps.formatMemoryDreamingDay,
-    resolveSessionTranscriptsDirForAgent: params.deps.resolveSessionTranscriptsDirForAgent,
-    activeMemoryToggleKey: params.deps.activeMemoryToggleKey,
-    setActiveMemorySessionDisabled: params.deps.setActiveMemorySessionDisabled,
-    buildAgentSessionKey: params.deps.buildAgentSessionKey,
-    normalizeLowercaseStringOrEmpty: params.deps.normalizeLowercaseStringOrEmpty,
-    formatErrorMessage: params.deps.formatErrorMessage,
-    liveTurnTimeoutMs: params.deps.liveTurnTimeoutMs,
-    resolveQaLiveTurnTimeoutMs: params.deps.resolveQaLiveTurnTimeoutMs,
-    splitModelRef: params.deps.splitModelRef,
-    hasDiscoveryLabels: params.deps.hasDiscoveryLabels,
-    reportsDiscoveryScopeLeak: params.deps.reportsDiscoveryScopeLeak,
-    reportsMissingDiscoveryFiles: params.deps.reportsMissingDiscoveryFiles,
-    hasModelSwitchContinuitySignal: params.deps.hasModelSwitchContinuitySignal,
+    waitForQaChannelReady: params.deps.waitForTransportReady,
     imageUnderstandingPngBase64: params.constants.imageUnderstandingPngBase64,
     imageUnderstandingLargePngBase64: params.constants.imageUnderstandingLargePngBase64,
     imageUnderstandingValidPngBase64: params.constants.imageUnderstandingValidPngBase64,

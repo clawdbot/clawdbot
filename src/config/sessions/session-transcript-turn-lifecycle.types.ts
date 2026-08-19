@@ -1,10 +1,11 @@
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
-
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
+  /** Rejects a run-owned turn after another admitted run takes writer ownership. */
+  expectedWriterRunId?: string;
   abortedLastRun: boolean | undefined;
   /** Fences recovery-only transcript writes against concurrent ownership changes. */
   mainRestartRecoveryCycleId: string | undefined;
@@ -28,6 +29,7 @@ export type SessionTranscriptTurnExpectedState = {
 export type SessionTranscriptTurnLifecyclePatch = {
   abortedLastRun?: boolean;
   endedAt?: number;
+  lifecycleRunId?: SessionEntry["lifecycleRunId"];
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   mainRestartRecovery?: SessionEntry["mainRestartRecovery"];
   restartRecoveryBeforeAgentReplyState?: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];

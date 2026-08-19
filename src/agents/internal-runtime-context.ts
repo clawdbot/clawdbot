@@ -16,9 +16,9 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]"
 /** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
-/** Header for context attached to the immediately preceding user message. */
+/** Position-independent instructions for context belonging to the active user turn. */
 export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
-  "OpenClaw runtime context for the immediately preceding user message.";
+  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
 /** Header for runtime events passed as prompt context. */
 export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
@@ -212,11 +212,11 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   }
 }
 
-function isRuntimeContextPromptHeader(line: string): boolean {
-  return (
-    line === OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER || line === OPENCLAW_RUNTIME_EVENT_HEADER
-  );
-}
+const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  "OpenClaw runtime context for the immediately preceding user message.",
+  OPENCLAW_RUNTIME_EVENT_HEADER,
+];
 
 function stripRuntimeContextPromptPreface(text: string): string {
   const lines = text.split(/\r?\n/);
@@ -227,7 +227,7 @@ function stripRuntimeContextPromptPreface(text: string): string {
     const line = lines[index] ?? "";
     const nextLine = lines[index + 1] ?? "";
     if (
-      isRuntimeContextPromptHeader(line.trim()) &&
+      RUNTIME_CONTEXT_PROMPT_HEADERS.includes(line.trim()) &&
       nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
     ) {
       changed = true;
@@ -294,10 +294,9 @@ export function hasInternalRuntimeContext(text: string): boolean {
   return (
     findDelimitedTokenIndex(text, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0) !== -1 ||
     text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
-    text.includes(
-      `${OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`,
-    ) ||
-    text.includes(`${OPENCLAW_RUNTIME_EVENT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`)
+    RUNTIME_CONTEXT_PROMPT_HEADERS.some((header) =>
+      text.includes(`${header}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`),
+    )
   );
 }
 

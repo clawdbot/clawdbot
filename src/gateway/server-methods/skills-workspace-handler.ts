@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -16,7 +17,23 @@ export function resolveSkillsAgentWorkspace(params: unknown, context: GatewayReq
     params && typeof params === "object" && "agentId" in params
       ? normalizeOptionalString((params as { agentId?: unknown }).agentId)
       : undefined;
-  const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
+  let agentId: string;
+  try {
+    agentId = agentIdRaw
+      ? normalizeAgentId(agentIdRaw)
+      : resolveDefaultAgentId(cfg, {
+          surface: "skills workspace",
+          hint: "Pass agentId to select a configured agent.",
+        });
+  } catch (error) {
+    if (!(error instanceof AgentSelectionRequiredError)) {
+      throw error;
+    }
+    return {
+      ok: false as const,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, error.message),
+    };
+  }
   if (agentIdRaw && !listAgentIds(cfg).includes(agentId)) {
     return {
       ok: false as const,

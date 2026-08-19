@@ -9,8 +9,9 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type AgentHarnessUserInputOption,
   type AgentHarnessUserInputQuestion,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   isJsonObject,
@@ -20,6 +21,8 @@ import {
 } from "./protocol.js";
 
 const DEFAULT_USER_INPUT_TIMEOUT_MS = 15 * 60_000;
+// Codex omits a deadline for nonblocking requests, so bound gateway and secret paths alike.
+const NONBLOCKING_USER_INPUT_TIMEOUT_MS = 120_000;
 
 type PendingSecretUserInput = {
   requestId: number | string;
@@ -104,7 +107,19 @@ export function createCodexUserInputBridge(params: {
       if (requestParams.questions.some((question) => question.isSecret)) {
         return new Promise<JsonValue>((resolve) => {
           const abortListener = () => resolveSecret(emptyUserInputResponse());
-          const cleanup = () => params.signal?.removeEventListener("abort", abortListener);
+          const timeout = requestParams.isBlocking
+            ? undefined
+            : setTimeout(
+                () => resolveSecret(emptyUserInputResponse()),
+                NONBLOCKING_USER_INPUT_TIMEOUT_MS,
+              );
+          timeout?.unref?.();
+          const cleanup = () => {
+            params.signal?.removeEventListener("abort", abortListener);
+            if (timeout) {
+              clearTimeout(timeout);
+            }
+          };
           const current: PendingSecretUserInput = {
             requestId: request.id,
             threadId: requestParams.threadId,
@@ -124,6 +139,7 @@ export function createCodexUserInputBridge(params: {
             intro: "Codex needs input:",
           }).catch((error: unknown) => {
             embeddedAgentLog.warn("failed to deliver secret codex user input prompt", { error });
+            resolveSecretIfCurrent(current, emptyUserInputResponse());
           });
         });
       }
@@ -141,10 +157,9 @@ export function createCodexUserInputBridge(params: {
           sessionKey: params.paramsForRun.sessionKey ?? params.paramsForRun.sessionId,
           agentId: params.paramsForRun.agentId,
           runId: params.paramsForRun.runId,
-          timeoutMs:
-            requestParams.autoResolutionMs ??
-            params.paramsForRun.timeoutMs ??
-            DEFAULT_USER_INPUT_TIMEOUT_MS,
+          timeoutMs: requestParams.isBlocking
+            ? (params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS)
+            : NONBLOCKING_USER_INPUT_TIMEOUT_MS,
           gatewayCall,
           delivery: params.paramsForRun,
           promptOptions: {
@@ -217,7 +232,7 @@ function readUserInputParams(value: JsonValue | undefined):
       turnId: string;
       itemId: string;
       questions: AgentHarnessUserInputQuestion[];
-      autoResolutionMs?: number;
+      isBlocking: boolean;
     }
   | undefined {
   if (!isJsonObject(value)) {
@@ -239,11 +254,7 @@ function readUserInputParams(value: JsonValue | undefined):
       return question;
     })
     .filter((question): question is AgentHarnessUserInputQuestion => Boolean(question));
-  const autoResolutionMs =
-    typeof value.autoResolutionMs === "number" && value.autoResolutionMs > 0
-      ? value.autoResolutionMs
-      : undefined;
-  return { threadId, turnId, itemId, questions, autoResolutionMs };
+  return { threadId, turnId, itemId, questions, isBlocking: value.isBlocking !== false };
 }
 
 function readQuestion(value: JsonValue): AgentHarnessUserInputQuestion | undefined {
@@ -289,7 +300,7 @@ function buildUserInputResponse(
   questions: AgentHarnessUserInputQuestion[],
   inputText: string,
 ): JsonObject {
-  return buildAgentHarnessUserInputAnswers(questions, inputText) as unknown as JsonObject;
+  return { ...buildAgentHarnessUserInputAnswers(questions, inputText) };
 }
 
 function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonObject {
@@ -301,12 +312,7 @@ function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonO
 }
 
 function emptyUserInputResponse(): JsonObject {
-  return emptyAgentHarnessUserInputAnswers() as unknown as JsonObject;
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
+  return { ...emptyAgentHarnessUserInputAnswers() };
 }
 
 function readRequestId(record: JsonObject): string | number | undefined {

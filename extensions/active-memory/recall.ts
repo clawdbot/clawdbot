@@ -15,6 +15,7 @@ import {
   scheduleMemorySearchCleanupAfterTimeout,
   setCachedResult,
   shouldCacheResult,
+  toSingleLineErrorMessage,
   toSingleLineLogValue,
 } from "./recall-state.js";
 import {
@@ -441,7 +442,7 @@ async function resolveActiveRecall(
       params.abortSignal?.throwIfAborted();
       return result;
     }
-    const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
+    const message = toSingleLineErrorMessage(error);
     if (params.config.logging) {
       params.api.logger.warn?.(`${logPrefix} failed error=${message}; skipping recall`);
     }

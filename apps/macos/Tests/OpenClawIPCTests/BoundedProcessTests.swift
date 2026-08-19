@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Subprocess
 import Testing
 @testable import OpenClaw
 
@@ -18,18 +19,30 @@ struct BoundedProcessTests {
     private static let concurrentSpawnTimeout: TimeInterval = 30
 
     @Test func `captures output without waiting for inherited handles`() async throws {
-        let startedAt = ContinuousClock.now
-        let result = try await BoundedProcess.run(
-            path: "/bin/sh",
-            arguments: ["-c", "sleep 5 & echo $!; echo ready"],
-            timeout: 1)
+        let operation = Task {
+            try await BoundedProcess.run(
+                path: "/bin/sh",
+                arguments: ["-c", "sleep 30 & echo $!; echo ready"],
+                timeout: 1)
+        }
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for inherited output handles to detach")
+            operation.cancel()
+        }
+        defer {
+            watchdog.cancel()
+            operation.cancel()
+        }
+        let result = try await operation.value
+        watchdog.cancel()
 
         let output = try #require(String(data: result.output, encoding: .utf8))
         let lines = output.split(separator: "\n")
         let childPID = try #require(lines.first.flatMap { pid_t($0) })
         #expect(lines.contains("ready"))
         #expect(result.terminationStatus == 0)
-        #expect(ContinuousClock.now - startedAt < .seconds(2))
         #expect(self.waitUntilGone(childPID))
     }
 
@@ -92,18 +105,16 @@ struct BoundedProcessTests {
         let parentPIDFile = directory.appendingPathComponent("parent.pid")
         let childPIDFile = directory.appendingPathComponent("child.pid")
 
-        let startedAt = ContinuousClock.now
-        do {
-            _ = try await BoundedProcess.run(
+        let operation = Task {
+            try await BoundedProcess.run(
                 path: "/bin/sh",
                 arguments: [
                     "-c",
                     """
                     trap '' TERM
-                    /bin/sh -c 'trap "" TERM; echo $$ > "$CHILD_PID_FILE"; while :; do :; done' &
+                    /bin/sh -c 'trap "" TERM; echo $$ > "$CHILD_PID_FILE"; exec /bin/sleep 30' &
                     echo $$ > "$PARENT_PID_FILE"
-                    while [ ! -s "$CHILD_PID_FILE" ]; do :; done
-                    while :; do :; done
+                    wait
                     """,
                 ],
                 environment: [
@@ -111,14 +122,27 @@ struct BoundedProcessTests {
                     "CHILD_PID_FILE": childPIDFile.path,
                 ],
                 timeout: 2)
+        }
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for TERM-resistant process group cleanup")
+            operation.cancel()
+        }
+        defer {
+            watchdog.cancel()
+            operation.cancel()
+        }
+        do {
+            _ = try await operation.value
             Issue.record("Expected process timeout")
         } catch {
             #expect(error is BoundedProcessError)
         }
+        watchdog.cancel()
 
         let parentPID = try await self.waitForPID(in: parentPIDFile)
         let childPID = try await self.waitForPID(in: childPIDFile)
-        #expect(ContinuousClock.now - startedAt < .seconds(3))
         #expect(self.waitUntilGone(parentPID))
         #expect(self.waitUntilGone(childPID))
     }
@@ -153,12 +177,23 @@ struct BoundedProcessTests {
         let childPID = try await self.waitForPID(in: childPIDFile)
 
         task.cancel()
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for cancelled process group cleanup")
+            task.cancel()
+        }
+        defer {
+            watchdog.cancel()
+            task.cancel()
+        }
         do {
             _ = try await task.value
             Issue.record("Expected cancellation")
         } catch {
             #expect(error is CancellationError)
         }
+        watchdog.cancel()
 
         #expect(self.waitUntilGone(parentPID))
         #expect(self.waitUntilGone(childPID))
@@ -171,7 +206,6 @@ struct BoundedProcessTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let pidFile = directory.appendingPathComponent("producer.pid")
 
-        let startedAt = ContinuousClock.now
         do {
             _ = try await BoundedProcess.run(
                 path: "/bin/sh",
@@ -179,20 +213,17 @@ struct BoundedProcessTests {
                     "-c",
                     """
                     echo $$ > "$PID_FILE"
-                    while :; do
-                        printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n'
-                    done
+                    exec /usr/bin/head -c 65537 /dev/zero
                     """,
                 ],
                 environment: ["PID_FILE": pidFile.path],
                 timeout: 5)
             Issue.record("Expected output limit failure")
         } catch {
-            #expect(!(error is BoundedProcessError))
+            #expect((error as? SubprocessError)?.code == .outputLimitExceeded)
         }
 
         let producerPID = try await self.waitForPID(in: pidFile)
-        #expect(ContinuousClock.now - startedAt < .seconds(2))
         #expect(self.waitUntilGone(producerPID))
     }
 

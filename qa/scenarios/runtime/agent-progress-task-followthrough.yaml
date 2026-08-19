@@ -1,0 +1,145 @@
+title: Agent progress task followthrough
+
+scenario:
+  id: agent-progress-task-followthrough
+  surface: agent-runtime
+  coverage:
+    primary:
+      - agent-runtime.progress-visibility-task-followthrough
+  objective: Verify visible task progress precedes a real read and the final response follows consumption of that read result.
+  successCriteria:
+    - A visible progress marker reaches the QA bus before the read tool starts.
+    - The read call has a nonempty identity matched by the result consumed in request 2.
+    - The terminal marker is delivered only after the matched read result.
+    - QA bus progress delivery is ordered before final delivery.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+    - src/agents/embedded-agent-runner/run/attempt.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    providerMode: mock-openai
+    retryCount: 0
+    summary: Deliver visible progress, execute one real read, consume its matched result, then deliver the final marker.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: agent-progress-task-followthrough
+      senderId: qa-progress-operator
+      fixtureFile: TASK_FOLLOWTHROUGH_EVIDENCE.txt
+      fixtureContent: "Task followthrough evidence: the read completed successfully.\n"
+      promptSnippet: "Block streaming QA check"
+      progressMarker: TASK-FOLLOWTHROUGH-READING
+      finalMarker: TASK-FOLLOWTHROUGH-OK
+      prompt: |-
+        Block streaming QA check: complete this whole sequence in one turn.
+        Step 1: send an assistant text block containing only this exact marker: `TASK-FOLLOWTHROUGH-READING`.
+        That first marker block must be emitted before any tool call.
+        Step 2: after the first marker block, use the read tool exactly once on `TASK_FOLLOWTHROUGH_EVIDENCE.txt`.
+        Step 3: after that read completes, send a final assistant text block containing only this exact marker: `TASK-FOLLOWTHROUGH-OK`.
+        Never put both markers in the same assistant text block.
+
+flow:
+  steps:
+    - name: exposes progress before consuming the read result
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, config.fixtureFile)"
+            - expr: config.fixtureContent
+            - utf8
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: busCursorBefore
+          value:
+            expr: "state.getSnapshot().cursor"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Progress Operator
+            text:
+              ref: config.prompt
+          saveAs: inbound
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            sinceIndex:
+              ref: outboundStartIndex
+            textIncludes:
+              ref: config.finalMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: outbound
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - assert:
+            expr: "scenarioRequests.length === 2"
+            message:
+              expr: "`expected exactly two provider requests, got ${JSON.stringify(scenarioRequests)}`"
+        - set: readPlanRequest
+          value:
+            expr: "scenarioRequests[0]"
+        - set: readResultRequest
+          value:
+            expr: "scenarioRequests[1]"
+        - assert:
+            expr: "readPlanRequest.plannedToolName === 'read' && readPlanRequest.plannedToolArgs?.path === config.fixtureFile && typeof readPlanRequest.plannedToolCallId === 'string' && readPlanRequest.plannedToolCallId.length > 0 && !readPlanRequest.toolOutputCallId"
+            message:
+              expr: "`request 1 did not plan the real read with a nonempty call ID: ${JSON.stringify(readPlanRequest)}`"
+        - assert:
+            expr: "readResultRequest.toolOutputCallId === readPlanRequest.plannedToolCallId && readResultRequest.toolOutputStructuredError !== true && String(readResultRequest.toolOutput ?? '').includes(config.fixtureContent.trim()) && !readResultRequest.plannedToolName"
+            message:
+              expr: "`request 2 did not consume the matched successful read result before terminal generation: ${JSON.stringify(readResultRequest)}`"
+        - set: busEvents
+          value:
+            expr: "state.getSnapshot().events.filter((event) => event.cursor > busCursorBefore && (event.kind === 'outbound-message' || event.kind === 'message-edited') && event.message.direction === 'outbound' && event.message.conversation.id === config.conversationId)"
+        - set: progressEvent
+          value:
+            expr: "busEvents.find((event) => event.message.text.includes(config.progressMarker))"
+        - set: finalEvent
+          value:
+            expr: "busEvents.findLast((event) => event.message.text.includes(config.finalMarker))"
+        - assert:
+            expr: "progressEvent && finalEvent && progressEvent.cursor < finalEvent.cursor"
+            message:
+              expr: "`QA bus did not deliver progress before final: ${JSON.stringify(busEvents)}`"
+        - assert:
+            expr: "!progressEvent.message.toolCalls || progressEvent.message.toolCalls.length === 0"
+            message:
+              expr: "`progress marker was not visible before the read started: ${JSON.stringify(progressEvent)}`"
+        - assert:
+            expr: "JSON.stringify(finalEvent.message.toolCalls?.map((toolCall) => toolCall.name) ?? []) === JSON.stringify(['read'])"
+            message:
+              expr: "`final delivery did not carry the completed read trace: ${JSON.stringify(finalEvent)}`"
+        - assert:
+            expr: "outbound.replyToId === inbound.id && outbound.text.trim() === config.finalMarker"
+            message:
+              expr: "`terminal marker was not the final reply to the real inbound turn: ${JSON.stringify(outbound)}`"
+      detailsExpr: "`${progressEvent.kind}@${progressEvent.cursor} -> read:${readPlanRequest.plannedToolCallId} -> result:${readResultRequest.toolOutputCallId} -> ${finalEvent.kind}@${finalEvent.cursor}`"

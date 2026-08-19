@@ -415,7 +415,6 @@ describe("scripts/mantis/publish-pr-evidence", () => {
 
     const manifest = loadEvidenceManifest(manifestPath);
     const body = renderEvidenceComment({
-      artifactRoot: "mantis/telegram-desktop/pr-1/run-1",
       manifest,
       marker: "<!-- mantis-telegram-desktop-proof -->",
       rawBase:

@@ -84,7 +84,13 @@ export const pluginSdkDocMetadata = {
   "runtime-store": {
     category: "runtime",
   },
+  "plugin-command-runtime": {
+    category: "runtime",
+  },
   "session-store-runtime": {
+    category: "runtime",
+  },
+  "agent-scope-runtime": {
     category: "runtime",
   },
   "agent-runtime": {

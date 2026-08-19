@@ -4,11 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
-import { shouldDedupeMessagingToolRepliesForRoute } from "./reply-payloads-dedupe.js";
 import {
   filterMessagingToolMediaDuplicates,
   resolveMessagingToolPayloadDedupe,
-} from "./reply-payloads.js";
+  shouldDedupeMessagingToolRepliesForRoute,
+} from "./reply-payloads-dedupe.js";
 
 function targetsMatchTelegramReplySuppression(params: {
   originTarget: string;
@@ -139,6 +139,25 @@ describe("filterMessagingToolMediaDuplicates", () => {
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
   });
 
+  it("dedupes canonical single-slash file URLs against triple-slash reply media", () => {
+    const result = filterMessagingToolMediaDuplicates({
+      payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
+      sentMediaUrls: ["FILE:/tmp/photo.jpg"],
+    });
+    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
+
+  it.runIf(process.platform === "win32")(
+    "dedupes Windows network file URLs across scheme casing",
+    () => {
+      const result = filterMessagingToolMediaDuplicates({
+        payloads: [{ text: "hello", mediaUrl: "FILE://server/share.png" }],
+        sentMediaUrls: ["file://server/share.png"],
+      });
+      expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+    },
+  );
+
   it("dedupes encoded file:// paths against local paths", () => {
     const result = expectDefined(
       filterMessagingToolMediaDuplicates({
@@ -148,6 +167,18 @@ describe("filterMessagingToolMediaDuplicates", () => {
       'filterMessagingToolMediaDuplicates({ payloads: [{ text: "hello", medi... test invariant',
     );
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
+
+  it.each([
+    ["FILE:/workspace/a%5Cb.png", "/workspace/a\\b.png"],
+    ["FILE:/workspace/a%5cb.png", "/workspace/a\\b.png"],
+    ["FILE:/workspace/a%2Fb.png", "/workspace/a/b.png"],
+    ["FILE:/workspace/a%2fb.png", "/workspace/a/b.png"],
+  ])("does not dedupe encoded separator URL %s against %s", (sentMediaUrl, replyMediaUrl) => {
+    const payloads = [{ text: "hello", mediaUrl: replyMediaUrl }];
+    expect(
+      filterMessagingToolMediaDuplicates({ payloads, sentMediaUrls: [sentMediaUrl] }),
+    ).toStrictEqual(payloads);
   });
 
   it("preserves transcript ownership metadata when stripping media", () => {

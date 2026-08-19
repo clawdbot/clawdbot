@@ -16,7 +16,7 @@ import {
   runChecks,
   runSingleCheck,
   selectChecksForShard,
-} from "../../scripts/run-additional-boundary-checks.mjs";
+} from "../../scripts/run-additional-boundary-checks.mts";
 
 function createOutputBuffer() {
   const chunks: string[] = [];
@@ -32,10 +32,14 @@ function createOutputBuffer() {
 }
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/run-additional-boundary-checks.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/run-additional-boundary-checks.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -209,7 +213,9 @@ describe("run-additional-boundary-checks", () => {
   it("does not start checks for CLI help or invalid arguments", () => {
     const help = runCli("--help");
     expect(help.status).toBe(0);
-    expect(help.stdout).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(help.stdout).toContain(
+      "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
+    );
     expect(help.stdout).not.toContain("::group::");
     expect(help.stderr).toBe("");
 
@@ -217,7 +223,9 @@ describe("run-additional-boundary-checks", () => {
     expect(unknown.status).toBe(1);
     expect(unknown.stdout).toBe("");
     expect(unknown.stderr).toContain("Unknown argument: --wat");
-    expect(unknown.stderr).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(unknown.stderr).toContain(
+      "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
+    );
     expect(unknown.stderr).not.toContain("::group::");
     expect(unknown.stderr).not.toContain("pnpm");
   });
@@ -238,11 +246,35 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps widen-then-assert lint in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:no-widen-then-assert",
+      command: "pnpm",
+      args: ["run", "lint:no-widen-then-assert"],
+    });
+  });
+
+  it("keeps chained-type-assertions lint in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:no-chained-type-assertions",
+      command: "pnpm",
+      args: ["run", "lint:no-chained-type-assertions"],
+    });
+  });
+
   it("keeps the Telegram grammY type import guard in source boundary checks", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:extensions:telegram-grammy-types",
       command: "pnpm",
       args: ["run", "lint:extensions:telegram-grammy-types"],
+    });
+  });
+
+  it("keeps the production plugin normalization boundary in CI checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "extension-normalization-core-bypass-boundary",
+      command: "pnpm",
+      args: ["run", "lint:extensions:no-normalization-core-bypass"],
     });
   });
 
@@ -419,7 +451,7 @@ describe("run-additional-boundary-checks", () => {
         ].join("");
         const runnerScript = `
 import { runChecks } from ${JSON.stringify(
-          new URL("../../scripts/run-additional-boundary-checks.mjs", import.meta.url).href,
+          new URL("../../scripts/run-additional-boundary-checks.mts", import.meta.url).href,
         )};
 
 await runChecks(

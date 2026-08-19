@@ -13,6 +13,7 @@ import type { ModelAliasIndex } from "./model-selection-directive.js";
 const loadPreparedModelCatalog = vi.hoisted(() => vi.fn(async () => modelCatalog));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog,
 }));
 

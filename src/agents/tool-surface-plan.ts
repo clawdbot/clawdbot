@@ -5,7 +5,7 @@ import {
   isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "./code-mode.js";
-import { normalizeToolName } from "./tool-policy-shared.js";
+import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 import type { ToolSearchConfig } from "./tool-search-types.js";
 import {
@@ -51,7 +51,7 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     !(
       params.forceDirectMessageTool &&
       params.toolsAllow?.length === 1 &&
-      normalizeToolName(params.toolsAllow[0] ?? "") === "message"
+      normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message"
     );
   const codeModeControlsEnabled =
     toolsAvailable &&

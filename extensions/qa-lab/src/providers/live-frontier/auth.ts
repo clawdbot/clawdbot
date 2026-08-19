@@ -11,7 +11,7 @@ import {
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveQaAgentAuthDir, writeQaAuthProfiles } from "../shared/auth-store.js";
+import { writeQaAuthProfiles } from "../shared/auth-store.js";
 
 export const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN";
 export const QA_LIVE_SETUP_TOKEN_VALUE_ENV = "OPENCLAW_LIVE_SETUP_TOKEN_VALUE";
@@ -197,7 +197,7 @@ export async function stageQaLiveAnthropicSetupToken(params: {
     return params.cfg;
   }
   await writeQaAuthProfiles({
-    agentDir: resolveQaAgentAuthDir({ stateDir: params.stateDir, agentId: "main" }),
+    agentId: "main",
     profiles: {
       [resolved.profileId]: {
         type: "token",
@@ -205,6 +205,7 @@ export async function stageQaLiveAnthropicSetupToken(params: {
         token: resolved.token,
       },
     },
+    stateDir: params.stateDir,
   });
   return applyAuthProfileConfig(params.cfg, {
     profileId: resolved.profileId,
@@ -260,8 +261,9 @@ export async function stageQaLiveApiKeyProfiles(params: {
   await Promise.all(
     agentIds.map((agentId) =>
       writeQaAuthProfiles({
-        agentDir: resolveQaAgentAuthDir({ stateDir: params.stateDir, agentId }),
+        agentId,
         profiles,
+        stateDir: params.stateDir,
       }),
     ),
   );

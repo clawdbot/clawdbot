@@ -1,15 +1,25 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
+  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+} from "./openclaw-state-db-additive-columns.js";
+import {
+  ensureAdditiveStateColumns,
+  ensureDevicePairSetupBootstrapSchema,
+} from "./openclaw-state-db-schema-additive.js";
+import {
   assertOpenClawStateDatabaseForMaintenance,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db.js";
+import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 describe("OpenClaw database maintenance schema validation", () => {
@@ -48,6 +58,186 @@ describe("OpenClaw database maintenance schema validation", () => {
           pathname: "global.sqlite",
         }),
       ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps a newer nullable shared-state column compatible with the previous schema", () => {
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
+      "  removed_at INTEGER\n",
+    );
+    const database = createGlobalDatabase();
+    try {
+      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
+          allowCompatibleAdditiveColumns: true,
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps the cron authority companion table compatible with the previous schema", () => {
+    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+      "CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (",
+    );
+    const endMarker = "\n) STRICT;";
+    const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const previousSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(
+      0,
+      start,
+    )}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
+    const database = createGlobalDatabase();
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("accepts compatible future columns in shared-state and agent databases", () => {
+    const globalDatabase = createGlobalDatabase();
+    const agentDatabase = createAgentDatabase();
+    try {
+      globalDatabase.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT;");
+      agentDatabase.exec("ALTER TABLE conversations ADD COLUMN future_note TEXT;");
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(globalDatabase, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(agentDatabase, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).not.toThrow();
+    } finally {
+      agentDatabase.close();
+      globalDatabase.close();
+    }
+  });
+
+  it("accepts the historical checked shared-host column but rejects other constraints", () => {
+    const historicalSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      "  shared_host INTEGER\n) STRICT;",
+      "  shared_host INTEGER CHECK (shared_host IN (0, 1))\n) STRICT;",
+    );
+    const database = createGlobalDatabase(historicalSchema);
+    try {
+      expect(historicalSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+
+      database.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT DEFAULT NULL;");
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).toThrow("column definitions differ for worktrees");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps every same-version additive column bare and canonical", () => {
+    const additiveColumns = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+      ({ columnName, tableName }) => `${tableName}.${columnName}`,
+    );
+    expect(OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns).toEqual(
+      additiveColumns,
+    );
+    expect(
+      CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+        ({ columnName, dataType, tableName }) => `${tableName}.${columnName} ${dataType}`,
+      ),
+    ).toEqual([
+      "claw_installs.bootstrap_content_digest TEXT",
+      "claw_installs.bootstrap_source_path TEXT",
+      "worker_environments.desktop_json TEXT",
+      "worker_environments.bootstrap_install_kind TEXT",
+      "claw_package_refs.extension_adapter_identity TEXT",
+      "claw_package_refs.extension_detected_format TEXT",
+      "claw_package_refs.extension_format TEXT",
+      "claw_package_refs.extension_id TEXT",
+      "claw_package_refs.extension_mapped_json TEXT",
+      "claw_package_refs.extension_unavailable_json TEXT",
+      "worker_environments.shared_host INTEGER",
+      "worker_environments.node_setup_id TEXT",
+      "worker_environments.node_device_id TEXT",
+      "worker_session_placements.terminal_reason TEXT",
+      "worker_session_placements.terminal_at_ms INTEGER",
+      "worker_session_placement_moves.target_machine_class TEXT",
+      "worktrees.run_end_cleanup_json TEXT",
+      "device_bootstrap_tokens.setup_id TEXT",
+      "session_groups.cwd TEXT",
+      "session_groups.worktree INTEGER",
+      "installed_plugin_index.workspace_dir TEXT",
+      "secret_store_entries.allowed_hosts TEXT",
+      "skill_workshop_proposals.claim_released_time INTEGER",
+    ]);
+
+    const database = createGlobalDatabase();
+    try {
+      for (const {
+        columnName,
+        dataType,
+        tableName,
+      } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+        expect(readColumnContract(database, tableName, columnName)).toEqual({
+          dflt_value: null,
+          hidden: 0,
+          name: columnName,
+          notnull: 0,
+          pk: 0,
+          type: dataType,
+        });
+        database.exec(`ALTER TABLE "${tableName}" DROP COLUMN "${columnName}";`);
+      }
+
+      ensureAdditiveStateColumns(database);
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+      for (const {
+        columnName,
+        dataType,
+        tableName,
+      } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+        expect(readColumnContract(database, tableName, columnName)).toEqual({
+          dflt_value: null,
+          hidden: 0,
+          name: columnName,
+          notnull: 0,
+          pk: 0,
+          type: dataType,
+        });
+      }
+      expect(readColumnContract(database, "device_bootstrap_tokens", "setup_id")).toBeUndefined();
+
+      ensureDevicePairSetupBootstrapSchema(database);
+      expect(readColumnContract(database, "device_bootstrap_tokens", "setup_id")).toEqual({
+        dflt_value: null,
+        hidden: 0,
+        name: "setup_id",
+        notnull: 0,
+        pk: 0,
+        type: "TEXT",
+      });
     } finally {
       database.close();
     }
@@ -148,6 +338,40 @@ describe("OpenClaw database maintenance schema validation", () => {
       database.close();
     }
   });
+
+  it.each(["node_worker_launches", "worker_environment_ssh_fallback_ports"])(
+    "allows lazy table %s to be absent but rejects drift",
+    (tableName) => {
+      const database = createGlobalDatabase();
+      try {
+        const canonicalTable = database
+          .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(tableName) as { sql?: unknown } | undefined;
+        if (typeof canonicalTable?.sql !== "string") {
+          throw new Error(`missing canonical ${tableName} table`);
+        }
+        database.exec(`DROP TABLE ${tableName};`);
+
+        expect(() =>
+          assertOpenClawStateDatabaseForMaintenance(database, {
+            pathname: "global.sqlite",
+          }),
+        ).not.toThrow();
+
+        const driftedTableSql = canonicalTable.sql.replace("(\n", "(\n  unexpected TEXT,\n");
+        expect(driftedTableSql).not.toBe(canonicalTable.sql);
+        database.exec(driftedTableSql);
+
+        expect(() =>
+          assertOpenClawStateDatabaseForMaintenance(database, {
+            pathname: "global.sqlite",
+          }),
+        ).toThrow(`column definitions differ for ${tableName}`);
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   it("rejects a current agent database with a missing canonical table", () => {
     const database = createAgentDatabase();
@@ -331,4 +555,24 @@ function createAgentDatabase(): DatabaseSync {
     )
     .run(OPENCLAW_AGENT_SCHEMA_VERSION);
   return database;
+}
+
+function readColumnContract(
+  database: DatabaseSync,
+  tableName: string,
+  columnName: string,
+): Record<string, unknown> | undefined {
+  const column = (
+    database.prepare(`PRAGMA table_xinfo("${tableName}")`).all() as Array<Record<string, unknown>>
+  ).find((candidate) => candidate.name === columnName);
+  return column
+    ? {
+        dflt_value: column.dflt_value,
+        hidden: column.hidden,
+        name: column.name,
+        notnull: column.notnull,
+        pk: column.pk,
+        type: column.type,
+      }
+    : undefined;
 }

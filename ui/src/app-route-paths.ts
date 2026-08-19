@@ -27,6 +27,7 @@ const APP_ROUTE_DEFINITIONS = {
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
   apps: { path: "/apps" },
+  portals: { path: "/portals" },
   agents: { path: "/settings/agents", aliases: ["/agents"] },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
@@ -37,6 +38,7 @@ const APP_ROUTE_DEFINITIONS = {
   lobsterdex: { path: "/settings/lobsterdex", aliases: ["/lobsterdex"] },
   notifications: { path: "/settings/notifications" },
   security: { path: "/settings/security" },
+  secrets: { path: "/settings/secrets" },
   advanced: { path: "/settings/advanced" },
   approvals: { path: "/settings/approvals" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
@@ -45,6 +47,7 @@ const APP_ROUTE_DEFINITIONS = {
   talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
+  updates: { path: "/settings/updates" },
   about: { path: "/settings/about" },
   "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
   "model-setup": { path: "/settings/model-setup", aliases: ["/model-setup"] },
@@ -65,7 +68,8 @@ const APP_ROUTE_DEFINITIONS = {
   // pre-rename bookmarks and deep links.
   cron: { path: "/automations", aliases: ["/cron"] },
   tasks: { path: "/tasks" },
-  nodes: { path: "/settings/devices", aliases: ["/nodes"] },
+  devices: { path: "/settings/devices", aliases: ["/nodes"] },
+  "cloud-workers": { path: "/settings/cloud-workers" },
   plugin: { path: "/plugin" },
 } as const;
 
@@ -256,11 +260,15 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   if (sessionNamespace) {
     return sessionNamespace;
   }
+  // uirouter matches static paths case-insensitively (pathKey lowercases), so
+  // this pre-gate must too — otherwise /Usage is rewritten to /chat before the
+  // router, which would have matched it, ever starts.
+  const routePathKey = routePath.toLowerCase();
   for (const routeId of APP_ROUTE_IDS) {
     const definition = APP_ROUTE_DEFINITIONS[routeId];
     const paths: readonly string[] =
       "aliases" in definition ? [definition.path, ...definition.aliases] : [definition.path];
-    if (paths.some((candidate) => normalizePath(candidate) === routePath)) {
+    if (paths.some((candidate) => normalizePath(candidate) === routePathKey)) {
       return routeId;
     }
   }

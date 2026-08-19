@@ -38,7 +38,7 @@ import {
   buildMediaContent,
   prepareImageInfo,
   resolveMediaDurationMs,
-  uploadMediaMaybeEncrypted,
+  uploadMediaWithEncryption,
 } from "./send/media.js";
 import { normalizeThreadId, resolveMatrixRoomId } from "./send/targets.js";
 import {
@@ -194,8 +194,8 @@ export async function sendMessageMatrix(
   message: string | undefined,
   opts: MatrixSendOpts,
 ): Promise<MatrixSendResult> {
-  const trimmedMessage = message?.trim() ?? "";
-  if (!trimmedMessage && !opts.mediaUrl) {
+  const messageText = message?.trimEnd() ?? "";
+  if (!messageText.trim() && !opts.mediaUrl) {
     throw new Error("Matrix send requires text or media");
   }
   const durableIdentity = resolveMatrixDurableDeliveryIdentity({
@@ -212,12 +212,10 @@ export async function sendMessageMatrix(
     },
     async (client) => {
       const roomId = await resolveMatrixRoomId(client, to);
+      const wireEventType = await client.prepareRoomForMessageSend(roomId);
       const cfg = requireRuntimeConfig(opts.cfg, "Matrix send") as CoreConfig;
       const threadId = normalizeThreadId(opts.threadId);
       const transactionScopeId = durableIdentity ? await client.getTransactionScopeId() : undefined;
-      const wireEventType = durableIdentity
-        ? await client.getMessageWireEventType(roomId)
-        : undefined;
       const storedPlan = durableIdentity
         ? await loadMatrixDeliveryPlan({
             identity: durableIdentity,
@@ -229,9 +227,10 @@ export async function sendMessageMatrix(
         : null;
       let plannedEvents: MatrixPreparedEvent[] | undefined = storedPlan?.events;
       if (!plannedEvents) {
-        const { chunks, tableMode } = chunkMatrixText(trimmedMessage, {
+        const { chunks, tableMode } = chunkMatrixText(messageText, {
           cfg,
           accountId: opts.accountId,
+          preserveWhitespace: true,
         });
         const relation = threadId
           ? buildThreadRelation(threadId, opts.replyToId)
@@ -257,7 +256,7 @@ export async function sendMessageMatrix(
             mediaLocalRoots: opts.mediaLocalRoots,
             mediaReadFile: opts.mediaReadFile,
           });
-          const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
+          const uploaded = await uploadMediaWithEncryption(client, roomId, media.buffer, {
             contentType: media.contentType,
             filename: media.fileName,
           });
@@ -280,7 +279,7 @@ export async function sendMessageMatrix(
               ? await prepareImageInfo({
                   buffer: media.buffer,
                   client,
-                  encrypted: Boolean(uploaded.file),
+                  roomId,
                 })
               : undefined;
           const [firstChunk, ...rest] = chunks;
@@ -344,6 +343,9 @@ export async function sendMessageMatrix(
             }));
       }
 
+      if (opts.mediaUrl) {
+        await client.prepareRoomForMessageSend(roomId, plannedEvents[0]?.content);
+      }
       let platformDispatchStarted = false;
       if (!durableIdentity) {
         await opts.onPlatformSendDispatch?.();
@@ -524,11 +526,12 @@ export async function sendSingleTextMessageMatrix(
     eventTextLength,
     fitsInSingleEvent,
     tableMode,
-  } = prepareMatrixSingleText(text, {
+  } = prepareMatrixSingleText(text.trimEnd(), {
     cfg: opts.cfg,
     accountId: opts.accountId,
+    preserveWhitespace: true,
   });
-  if (!trimmedText) {
+  if (!trimmedText.trim()) {
     throw new Error("Matrix single-message send requires text");
   }
   if (!fitsInSingleEvent) {

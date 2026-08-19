@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 
 const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
   listOpenClawPluginManifestMetadata: vi.fn(),
   loadPluginManifest: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(),
+  loadPluginManifestRegistryCore: vi.fn(),
 }));
 const providerMocks = vi.hoisted(() => ({
   normalizePluginDiscoveryResult: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
 
 vi.mock("../../plugins/manifest-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/manifest-registry.js")>()),
-  loadPluginManifestRegistry: manifestMocks.loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore: manifestMocks.loadPluginManifestRegistryCore,
 }));
 
 vi.mock("../../plugins/providers.js", async (importOriginal) => ({
@@ -108,6 +109,7 @@ function setManifestPlugins(plugins: unknown[]) {
 }
 
 beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
   for (const mock of Object.values(manifestMocks)) {
     mock.mockReset();
   }
@@ -115,7 +117,7 @@ beforeEach(() => {
     mock.mockReset();
   }
   manifestMocks.listOpenClawPluginManifestMetadata.mockReturnValue([]);
-  manifestMocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [] });
+  manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [] });
   providerMocks.resolveActivatableProviderOwnerPluginIds.mockImplementation(
     ({ pluginIds }: { pluginIds: string[] }) => pluginIds,
   );
@@ -284,6 +286,56 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(manifestMocks.loadPluginManifest).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes the no-snapshot memo only at the plugin metadata lifecycle boundary", () => {
+    const env = { HOME: "/custom-home" };
+    const plugin = createMistralManifestPlugin();
+    setManifestPlugins([
+      { ...plugin, modelCatalog: { ...plugin.modelCatalog, runtimeAugment: true } },
+    ]);
+
+    expect(bundledStaticCatalogProviderUsesRuntimeAugment({ provider: "mistral", env })).toBe(true);
+    expect(bundledStaticCatalogProviderUsesRuntimeAugment({ provider: "mistral", env })).toBe(true);
+    expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledTimes(1);
+
+    setManifestPlugins([
+      { ...plugin, modelCatalog: { ...plugin.modelCatalog, runtimeAugment: false } },
+    ]);
+    expect(bundledStaticCatalogProviderUsesRuntimeAugment({ provider: "mistral", env })).toBe(true);
+
+    clearPluginMetadataLifecycleCaches();
+    expect(bundledStaticCatalogProviderUsesRuntimeAugment({ provider: "mistral", env })).toBe(
+      false,
+    );
+    expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes a retained no-snapshot resolver at the plugin metadata lifecycle boundary", () => {
+    const env = { HOME: "/custom-home" };
+    const firstPlugin = createMistralManifestPlugin();
+    setManifestPlugins([firstPlugin]);
+    const resolveModel = createBundledStaticCatalogModelResolver({ env });
+
+    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
+      "mistral-medium-3-5",
+    );
+
+    const replacementPlugin = createMistralManifestPlugin();
+    replacementPlugin.modelCatalog.providers.mistral.models =
+      replacementPlugin.modelCatalog.providers.mistral.models.map((model) => ({
+        ...model,
+        id: "mistral-medium-next",
+        name: "Mistral Medium Next",
+      }));
+    setManifestPlugins([replacementPlugin]);
+    clearPluginMetadataLifecycleCaches();
+
+    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })).toBeUndefined();
+    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })?.name).toBe(
+      "Mistral Medium Next",
+    );
+    expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledTimes(2);
+  });
+
   it("preserves plugin enablement policy for current snapshot catalog rows", () => {
     setCurrentManifestPlugins([createMistralManifestPlugin()]);
 
@@ -340,6 +392,6 @@ describe("bundled static model catalog snapshot cache", () => {
     await expect(loadBundledProviderStaticCatalogContextModels({ cfg })).resolves.toEqual([
       expect.objectContaining({ provider: "google", contextWindow: 1_048_576 }),
     ]);
-    expect(manifestMocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(manifestMocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
   });
 });

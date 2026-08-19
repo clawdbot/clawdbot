@@ -1,6 +1,5 @@
 // Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { spawn } from "node:child_process";
-// Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,9 +8,14 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
+  listPluginSdkDeclarationOutputs,
+  pluginSdkEntrypoints,
+} from "../../scripts/lib/plugin-sdk-entries.mjs";
+import {
+  computeArtifactInputsDigest,
   createPrefixedOutputWriter,
+  derivePluginSdkTypeInputsFromBuildInfo,
   isArtifactSetFresh,
   parseMode,
   resolveBoundaryEntryShimRequiredOutputs,
@@ -20,15 +24,10 @@ import {
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
-  signalNodeStep,
-} from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+} from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 function createMockPipe() {
   const pipe = new EventEmitter() as EventEmitter & {
@@ -101,6 +100,40 @@ async function waitForProcessExit(
 }
 
 describe("prepare-extension-package-boundary-artifacts", () => {
+  it("derives the historical SDK cache misses from TypeScript build inputs", () => {
+    const rootDir = makeTempDir(tempRoots, "openclaw-plugin-sdk-inputs-");
+    const buildInfoPath = path.join(rootDir, "dist", "plugin-sdk", ".tsbuildinfo");
+    fs.mkdirSync(path.dirname(buildInfoPath), { recursive: true });
+    fs.writeFileSync(
+      buildInfoPath,
+      JSON.stringify({
+        fileNames: [
+          "../../src/plugin-sdk/provider-auth.ts",
+          "../../src/agents/cli-credentials.ts",
+          "../../src/plugins/session-catalog.ts",
+          "../../src/agents/embedded-agent-runner/run/types.ts",
+        ],
+        packageJsons: ["../../package.json"],
+      }),
+      "utf8",
+    );
+
+    const inputs = derivePluginSdkTypeInputsFromBuildInfo(buildInfoPath, rootDir);
+
+    for (const historicalMiss of [
+      "src/agents/cli-credentials.ts",
+      "src/plugins/session-catalog.ts",
+      "src/agents/embedded-agent-runner/run/types.ts",
+    ]) {
+      expect(
+        inputs.some((input) => historicalMiss === input || historicalMiss.startsWith(`${input}/`)),
+        historicalMiss,
+      ).toBe(true);
+      expect(inputs).not.toContain(historicalMiss);
+    }
+    expect(inputs).toContain("package.json");
+  });
+
   it("resolves the tsx loader from the selected checkout toolchain", () => {
     const tsxBinPath = "/primary/node_modules/.bin/tsx";
     const loaderPath = "/primary/node_modules/tsx/dist/loader.mjs";
@@ -165,75 +198,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
-
-  it("signals Windows node step process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalNodeStep(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalNodeStep(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows node step process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalNodeStep(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
 
   it.runIf(process.platform !== "win32")(
     "force-kills aborted sibling step process groups",
@@ -439,7 +403,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const descendantPidPath = path.join(rootDir, "descendant.pid");
       let descendantPid = 0;
       const moduleHref = pathToFileURL(
-        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mjs"),
+        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
       ).href;
       const descendantScript = [
         "const fs = require('node:fs');",
@@ -558,6 +522,61 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ).toBe(false);
   });
 
+  it("keeps mtime-stale artifacts fresh when the hash stamp matches the input digest", () => {
+    // Regression: fresh checkouts re-stamp every input mtime, so cache-restored
+    // artifacts must stay fresh by content identity, not build again per CI run.
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-hash-"));
+    tempRoots.add(rootDir);
+    const inputPath = path.join(rootDir, "src", "demo.ts");
+    const stampPath = path.join(rootDir, "dist", ".demo.stamp");
+    const outputPath = path.join(rootDir, "dist", "demo.d.ts");
+    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
+    fs.writeFileSync(inputPath, "export const demo = 1;\n", "utf8");
+    fs.writeFileSync(outputPath, "export declare const demo = 1;\n", "utf8");
+    fs.writeFileSync(
+      stampPath,
+      `${computeArtifactInputsDigest({ rootDir, inputPaths: ["src"] })}\n`,
+      "utf8",
+    );
+
+    // Simulate checkout: inputs newer than restored outputs, bytes unchanged.
+    fs.utimesSync(stampPath, new Date(1_000), new Date(1_000));
+    fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));
+    const repairTimeMs = Date.now();
+    fs.utimesSync(inputPath, repairTimeMs / 1_000, (repairTimeMs + 0.5) / 1_000);
+    const freshParams = {
+      rootDir,
+      inputPaths: ["src"],
+      outputPaths: ["dist/.demo.stamp", "dist/demo.d.ts"],
+      hashStampPath: "dist/.demo.stamp",
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(repairTimeMs);
+    try {
+      expect(isArtifactSetFresh(freshParams)).toBe(true);
+      // The repaired output must clear the newest input by a whole millisecond.
+      // Matching it exactly leaves no headroom for sub-millisecond write
+      // rounding or lagging metadata, and a CI runner that lands even a
+      // fraction short puts every later invocation back on the full-hash path.
+      expect(fs.statSync(outputPath).mtimeMs).toBeGreaterThanOrEqual(
+        Math.ceil(fs.statSync(inputPath).mtimeMs) + 1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    fs.appendFileSync(inputPath, "export const demoTwo = 2;\n", "utf8");
+    fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));
+    expect(isArtifactSetFresh(freshParams)).toBe(false);
+
+    // Legacy timestamp stamps never satisfy the hash fallback.
+    fs.writeFileSync(stampPath, `${new Date(5_000).toISOString()}\n`, "utf8");
+    fs.utimesSync(stampPath, new Date(1_000), new Date(1_000));
+    expect(isArtifactSetFresh(freshParams)).toBe(false);
+  });
+
   it("requires generated entry-shim outputs in addition to the freshness stamp", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-entry-shims-"));
     tempRoots.add(rootDir);
@@ -624,6 +643,13 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     const privateQaOutputs = resolveBoundaryEntryShimRequiredOutputs({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
     });
+
+    expect(productionOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs().toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(privateQaOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs(pluginSdkEntrypoints).toSorted((a, b) => a.localeCompare(b)),
+    );
 
     expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");

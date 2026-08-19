@@ -5,13 +5,15 @@
  * auth profiles, and the current runtime config snapshot.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
-  resolveApiKeyForProvider as resolveProviderAuth,
+  resolveApiKeyForProviderCore as resolveProviderAuth,
 } from "./model-auth.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
 import {
@@ -19,11 +21,14 @@ import {
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
+import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   currentThreadTs?: string;
@@ -134,6 +139,9 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       }
     : undefined;
   const existingToolNames = new Set(params.existingToolNames ?? []);
+  const preparedModelRuntime = params.options?.preparedModelRuntime;
+  const runtimeRegistry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry() ?? undefined;
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
     context: {
@@ -147,6 +155,16 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
+    ...(runtimeRegistry ? { runtimeRegistry } : {}),
+    ...(preparedModelRuntime
+      ? {
+          preparedRuntime: {
+            loadContext: getPreparedPluginRuntimeLoadContext(preparedModelRuntime.pluginRegistry),
+            metadataSnapshot: preparedModelRuntime.metadataSnapshot,
+            registry: preparedModelRuntime.pluginRegistry,
+          },
+        }
+      : {}),
   });
   for (const tool of pluginTools) {
     existingToolNames.add(tool.name);

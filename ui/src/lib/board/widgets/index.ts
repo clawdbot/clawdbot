@@ -1,18 +1,12 @@
 import type { TemplateResult } from "lit";
 import type { GatewayControlUiPluginWidgetKind } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
-import type { BoardViewWidget } from "../view-types.ts";
-import type { BoardObserverContext } from "../view-types.ts";
-import { renderObserverWidget } from "./observer.ts";
-
-type BuiltinBoardWidgetRenderer = (context: {
-  observer?: BoardObserverContext;
-  sessionKey: string;
-}) => TemplateResult;
+import type { BoardWidget } from "../types.ts";
 
 export type PluginBoardWidgetRenderer = (props: {
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   sessionKey: string;
+  active: boolean;
   canMutate: boolean;
   requestUpdate: () => void;
 }) => TemplateResult;
@@ -29,6 +23,16 @@ type PluginWidgetKindContribution = {
  * props, and use the standard gateway client for RPCs owned by their plugin.
  */
 const PLUGIN_WIDGET_KIND_CONTRIBUTIONS: Record<string, PluginWidgetKindContribution> = {
+  "session:progress": {
+    kind: "session:progress",
+    label: t("sessionProgressCard.widgetLabel"),
+    loader: async () => (await import("./session-progress.ts")).renderSessionProgressWidget,
+  },
+  "workboard:board": {
+    kind: "workboard:board",
+    label: t("workboard.widget.boardLabel"),
+    loader: async () => (await import("./workboard-board.ts")).renderWorkboardBoardWidget,
+  },
   "workboard:card": {
     kind: "workboard:card",
     label: t("workboard.widget.cardLabel"),
@@ -42,16 +46,6 @@ const PLUGIN_WIDGET_KIND_CONTRIBUTIONS: Record<string, PluginWidgetKindContribut
 };
 
 const pluginRendererPromises = new Map<string, Promise<PluginBoardWidgetRenderer>>();
-
-const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinBoardWidgetRenderer> = {
-  observer: renderObserverWidget,
-};
-
-export function getBuiltinWidgetRenderer(
-  name: string | undefined,
-): BuiltinBoardWidgetRenderer | null {
-  return name ? (BUILTIN_WIDGET_RENDERERS[name] ?? null) : null;
-}
 
 export function pluginIdForWidgetKind(kind: string | undefined): string {
   return kind?.split(":", 1)[0]?.trim() || "unknown";

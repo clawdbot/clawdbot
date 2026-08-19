@@ -9,7 +9,7 @@ import {
   unlinkIfExists,
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { withTempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import type { RequestClient } from "./internal/discord.js";
@@ -38,6 +38,7 @@ type VoiceMessageOpts = Pick<
   | "mediaAccess"
   | "mediaLocalRoots"
   | "mediaReadFile"
+  | "onPlatformSendDispatch"
 >;
 
 function toDiscordSendResult(
@@ -53,10 +54,11 @@ function toDiscordSendResult(
   });
 }
 
-async function materializeVoiceMessageInput(
+async function withMaterializedVoiceMessageInput<T>(
   mediaUrl: string,
   opts: VoiceMessageOpts,
-): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
+  run: (filePath: string) => Promise<T>,
+): Promise<T> {
   // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
   // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
   const media = await loadWebMediaRaw(
@@ -71,15 +73,13 @@ async function materializeVoiceMessageInput(
   const extFromName = media.fileName ? path.extname(media.fileName) : "";
   const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
   const ext = extFromName || extFromMime || ".bin";
-  const workspace = await tempWorkspace({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "voice-src-",
-  });
-  const filePath = await workspace.write(`input${ext}`, media.buffer);
-  return {
-    filePath,
-    cleanup: () => workspace.cleanup().then(() => undefined),
-  };
+  return await withTempWorkspace(
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "voice-src-",
+    },
+    async (workspace) => await run(await workspace.write(`input${ext}`, media.buffer)),
+  );
 }
 
 /**
@@ -97,64 +97,64 @@ export async function sendVoiceMessageDiscord(
   audioPath: string,
   opts: VoiceMessageOpts,
 ): Promise<DiscordSendResult> {
-  const { filePath: localInputPath, cleanup: cleanupLocalInput } =
-    await materializeVoiceMessageInput(audioPath, opts);
-  let oggPath: string | null = null;
-  let oggCleanup = false;
-  let token: string | undefined;
-  let rest: RequestClient | undefined;
-  let channelId: string | undefined;
   const cfg = requireRuntimeConfig(opts.cfg, "Discord voice send");
+  return await withMaterializedVoiceMessageInput(audioPath, opts, async (localInputPath) => {
+    let oggPath: string | null = null;
+    let oggCleanup = false;
+    let token: string | undefined;
+    let rest: RequestClient | undefined;
+    let channelId: string | undefined;
 
-  try {
-    const accountInfo = resolveDiscordAccount({
-      cfg,
-      accountId: opts.accountId,
-    });
-    const client = createDiscordClient({ ...opts, cfg });
-    token = client.token;
-    rest = client.rest;
-    const request = client.request;
-    const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
-    channelId = (await resolveChannelId(rest, recipient, request)).channelId;
-
-    const ogg = await ensureOggOpus(localInputPath);
-    oggPath = ogg.path;
-    oggCleanup = ogg.cleanup;
-
-    const metadata = await getVoiceMessageMetadata(oggPath);
-    const audioBuffer = await fs.readFile(oggPath);
-    const result = await sendDiscordVoiceMessage(
-      rest,
-      channelId,
-      audioBuffer,
-      metadata,
-      opts.reply?.messageId,
-      request,
-      opts.silent,
-      token,
-    );
-
-    recordChannelActivity({
-      channel: "discord",
-      accountId: accountInfo.accountId,
-      direction: "outbound",
-    });
-
-    return toDiscordSendResult(result, channelId, opts.reply);
-  } catch (err) {
-    if (channelId && rest && token) {
-      throw await buildDiscordSendError(err, {
-        channelId,
+    try {
+      const accountInfo = resolveDiscordAccount({
         cfg,
-        rest,
-        token,
-        hasMedia: true,
+        accountId: opts.accountId,
       });
+      const client = createDiscordClient({ ...opts, cfg });
+      token = client.token;
+      rest = client.rest;
+      const request = client.request;
+      const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
+      channelId = (await resolveChannelId(rest, recipient, request)).channelId;
+
+      const ogg = await ensureOggOpus(localInputPath);
+      oggPath = ogg.path;
+      oggCleanup = ogg.cleanup;
+
+      const metadata = await getVoiceMessageMetadata(oggPath);
+      const audioBuffer = await fs.readFile(oggPath);
+      await opts.onPlatformSendDispatch?.();
+      const result = await sendDiscordVoiceMessage(
+        rest,
+        channelId,
+        audioBuffer,
+        metadata,
+        opts.reply?.messageId,
+        request,
+        opts.silent,
+        token,
+      );
+
+      recordChannelActivity({
+        channel: "discord",
+        accountId: accountInfo.accountId,
+        direction: "outbound",
+      });
+
+      return toDiscordSendResult(result, channelId, opts.reply);
+    } catch (err) {
+      if (channelId && rest && token) {
+        throw await buildDiscordSendError(err, {
+          channelId,
+          cfg,
+          rest,
+          token,
+          hasMedia: true,
+        });
+      }
+      throw err;
+    } finally {
+      await unlinkIfExists(oggCleanup ? oggPath : null);
     }
-    throw err;
-  } finally {
-    await unlinkIfExists(oggCleanup ? oggPath : null);
-    await cleanupLocalInput();
-  }
+  });
 }

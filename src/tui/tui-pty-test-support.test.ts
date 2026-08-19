@@ -60,7 +60,7 @@ describe("TUI PTY test support", () => {
   it("applies fixture-specific terminal dimensions", () => {
     nodePtyMocks.spawn.mockReturnValue(createMockPty());
 
-    startPty("node", [], {
+    const run = startPty("node", [], {
       cwd: process.cwd(),
       env: {
         OPENCLAW_TUI_PTY_COLS: "72",
@@ -78,12 +78,13 @@ describe("TUI PTY test support", () => {
         rows: 20,
       }),
     );
+    expect(run).toMatchObject({ cols: 72, rows: 20 });
   });
 
   it("falls back when fixture-specific terminal dimensions are invalid", () => {
     nodePtyMocks.spawn.mockReturnValue(createMockPty());
 
-    startPty("node", [], {
+    const run = startPty("node", [], {
       cwd: process.cwd(),
       env: {
         OPENCLAW_TUI_PTY_COLS: "0",
@@ -101,6 +102,7 @@ describe("TUI PTY test support", () => {
         rows: 30,
       }),
     );
+    expect(run).toMatchObject({ cols: 100, rows: 30 });
   });
 
   it.each([

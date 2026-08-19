@@ -1,18 +1,17 @@
 // Telegram plugin module implements lane delivery text deliverer behavior.
 import {
   createPreviewMessageReceipt,
-  type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
-import {
   isPotentialTruncatedFinal,
   selectLongerFinalText,
+  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
@@ -43,6 +42,7 @@ export type LaneDeliveryResult =
       kind: "preview-finalized";
       delivery: LanePreviewFinalizedDelivery;
     }
+  | { kind: "preview-finalized-partial"; delivery: LanePreviewFinalizedDelivery; error: unknown }
   | { kind: "preview-retained" | "preview-updated" | "sent" | "skipped" };
 
 type CreateLaneTextDelivererParams = {
@@ -55,6 +55,8 @@ type CreateLaneTextDelivererParams = {
       durable?: boolean;
       promptContextSequence?: TelegramPromptContextProjectionSequence;
       textMode?: "html";
+      onPlatformSendDispatch?: () => Promise<void>;
+      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
     },
   ) => Promise<boolean>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
@@ -86,10 +88,14 @@ type DeliverLaneTextParams = {
   durable?: boolean;
   allowStream?: boolean;
   promptContextSequence?: TelegramPromptContextProjectionSequence;
+  onPlatformSendDispatch?: () => Promise<void>;
+  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
 };
 
+export type LaneTextDeliverer = (params: DeliverLaneTextParams) => Promise<LaneDeliveryResult>;
+
 function result(
-  kind: LaneDeliveryResult["kind"],
+  kind: Exclude<LaneDeliveryResult["kind"], "preview-finalized-partial">,
   delivery?: LanePreviewFinalizedDeliveryInput,
 ): LaneDeliveryResult {
   if (kind === "preview-finalized") {
@@ -105,7 +111,7 @@ function result(
   return { kind };
 }
 
-export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
+export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): LaneTextDeliverer {
   const textOnlyPayload = (payload: ReplyPayload): ReplyPayload => {
     const {
       mediaUrl: _mediaUrl,
@@ -170,10 +176,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     ) {
       return payload;
     }
-    const telegramRest =
-      telegramData && typeof telegramData === "object" && !Array.isArray(telegramData)
-        ? (telegramData as Record<string, unknown>)
-        : {};
+    const telegramRest = asNonArrayRecord(telegramData);
     return {
       ...payload,
       channelData: {
@@ -275,9 +278,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     buttons: TelegramInlineButtons | undefined,
     promptContextSequence: TelegramPromptContextProjectionSequence,
     followedByDurablePayload = false,
+    allowErrorPayload = false,
+    onPlatformSendDispatch?: () => Promise<void>,
   ): Promise<LaneDeliveryResult | undefined> => {
     const stream = lane.stream;
-    if (!stream || text.length === 0 || payload.isError) {
+    if (!stream || text.length === 0 || (payload.isError && !allowErrorPayload)) {
       return undefined;
     }
     rotateFinalizedStream(lane);
@@ -300,11 +305,23 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     lane.lastPartialText = previewText;
     lane.hasStreamedMessage = true;
     lane.finalized = false;
-    if (stream.lastDeliveredText?.() !== previewText) {
-      stream.update(previewText);
+    const previewAlreadyVisible = stream.lastDeliveredText?.() === previewText;
+    if (!previewAlreadyVisible) {
+      if (finalizePreview && onPlatformSendDispatch) {
+        stream.update(previewText, { onPlatformSendDispatch });
+      } else {
+        stream.update(previewText);
+      }
+    } else if (finalizePreview) {
+      await onPlatformSendDispatch?.();
     }
     if (finalizePreview) {
-      await params.stopDraftLane(lane);
+      if (previewAlreadyVisible) {
+        // Cleanup cannot invalidate an accepted preview or create fresh send custody.
+        await params.stopDraftLane(lane).catch(() => undefined);
+      } else {
+        await params.stopDraftLane(lane);
+      }
     } else {
       await params.flushDraftLane(lane);
     }
@@ -340,6 +357,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     let buttonsAttached = false;
     if (buttons && activeSnapshot) {
       try {
+        await onPlatformSendDispatch?.();
         await params.editStreamMessage({
           laneName,
           messageId,
@@ -382,6 +400,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     durable: requestedDurable,
     allowStream = true,
     promptContextSequence: suppliedPromptContextSequence,
+    onPlatformSendDispatch,
+    bindPendingFinalDelivery,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const promptContextSequence =
@@ -390,17 +410,41 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const isDurableFinal = infoKind === "final";
     const finalizePreview = requestedFinalizePreview ?? isDurableFinal;
     const durable = requestedDurable ?? isDurableFinal;
+    const streamedErrorDraftText =
+      isDurableFinal &&
+      payload.isError === true &&
+      laneName === "answer" &&
+      lane.stream &&
+      lane.hasStreamedMessage &&
+      !lane.finalized &&
+      !reply.hasMedia &&
+      text.trim()
+        ? (() => {
+            const existing = (
+              lane.lastPartialText ||
+              lane.stream?.lastDeliveredText?.() ||
+              ""
+            ).trimEnd();
+            const notice = text.trim();
+            return existing && !existing.endsWith(notice)
+              ? `${existing}\n\n${notice}`
+              : existing || notice;
+          })()
+        : undefined;
     const streamed =
       allowStream && !reply.hasMedia
         ? await streamText(
             laneName,
             lane,
-            text,
+            streamedErrorDraftText ?? text,
             payload,
             isDurableFinal,
             finalizePreview,
             buttons,
             promptContextSequence,
+            false,
+            streamedErrorDraftText !== undefined,
+            onPlatformSendDispatch,
           )
         : undefined;
     if (streamed) {
@@ -425,6 +469,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         buttons,
         promptContextSequence,
         true,
+        false,
+        onPlatformSendDispatch,
       );
       if (finalizedPreview) {
         const stripButtons =
@@ -432,17 +478,26 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           finalizedPreview.delivery.buttonsAttached === true;
         const mediaText =
           finalizedPreview.kind === "preview-finalized" ? finalizedPreview.delivery.content : text;
-        await params.sendPayload(
-          mediaOnlyPayload(payload, mediaText, {
-            stripButtons,
-            fallbackButtons: stripButtons ? undefined : buttons,
-          }),
-          {
-            afterAcceptedDraft: true,
-            durable,
-            promptContextSequence,
-          },
-        );
+        try {
+          await params.sendPayload(
+            mediaOnlyPayload(payload, mediaText, {
+              stripButtons,
+              fallbackButtons: stripButtons ? undefined : buttons,
+            }),
+            {
+              afterAcceptedDraft: true,
+              durable,
+              promptContextSequence,
+              onPlatformSendDispatch,
+              bindPendingFinalDelivery,
+            },
+          );
+        } catch (error) {
+          if (durable && finalizedPreview.kind === "preview-finalized") {
+            return { ...finalizedPreview, kind: "preview-finalized-partial", error };
+          }
+          throw error;
+        }
         return finalizedPreview;
       }
     }
@@ -467,6 +522,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         afterAcceptedDraft,
         durable,
         promptContextSequence,
+        onPlatformSendDispatch,
+        bindPendingFinalDelivery,
         ...(retainedFinalContent?.sourceTextMode === "html" ? { textMode: "html" } : {}),
       },
     );

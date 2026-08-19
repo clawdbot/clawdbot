@@ -10,7 +10,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Frame, Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
+import { ACT_MAX_VIEWPORT_DIMENSION, resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import {
@@ -54,10 +54,6 @@ function resolveBoundedTimeoutMs(
 
 function resolveSnapshotTimeoutMs(timeoutMs: number | undefined): number {
   return resolveBoundedTimeoutMs(timeoutMs, 5_000, 500, 60_000);
-}
-
-function resolveNavigationTimeoutMs(timeoutMs: number | undefined): number {
-  return resolveBoundedTimeoutMs(timeoutMs, 20_000, 1000, 120_000);
 }
 
 function resolveViewportDimension(value: unknown, label: "width" | "height"): number {
@@ -509,7 +505,7 @@ export async function navigateViaPlaywright(opts: {
     url,
     ...navigationPolicy,
   });
-  const timeout = resolveNavigationTimeoutMs(opts.timeoutMs);
+  const timeout = resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   let page = await getPageForTargetId(opts);
   let pageState = ensurePageState(page);
   const navigate = async () =>

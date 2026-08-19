@@ -12,12 +12,22 @@ import {
   createSolidPngBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  attachManagedImageRecordToMessage,
   insertManagedImageRecord,
+  listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
@@ -58,7 +68,7 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
-  loadSessionEntryReadOnly: loadSessionEntryMock,
+  loadGatewaySessionEntryReadOnly: loadSessionEntryMock,
   resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
 }));
 
@@ -103,6 +113,19 @@ const {
   resolveManagedOutgoingMediaArtifactDownload: resolveManagedOutgoingImageArtifactDownload,
   resolveManagedImageAttachmentLimits,
 } = await import("./managed-image-attachments.js");
+
+async function replaceTestSessionEntry(
+  scope: {
+    agentId: string;
+    env: NodeJS.ProcessEnv;
+    sessionKey: string;
+    storePath?: string;
+  },
+  entry: { sessionId: string; updatedAt: number },
+): Promise<void> {
+  const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
+  await replaceSessionEntry(scope, entry);
+}
 
 type RequestResult = {
   statusCode: number;
@@ -169,6 +192,39 @@ function requireManagedOriginalPath(stateDir: string, attachmentId: string): str
   return path.join(stateDir, "media", record.original.mediaSubdir, record.original.mediaId);
 }
 
+function prepareAgentSessionStore(stateDir: string, agentId: string): void {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawAgentDatabase({ agentId, env });
+  closeOpenClawAgentDatabasesForTest();
+}
+
+async function prepareManagedSessionStore(stateDir: string): Promise<void> {
+  closeOpenClawAgentDatabasesForTest();
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const storePath = path.join(stateDir, "sessions.sqlite");
+  await replaceTestSessionEntry(
+    {
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:main",
+      storePath,
+    },
+    { sessionId: "sess-1", updatedAt: Date.now() },
+  );
+  closeOpenClawAgentDatabasesForTest();
+  const { loadExactSessionEntryReadOnlyResult } =
+    await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
+  expect(
+    loadExactSessionEntryReadOnlyResult({
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:main",
+      storePath,
+    }),
+  ).toMatchObject({ found: true, value: { sessionKey: "agent:main:main" } });
+  getRuntimeConfigMock.mockReturnValue({ session: { store: storePath } });
+}
+
 async function createFixture(
   stateDir: string,
   options?: {
@@ -178,6 +234,8 @@ async function createFixture(
     filename?: string;
     contentType?: string;
     body?: Buffer;
+    messageId?: string | null;
+    createdAt?: string;
   },
 ) {
   const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
@@ -192,8 +250,8 @@ async function createFixture(
       attachmentId,
       sessionKey,
       ...(options?.agentId ? { agentId: options.agentId } : {}),
-      messageId: "msg-1",
-      createdAt: new Date().toISOString(),
+      messageId: options?.messageId === undefined ? "msg-1" : options.messageId,
+      createdAt: options?.createdAt ?? new Date().toISOString(),
       alt: "Cat",
       original: {
         mediaRoot: path.join(stateDir, "media"),
@@ -243,7 +301,7 @@ async function requestManagedImage(params: {
     );
   });
   loadSessionEntryMock.mockReturnValue({
-    storePath: path.join(params.stateDir, "gateway-sessions.json"),
+    storePath: path.join(params.stateDir, "sessions.sqlite"),
     entry: params.sessionEntry ?? { sessionId: "sess-1", sessionFile: "session.jsonl" },
   });
   resolveSessionHistoryTranscriptPathMock.mockResolvedValue(
@@ -325,18 +383,13 @@ async function requestManagedImage(params: {
   }
 }
 
-describe("resolveManagedImageAttachmentLimits", () => {
-  it("keeps the existing public limit shape", () => {
-    expect(resolveManagedImageAttachmentLimits()).toEqual(DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS);
-  });
-});
-
 describe("handleManagedOutgoingImageHttpRequest", () => {
   let stateDir: string;
 
   beforeEach(async () => {
     stateDir = tempDirs.make("managed-images-");
     vi.clearAllMocks();
+    await prepareManagedSessionStore(stateDir);
   });
 
   afterEach(async () => {
@@ -347,6 +400,14 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
   it("serves full images for authorized chat-history readers", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
+    expect(
+      resolveExistingAgentSessionStoreTargetsReadOnlyResult(getRuntimeConfigMock(), "main", {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toMatchObject({
+      available: true,
+      targets: [{ storePath: path.join(stateDir, "sessions.sqlite") }],
+    });
 
     const { result } = await requestManagedImage({
       stateDir,
@@ -354,23 +415,12 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       authResponse: { authMethod: "token" },
     });
 
+    expect(resolveSessionHistoryTranscriptPathMock).toHaveBeenCalled();
+    expect(readSessionMessagesMock).toHaveBeenCalled();
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-type"]).toBe("image/png");
     expect(result.headers["content-disposition"]).toContain("inline");
     expect(result.body.toString("utf-8")).toBe("original-image");
-    expect(readSessionMessagesMock).toHaveBeenCalledWith(
-      {
-        agentId: undefined,
-        sessionEntry: {
-          sessionFile: "session.jsonl",
-          sessionId: "sess-1",
-        },
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
-        storePath: path.join(stateDir, "gateway-sessions.json"),
-      },
-      expect.objectContaining({ allowResetArchiveFallback: true }),
-    );
   });
 
   it("serves Unicode media filenames with an encoded content disposition", async () => {
@@ -857,6 +907,89 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a managed audio filename stable in artifact downloads", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "meeting-note.mp3",
+      contentType: "audio/mpeg",
+      body: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+    });
+    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "sessions.sqlite"),
+      entry: { sessionId: "sess-1" },
+    });
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        role: "assistant",
+        content: [{ type: "audio", url: canonicalPath, openUrl: canonicalPath }],
+        __openclaw: { id: "msg-1" },
+      },
+    ]);
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download?.title).toBe("meeting-note.mp3");
+  });
+
+  it("serves a bounded thumbnail through the full-image artifact ticket", async () => {
+    const source = createSolidPngBuffer(640, 320, { r: 24, g: 64, b: 128 });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
+    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    const transcriptMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
+        __openclaw: { id: "msg-1" },
+      },
+    ];
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "sessions.sqlite"),
+      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
+    readSessionMessagesMock.mockResolvedValue(transcriptMessages);
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+    const thumbnailUrl = download?.url.replace(/\/full(?=\?)/u, "/thumbnail") ?? "";
+
+    vi.clearAllMocks();
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: thumbnailUrl,
+      denyAuth: true,
+      transcriptMessages,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
+    expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
+    expect(readImageProbeFromHeader(result.body)).toMatchObject({ width: 300, height: 150 });
+    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a managed global artifact owned by another agent", async () => {
+    const { attachmentId } = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "ops",
+    });
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey: "global",
+      agentId: "research",
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download).toBeNull();
+  });
+
   it("keeps serving and deleting an original after the configured media root changes", async () => {
     const fixture = await createFixture(stateDir);
     const externalConfigDir = tempDirs.make("managed-image-moved-config-");
@@ -1166,6 +1299,7 @@ describe("createManagedOutgoingImageBlocks", () => {
   beforeEach(async () => {
     stateDir = tempDirs.make("managed-image-blocks-");
     vi.clearAllMocks();
+    await prepareManagedSessionStore(stateDir);
   });
 
   afterEach(async () => {
@@ -1257,6 +1391,28 @@ describe("createManagedOutgoingImageBlocks", () => {
       mimeType: "audio/x-caf",
       playback: "transcode",
     });
+  });
+
+  it("does not publish a record when playback inspection fails", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "voice.mp3");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    resolvePlaybackModeForSourceMock.mockRejectedValueOnce(
+      new Error("synthetic playback inspection failure"),
+    );
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+      continueOnPrepareError: true,
+    });
+
+    expect(blocks).toEqual([]);
+    expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
+    await expectPathMissing(path.join(stateDir, "media", "outgoing", "originals"));
   });
 
   it.each(["audio", "video"] as const)("caps managed %s data URLs by media kind", async (kind) => {
@@ -1478,6 +1634,7 @@ describe("createManagedOutgoingImageBlocks", () => {
           OPENCLAW_STATE_DIR: undefined,
         },
         async () => {
+          await prepareManagedSessionStore(splitStateDir);
           const blocks = await createManagedOutgoingImageBlocks({
             stateDir: splitStateDir,
             sessionKey: "agent:main:main",
@@ -1814,6 +1971,7 @@ describe("attachManagedOutgoingImagesToMessage", () => {
   beforeEach(async () => {
     stateDir = tempDirs.make("managed-image-attach-");
     vi.clearAllMocks();
+    await prepareManagedSessionStore(stateDir);
   });
 
   afterEach(async () => {
@@ -1848,10 +2006,11 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   beforeEach(async () => {
     stateDir = tempDirs.make("managed-image-cleanup-");
     vi.clearAllMocks();
-    getRuntimeConfigMock.mockReturnValue({});
+    await prepareManagedSessionStore(stateDir);
   });
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -1869,6 +2028,54 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedRecordCount).toBe(1);
     expect(result.deletedFileCount).toBe(1);
     expect(result.retainedCount).toBe(0);
+    await expectPathMissing(fixture.originalPath);
+  });
+
+  it("retains an aged transient record while its session still has an active run", async () => {
+    const fixture = await createFixture(stateDir, {
+      messageId: null,
+      createdAt: new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+    });
+
+    const checkedSessionKeys: string[] = [];
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      hasActiveSessionRun: (sessionKey) => {
+        checkedSessionKeys.push(sessionKey);
+        return sessionKey === fixture.sessionKey;
+      },
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(checkedSessionKeys).toEqual([fixture.sessionKey]);
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(
+      attachManagedImageRecordToMessage({
+        attachmentId: fixture.attachmentId,
+        sessionKey: fixture.sessionKey,
+        messageId: "msg-late",
+        updatedAt: new Date().toISOString(),
+        stateDir,
+      }),
+    ).toBe(true);
+    const attached = readManagedImageRecord(fixture.attachmentId, stateDir);
+    expect(attached?.messageId).toBe("msg-late");
+    expect(attached?.retentionClass).toBe("history");
+  });
+
+  it("reaps an aged transient record once its session has no active run", async () => {
+    const fixture = await createFixture(stateDir, {
+      messageId: null,
+      createdAt: new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+    });
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      hasActiveSessionRun: () => false,
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).toBeNull();
     await expectPathMissing(fixture.originalPath);
   });
 
@@ -1974,6 +2181,281 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expect(fs.access(orphanPath)).resolves.toBeUndefined();
   });
 
+  it("retains history records when the session table is unavailable", async () => {
+    const fixture = await createFixture(stateDir);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database.exec("DROP TABLE session_nodes;");
+    database.close();
+    getRuntimeConfigMock.mockReturnValue({ session: { store: databasePath } });
+    loadSessionEntryMock.mockReturnValue({ storePath: databasePath, entry: undefined });
+
+    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("retains history records when the session row is unreadable", async () => {
+    const fixture = await createFixture(stateDir);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    opened.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
+      )
+      .run("agent:main:main", "broken-session", "{invalid", Date.now());
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    getRuntimeConfigMock.mockReturnValue({ session: { store: databasePath } });
+    loadSessionEntryMock.mockReturnValue({ storePath: databasePath, entry: undefined });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let a valid fallback mask an unreadable exact row", async () => {
+    const fixture = await createFixture(stateDir);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    opened.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
+      )
+      .run("agent:main:main", "broken-session", "{invalid", Date.now());
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    getRuntimeConfigMock.mockReturnValue({ session: { store: databasePath } });
+    loadSessionEntryMock.mockReturnValue({
+      storePath: databasePath,
+      entry: { sessionId: "fallback-session", sessionFile: "/tmp/fallback.jsonl" },
+    });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("retains history records when a per-agent session database is missing", async () => {
+    const fixture = await createFixture(stateDir);
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    getRuntimeConfigMock.mockReturnValue({
+      session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
+    });
+    loadSessionEntryMock.mockReturnValue({ storePath, entry: undefined });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("retains history when a healthy configured store masks an unreadable candidate", async () => {
+    const fixture = await createFixture(stateDir);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const storeTemplate = path.join(stateDir, "custom", "{agentId}", "sessions.json");
+    const configuredStorePath = storeTemplate.replace("{agentId}", "main");
+    const configuredTarget = resolveSqliteTargetFromSessionStorePath(configuredStorePath, {
+      agentId: "main",
+      env,
+    });
+    openOpenClawAgentDatabase({ agentId: "main", env, path: configuredTarget.path });
+    closeOpenClawAgentDatabasesForTest();
+    const discoveredDatabasePath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(discoveredDatabasePath);
+    database.exec("DROP TABLE session_nodes;");
+    database.close();
+    getRuntimeConfigMock.mockReturnValue({ session: { store: storeTemplate } });
+    loadSessionEntryMock.mockReturnValue({ storePath: configuredStorePath, entry: undefined });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("retains history when a healthy discovered store masks a missing configured store", async () => {
+    const fixture = await createFixture(stateDir);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const storeTemplate = path.join(stateDir, "missing-custom", "{agentId}", "sessions.json");
+    const discovered = openOpenClawAgentDatabase({ agentId: "main", env });
+    discovered.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, 1, ?)",
+      )
+      .run(
+        "agent:main:main",
+        "discovered-session",
+        JSON.stringify({ sessionId: "discovered-session" }),
+        Date.now(),
+      );
+    closeOpenClawAgentDatabasesForTest();
+    getRuntimeConfigMock.mockReturnValue({ session: { store: storeTemplate } });
+    loadSessionEntryMock.mockReturnValue({
+      storePath: storeTemplate.replace("{agentId}", "main"),
+      entry: undefined,
+    });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("retains history records when a fixed store database is missing", async () => {
+    const fixture = await createFixture(stateDir);
+    const storePath = path.join(stateDir, "unmounted-sessions.json");
+    getRuntimeConfigMock.mockReturnValue({ session: { store: storePath } });
+    loadSessionEntryMock.mockReturnValue({ storePath, entry: undefined });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("does not assign the configured fixed store to a retired agent", async () => {
+    const fixture = await createFixture(stateDir, {
+      agentId: "retired",
+      sessionKey: "agent:retired:main",
+    });
+    const storePath = path.join(stateDir, "current-sessions.json");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env });
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env, path: target.path });
+    opened.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, 1, ?)",
+      )
+      .run("main", "current-session", JSON.stringify({ sessionId: "current-session" }), Date.now());
+    closeOpenClawAgentDatabasesForTest();
+    getRuntimeConfigMock.mockReturnValue({ session: { store: storePath } });
+    loadSessionEntryMock.mockReturnValue({ storePath, entry: undefined });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("cleans retired fixed-store history after explicit ownership is readable", async () => {
+    const fixture = await createFixture(stateDir, {
+      agentId: "retired",
+      sessionKey: "agent:retired:main",
+    });
+    const storePath = path.join(stateDir, "retired-readable-sessions.json");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    await replaceTestSessionEntry(
+      { agentId: "retired", env, storePath, sessionKey: "agent:retired:main" },
+      { sessionId: "retired-session", updatedAt: Date.now() },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    const config = { session: { store: storePath } };
+    getRuntimeConfigMock.mockReturnValue(config);
+    expect(
+      resolveExistingAgentSessionStoreTargetsReadOnlyResult(config, "retired", { env }),
+    ).toEqual({ available: true, targets: [{ agentId: "retired", storePath }] });
+    const { loadExactSessionEntryReadOnlyResult } =
+      await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
+    expect(
+      loadExactSessionEntryReadOnlyResult({
+        agentId: "retired",
+        sessionKey: "agent:retired:main",
+        storePath,
+      }),
+    ).toMatchObject({ found: true, value: { sessionKey: "agent:retired:main" } });
+    loadSessionEntryMock.mockReturnValue({
+      storePath,
+      entry: { sessionId: "retired-session", sessionFile: "/tmp/retired.jsonl" },
+    });
+    readSessionMessagesMock.mockReturnValue([]);
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).toBeNull();
+    await expectPathMissing(fixture.originalPath);
+  });
+
+  it("retains history records when a retired fixed store is unavailable", async () => {
+    const fixture = await createFixture(stateDir, {
+      agentId: "retired",
+      sessionKey: "agent:retired:main",
+    });
+    const storePath = path.join(stateDir, "retired-sessions.json");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "retired",
+      env,
+    });
+    openOpenClawAgentDatabase({ agentId: "retired", env, path: target.path });
+    closeOpenClawAgentDatabasesForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(target.path);
+    database.exec("DROP TABLE schema_meta;");
+    database.close();
+    const config = { session: { store: storePath } };
+    getRuntimeConfigMock.mockReturnValue(config);
+    loadSessionEntryMock.mockReturnValue({ storePath, entry: undefined });
+    expect(
+      resolveExistingAgentSessionStoreTargetsReadOnlyResult(config, "retired", { env }),
+    ).toEqual({ available: false, reason: "schema-missing" });
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingImageRecords({ stateDir }),
+    );
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
   it("retains committed records that are still referenced by a full-image block", async () => {
     const fixture = await createFixture(stateDir);
     loadSessionEntryMock.mockReturnValue({
@@ -1999,19 +2481,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedFileCount).toBe(0);
     expect(result.retainedCount).toBe(1);
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
-    expect(readSessionMessagesMock).toHaveBeenCalledWith(
-      {
-        agentId: undefined,
-        sessionEntry: {
-          sessionFile: "/tmp/sess-main.jsonl",
-          sessionId: "sess-main",
-        },
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: path.join(stateDir, "gateway-sessions.json"),
-      },
-      expect.objectContaining({ allowResetArchiveFallback: true }),
-    );
+    expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
   });
 
   it("reads each session transcript once while evaluating committed records", async () => {
@@ -2084,6 +2554,20 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   });
 
   it("retains other selected-agent global records during scoped cleanup", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+      session: { store: path.join(stateDir, "sessions.sqlite") },
+    });
+    await replaceTestSessionEntry(
+      {
+        agentId: "main",
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        sessionKey: "global",
+        storePath: path.join(stateDir, "sessions.sqlite"),
+      },
+      { sessionId: "sess-main-global", updatedAt: Date.now() },
+    );
+    closeOpenClawAgentDatabasesForTest();
     const retainedFixture = await createFixture(stateDir, {
       sessionKey: "global",
       agentId: "work",
@@ -2106,17 +2590,94 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       agentId: "main",
     });
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "main" });
     expect(result.deletedRecordCount).toBe(1);
     expect(result.retainedCount).toBe(1);
     await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
     await expectPathMissing(deletedFixture.originalPath);
   });
 
-  it("treats legacy unscoped global records as the configured default agent", async () => {
-    getRuntimeConfigMock.mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "work", default: true }] },
+  it.each([
+    {
+      label: "uses the recorded owner for unscoped session keys",
+      sessionKey: "legacy-session",
+      recordAgentId: "work",
+    },
+    {
+      label: "uses an agent-scoped session key owner when the record omits agentId",
+      sessionKey: "agent:work:main",
+      recordAgentId: undefined,
+    },
+  ])("$label", async ({ sessionKey, recordAgentId }) => {
+    const fixture = await createFixture(stateDir, {
+      sessionKey,
+      ...(recordAgentId ? { agentId: recordAgentId } : {}),
     });
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+      session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
+    });
+    prepareAgentSessionStore(stateDir, "work");
+    await replaceTestSessionEntry(
+      {
+        agentId: "work",
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        sessionKey,
+      },
+      { sessionId: "sess-work", updatedAt: Date.now() },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "agents", "work", "sessions", "sessions.json"),
+      entry: { sessionId: "sess-work", sessionFile: "/tmp/work.jsonl" },
+    });
+    readSessionMessagesMock.mockReturnValue([
+      {
+        __openclaw: { id: "msg-1" },
+        content: [
+          {
+            type: "image",
+            url: `/api/chat/media/outgoing/${fixture.sessionKey}/${fixture.attachmentId}/full`,
+          },
+        ],
+      },
+    ]);
+
+    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+
+    expect(readSessionMessagesMock).toHaveBeenCalled();
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+  });
+
+  it("treats legacy unscoped global records as the configured default agent", async () => {
+    const config = {
+      agents: { list: [{ id: "main" }, { id: "work", default: true }] },
+    };
+    getRuntimeConfigMock.mockReturnValue(config);
+    prepareAgentSessionStore(stateDir, "work");
+    await replaceTestSessionEntry(
+      {
+        agentId: "work",
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        sessionKey: "global",
+      },
+      { sessionId: "sess-work-global", updatedAt: Date.now() },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    expect(
+      resolveExistingAgentSessionStoreTargetsReadOnlyResult(config, "work", {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toMatchObject({ available: true });
+    const { loadExactSessionEntryReadOnlyResult } =
+      await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
+    expect(
+      loadExactSessionEntryReadOnlyResult({
+        agentId: "work",
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        sessionKey: "global",
+      }),
+    ).toMatchObject({ found: true, value: { sessionKey: "global" } });
     const deletedFixture = await createFixture(stateDir, {
       sessionKey: "global",
       attachmentId: "88888888-8888-4888-8888-888888888888",
@@ -2138,13 +2699,45 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       agentId: "work",
     });
 
+    expect(readSessionMessagesMock).toHaveBeenCalled();
     expect(result.deletedRecordCount).toBe(1);
     expect(result.retainedCount).toBe(1);
     await expectPathMissing(deletedFixture.originalPath);
     await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
   });
 
+  it("retains ownerless global records when no compatibility owner exists", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+    });
+    const fixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      attachmentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      sessionKey: "global",
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
   it("does not retain selected-agent global records during full cleanup", async () => {
+    await replaceTestSessionEntry(
+      {
+        agentId: "work",
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        sessionKey: "global",
+        storePath: path.join(stateDir, "sessions.sqlite"),
+      },
+      { sessionId: "sess-work-global", updatedAt: Date.now() },
+    );
+    closeOpenClawAgentDatabasesForTest();
     const fixture = await createFixture(stateDir, {
       sessionKey: "global",
       agentId: "work",

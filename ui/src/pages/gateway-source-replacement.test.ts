@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import type { SessionsRouteData } from "./sessions/sessions-page.ts";
+import type { SessionsRouteData } from "./sessions/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
-import type { UsageRefreshReason } from "./usage/refresh-policy.ts";
+import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
@@ -26,6 +26,20 @@ type TestPage = HTMLElement & {
   render: () => unknown;
   readonly updateComplete: Promise<boolean>;
 };
+
+type TestGatewayController = {
+  applySnapshot: (
+    snapshot: ApplicationGatewaySnapshot,
+    binding: { initial: boolean; sourceChanged: boolean },
+  ) => void;
+};
+
+function applyPageGatewaySnapshot(
+  page: TestPage & { gateway: TestGatewayController },
+  snapshot: ApplicationGatewaySnapshot,
+) {
+  page.gateway.applySnapshot(snapshot, { initial: false, sourceChanged: false });
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -91,6 +105,9 @@ function contextWithClient(
     sessions: {
       state: { result: null, loading: false },
       list: vi.fn(async () => null),
+      listSnapshot: () => ({ result: null, agentId: null, loading: false, error: null }),
+      subscribeList: () => () => undefined,
+      refreshList: vi.fn(async () => undefined),
       subscribe,
     },
     workboard: { subscribe },
@@ -155,7 +172,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const routeData = {
       gateway: context.gateway,
       gatewaySnapshot: context.gateway.snapshot,
+      sessions: context.sessions,
       result: { count: 1, sessions: [{ key: "old" }] },
+      loading: false,
       error: null,
       expandedSessionKey: null,
       statusFilter: "active",
@@ -259,9 +278,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const result = { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"];
     const page = createPage("openclaw-usage-page", context) as TestPage & {
       routeData: UsageRouteData;
-      refreshRuntime: {
-        applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
-      };
+      gateway: TestGatewayController;
     };
     page.routeData = {
       gateway: context.gateway,
@@ -282,11 +299,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page);
     await page.updateComplete;
-    page.refreshRuntime.applyGatewaySnapshot({
+    applyPageGatewaySnapshot(page, {
       ...context.gateway.snapshot,
       phase: "stopped",
     });
-    page.refreshRuntime.applyGatewaySnapshot(context.gateway.snapshot);
+    applyPageGatewaySnapshot(page, context.gateway.snapshot);
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
@@ -310,10 +327,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const page = createPage("openclaw-usage-page", context) as TestPage & {
       routeData: UsageRouteData;
       usageResult: UsageRouteData["result"];
-      refreshRuntime: {
-        request: (reason: UsageRefreshReason) => void;
-        applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
-      };
+      gateway: TestGatewayController;
+      refreshPolicy: UsageRefreshPolicy;
     };
     page.routeData = {
       gateway: context.gateway,
@@ -334,13 +349,13 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page);
     await page.updateComplete;
-    page.refreshRuntime.request("manual");
+    page.refreshPolicy.request("manual");
     await waitForFast(() => expect(usageRequestCount).toBe(1));
-    page.refreshRuntime.applyGatewaySnapshot({
+    applyPageGatewaySnapshot(page, {
       ...context.gateway.snapshot,
       phase: "stopped",
     });
-    page.refreshRuntime.applyGatewaySnapshot(context.gateway.snapshot);
+    applyPageGatewaySnapshot(page, context.gateway.snapshot);
 
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2),
@@ -370,10 +385,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const page = createPage("openclaw-usage-page", harness.context) as TestPage & {
       routeData: UsageRouteData;
       readonly usageLoading: boolean;
-      refreshRuntime: {
-        request: (reason: UsageRefreshReason) => void;
-        setLastLoadedAtMs: (value: number | null) => void;
-      };
+      refreshPolicy: UsageRefreshPolicy;
     };
     page.routeData = {
       gateway: harness.context.gateway,
@@ -399,7 +411,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     harness.emitConnected(true);
     expect(request).not.toHaveBeenCalled();
 
-    page.refreshRuntime.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
+    page.refreshPolicy.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
     visibility.mockReturnValue("hidden");
     harness.emitConnected(false);
     harness.emitConnected(true);
@@ -415,16 +427,16 @@ describe("gateway source replacement across reconnect with a reused client", () 
       "usage.status",
     ]);
 
-    page.refreshRuntime.request("manual");
+    page.refreshPolicy.request("manual");
     await waitForFast(() => expect(page.usageLoading).toBe(false));
     expect(request).toHaveBeenCalledTimes(6);
 
     const failedRefresh = deferred<never>();
     request.mockImplementationOnce(() => failedRefresh.promise);
-    page.refreshRuntime.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
-    page.refreshRuntime.request("manual");
+    page.refreshPolicy.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
+    page.refreshPolicy.request("manual");
     expect(request).toHaveBeenCalledTimes(9);
-    page.refreshRuntime.request("focus");
+    page.refreshPolicy.request("focus");
     failedRefresh.reject(new Error("connection interrupted"));
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(12));
     await waitForFast(() => expect(page.usageLoading).toBe(false));
@@ -448,13 +460,44 @@ describe("gateway source replacement across reconnect with a reused client", () 
       routeData: SkillsRouteData;
       skillsReport: SkillsRouteData["report"];
     };
-    page.routeData = routeData;
-
     document.body.append(page);
+    page.routeData = routeData;
     await page.updateComplete;
 
     expect(page.skillsReport).toBe(report);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("defers fallback skills loading until route data is initialized and invalidated", async () => {
+    const request = vi.fn(async () => ({ skills: [] }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global" as const,
+      agents: [{ id: "main" }, { id: "research" }],
+    };
+    const context = contextWithClient(client, { connected: true, agentsList });
+    const page = createPage("openclaw-skills-page", context) as TestPage & {
+      routeData: SkillsRouteData;
+    };
+
+    document.body.append(page);
+    await page.updateComplete;
+    expect(request).not.toHaveBeenCalled();
+
+    page.routeData = {
+      gateway: context.gateway,
+      gatewaySnapshot: { ...context.gateway.snapshot },
+      agents: context.agents,
+      agentsList,
+      selectedAgentId: "main",
+      report: null,
+      error: null,
+    };
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" }),
+    );
   });
 
   it("rejects skills route data from an earlier same-client gateway epoch", async () => {
@@ -530,19 +573,16 @@ describe("gateway source replacement across reconnect with a reused client", () 
   it("clears skills loaded by the previous provider", async () => {
     const client = {} as GatewayBrowserClient;
     const page = createPage("openclaw-skills-page", contextWithClient(client)) as TestPage & {
-      agentsList: unknown;
       skillsReport: unknown;
       skillCardContents: Record<string, string>;
     };
     document.body.append(page);
     await page.updateComplete;
-    page.agentsList = { agents: [{ id: "old" }] };
     page.skillsReport = { skills: [{ key: "old" }] };
     page.skillCardContents = { old: "stale" };
 
     await replaceContext(page, client);
 
-    expect(page.agentsList).toBeNull();
     expect(page.skillsReport).toBeNull();
     expect(page.skillCardContents).toEqual({});
   });
@@ -552,19 +592,14 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const ensureList = vi.fn(() => pending.promise);
     const request = vi.fn(async () => ({ skills: [] }));
     const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { ensureList });
+    const context = contextWithClient(client, { connected: true, ensureList });
     const page = createPage("openclaw-skills-page", context) as TestPage & {
-      agentsList: SkillsRouteData["agentsList"];
-      connected: boolean;
       loadAgents: () => Promise<void>;
     };
     document.body.append(page);
     await page.updateComplete;
-    (context.gateway.snapshot as ApplicationGatewaySnapshot).phase = "connected";
-    page.connected = true;
-
     const load = page.loadAgents();
-    await waitForFast(() => expect(ensureList).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(ensureList).toHaveBeenCalled());
     const replacementAgents = {
       defaultId: "fresh",
       mainKey: "agent:fresh:main",
@@ -581,7 +616,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     } as unknown as NonNullable<SkillsRouteData["agentsList"]>);
     await load;
 
-    expect(page.agentsList).toBe(replacementAgents);
+    expect(page.context.agents.state.agentsList).toBe(replacementAgents);
   });
 
   it("clears logs loaded by the previous provider", async () => {
@@ -604,13 +639,14 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.logsCursor).toBeNull();
   });
 
-  it("clears diagnostics loaded by the previous provider", async () => {
+  it("clears diagnostics data and errors loaded by the previous provider", async () => {
     const client = {} as GatewayBrowserClient;
     const page = createPage("openclaw-debug-page", contextWithClient(client)) as TestPage & {
       debugStatus: unknown;
       debugHealth: unknown;
       debugModels: unknown[];
       debugHeartbeat: unknown;
+      debugDiagnosticsError: string | null;
     };
     document.body.append(page);
     await page.updateComplete;
@@ -618,6 +654,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     page.debugHealth = { ok: true };
     page.debugModels = [{ id: "old" }];
     page.debugHeartbeat = { provider: "old" };
+    page.debugDiagnosticsError = "old diagnostics failure";
 
     await replaceContext(page, client);
 
@@ -625,22 +662,22 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.debugHealth).toBeNull();
     expect(page.debugModels).toEqual([]);
     expect(page.debugHeartbeat).toBeNull();
+    expect(page.debugDiagnosticsError).toBeNull();
   });
 
   it("discards diagnostics from a replaced provider that reuses its client", async () => {
     const pending = deferred<unknown>();
     const request = vi.fn(() => pending.promise);
     const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client);
+    const context = contextWithClient(client, { connected: true });
     const page = createPage("openclaw-debug-page", context) as TestPage & {
-      connected: boolean;
       debugStatus: unknown;
       diagnosticsTask: { run: () => Promise<void>; status: TaskStatus };
     };
+    page.debugStatus = { seeded: true };
     document.body.append(page);
     await page.updateComplete;
-    (context.gateway.snapshot as ApplicationGatewaySnapshot).phase = "connected";
-    page.connected = true;
+    page.debugStatus = null;
 
     const load = page.diagnosticsTask.run();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));

@@ -7,7 +7,7 @@ import type { Command } from "commander";
 import type { PushTestResult } from "../../../packages/gateway-protocol/src/index.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import { callNodesGatewayCli, nodesCallOpts, resolveCliNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
 type NodesPushOpts = NodesRpcOpts & {
@@ -40,7 +40,7 @@ export function registerNodesPushCommand(nodes: Command) {
       .option("--environment <sandbox|production>", "Override APNs environment")
       .action(async (opts: NodesPushOpts) => {
         await runNodesCommand("push", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const title = normalizeOptionalString(opts.title) || "OpenClaw";
           const body = normalizeOptionalString(opts.body) || `Push test for node ${nodeId}`;
           const environment = normalizeEnvironment(opts.environment);
@@ -57,7 +57,7 @@ export function registerNodesPushCommand(nodes: Command) {
             params.environment = environment;
           }
 
-          const result = await callGatewayCli("push.test", opts, params);
+          const result = await callNodesGatewayCli("push.test", opts, params);
           const parsed =
             typeof result === "object" && result !== null
               ? (result as Partial<PushTestResult>)

@@ -1,12 +1,13 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 /**
  * Exec approval id routing tests.
  * Covers approval registration ids, follow-up idempotency, and approved
  * node/gateway invocation behavior.
  */
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadExecApprovals,
@@ -73,7 +74,7 @@ vi.mock("../utils/message-channel.js", () => {
   };
 });
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (context?: {
     channel?: string | null;
     to?: string | number | null;
@@ -378,12 +379,7 @@ function mockNoApprovalRouteRegistration() {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function expectRecordFields(
   record: Record<string, unknown> | undefined,
@@ -730,7 +726,7 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain(
-      "Warning: background execution is disabled; running synchronously.",
+      "Warning: continuation options are unavailable; running synchronously.",
     );
     expect(getResultText(result)).toContain("node-ok");
   });
@@ -1009,7 +1005,7 @@ describe("exec approvals", () => {
   });
 
   it.each(["gateway", "node"] as const)(
-    "keeps background fallback warnings out of pending %s approvals",
+    "keeps unavailable continuation guidance out of pending %s approvals",
     async (host) => {
       let approvalRequest: Record<string, unknown> | undefined;
       vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
@@ -1046,7 +1042,7 @@ describe("exec approvals", () => {
       });
 
       expect(result.details.status).toBe("approval-pending");
-      expect(getResultText(result)).not.toContain("background execution is disabled");
+      expect(getResultText(result)).not.toMatch(/process|background|yieldMs|poll/i);
       expect(approvalRequest?.warningText).toBeUndefined();
     },
   );
@@ -1328,6 +1324,7 @@ describe("exec approvals", () => {
 
   it("shows full chained gateway commands in approval-pending message", async () => {
     const calls: string[] = [];
+    const command = `${JSON.stringify(process.execPath)} --version && ${JSON.stringify(process.execPath)} --version`;
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "exec.approval.request") {
@@ -1347,10 +1344,10 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-chain-gateway", {
-      command: "npm view diver --json | jq .name && brew outdated",
+      command,
     });
 
-    expectPendingCommandText(result, "npm view diver --json | jq .name && brew outdated");
+    expectPendingCommandText(result, command);
     expect(calls).toContain("exec.approval.request");
   });
 
@@ -1495,6 +1492,7 @@ describe("exec approvals", () => {
 
   it("shows full chained node commands in approval-pending message", async () => {
     const calls: string[] = [];
+    const command = `${JSON.stringify(process.execPath)} --version && ${JSON.stringify(process.execPath)} --version`;
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "node.invoke") {
@@ -1514,10 +1512,10 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-chain-node", {
-      command: "npm view diver --json | jq .name && brew outdated",
+      command,
     });
 
-    expectPendingCommandText(result, "npm view diver --json | jq .name && brew outdated");
+    expectPendingCommandText(result, command);
     expect(calls).toContain("exec.approval.request");
   });
 

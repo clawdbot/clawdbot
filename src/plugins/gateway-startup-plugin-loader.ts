@@ -107,15 +107,3 @@ export function loadGatewayStartupPluginPlan(
 ): GatewayStartupPluginPlan {
   return loadGatewayStartupPluginPlanWithMetadata(params).plan;
 }
-
-export function resolveGatewayStartupPluginIds(params: {
-  config: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  workerProviderIds?: readonly string[];
-  platform?: NodeJS.Platform;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}): string[] {
-  return [...loadGatewayStartupPluginPlan(params).pluginIds];
-}

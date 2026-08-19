@@ -1,5 +1,6 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
-import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflight.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
@@ -262,7 +263,11 @@ export async function planClawPackageRemovals(
       continue;
     }
     if (!managedCleanup && !explicitlySelected && cleanup.mode !== "remove-if-unused") {
-      retain("Referenced resources are retained unless a cleanup mode selects them.");
+      retain(
+        packageRef.origin === "claw-introduced"
+          ? "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it."
+          : "Referenced resources are retained unless a separate cleanup mode selects them.",
+      );
       continue;
     }
     if (!explicitlySelected && affectedClawAgentIds.length > 0) {
@@ -274,6 +279,16 @@ export async function planClawPackageRemovals(
       (packageRef.independentOwner || packageRef.origin === "pre-existing")
     ) {
       retain("Package has a current non-Claw owner or pre-existing origin.");
+      continue;
+    }
+    if (
+      packageRef.kind === "plugin" &&
+      !explicitlySelected &&
+      cleanup.mode === "remove-if-unused"
+    ) {
+      retain(
+        "Global plugins are excluded from generic remove-if-unused cleanup; select the plugin explicitly to invoke its canonical owner.",
+      );
       continue;
     }
 
@@ -574,7 +589,7 @@ async function applyClawPackageRemovalsUnlocked(
       results.push({
         ...base,
         action: "error",
-        reason: error instanceof Error ? error.message : String(error),
+        reason: coerceErrorMessage(error),
       });
     } finally {
       try {

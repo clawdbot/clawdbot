@@ -214,6 +214,13 @@ describe("media reference helpers", () => {
       MediaReferenceError,
     );
     expect(() => parseInboundMediaUri("media://inbound/%00.png")).toThrow(MediaReferenceError);
+    for (const claim of [
+      ["media://user", "password@inbound/claim.png"].join(":"),
+      "media://inbound/claim.png?signature=private-secret",
+      "media://inbound/claim.png#private-fragment",
+    ]) {
+      expect(() => parseInboundMediaUri(claim), claim).toThrow(MediaReferenceError);
+    }
   });
 
   it("rejects symlinked inbound media files", async () => {

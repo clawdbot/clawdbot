@@ -31,16 +31,18 @@ type ResolveSqliteStoreTargetOptions = {
   defaultAgentId?: string;
   env?: NodeJS.ProcessEnv;
   registeredDatabases?: readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[];
+  isSameDatabasePath?: (left: string, right: string) => boolean;
 };
 
 function resolveRegisteredOwners(
   pathname: string,
   registeredDatabases: readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[],
+  isSameDatabasePath: (left: string, right: string) => boolean,
 ): string[] {
   return [
     ...new Set(
       registeredDatabases
-        .filter((entry) => isSameOpenClawAgentDatabasePath(entry.path, pathname))
+        .filter((entry) => isSameDatabasePath(entry.path, pathname))
         .map((entry) => normalizeAgentId(entry.agentId)),
     ),
   ];
@@ -78,8 +80,13 @@ function resolveCustomStoreSqlitePath(params: {
   const registeredDatabases =
     params.options.registeredDatabases ??
     listOpenClawRegisteredAgentDatabases(params.options.env ? { env: params.options.env } : {});
+  const isSameDatabasePath = params.options.isSameDatabasePath ?? isSameOpenClawAgentDatabasePath;
   const resolvePersistedOwner = (candidatePath: string) => {
-    const registeredOwners = resolveRegisteredOwners(candidatePath, registeredDatabases);
+    const registeredOwners = resolveRegisteredOwners(
+      candidatePath,
+      registeredDatabases,
+      isSameDatabasePath,
+    );
     const databaseOwner = resolveDatabaseOwner(candidatePath);
     return {
       effectiveOwner:
@@ -91,7 +98,11 @@ function resolveCustomStoreSqlitePath(params: {
       registeredOwners,
     };
   };
-  const registeredUnsuffixedOwners = resolveRegisteredOwners(unsuffixedPath, registeredDatabases);
+  const registeredUnsuffixedOwners = resolveRegisteredOwners(
+    unsuffixedPath,
+    registeredDatabases,
+    isSameDatabasePath,
+  );
   const durableUnsuffixedOwner = resolveDatabaseOwner(unsuffixedPath);
   const persistedUnsuffixedOwner =
     registeredUnsuffixedOwners.length === 1
@@ -121,7 +132,7 @@ function resolveCustomStoreSqlitePath(params: {
     };
     const occupiedIndexes = new Set<number>();
     for (const registered of registeredDatabases) {
-      if (!isSameOpenClawAgentDatabasePath(path.dirname(registered.path), sessionsDir)) {
+      if (!isSameDatabasePath(path.dirname(registered.path), sessionsDir)) {
         continue;
       }
       const index = parseIndex(path.basename(registered.path));
@@ -259,7 +270,11 @@ export function resolveSqliteTargetFromSessionStorePath(
     const registeredDatabases =
       options.registeredDatabases ??
       listOpenClawRegisteredAgentDatabases(options.env ? { env: options.env } : {});
-    const registeredOwners = resolveRegisteredOwners(unsuffixedTarget.path, registeredDatabases);
+    const registeredOwners = resolveRegisteredOwners(
+      unsuffixedTarget.path,
+      registeredDatabases,
+      options.isSameDatabasePath ?? isSameOpenClawAgentDatabasePath,
+    );
     const databaseOwner = resolveDatabaseOwner(unsuffixedTarget.path);
     const configuredDefaultAgentId = normalizeAgentId(
       options.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,

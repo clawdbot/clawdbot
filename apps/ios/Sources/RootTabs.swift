@@ -49,6 +49,7 @@ struct RootTabs: View {
     @State private var presentedSheet: PresentedSheet?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var gatewayToastDragOffset: CGFloat = 0
+    @State private var gatewayRetryFailure: String?
     // Swipe-up hides the toast only until the next problem report.
     @State private var isGatewayToastSwipeDismissed: Bool = false
     @State private var showOnboarding: Bool = false
@@ -168,8 +169,15 @@ struct RootTabs: View {
 
     private var sidebarSplitContent: some View {
         GeometryReader { proxy in
-            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: proxy.size)
-            let sidebarWidth = self.sidebarWidth(containerWidth: proxy.size.width, isDrawerLayout: isDrawerLayout)
+            // Keyboard safe-area changes must not masquerade as window/orientation changes;
+            // switching layouts destroys the focused detail subtree.
+            let layoutContainerSize = Self.sidebarLayoutContainerSize(
+                contentSize: proxy.size,
+                windowSize: self.foregroundKeyWindowSize())
+            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: layoutContainerSize)
+            let sidebarWidth = self.sidebarWidth(
+                containerWidth: layoutContainerSize.width,
+                isDrawerLayout: isDrawerLayout)
             Group {
                 if isDrawerLayout {
                     self.sidebarDrawerContent(
@@ -180,10 +188,13 @@ struct RootTabs: View {
                 }
             }
             .onAppear {
-                self.updateSidebarLayout(containerSize: proxy.size, force: false)
+                self.updateSidebarLayout(containerSize: layoutContainerSize, force: false)
             }
             .onChange(of: proxy.size) { _, size in
-                self.updateSidebarLayout(containerSize: size, force: false)
+                let layoutContainerSize = Self.sidebarLayoutContainerSize(
+                    contentSize: size,
+                    windowSize: self.foregroundKeyWindowSize())
+                self.updateSidebarLayout(containerSize: layoutContainerSize, force: false)
             }
             // Single refresh owner: identity/session changes, scene activation,
             // and the periodic attention refresh all land here.
@@ -384,6 +395,10 @@ struct RootTabs: View {
                 headerTitle: "Automations",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
+        case .desktop:
+            DesktopHubScreen(
+                headerSidebarAction: self.sidebarHeaderAction,
+                gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .terminal:
             TerminalHubScreen(
                 headerSidebarAction: self.sidebarHeaderAction,
@@ -498,23 +513,47 @@ struct RootTabs: View {
         Self.sidebarWidth(containerWidth: containerWidth, isDrawerLayout: isDrawerLayout)
     }
 
+    private func foregroundKeyWindowSize() -> CGSize? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })?
+            .windows
+            .first(where: \.isKeyWindow)?
+            .bounds.size
+    }
+
     private func rootOverlays(_ content: some View) -> some View {
         content
             .overlay(alignment: .top) {
                 // Stable container so the toast's move/opacity transition animates
                 // when the gateway problem appears or clears outside withAnimation.
                 ZStack(alignment: .top) {
-                    if let gatewayProblem = self.activeGatewayProblemToast {
+                    if let gatewayRetryFailure {
+                        OpenClawNoticeBanner(
+                            icon: "wifi.exclamationmark",
+                            title: "Gateway reconnect failed",
+                            message: .verbatim(gatewayRetryFailure),
+                            ownerLabel: "Needs attention",
+                            tint: OpenClawBrand.warn,
+                            secondaryActionTitle: "Dismiss",
+                            onSecondaryAction: { self.gatewayRetryFailure = nil })
+                            .padding(.horizontal, 12)
+                            .safeAreaPadding(.top, 10)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    } else if let gatewayProblem = self.activeGatewayProblemToast {
                         self.gatewayProblemToast(gatewayProblem)
                     }
                 }
+                .animation(self.gatewayToastAnimation, value: self.gatewayRetryFailure)
                 .animation(self.gatewayToastAnimation, value: self.activeGatewayProblemToast)
             }
             .overlay(alignment: .topLeading) {
                 if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
                     VoiceWakeToast(command: voiceWakeToastText)
                         .padding(.leading, 10)
-                        .safeAreaPadding(.top, self.activeGatewayProblemToast == nil ? 58 : 132)
+                        .safeAreaPadding(
+                            .top,
+                            self.activeGatewayProblemToast == nil && self.gatewayRetryFailure == nil ? 58 : 132)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -1073,7 +1112,12 @@ extension RootTabs {
         } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         } else if problem.retryable {
-            Task { await self.gatewayController.connectActiveGateway() }
+            self.gatewayRetryFailure = nil
+            Task {
+                if case let .failed(message) = await self.gatewayController.connectActiveGateway() {
+                    self.gatewayRetryFailure = message
+                }
+            }
         } else {
             self.selectSidebarDestination(.gateway)
         }
@@ -1234,7 +1278,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone)
+    RootTabsPreviewHost()
 }
 
 #Preview(
@@ -1242,7 +1286,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, sidebarVisible: true)
+    RootTabsPreviewHost(sidebarVisible: true)
 }
 
 #Preview(
@@ -1250,7 +1294,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, gatewayState: .connected)
+    RootTabsPreviewHost(gatewayState: .connected)
 }
 
 #Preview(
@@ -1258,7 +1302,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, gatewayState: .error)
+    RootTabsPreviewHost(gatewayState: .error)
 }
 
 #Preview(
@@ -1266,7 +1310,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 852, height: 393),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .phone)
+    RootTabsPreviewHost()
         .environment(\.horizontalSizeClass, .regular)
         .environment(\.verticalSizeClass, .compact)
 }
@@ -1276,7 +1320,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1024, height: 1366),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .pad)
+    RootTabsPreviewHost()
 }
 
 #Preview(
@@ -1284,7 +1328,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .connected)
+    RootTabsPreviewHost(gatewayState: .connected)
 }
 
 #Preview(
@@ -1292,7 +1336,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .connecting)
+    RootTabsPreviewHost(gatewayState: .connecting)
 }
 
 #Preview(
@@ -1300,24 +1344,21 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .error)
+    RootTabsPreviewHost(gatewayState: .error)
 }
 
 private struct RootTabsPreviewHost: View {
     @State private var appearanceModel = AppAppearanceModel()
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
-    private let idiom: UIUserInterfaceIdiom
     private let sidebarVisible: Bool?
 
     init(
-        idiom: UIUserInterfaceIdiom,
         gatewayState: RootTabsPreviewGatewayState = .offline,
         sidebarVisible: Bool? = nil)
     {
         let appModel = NodeAppModel()
         gatewayState.apply(to: appModel)
-        self.idiom = idiom
         self.sidebarVisible = sidebarVisible
         _appModel = State(initialValue: appModel)
         _gatewayController = State(

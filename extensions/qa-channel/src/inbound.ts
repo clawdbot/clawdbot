@@ -8,11 +8,8 @@ import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  getAgentScopedMediaLocalRoots,
-  saveMediaBuffer,
-  saveMediaSource,
-} from "openclaw/plugin-sdk/media-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -25,6 +22,7 @@ import {
   type QaBusMessage,
 } from "./bus-client.js";
 import { sendQaChannelMediaBatch } from "./outbound.js";
+import type { PluginRuntime } from "./runtime-api.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -207,7 +205,7 @@ function createQaReplyPreview(params: {
     currentText = "";
   };
 
-  const sendDurable = async (text: string) => {
+  const sendDurable = async (text: string, isError?: boolean) => {
     if (!text.trim()) {
       return;
     }
@@ -217,6 +215,7 @@ function createQaReplyPreview(params: {
       accountId: params.account.accountId,
       to: params.target,
       text,
+      isError,
       senderId: params.account.botUserId,
       senderName: params.account.botDisplayName,
       threadId: params.inbound.threadId,
@@ -229,8 +228,15 @@ function createQaReplyPreview(params: {
 
   return {
     clear,
-    async deliver(text: string, kind: string) {
+    async deliver(text: string, kind: string, isError?: boolean) {
       await pending;
+      if (isError === true) {
+        // Preview edits cannot add the typed failure marker. Replace any preview
+        // with one durable marked message so QA Lab cannot accept it as success.
+        await clear();
+        await sendDurable(text, true);
+        return;
+      }
       // Core may close a streamed block with an identical final payload.
       // The block is already durable, so posting the final again duplicates the reply.
       if (
@@ -260,8 +266,10 @@ export async function handleQaInbound(params: {
   account: ResolvedQaChannelAccount;
   config: CoreConfig;
   message: QaBusMessage;
+  buildContext?: typeof buildChannelInboundEventContext;
+  channelRuntime?: PluginRuntime["channel"];
 }) {
-  const runtime = getQaChannelRuntime();
+  const channelRuntime = params.channelRuntime ?? getQaChannelRuntime().channel;
   const inbound = params.message;
   const target = buildQaTarget({
     chatType: inbound.conversation.kind,
@@ -291,12 +299,9 @@ export async function handleQaInbound(params: {
   });
   const isGroup = inbound.conversation.kind !== "direct";
   const wasMentioned = isGroup
-    ? runtime.channel.mentions.matchesMentionPatterns(
+    ? channelRuntime.mentions.matchesMentionPatterns(
         inbound.text,
-        runtime.channel.mentions.buildMentionRegexes(
-          params.config as OpenClawConfig,
-          route.agentId,
-        ),
+        channelRuntime.mentions.buildMentionRegexes(params.config as OpenClawConfig, route.agentId),
       )
     : undefined;
   const groupConfig = isGroup
@@ -306,6 +311,16 @@ export async function handleQaInbound(params: {
         target,
       })
     : undefined;
+  const nativeCommand = inbound.nativeCommand;
+  const commandTargets = nativeCommand
+    ? resolveNativeCommandSessionTargets({
+        agentId: route.agentId,
+        sessionPrefix: "qa-channel:slash",
+        userId: inbound.senderId,
+        targetSessionKey: route.sessionKey,
+      })
+    : undefined;
+  const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
   const access = await resolveStableChannelMessageIngress({
     channelId: params.channelId,
     accountId: params.account.accountId,
@@ -317,6 +332,12 @@ export async function handleQaInbound(params: {
       id: inbound.conversation.id,
       threadId: inbound.threadId,
       title: inbound.conversation.title,
+    },
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey,
+      messageId: inbound.id,
+      inboundEventKind: "user_request",
     },
     mentionFacts: isGroup
       ? {
@@ -347,19 +368,7 @@ export async function handleQaInbound(params: {
     body: inbound.text,
   });
   const media = await resolveQaInboundMediaFacts(inbound.attachments);
-  const nativeCommand = inbound.nativeCommand;
-  const commandTargets = nativeCommand
-    ? resolveNativeCommandSessionTargets({
-        agentId: route.agentId,
-        sessionPrefix: "qa-channel:slash",
-        userId: inbound.senderId,
-        targetSessionKey: route.sessionKey,
-      })
-    : undefined;
-  const commandBody = nativeCommand ? `/${nativeCommand.name}` : inbound.text;
-
-  const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
     channel: params.channelId,
     accountId: route.accountId ?? params.account.accountId,
     messageId: inbound.id,
@@ -392,14 +401,15 @@ export async function handleQaInbound(params: {
       messageThreadId: inbound.threadId,
       threadParentId: inbound.threadId ? inbound.conversation.id : undefined,
     },
-    message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody },
+    message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody: inbound.text },
     media,
+    channelIngress: access,
     access: {
       commands: { authorized: true },
       mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },
     },
     command: nativeCommand
-      ? { kind: "native", name: nativeCommand.name, body: commandBody, authorized: true }
+      ? { kind: "native", name: nativeCommand.name, body: inbound.text, authorized: true }
       : undefined,
     extra: {
       CommandTargetSessionKey: commandTargets?.commandTargetSessionKey,
@@ -411,7 +421,7 @@ export async function handleQaInbound(params: {
     },
   });
 
-  await runtime.channel.inbound.dispatch({
+  await channelRuntime.inbound.dispatch({
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
     accountId: params.account.accountId,
@@ -421,7 +431,12 @@ export async function handleQaInbound(params: {
       deliver: async (payload, info) => {
         const reply =
           payload && typeof payload === "object"
-            ? (payload as { text?: string; mediaUrl?: string; mediaUrls?: string[] })
+            ? (payload as {
+                text?: string;
+                mediaUrl?: string;
+                mediaUrls?: string[];
+                isError?: boolean;
+              })
             : undefined;
         const text = reply?.text ?? "";
         const mediaUrls = Array.from(
@@ -446,6 +461,7 @@ export async function handleQaInbound(params: {
             accountId: params.account.accountId,
             to: target,
             text,
+            isError: reply?.isError,
             mediaUrls,
             mediaLocalRoots: getAgentScopedMediaLocalRoots(
               params.config as OpenClawConfig,
@@ -459,7 +475,7 @@ export async function handleQaInbound(params: {
         if (!text.trim()) {
           return;
         }
-        await preview.deliver(text, info?.kind ?? "final");
+        await preview.deliver(text, info?.kind ?? "final", reply?.isError);
       },
       onError: (error) => {
         void preview.clear().catch((clearError: unknown) => {

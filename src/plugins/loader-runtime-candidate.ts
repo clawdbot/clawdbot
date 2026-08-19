@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   resolveEffectiveEnableState,
@@ -488,17 +489,6 @@ export function loadRuntimePluginCandidate(params: {
       record.memorySlotSelected = true;
     }
   }
-  if (registrationPlan.runFullActivationOnlyRegistrations) {
-    if (definition?.reload) {
-      params.registryBuilder.registerReload(record, definition.reload);
-    }
-    for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
-      params.registryBuilder.registerNodeHostCommand(record, nodeHostCommand);
-    }
-    for (const collector of definition?.securityAuditCollectors ?? []) {
-      params.registryBuilder.registerSecurityAuditCollector(record, collector);
-    }
-  }
   if (params.validateOnly) {
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
@@ -516,6 +506,17 @@ export function loadRuntimePluginCandidate(params: {
       pushPluginLoadError(formatMissingPluginRegisterError(mod, context.env));
     }
     return;
+  }
+  if (registrationPlan.runFullActivationOnlyRegistrations) {
+    if (definition?.reload) {
+      params.registryBuilder.registerReload(record, definition.reload);
+    }
+    for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
+      params.registryBuilder.registerNodeHostCommand(record, nodeHostCommand);
+    }
+    for (const collector of definition?.securityAuditCollectors ?? []) {
+      params.registryBuilder.registerSecurityAuditCollector(record, collector);
+    }
   }
   const api = params.registryBuilder.createApi(record, {
     config: context.cfg,
@@ -577,20 +578,8 @@ function recordBundleDiagnostics(params: {
 }): void {
   const unsupportedCapabilities = (params.record.bundleCapabilities ?? []).filter(
     (capability) =>
-      capability !== "skills" &&
-      capability !== "mcpServers" &&
-      capability !== "settings" &&
-      !(
-        (capability === "commands" ||
-          capability === "agents" ||
-          capability === "outputStyles" ||
-          capability === "lspServers") &&
-        (params.record.bundleFormat === "claude" || params.record.bundleFormat === "cursor")
-      ) &&
-      !(
-        capability === "hooks" &&
-        (params.record.bundleFormat === "codex" || params.record.bundleFormat === "claude")
-      ),
+      !params.record.bundleFormat ||
+      !isBundleCapabilitySupported(params.record.bundleFormat, capability),
   );
   for (const capability of unsupportedCapabilities) {
     params.registry.diagnostics.push({
@@ -626,7 +615,7 @@ function recordBundleDiagnostics(params: {
         source: params.record.source,
         message:
           "bundle MCP servers use unsupported transports or incomplete configs " +
-          `(stdio only today): ${runtimeSupport.unsupportedServerNames.join(", ")}`,
+          `(${runtimeSupport.unsupportedServerNames.join(", ")})`,
       });
     }
   }

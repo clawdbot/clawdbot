@@ -1,3 +1,4 @@
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 /**
  * Agent transcript redaction helpers.
  *
@@ -20,6 +21,7 @@ import {
   shouldPreserveNestedTranscriptImageDataUrlFields,
   shouldPreserveTranscriptImagePayload,
 } from "./transcript-redact-images.js";
+import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 
 function resolveTranscriptRedactPatterns(patterns?: string[]) {
   return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
@@ -77,14 +79,6 @@ type TranscriptAssistantRoute = {
   provider?: string;
 };
 
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-chatgpt-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
   "google-vertex",
@@ -103,10 +97,19 @@ const OPENAI_COMPLETIONS_APIS = new Set([
 const OPAQUE_REPLAY_TOKEN_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 const GOOGLE_THOUGHT_SIGNATURE_RE =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-const OPENAI_REPLAY_CONTEXT_HASH_RE = /^[a-f0-9]{16}$/;
+// Transport replay fences use the two-word base-36 output from shortHash.
+const OPENAI_REPLAY_CONTEXT_HASH_RE = /^[a-z0-9]{2,16}$/;
+
+function isOpenAIReplayContextHash(value: unknown): value is string {
+  return typeof value === "string" && OPENAI_REPLAY_CONTEXT_HASH_RE.test(value);
+}
+
+function isOpenAIResponsesApi(api: string): boolean {
+  return OPENAI_RESPONSES_APIS.has(api);
+}
 
 function isOpenAIResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && OPENAI_RESPONSES_APIS.has(route.api);
+  return typeof route?.api === "string" && isOpenAIResponsesApi(route.api);
 }
 
 function isGoogleReasoningRoute(route: TranscriptAssistantRoute | undefined): boolean {
@@ -126,6 +129,17 @@ function isGoogleOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefi
     (route?.provider === "google" ||
       route?.endpointClass === "google-generative-ai" ||
       route?.endpointClass === "google-vertex")
+  );
+}
+
+function isVeniceGeminiOpenAICompletionsRoute(
+  route: TranscriptAssistantRoute | undefined,
+): boolean {
+  return (
+    isOpenAICompletionsRoute(route) &&
+    route?.provider === "venice" &&
+    typeof route.model === "string" &&
+    /(?:^|\/)gemini-/.test(route.model.trim().toLowerCase())
   );
 }
 
@@ -216,6 +230,17 @@ function isOpenAIResponseItemId(
   return isSafeReplayIdentifier(value, isGitHubCopilotResponsesRoute(route) ? 64 : 512);
 }
 
+const replaySanitizerHelpers = {
+  isAnthropicReasoningRoute,
+  isOpenAIReplayContextHash,
+  isOpenAIResponseItemId,
+  isOpenAIResponsesApi,
+  isOpenAIResponsesRoute,
+  isPlainTranscriptObject,
+  isStructurallyValidOpaqueReplayToken,
+  redactTranscriptText,
+};
+
 function isOpenAITextSignature(
   value: string,
   route: TranscriptAssistantRoute | undefined,
@@ -278,15 +303,9 @@ function sanitizeOpenAIReasoningReplayMetadata(
     value.provider !== route?.provider ||
     value.api !== route.api ||
     value.model !== route.model ||
-    (value.baseUrlHash !== undefined &&
-      (typeof value.baseUrlHash !== "string" ||
-        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.baseUrlHash))) ||
-    (value.sessionHash !== undefined &&
-      (typeof value.sessionHash !== "string" ||
-        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.sessionHash))) ||
-    (value.authProfileHash !== undefined &&
-      (typeof value.authProfileHash !== "string" ||
-        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.authProfileHash)))
+    (value.baseUrlHash !== undefined && !isOpenAIReplayContextHash(value.baseUrlHash)) ||
+    (value.sessionHash !== undefined && !isOpenAIReplayContextHash(value.sessionHash)) ||
+    (value.authProfileHash !== undefined && !isOpenAIReplayContextHash(value.authProfileHash))
   ) {
     return undefined;
   }
@@ -330,7 +349,11 @@ function shouldPreserveOpaqueProviderPayload(
   if (isGoogleReasoningRoute(route) && isGoogleSlot) {
     return isGoogleThoughtSignature(item);
   }
-  if (isGoogleOpenAICompletionsRoute(route) && type === "toolCall" && key === "thoughtSignature") {
+  if (
+    (isGoogleOpenAICompletionsRoute(route) || isVeniceGeminiOpenAICompletionsRoute(route)) &&
+    type === "toolCall" &&
+    key === "thoughtSignature"
+  ) {
     // The OpenAI-compatible transport captures provider-owned opaque signatures
     // such as SIG-OPAQUE-ABC==; native Google routes require standard base64.
     return isStructurallyValidOpaqueReplayToken(item);
@@ -515,6 +538,24 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    if (location === "root" && source.role === "assistant" && key === "providerReplay") {
+      const sanitizedReplay = sanitizeCompactionReplayState(
+        item,
+        currentAssistantRoute,
+        cfg,
+        replaySanitizerHelpers,
+      );
+      if (sanitizedReplay !== undefined) {
+        if (sanitizedReplay !== item) {
+          next ??= { ...source };
+          next[key] = sanitizedReplay;
+        }
+        continue;
+      }
+      next ??= { ...source };
+      delete next[key];
+      continue;
+    }
     if (
       location === "assistant-content-block" &&
       (isOpenAIResponsesRoute(currentAssistantRoute) ||

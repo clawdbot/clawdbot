@@ -4,7 +4,6 @@ export { createTalkRealtimeRelaySession } from "./talk-realtime-relay-session-cr
 export {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
-  closeTalkRealtimeRelaySessionsForConnection,
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
   registerTalkRealtimeRelayAgentRun,

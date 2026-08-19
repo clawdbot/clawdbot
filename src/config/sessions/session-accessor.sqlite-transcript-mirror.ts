@@ -6,16 +6,19 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
-  loadSqliteTranscriptEventsFromDatabase,
+  loadTranscriptEventsFromDatabase,
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
 const TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE = 900;
 
 type TranscriptMirrorFacts = {
+  anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
   existingIdempotencyKeys: Set<string>;
   messagesByIdempotencyKey: Map<string, unknown>;
 };
@@ -49,20 +52,20 @@ function loadTranscriptEventsForMirrorFallback(
     return undefined;
   }
   // Raw rows stay authoritative if projection maintenance has not caught up.
-  return loadSqliteTranscriptEventsFromDatabase(database, sessionId);
+  return loadTranscriptEventsFromDatabase(database, sessionId);
 }
 
 /** Reads the bounded identity facts needed by transcript mirrors. */
 export function readTranscriptMirrorFacts(
   database: OpenClawAgentDatabase,
-  sessionId: string,
+  resolved: ResolvedTranscriptScope,
   params: {
     idempotencyKeys: readonly string[];
   },
 ): TranscriptMirrorFacts {
   return runSqliteDeferredTransactionSync(
     database.db,
-    () => readTranscriptMirrorFactsInSnapshot(database, sessionId, params),
+    () => readTranscriptMirrorFactsInSnapshot(database, resolved, params),
     {
       databaseLabel: database.path,
       operationLabel: "session.transcript.mirror-facts",
@@ -73,19 +76,20 @@ export function readTranscriptMirrorFacts(
 /** Reads mirror facts after the caller has established one SQLite snapshot. */
 function readTranscriptMirrorFactsInSnapshot(
   database: OpenClawAgentDatabase,
-  sessionId: string,
+  resolved: ResolvedTranscriptScope,
   params: {
     idempotencyKeys: readonly string[];
   },
 ): TranscriptMirrorFacts {
   const idempotencyKeys = [...new Set(params.idempotencyKeys)];
-  const fallbackEvents = loadTranscriptEventsForMirrorFallback(database, sessionId);
+  const fallbackEvents = loadTranscriptEventsForMirrorFallback(database, resolved.sessionId);
   if (fallbackEvents !== undefined) {
     return readMirrorFactsFromEvents(fallbackEvents, new Set(idempotencyKeys));
   }
 
   const db = getSessionKysely(database.db);
   const facts: TranscriptMirrorFacts = {
+    anchorsByIdempotencyKey: new Map(),
     existingIdempotencyKeys: new Set(),
     messagesByIdempotencyKey: new Map(),
   };
@@ -104,8 +108,8 @@ function readTranscriptMirrorFactsInSnapshot(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
-        .select(["identity.message_idempotency_key", "event.event_json"])
-        .where("identity.session_id", "=", sessionId)
+        .select(["identity.event_id", "identity.message_idempotency_key", "event.event_json"])
+        .where("identity.session_id", "=", resolved.sessionId)
         .where("identity.message_idempotency_key", "in", batch)
         .orderBy("identity.seq", "asc"),
     ).rows;
@@ -115,6 +119,14 @@ function readTranscriptMirrorFactsInSnapshot(
         continue;
       }
       facts.existingIdempotencyKeys.add(idempotencyKey);
+      const anchor = readActiveTranscriptEntryAnchorInTransaction({
+        database,
+        resolved,
+        entryId: row.event_id,
+      });
+      if (anchor) {
+        facts.anchorsByIdempotencyKey.set(idempotencyKey, anchor);
+      }
       const message = readTranscriptEventMessage(JSON.parse(row.event_json) as TranscriptEvent);
       if (message !== undefined) {
         facts.messagesByIdempotencyKey.set(idempotencyKey, message);
@@ -130,6 +142,7 @@ function readMirrorFactsFromEvents(
   candidateKeys: ReadonlySet<string>,
 ): TranscriptMirrorFacts {
   const facts: TranscriptMirrorFacts = {
+    anchorsByIdempotencyKey: new Map(),
     existingIdempotencyKeys: new Set(),
     messagesByIdempotencyKey: new Map(),
   };

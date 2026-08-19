@@ -18,7 +18,7 @@ function isVitestRootArgs(args: string): boolean {
   return (
     args.includes("node_modules/.bin/vitest") ||
     /\bvitest(?:\.(?:m?js|cmd|exe))?\b/u.test(args) ||
-    args.includes("scripts/test-projects.mjs") ||
+    args.includes("scripts/test-projects.mts") ||
     args.includes("scripts/run-vitest.mjs")
   );
 }

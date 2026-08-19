@@ -119,11 +119,15 @@ export function createFollowupRunner(
         await defaults.opts?.onObservedReplyDelivery?.();
       }
       const accounting = await accountFollowupTurn({ turn, defaults, execution });
+      const deliveryOpts = {
+        ...defaults.opts,
+        commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
+      };
       const decision = resolveFollowupDeliveryDecision({
         turn,
         execution: execution.execution,
         accounting,
-        opts: defaults.opts,
+        opts: deliveryOpts,
       });
       await deliverFollowupDecision({
         decision,

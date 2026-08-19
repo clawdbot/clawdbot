@@ -1,5 +1,6 @@
 // Whatsapp plugin module implements creds files behavior.
 import path from "node:path";
+import type { SignalDataTypeMap } from "baileys";
 import {
   assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
@@ -8,6 +9,31 @@ import {
   statRegularFile,
   statRegularFileSync,
 } from "openclaw/plugin-sdk/security-runtime";
+
+// The legacy OAuth root is shared; keep its exact WhatsApp namespaces aligned
+// with Baileys without importing the provider into setup discovery.
+const BAILEYS_SIGNAL_AUTH_CATEGORIES = {
+  "app-state-sync-key": true,
+  "app-state-sync-version": true,
+  "device-list": true,
+  "identity-key": true,
+  "lid-mapping": true,
+  "pre-key": true,
+  "sender-key": true,
+  "sender-key-memory": true,
+  session: true,
+  tctoken: true,
+} satisfies Record<keyof SignalDataTypeMap, true>;
+
+export function isWhatsAppBaileysAuthFileName(name: string): boolean {
+  if (name === "creds.json" || name === "creds.json.bak") {
+    return true;
+  }
+  return (
+    name.endsWith(".json") &&
+    Object.keys(BAILEYS_SIGNAL_AUTH_CATEGORIES).some((category) => name.startsWith(`${category}-`))
+  );
+}
 
 export function resolveWebCredsPath(authDir: string): string {
   return path.join(authDir, "creds.json");

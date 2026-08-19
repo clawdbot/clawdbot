@@ -88,6 +88,19 @@ function seedStateDatabase(params: {
   return sqlitePath;
 }
 
+function dropBootstrapProvenanceColumns(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
+      ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
+    `);
+  } finally {
+    database.close();
+  }
+}
+
 function readPragma(database: DatabaseSync, name: string): number {
   const row = database.prepare(`PRAGMA ${name};`).get() as Record<string, unknown>;
   return Number(row[name] ?? Object.values(row)[0]);
@@ -168,6 +181,27 @@ describe("runDoctorStateSqliteCompact", () => {
     expect(report.after.pageSizeBytes).toBeGreaterThan(0);
     expect(report.reclaimedBytes).toBeGreaterThan(0);
     expect(report.integrityCheck).toBe("ok");
+  });
+
+  it("compacts pre-bootstrap-column v6 state without migrating it", async () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    dropBootstrapProvenanceColumns(sqlitePath);
+
+    const report = await runDoctorStateSqliteCompact({ env });
+
+    expectCompletedReport(report);
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      const columns = database.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
+        name?: unknown;
+      }>;
+      expect(columns.map((column) => column.name)).not.toContain("bootstrap_source_path");
+      expect(columns.map((column) => column.name)).not.toContain("bootstrap_content_digest");
+    } finally {
+      database.close();
+    }
   });
 
   it("clears authoritative quarantine after compaction", async () => {

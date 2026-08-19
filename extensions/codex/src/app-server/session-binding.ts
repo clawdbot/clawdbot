@@ -15,12 +15,9 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import {
-  CODEX_PLUGINS_MARKETPLACE_NAME,
-  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-  normalizeCodexServiceTier,
-} from "./config.js";
+import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN, normalizeCodexServiceTier } from "./config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
@@ -177,6 +174,7 @@ const accountAppPolicyEntrySchema = z
     source: z.literal("account"),
     appName: z.string(),
     allowDestructiveActions: z.boolean(),
+    allowOpenWorld: z.boolean().optional(),
     destructiveApprovalMode: destructiveApprovalModeSchema,
     mcpServerNames: z.array(z.string()),
   })
@@ -185,12 +183,10 @@ const pluginAppPolicyEntrySchema = z
   .object({
     source: z.literal("plugin").optional(),
     configKey: z.string(),
-    marketplaceName: z.enum([
-      CODEX_PLUGINS_MARKETPLACE_NAME,
-      CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-    ]),
+    marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN),
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
+    allowOpenWorld: z.boolean().optional(),
     destructiveApprovalMode: destructiveApprovalModeSchema,
     mcpServerNames: z.array(z.string()),
   })
@@ -213,6 +209,9 @@ const threadBindingSchema = z
     connectionScope: z.literal("supervision").optional(),
     supervisionSourceThreadId: z.string().trim().min(1).optional(),
     authProfileId: optionalStringSchema,
+    // Freeze external-cwd AGENTS.md at thread creation; bootstrap refreshes must
+    // not mutate the inherited policy of a resumed native session.
+    agentWorkspaceDeveloperInstructions: optionalNonBlankStringSchema,
     model: optionalStringSchema,
     // Codex App Server owns selection for supervised and adopted threads. Keep
     // this marker across resumes so OpenClaw never substitutes a default or fallback.
@@ -226,6 +225,8 @@ const threadBindingSchema = z
       .pipe(z.string().min(1))
       .optional()
       .catch(undefined),
+    // Legacy rows may contain the retired two-field permission overlay. Keep
+    // parsing it so the rest of the binding survives; SessionEntry owns live policy.
     approvalPolicy: z
       .preprocess(
         (value) => (value === "on-failure" ? "on-request" : value),
@@ -251,8 +252,11 @@ const threadBindingSchema = z
     nativeSkillIsolationFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,
+    configuredMcpOwnershipVersion: z.literal(1).optional().catch(undefined),
     ringZeroConfigFingerprint: optionalStringSchema,
     ringZeroClientInstanceId: optionalStringSchema,
+    /** Durable fact preventing a later unrestricted turn from widening this thread. */
+    nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,
@@ -263,6 +267,17 @@ const threadBindingSchema = z
     conversationStartId: optionalStringSchema,
     conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
     historyCoveredThrough: optionalTimestampSchema,
+    // Observed density of the last completed turn on this thread: prompt chars
+    // actually sent vs provider-reported input tokens. Read by the no-engine
+    // continuity cap so the next projection is sized from this session's real
+    // content density instead of a fixed chars-per-token guess.
+    continuityCalibration: z
+      .object({
+        promptChars: z.number().int().positive(),
+        inputTokens: z.number().int().positive(),
+      })
+      .optional()
+      .catch(undefined),
   })
   .superRefine((binding, context) => {
     if (binding.connectionScope === "supervision") {
@@ -368,6 +383,11 @@ type CodexAppServerBindingMutation =
       patch: Partial<Omit<CodexAppServerThreadBinding, "threadId">>;
     }
   | {
+      kind: "replace-thread";
+      expectedThreadId: string;
+      binding: CodexAppServerThreadBinding;
+    }
+  | {
       kind: "patch-pending-supervision-branch";
       expected: CodexAppServerPendingSupervisionBranch;
       pending: CodexAppServerPendingSupervisionBranch;
@@ -444,9 +464,12 @@ function normalizeLegacyBindingFingerprint(value: unknown): unknown {
   return hashCodexAppServerBindingFingerprint(value);
 }
 
-function normalizeLegacyBindingFingerprints(
-  record: Record<string, unknown>,
-): Record<string, unknown> {
+function normalizeLegacyBindingFingerprints<
+  T extends {
+    dynamicToolsFingerprint?: unknown;
+    userMcpServersFingerprint?: unknown;
+  },
+>(record: T): T {
   // Shipped sidecars can contain unbounded canonical JSON fingerprints. Bound
   // them at the legacy encoder so plugin-state registration cannot reject the row.
   let normalized = record;
@@ -459,7 +482,7 @@ function normalizeLegacyBindingFingerprints(
     if (normalized === record) {
       normalized = { ...record };
     }
-    normalized[key] = next;
+    Object.assign(normalized, { [key]: next });
   }
   return normalized;
 }
@@ -471,9 +494,7 @@ export function normalizeStoredCodexAppServerBindingFingerprints(
   if (!stored || stored.state !== "active") {
     return stored;
   }
-  const binding = normalizeLegacyBindingFingerprints(
-    stored.binding as unknown as Record<string, unknown>,
-  );
+  const binding = normalizeLegacyBindingFingerprints(stored.binding);
   return binding === stored.binding
     ? stored
     : readStoredCodexAppServerBinding({ ...stored, binding });
@@ -487,7 +508,7 @@ export function createStoredCodexAppServerBinding(
     lookup?: Omit<CodexAppServerAuthProfileLookup, "authProfileId">;
   } = {},
 ): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
-  const rawRecord = asRecord(value);
+  const rawRecord = asOptionalRecord(value);
   if (!rawRecord) {
     return undefined;
   }
@@ -927,6 +948,12 @@ export function createCodexAppServerBindingStore(
                 mutation.threadId,
                 mutation.expectedPendingSupervisionBranch,
               );
+            const replacesExpectedOrdinaryOwner =
+              mutation.kind === "replace-thread" &&
+              active?.binding.threadId === mutation.expectedThreadId &&
+              active.binding.connectionScope !== "supervision" &&
+              mutation.binding.connectionScope !== "supervision" &&
+              mutation.binding.threadId !== mutation.expectedThreadId;
             if (
               (mutation.kind === "set" &&
                 ((mutation.if?.kind === "absent" && storedActive) ||
@@ -935,6 +962,7 @@ export function createCodexAppServerBindingStore(
                   (active?.binding.connectionScope === "supervision" &&
                     !preservesSupervisionOwner))) ||
               (mutation.kind === "patch" && active?.binding.threadId !== mutation.threadId) ||
+              (mutation.kind === "replace-thread" && !replacesExpectedOrdinaryOwner) ||
               ((mutation.kind === "patch-pending-supervision-branch" ||
                 mutation.kind === "commit-pending-supervision-branch") &&
                 !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
@@ -962,7 +990,7 @@ export function createCodexAppServerBindingStore(
               };
             }
             let binding: CodexAppServerThreadBinding;
-            if (mutation.kind === "set") {
+            if (mutation.kind === "set" || mutation.kind === "replace-thread") {
               binding = validateBindingForWrite(mutation.binding);
             } else if (mutation.kind === "patch-pending-supervision-branch") {
               binding = validateBindingForWrite({
@@ -1379,12 +1407,6 @@ function stripUndefinedValue(value: unknown): unknown {
   );
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readTimestamp(value: unknown): string | undefined {
   return optionalTimestampSchema.parse(value);
 }
@@ -1393,17 +1415,17 @@ function readPluginAppPolicyContext(
   value: unknown,
   bindingSchemaVersion: 1 | 2,
 ): PluginAppPolicyContext | undefined {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record || typeof record.fingerprint !== "string") {
     return undefined;
   }
-  const apps = asRecord(record.apps);
+  const apps = asOptionalRecord(record.apps);
   if (!apps) {
     return undefined;
   }
   const parsedApps: PluginAppPolicyContext["apps"] = {};
   for (const [appId, rawEntry] of Object.entries(apps)) {
-    const entry = asRecord(rawEntry);
+    const entry = asOptionalRecord(rawEntry);
     if (!entry) {
       return undefined;
     }
@@ -1419,6 +1441,7 @@ function readPluginAppPolicyContext(
         "appId" in entry ||
         typeof entry.appName !== "string" ||
         typeof entry.allowDestructiveActions !== "boolean" ||
+        (entry.allowOpenWorld !== undefined && typeof entry.allowOpenWorld !== "boolean") ||
         destructiveApprovalMode === "invalid" ||
         !mcpServerNamesValid
       ) {
@@ -1428,6 +1451,9 @@ function readPluginAppPolicyContext(
         source: "account",
         appName: entry.appName,
         allowDestructiveActions: entry.allowDestructiveActions,
+        ...(typeof entry.allowOpenWorld === "boolean"
+          ? { allowOpenWorld: entry.allowOpenWorld }
+          : {}),
         ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
         mcpServerNames: entry.mcpServerNames as string[],
       };
@@ -1437,10 +1463,11 @@ function readPluginAppPolicyContext(
       "appId" in entry ||
       (entry.source !== undefined && entry.source !== "plugin") ||
       typeof entry.configKey !== "string" ||
-      (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME &&
-        entry.marketplaceName !== CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME) ||
+      typeof entry.marketplaceName !== "string" ||
+      !CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN.test(entry.marketplaceName) ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
+      (entry.allowOpenWorld !== undefined && typeof entry.allowOpenWorld !== "boolean") ||
       destructiveApprovalMode === "invalid" ||
       !mcpServerNamesValid
     ) {
@@ -1451,6 +1478,9 @@ function readPluginAppPolicyContext(
       marketplaceName: entry.marketplaceName,
       pluginName: entry.pluginName,
       allowDestructiveActions: entry.allowDestructiveActions,
+      ...(typeof entry.allowOpenWorld === "boolean"
+        ? { allowOpenWorld: entry.allowOpenWorld }
+        : {}),
       ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
       mcpServerNames: entry.mcpServerNames as string[],
     };
@@ -1567,13 +1597,4 @@ export function normalizeCodexAppServerBindingModelProvider(params: {
   return modelProvider;
 }
 
-/** Restores the sole provider intentionally omitted from canonical binding rows. */
-export function resolveCodexAppServerBindingModelProvider(
-  params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
-): string | undefined {
-  return (
-    params.modelProvider?.trim() ||
-    (isCodexAppServerNativeAuthProfile(params) ? PUBLIC_OPENAI_MODEL_PROVIDER : undefined)
-  );
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

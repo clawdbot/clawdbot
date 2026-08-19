@@ -1,7 +1,7 @@
 /** Builds /status replies using the command's authorized channel context. */
 import { logVerbose } from "../../globals.js";
 import { formatDetailedPluginHealth } from "../../status/status-plugin-health.js";
-import { buildStatusText } from "../../status/status-text.js";
+import { buildStatusReplyParts } from "../../status/status-text.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import type { ReplyPayload } from "../types.js";
 import { requireCommandFlagEnabled } from "./command-gates.js";
@@ -22,13 +22,14 @@ export async function buildStatusReply(
     return undefined;
   }
 
-  return {
-    text: await buildStatusText({
-      ...params,
-      statusChannel: command.channel,
-      statusAccountId: command.accountId,
-    }),
-  };
+  const { text, presentation } = await buildStatusReplyParts({
+    ...params,
+    statusChannel: command.channel,
+    statusAccountId: command.accountId,
+  });
+  // The text body is the authored plain rendering of the same facts; channels
+  // with native table support render the presentation instead.
+  return { text, presentation, presentationTextMode: "fallback" };
 }
 
 export async function buildStatusPluginsReply(

@@ -1,15 +1,28 @@
 ---
-summary: "Store durable user preferences and profile facts as directive-based USER.md entries"
+summary: "Manage durable user preferences and your Gateway profile identity"
 title: "User model"
 read_when:
   - You want stable preferences to guide future sessions
   - You need to update a preference without leaving contradictory history
   - You are deciding whether something belongs in USER.md or MEMORY.md
+  - You want to link GitHub credit to your Gateway profile
 ---
 
 `USER.md` is the optional user-model artifact in an agent workspace. It stores stable preferences, communication style, relationships, and active-project context as directives that can guide future sessions.
 
 OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate small bootstrap budget, and edits are picked up on later turns in a long-lived session. If the file is absent, startup continues without it.
+
+## Gateway profile and GitHub credit
+
+Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative even when you link GitHub.
+
+Enter a GitHub username in the **GitHub** row to opt into public commit attribution. The Gateway resolves the public account through GitHub, stores its stable numeric account id and current login, and derives a GitHub noreply address. OpenClaw never requests or stores a private GitHub email for this feature.
+
+When your authenticated profile has prompted a session before an agent run, commits created from that run receive your exact `Co-authored-by` trailer. All linked profile-backed human participants are eligible; channel-only identities, agents, bots, and the configured primary Git author are excluded. The participant set is bounded to 32 and recorded best-effort. The run tells the model when an eligible profile is unlinked or the bound may be incomplete; it never guesses an identity from transcript names.
+
+OpenClaw supplies exact trailers in the model context for that turn and instructs coding agents to retain them through amendments, rebases, and squash commits so credit reaches the final commit merged to the default branch. The trailers are not exported through the process or shell environment. Git commands remain ordinary shell execution: OpenClaw does not replace `git` or install repository hooks, so the instruction and post-commit verification are the enforcement boundary.
+
+Changing the linked username resolves and stores the new public account. **Disconnect** stops attribution for future runs; it does not rewrite commits that already contain the public trailer.
 
 ## Write directives, not observations
 

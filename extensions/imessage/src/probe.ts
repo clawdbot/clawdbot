@@ -10,10 +10,12 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
 import {
+  filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { expandIMessageUserPath } from "./cli-path.js";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import {
@@ -21,6 +23,7 @@ import {
   setCachedIMessagePrivateApiStatus,
   type IMessagePrivateApiStatus,
 } from "./private-api-status.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
 import {
   IMESSAGE_INSTALL_COMMAND,
   IMESSAGE_UPDATE_COMMAND,
@@ -42,6 +45,7 @@ export type IMessageProbe = BaseProbeResult & {
 export type IMessageProbeOptions = {
   cliPath?: string;
   dbPath?: string;
+  remoteHost?: string;
   forceRefresh?: boolean;
   platform?: NodeJS.Platform;
   runtime?: RuntimeEnv;
@@ -120,7 +124,9 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
     return cached;
   }
   try {
-    const result = await runCommandWithTimeout([cliPath, "rpc", "--help"], { timeoutMs });
+    const result = await runCommandWithTimeout([expandIMessageUserPath(cliPath), "rpc", "--help"], {
+      timeoutMs,
+    });
     const combined = `${result.stdout}\n${result.stderr}`.trim();
     const normalized = normalizeLowercaseStringOrEmpty(combined);
     if (normalized.includes("unknown command") && normalized.includes("rpc")) {
@@ -182,14 +188,6 @@ function selectorsFromPayload(payload: Record<string, unknown>): Record<string, 
   return selectors;
 }
 
-function rpcMethodsFromPayload(payload: Record<string, unknown>): string[] {
-  const raw = payload.rpc_methods;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.filter((entry): entry is string => typeof entry === "string");
-}
-
 // Probe whether the installed imsg CLI accepts `--file` on the `send-rich`
 // subcommand (added by openclaw/imsg#114, which lets a single bridge call
 // combine `--reply-to` and an attachment). We grep the help output rather
@@ -201,7 +199,10 @@ async function probeSendRichSupportsAttachment(
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    const result = await runCommandWithTimeout([cliPath, "send-rich", "--help"], { timeoutMs });
+    const result = await runCommandWithTimeout(
+      [expandIMessageUserPath(cliPath), "send-rich", "--help"],
+      { timeoutMs },
+    );
     if (result.code !== 0) {
       return false;
     }
@@ -217,7 +218,10 @@ async function probePollSendSupportsNoComment(
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    const result = await runCommandWithTimeout([cliPath, "poll", "send", "--help"], { timeoutMs });
+    const result = await runCommandWithTimeout(
+      [expandIMessageUserPath(cliPath), "poll", "send", "--help"],
+      { timeoutMs },
+    );
     if (result.code !== 0) {
       return false;
     }
@@ -241,7 +245,9 @@ export async function probeIMessagePrivateApi(
     }
   }
   try {
-    const result = await runCommandWithTimeout([key, "status", "--json"], { timeoutMs });
+    const result = await runCommandWithTimeout([expandIMessageUserPath(key), "status", "--json"], {
+      timeoutMs,
+    });
     const combined = `${result.stdout}\n${result.stderr}`.trim();
     const normalized = normalizeLowercaseStringOrEmpty(combined);
     if (
@@ -265,7 +271,7 @@ export async function probeIMessagePrivateApi(
     }
     const { payload, firstLineSnippet } = parseStatusPayload(result.stdout);
     const selectors = payload ? selectorsFromPayload(payload) : {};
-    const rpcMethods = payload ? rpcMethodsFromPayload(payload) : [];
+    const rpcMethods = filterStringEntries(payload?.rpc_methods);
     const advancedFeatures = payload?.advanced_features === true;
     const v2Ready = payload?.v2_ready === true;
     // imsg explains an unavailable bridge here (SIP, library validation, macOS
@@ -331,6 +337,10 @@ export async function probeIMessage(
   const explicitCliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim();
   const cliPath = explicitCliPath || "imsg";
   const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();
+  const remoteHost = await resolveIMessageRemoteHost({
+    cliPath,
+    remoteHost: opts.remoteHost ?? cfg?.channels?.imessage?.remoteHost,
+  });
   // Use explicit timeout if provided, otherwise fall back to config, then default
   const effectiveTimeout =
     timeoutMs ?? cfg?.channels?.imessage?.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
@@ -340,7 +350,7 @@ export async function probeIMessage(
     return { ok: false, fatal: true, error: nonMacHostError };
   }
 
-  const detected = await detectBinary(cliPath);
+  const detected = await detectBinary(expandIMessageUserPath(cliPath));
   if (!detected) {
     const error = isAutoManagedIMessageCliPath(cliPath, {
       explicit: explicitCliPath !== undefined,
@@ -369,6 +379,7 @@ export async function probeIMessage(
   const client = await createIMessageRpcClient({
     cliPath,
     dbPath,
+    remoteHost,
     runtime: opts.runtime,
   });
   try {

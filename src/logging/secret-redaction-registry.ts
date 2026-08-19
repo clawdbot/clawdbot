@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { escapeRegExp } from "../shared/regexp.js";
 
 const MIN_SECRET_VALUE_LENGTH = 6;
@@ -18,12 +19,7 @@ function registerOneSecretValue(value: string): void {
     return;
   }
   registeredValues.set(value, true);
-  if (registeredValues.size > MAX_SECRET_VALUES) {
-    const oldest = registeredValues.keys().next().value;
-    if (oldest !== undefined) {
-      registeredValues.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(registeredValues, MAX_SECRET_VALUES);
   rebuildProbe();
 }
 

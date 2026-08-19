@@ -1,7 +1,8 @@
-// Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -153,6 +154,7 @@ import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js"
 
 const originalStdinIsTTY = process.stdin.isTTY;
 const originalPlatform = process.platform;
+const originalGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
 const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 const originalParentSupportsConfigWrite =
   process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
@@ -307,12 +309,7 @@ function createGatewayCommand(entrypoint: string) {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
   const call = mock.mock.calls[index];
@@ -433,6 +430,7 @@ function setupGatewayTokenRepairScenario() {
 describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
     mocks.isDefaultInstallIdentity.mockReturnValue(true);
@@ -457,6 +455,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
       configurable: true,
     });
     mockProcessPlatform(originalPlatform);
+    if (originalGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = originalGatewayToken;
+    }
     if (originalUpdateInProgress === undefined) {
       delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
     } else {
@@ -1128,7 +1131,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
         OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Work",
       },
     });
@@ -1136,8 +1138,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1145,16 +1147,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.26",
-      },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
     await runNonInteractiveRepair({ updateInProgress: true });
 
     expectNoteContaining(
-      "Gateway service was installed by an older OpenClaw version.",
+      "Gateway service entrypoint differs from the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
@@ -1175,16 +1175,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "0";
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
-      },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1192,9 +1190,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.26",
-      },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
@@ -1214,15 +1210,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
       programArguments: gatewayProgramArguments,
       environment: {
         OPENCLAW_GATEWAY_TOKEN: "stale-token",
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
       },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1272,14 +1267,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.readWindowsProcessArgsSync.mockReturnValue(args);
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.5.25" },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1287,7 +1282,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.5.26" },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
@@ -1321,7 +1316,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
           programArguments: gatewayProgramArguments,
           environment: {
             OPENCLAW_GATEWAY_TOKEN: "stale-token",
-            OPENCLAW_SERVICE_VERSION: "2026.5.25",
           },
         });
         mocks.auditGatewayServiceConfig.mockResolvedValue({
@@ -1337,9 +1331,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         mocks.buildGatewayInstallPlan.mockResolvedValue({
           programArguments: gatewayProgramArguments,
           workingDirectory: "/tmp",
-          environment: {
-            OPENCLAW_SERVICE_VERSION: "2026.5.26",
-          },
+          environment: {},
         });
         mocks.readRuntime.mockResolvedValue({ status: "running" });
         mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue({
@@ -1420,7 +1412,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
           programArguments: gatewayProgramArguments,
           environment: {
             OPENCLAW_GATEWAY_TOKEN: "stale-token",
-            OPENCLAW_SERVICE_VERSION: "2026.5.25",
           },
         });
         mocks.auditGatewayServiceConfig.mockResolvedValue({
@@ -1436,9 +1427,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         mocks.buildGatewayInstallPlan.mockResolvedValue({
           programArguments: gatewayProgramArguments,
           workingDirectory: "/tmp",
-          environment: {
-            OPENCLAW_SERVICE_VERSION: "2026.5.26",
-          },
+          environment: {},
         });
         mocks.readRuntime.mockResolvedValue({ status: "running" });
 
@@ -1466,16 +1455,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "1";
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
-      },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1483,9 +1470,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.26",
-      },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "stopped" });
 

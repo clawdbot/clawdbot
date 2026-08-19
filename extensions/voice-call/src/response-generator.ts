@@ -4,18 +4,22 @@
  */
 
 import crypto from "node:crypto";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  applyModelOverrideToSessionEntry,
+  applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
   resolvePersistedSessionRuntimeId,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   isRecord,
+  filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenClawPluginApi } from "../api.js";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
@@ -23,15 +27,17 @@ type VoiceResponseParams = {
   /** Voice call config */
   voiceConfig: VoiceCallConfig;
   /** Core OpenClaw config */
-  coreConfig: CoreConfig;
+  coreConfig: OpenClawConfig;
   /** Injected host agent runtime */
-  agentRuntime: CoreAgentDeps;
+  agentRuntime: OpenClawPluginApi["runtime"]["agent"];
   /** Call ID for session tracking */
   callId: string;
   /** Persisted call session key */
   sessionKey?: string;
   /** Caller's phone number */
   from: string;
+  /** Caller ownership prepared by the call boundary. */
+  senderIsOwner: boolean | undefined;
   /** Agent frozen on the call record. */
   agentId?: string;
   /** Conversation transcript */
@@ -65,18 +71,14 @@ function readExplicitToolsAllow(value: unknown): string[] | undefined {
     return undefined;
   }
 
-  return allow.filter((entry): entry is string => typeof entry === "string");
+  return filterStringEntries(allow);
 }
 
-function resolveVoiceAgentToolsAllow(config: CoreConfig, agentId: string): string[] | undefined {
-  const agents = isRecord(config.agents) ? config.agents : undefined;
-  const list = Array.isArray(agents?.list) ? agents.list : [];
-  const agent = list.find((entry) => isRecord(entry) && entry.id === agentId);
-  if (!isRecord(agent)) {
-    return undefined;
-  }
-
-  return readExplicitToolsAllow(isRecord(agent.tools) ? agent.tools : undefined);
+function resolveVoiceAgentToolsAllow(
+  config: OpenClawConfig,
+  agentId: string,
+): string[] | undefined {
+  return readExplicitToolsAllow(resolveAgentConfig(config, agentId)?.tools);
 }
 
 const VOICE_SPOKEN_OUTPUT_CONTRACT = [
@@ -245,6 +247,7 @@ export async function generateVoiceResponse(
     callId,
     sessionKey,
     from,
+    senderIsOwner,
     transcript,
     userMessage,
     coreConfig,
@@ -292,6 +295,7 @@ export async function generateVoiceResponse(
 
         // Resolve model from config
         const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+        const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
         let sessionEntry = existingSessionEntry;
         if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
@@ -316,8 +320,14 @@ export async function generateVoiceResponse(
                       updatedAt: now,
                     };
                 if (voiceConfig.responseModel) {
-                  applyModelOverrideToSessionEntry({
+                  applyModelOverrideWithAuthProfileCompatibility({
+                    cfg,
+                    agentDir,
                     entry: next,
+                    currentProvider:
+                      entry.providerOverride?.trim() ||
+                      entry.modelProvider?.trim() ||
+                      configuredModel.provider,
                     selection: { provider, model },
                     selectionSource: "auto",
                   });
@@ -400,6 +410,7 @@ export async function generateVoiceResponse(
           lane: "voice",
           extraSystemPrompt,
           agentDir,
+          senderIsOwner,
           toolsAllow,
           abortSignal,
           blockReplyBreak: "text_end",

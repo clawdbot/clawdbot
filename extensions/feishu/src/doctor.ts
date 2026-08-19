@@ -17,7 +17,10 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 const FEISHU_STATE_DIR = "feishu";
@@ -175,10 +178,6 @@ function isFeishuAcpBindingSessionKey(key: string): boolean {
   return /^agent:[^:]+:acp:binding:feishu(?::|$)/.test(key.trim().toLowerCase());
 }
 
-function normalizeMetadataString(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
 function isFeishuSessionEntry(key: string, value: unknown): boolean {
   if (isFeishuAcpBindingSessionKey(key)) {
     return false;
@@ -190,29 +189,29 @@ function isFeishuSessionEntry(key: string, value: unknown): boolean {
     return false;
   }
   if (
-    normalizeMetadataString(value.channel) === "feishu" ||
-    normalizeMetadataString(value.lastChannel) === "feishu"
+    normalizeLowercaseStringOrEmpty(value.channel) === "feishu" ||
+    normalizeLowercaseStringOrEmpty(value.lastChannel) === "feishu"
   ) {
     return true;
   }
   const route = isRecord(value.route) ? value.route : null;
-  if (normalizeMetadataString(route?.channel) === "feishu") {
+  if (normalizeLowercaseStringOrEmpty(route?.channel) === "feishu") {
     return true;
   }
   const deliveryContext = isRecord(value.deliveryContext) ? value.deliveryContext : null;
-  if (normalizeMetadataString(deliveryContext?.channel) === "feishu") {
+  if (normalizeLowercaseStringOrEmpty(deliveryContext?.channel) === "feishu") {
     return true;
   }
   const pendingDeliveryContext = isRecord(value.pendingFinalDeliveryContext)
     ? value.pendingFinalDeliveryContext
     : null;
-  if (normalizeMetadataString(pendingDeliveryContext?.channel) === "feishu") {
+  if (normalizeLowercaseStringOrEmpty(pendingDeliveryContext?.channel) === "feishu") {
     return true;
   }
   const origin = isRecord(value.origin) ? value.origin : null;
-  const originProvider = normalizeMetadataString(origin?.provider);
-  const originSurface = normalizeMetadataString(origin?.surface);
-  const originFrom = normalizeMetadataString(origin?.from);
+  const originProvider = normalizeLowercaseStringOrEmpty(origin?.provider);
+  const originSurface = normalizeLowercaseStringOrEmpty(origin?.surface);
+  const originFrom = normalizeLowercaseStringOrEmpty(origin?.from);
   return (
     originProvider === "feishu" ||
     originSurface.startsWith("feishu") ||

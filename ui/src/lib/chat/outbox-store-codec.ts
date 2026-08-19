@@ -1,9 +1,8 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
 import { normalizeAgentId } from "../sessions/session-key.ts";
-import type {
-  ChatAttachment,
-  ChatQueueItem,
-  ChatQueueSkillWorkshopRevision,
-} from "./chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
 
 export const MAX_STORED_SESSIONS = 20;
@@ -22,19 +21,15 @@ export type StoredComposerSession = {
   updatedAt: number;
 };
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function normalizeOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
 function normalizeChatAttachment(value: unknown): ChatAttachment | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const mimeType = normalizeOptionalString(entry.mimeType);
   if (!id || !mimeType) {
@@ -55,29 +50,11 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
-function normalizeSkillWorkshopRevision(
-  value: unknown,
-): ChatQueueSkillWorkshopRevision | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const entry = value as Record<string, unknown>;
-  const proposalId = normalizeOptionalString(entry.proposalId);
-  if (!proposalId) {
-    return undefined;
-  }
-  const agentId = normalizeOptionalString(entry.agentId);
-  return {
-    proposalId,
-    ...(agentId ? { agentId: normalizeAgentId(agentId) } : {}),
-  };
-}
-
 export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
   const createdAt =
@@ -93,12 +70,22 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  if (typeof entry.orderKey === "number" && Number.isFinite(entry.orderKey)) {
+    item.orderKey = entry.orderKey;
+  }
   const sender = normalizeSenderIdentity(entry.sender as Record<string, unknown> | undefined);
   if (sender) {
     item.sender = sender;
   }
-  if (entry.kind === "queued" || entry.kind === "steered") {
-    item.kind = entry.kind;
+  const legacySteer =
+    entry.kind === "steered" ||
+    normalizeOptionalString(entry.steerTargetRunId) !== undefined ||
+    entry.sendState === "steering";
+  const queueMode = legacySteer
+    ? "steer"
+    : normalizeQueueMode(typeof entry.queueMode === "string" ? entry.queueMode : undefined);
+  if (queueMode) {
+    item.queueMode = queueMode;
   }
   if (attachments.length) {
     item.attachments = attachments;
@@ -111,7 +98,9 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (replyToId) {
     item.replyToId = replyToId;
   }
-  if (
+  if (entry.sendState === "steering") {
+    item.sendState = "unconfirmed";
+  } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
     entry.sendState === "waiting-idle" ||
@@ -149,18 +138,14 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (agentId) {
     item.agentId = normalizeAgentId(agentId);
   }
-  const skillWorkshopRevision = normalizeSkillWorkshopRevision(entry.skillWorkshopRevision);
-  if (skillWorkshopRevision) {
-    item.skillWorkshopRevision = skillWorkshopRevision;
-  }
   return item;
 }
 
 export function normalizeStoredSession(value: unknown): StoredComposerSession | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue

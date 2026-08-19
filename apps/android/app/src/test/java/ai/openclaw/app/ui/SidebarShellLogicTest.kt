@@ -118,43 +118,9 @@ class SidebarShellLogicTest {
             session("archived", activity = 50, archived = true),
             session("fresh-pinned", activity = 20, pinned = true),
           ),
-        query = "",
       )
 
     assertEquals(listOf("fresh-pinned", "old-pinned", "fresh"), rows.map(ChatSessionEntry::key))
-  }
-
-  @Test
-  fun recentSessionSearchCoversTitleLabelKeyAndOwnerWithoutApplyingRecentLimit() {
-    val rows =
-      sidebarRecentSessions(
-        sessions =
-          listOf(
-            session("agent:main:title", activity = 1, displayName = "Ops planning"),
-            session("agent:main:label", activity = 2, label = "Ops handoff"),
-            session("agent:ops:key", activity = 3),
-            session("agent:main:owner", activity = 4, owner = "ops"),
-            session("agent:main:other", activity = 5, displayName = "Product notes"),
-          ),
-        query = "ops",
-        limit = 1,
-      )
-
-    assertEquals(
-      listOf("agent:main:owner", "agent:ops:key", "agent:main:label", "agent:main:title"),
-      rows.map(ChatSessionEntry::key),
-    )
-  }
-
-  @Test
-  fun activeSearchReturnsAllMatchesBeyondTheRecentSessionLimit() {
-    val rows =
-      sidebarRecentSessions(
-        sessions = (1L..12L).map { activity -> session("ops-session-$activity", activity = activity) },
-        query = "ops",
-      )
-
-    assertEquals(12, rows.size)
   }
 
   @Test
@@ -162,10 +128,23 @@ class SidebarShellLogicTest {
     val rows =
       sidebarRecentSessions(
         sessions = (1L..12L).map { activity -> session("session-$activity", activity = activity) },
-        query = "",
       )
 
     assertEquals(8, rows.size)
+  }
+
+  @Test
+  fun sessionSubtitleShowsWorkingForActiveRunsAndKeepsTheIdleSourceFallback() {
+    val session = ChatSessionEntry(key = "telegram:123", updatedAtMs = 1_000, hasActiveRun = true)
+
+    assertEquals(
+      "Working",
+      sidebarSessionSubtitle(session, activeRunLabel = "Working", nowMs = 1_000),
+    )
+    assertEquals(
+      "Telegram",
+      sidebarSessionSubtitle(session.copy(hasActiveRun = false), activeRunLabel = null, nowMs = 1_000),
+    )
   }
 
   private fun agent(

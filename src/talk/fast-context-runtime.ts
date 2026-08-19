@@ -9,22 +9,17 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
+import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
+import {
+  authorizeActiveMemorySearchHits,
+  getActiveMemorySearchManagerCore,
+} from "../plugins/memory-runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import type { RealtimeVoiceAgentConsultResult } from "./agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "./agent-consult-tool.js";
 
 type Logger = {
   debug?: (message: string) => void;
-};
-
-type MemorySearchHit = {
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  source: "memory" | "sessions";
-  score: number;
 };
 
 /** Fast-context lookup policy for realtime voice consult shortcuts. */
@@ -48,20 +43,13 @@ export type RealtimeVoiceFastContextLabels = {
 
 type FastContextLookupResult =
   | { status: "unavailable"; error?: string }
-  | { status: "hits"; hits: MemorySearchHit[] };
+  | { status: "hits"; hits: MemorySearchResult[] };
 
 export type RealtimeVoiceFastContextConsultResult =
   | { handled: false }
   | { handled: true; result: RealtimeVoiceAgentConsultResult };
 
 const MAX_SNIPPET_CHARS = 700;
-
-class RealtimeFastContextTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`fast context lookup timed out after ${timeoutMs}ms`);
-    this.name = "RealtimeFastContextTimeoutError";
-  }
-}
 
 function normalizeSnippet(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
@@ -89,7 +77,7 @@ function resolveLabels(
 
 function buildContextText(params: {
   query: string;
-  hits: MemorySearchHit[];
+  hits: MemorySearchResult[];
   labels: RealtimeVoiceFastContextLabels;
 }): string {
   const hits = params.hits
@@ -123,7 +111,7 @@ async function lookupFastContext(params: {
 }): Promise<FastContextLookupResult> {
   // The memory runtime owns whether memory/session search is active for this
   // agent. Talk only consumes the current manager when it is already available.
-  const memory = await getActiveMemorySearchManager({
+  const memory = await getActiveMemorySearchManagerCore({
     cfg: params.cfg,
     agentId: params.agentId,
   });
@@ -133,10 +121,19 @@ async function lookupFastContext(params: {
       error: memory.error ?? "no active memory manager",
     };
   }
-  const hits = await memory.manager.search(params.query, {
+  const rawHits = await memory.manager.search(params.query, {
     maxResults: params.config.maxResults,
     sessionKey: params.sessionKey,
     sources: params.config.sources,
+  });
+  // This shortcut runs before an agent sandbox exists, but it still carries
+  // the voice session identity needed for ordinary session-history visibility.
+  const hits = await authorizeActiveMemorySearchHits({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    requesterSessionKey: params.sessionKey,
+    sandboxed: false,
+    hits: rawHits,
   });
   return { status: "hits", hits };
 }
@@ -168,7 +165,7 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
         query,
       }),
       timeoutMs,
-      { createError: () => new RealtimeFastContextTimeoutError(timeoutMs) },
+      { createError: () => new Error(`fast context lookup timed out after ${timeoutMs}ms`) },
     );
     if (lookup.status === "unavailable") {
       params.logger.debug?.(`[talk] fast context unavailable: ${lookup.error}`);

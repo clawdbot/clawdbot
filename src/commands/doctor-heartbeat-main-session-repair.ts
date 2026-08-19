@@ -7,7 +7,7 @@ import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/hea
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   type resolveSessionFilePathOptions,
 } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -294,7 +294,11 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   }
   let transcriptPath: string | undefined;
   try {
-    transcriptPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, params.sessionPathOpts);
+    transcriptPath = resolveSessionFilePathCore(
+      mainEntry.sessionId,
+      mainEntry,
+      params.sessionPathOpts,
+    );
   } catch {
     transcriptPath = undefined;
   }

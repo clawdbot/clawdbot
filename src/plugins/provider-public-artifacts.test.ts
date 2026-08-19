@@ -21,6 +21,11 @@ function writeExternalPolicyFixture(): string {
       '    ? { levels: [{ id: "off" }, { id: "high" }, { id: "max" }], defaultLevel: "off" }',
       '    : { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel: "off" };',
       "}",
+      "export function inspectEmbeddingProviderSetup({ provider }) {",
+      '  return provider === "fixture-embedding"',
+      '    ? { provider, reason: "setup missing", requirement: "fixture-setup" }',
+      "    : null;",
+      "}",
       "export function projectConfiguredModelRow() { return null; }",
       "",
     ].join("\n"),
@@ -177,15 +182,7 @@ describe("provider public artifacts", () => {
         modelId: "deepseek-v4-pro",
       }),
     ).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "xhigh" },
-        { id: "max" },
-      ],
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
       defaultLevel: "high",
     });
     expect(
@@ -209,6 +206,7 @@ describe("provider public artifacts", () => {
         rootDir: pluginRoot,
         providers: ["fixture-provider"],
         cliBackends: [],
+        contracts: { embeddingProviders: ["fixture-embedding"] },
       } as const;
       const surface = resolveProviderPolicySurface("fixture-provider", {
         manifestRegistry: { plugins: [fixturePlugin as never] },
@@ -225,12 +223,66 @@ describe("provider public artifacts", () => {
           ?.levels.map((level) => level.label),
       ).toEqual([undefined, "on"]);
       expect(surface).not.toHaveProperty("projectConfiguredModelRow");
+      expect(
+        resolveProviderPolicySurface("fixture-embedding", {
+          manifestRegistry: { plugins: [fixturePlugin as never] },
+        })?.inspectEmbeddingProviderSetup?.({
+          config: {},
+          env: {},
+          agentId: "main",
+          provider: "fixture-embedding",
+        }),
+      ).toEqual({
+        provider: "fixture-embedding",
+        reason: "setup missing",
+        requirement: "fixture-setup",
+      });
     } finally {
       restoreBundledPluginEnv();
       fs.rmSync(pluginRoot, { recursive: true, force: true });
       fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects trusted official provider policy artifacts hardlinked outside the installed root",
+    () => {
+      const tempRoot = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-hardlink-")),
+      );
+      const pluginRoot = path.join(tempRoot, "installed-provider");
+      const outsidePath = path.join(tempRoot, "outside-policy.js");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        outsidePath,
+        'export function resolveThinkingProfile() { return { defaultLevel: "escaped" }; }\n',
+        "utf8",
+      );
+      fs.linkSync(outsidePath, path.join(pluginRoot, "provider-policy-api.js"));
+
+      try {
+        const pluginId = "hardlinked-provider";
+        expect(() =>
+          resolveProviderPolicySurface(pluginId, {
+            manifestRegistry: {
+              plugins: [
+                {
+                  id: pluginId,
+                  origin: "global",
+                  trustedOfficialInstall: true,
+                  rootDir: pluginRoot,
+                  providers: [pluginId],
+                  cliBackends: [],
+                } as never,
+              ],
+            },
+          }),
+        ).toThrow("Unable to open plugin public surface provider-policy-api.js");
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("resolves namespaced provider policies from their trusted external plugin root", () => {
     const bundledPluginsDir = fs.mkdtempSync(
@@ -386,7 +438,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -447,7 +499,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -572,7 +624,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -608,7 +660,7 @@ describe("provider public artifacts", () => {
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
-  it("loads provider policy surfaces without package-manager repair", async () => {
+  it("keeps canonical provider policy lookup on the direct artifact path", async () => {
     const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
       normalizeConfig: (ctx: { providerConfig: ModelProviderConfig }) => ctx.providerConfig,
     }));
@@ -620,7 +672,12 @@ describe("provider public artifacts", () => {
       typeof import("./provider-public-artifacts.js")
     >(import.meta.url, "./provider-public-artifacts.js?scope=no-runtime-deps");
 
-    const surface = resolvePolicySurface("openai");
+    const manifestRegistry = {
+      get plugins(): never {
+        throw new Error("direct provider policy lookup must not inspect manifest metadata");
+      },
+    };
+    const surface = resolvePolicySurface("openai", { manifestRegistry });
     expect(surface?.normalizeConfig).toBeTypeOf("function");
     expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "openai",

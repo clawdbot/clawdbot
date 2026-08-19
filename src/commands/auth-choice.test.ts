@@ -1,7 +1,12 @@
 // Auth choice tests cover auth choice application, provider config, and credential prompts.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  createAuthTestLifecycle,
+  createExitThrowingRuntime,
+  createWizardPrompter,
+  setupAuthTestEnv,
+} from "../../test/helpers/auth-wizard.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -10,12 +15,6 @@ import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.apply.js";
-import {
-  createAuthTestLifecycle,
-  createExitThrowingRuntime,
-  createWizardPrompter,
-  setupAuthTestEnv,
-} from "./test-wizard-helpers.js";
 
 type DetectZaiEndpoint = (params: {
   apiKey: string;
@@ -186,6 +185,23 @@ function seedTestAuthProfile(params: {
 }
 
 vi.mock("../agents/auth-profiles.js", () => ({
+  persistAuthProfileBatch: async (params: {
+    profiles: readonly {
+      profileId: string;
+      credential: StoredAuthProfile;
+      replaceExisting?: boolean;
+    }[];
+    agentDir?: string;
+  }) => {
+    for (const profile of params.profiles) {
+      const existing = readTestAuthProfileStore(params.agentDir).profiles[profile.profileId];
+      if (profile.replaceExisting === false && existing) {
+        continue;
+      }
+      seedTestAuthProfile({ ...profile, agentDir: params.agentDir });
+    }
+    return { rollback() {} };
+  },
   upsertAuthProfile: (params: {
     profileId: string;
     credential: StoredAuthProfile;
@@ -200,6 +216,13 @@ vi.mock("../agents/auth-profiles.js", () => ({
   }) => {
     seedTestAuthProfile(params);
     return { version: 1, profiles: readTestAuthProfileStore(params.agentDir).profiles };
+  },
+  upsertAuthProfileWithLockOrThrow: async (params: {
+    profileId: string;
+    credential: StoredAuthProfile;
+    agentDir?: string;
+  }) => {
+    seedTestAuthProfile(params);
   },
 }));
 
@@ -538,7 +561,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       envVar: "OPENCODE_API_KEY",
       promptMessage: "Enter OpenCode API key",
       profileIds: ["opencode:default", "opencode-go:default"],
-      defaultModel: "opencode/claude-opus-4-6",
+      defaultModel: "opencode/claude-opus-5",
       expectedProviders: ["opencode", "opencode-go"],
       noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
       noteTitle: "OpenCode",
@@ -552,7 +575,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       envVar: "OPENCODE_API_KEY",
       promptMessage: "Enter OpenCode API key",
       profileIds: ["opencode-go:default", "opencode:default"],
-      defaultModel: "opencode-go/kimi-k2.6",
+      defaultModel: "opencode-go/deepseek-v4-pro",
       expectedProviders: ["opencode", "opencode-go"],
       noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
       noteTitle: "OpenCode",
@@ -598,6 +621,7 @@ describe("applyAuthChoice", () => {
     "SYNTHETIC_API_KEY",
   ]);
   let authTestRoot: string | null = null;
+  let authTestCleanup: (() => Promise<void>) | null = null;
   let authStateCounter = 0;
   async function setupTempState() {
     if (!authTestRoot) {
@@ -676,15 +700,15 @@ describe("applyAuthChoice", () => {
   let defaultProviderPlugins: ProviderPlugin[] = [];
 
   beforeAll(async () => {
-    authTestRoot = (await setupAuthTestEnv("openclaw-auth-")).stateDir;
+    const authTestEnv = await setupAuthTestEnv("openclaw-auth-");
+    authTestRoot = authTestEnv.stateDir;
+    authTestCleanup = authTestEnv.cleanup;
     defaultProviderPlugins = await createDefaultProviderPlugins();
     resolvePluginProviders.mockReturnValue(defaultProviderPlugins);
   });
 
   afterAll(async () => {
-    if (authTestRoot) {
-      await fs.rm(authTestRoot, { recursive: true, force: true });
-    }
+    await authTestCleanup?.();
   });
 
   afterEach(async () => {
@@ -1176,7 +1200,7 @@ describe("applyAuthChoice", () => {
         token: "sk-opencode-zen-test",
         promptMessage: "Enter OpenCode API key",
         existingPrimary: "anthropic/claude-opus-4-5",
-        expectedOverride: "opencode/claude-opus-4-6",
+        expectedOverride: "opencode/claude-opus-5",
         profileId: "opencode:default",
         profileProvider: "opencode",
         extraProfileId: "opencode-go:default",

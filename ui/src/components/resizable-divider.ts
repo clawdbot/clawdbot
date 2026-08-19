@@ -24,7 +24,7 @@ class ResizableDivider extends OpenClawLitElement {
 
   static override styles = css`
     :host {
-      width: 4px;
+      width: var(--rail-resizer-size, 4px);
       cursor: col-resize;
       flex-shrink: 0;
       position: relative;
@@ -48,9 +48,9 @@ class ResizableDivider extends OpenClawLitElement {
       top: 0;
       bottom: 0;
       left: 50%;
-      width: 1px;
+      width: var(--rail-divider-size, 1px);
       transform: translateX(-50%);
-      background: var(--border, #1e2028);
+      background: var(--rail-divider-color, var(--border, #1e2028));
       transition:
         background 150ms ease-out,
         width 150ms ease-out;
@@ -58,7 +58,7 @@ class ResizableDivider extends OpenClawLitElement {
     :host(:hover)::after,
     :host(.dragging)::after,
     :host(:focus-visible)::after {
-      width: 2px;
+      width: var(--rail-divider-active-size, 2px);
       background: var(--accent, #ff5c5c);
     }
     :host(:focus-visible) {
@@ -67,7 +67,7 @@ class ResizableDivider extends OpenClawLitElement {
     }
     :host([orientation="horizontal"]) {
       width: auto;
-      height: 4px;
+      height: var(--rail-resizer-size, 4px);
       cursor: row-resize;
     }
     :host([orientation="horizontal"])::before {
@@ -82,7 +82,7 @@ class ResizableDivider extends OpenClawLitElement {
       left: 0;
       right: 0;
       width: auto;
-      height: 1px;
+      height: var(--rail-divider-size, 1px);
       transform: translateY(-50%);
       transition:
         background 150ms ease-out,
@@ -92,7 +92,7 @@ class ResizableDivider extends OpenClawLitElement {
     :host([orientation="horizontal"].dragging)::after,
     :host([orientation="horizontal"]:focus-visible)::after {
       width: auto;
-      height: 2px;
+      height: var(--rail-divider-active-size, 2px);
     }
   `;
 

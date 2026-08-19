@@ -1,4 +1,4 @@
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Feishu plugin module implements thread bindings behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -12,7 +12,7 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type FeishuBindingTargetKind = "subagent" | "acp";
@@ -211,13 +211,12 @@ export function createFeishuThreadBindingManager(params: {
         targetKind: toFeishuTargetKind(targetKind),
         targetSessionKey: normalizedTargetSessionKey,
         agentId:
-          typeof metadata?.agentId === "string" && metadata.agentId.trim()
-            ? metadata.agentId.trim()
-            : (existingLocal?.agentId ??
-              resolveAgentIdFromSessionKey(
-                normalizedTargetSessionKey,
-                resolveDefaultAgentId(params.cfg),
-              )),
+          normalizeOptionalString(metadata?.agentId) ??
+          existingLocal?.agentId ??
+          resolveSessionAgentId({
+            config: params.cfg,
+            sessionKey: normalizedTargetSessionKey,
+          }),
         label:
           typeof metadata?.label === "string" && metadata.label.trim()
             ? metadata.label.trim()
@@ -350,13 +349,3 @@ export function getFeishuThreadBindingManager(
 ): FeishuThreadBindingManager | null {
   return getState().managersByAccountId.get(normalizeAccountId(accountId)) ?? null;
 }
-
-export const testing = {
-  resetFeishuThreadBindingsForTests() {
-    for (const manager of getState().managersByAccountId.values()) {
-      manager.stop();
-    }
-    getState().managersByAccountId.clear();
-    getState().bindingsByAccountConversation.clear();
-  },
-};

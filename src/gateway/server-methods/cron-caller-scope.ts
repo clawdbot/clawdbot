@@ -4,10 +4,16 @@ import {
   createTrustedCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../../cron/scheduled-tool-policy.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type {
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronToolsAllowProvenance,
+} from "../../cron/types.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import type { GatewayClient } from "./types.js";
 
 export type CronCallerScope = {
@@ -16,6 +22,8 @@ export type CronCallerScope = {
   sessionKey?: string;
   accountId: string;
   currentJobId?: string;
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
 };
 
 export function readCronCallerScope(
@@ -30,12 +38,30 @@ export function readCronCallerScope(
     cronSelfManagementContext && Date.now() < cronSelfManagementContext.expiresAtMs
       ? cronSelfManagementContext.jobId.trim() || undefined
       : undefined;
+  const sourceChannel = identity.turnSourceChannel?.trim().toLowerCase();
+  const callerOrigin = sourceChannel
+    ? ({ kind: "external", channel: sourceChannel } as const)
+    : identity.turnSourceLocal === true
+      ? ({ kind: "local" } as const)
+      : ({ kind: "unknown" } as const);
   return {
     kind: "agentTool",
     agentId: normalizeAgentId(identity.agentId),
     sessionKey: identity.sessionKey?.trim() || undefined,
     accountId: normalizeAccountId(identity.turnSourceAccountId),
     currentJobId,
+    ...(identity.cronToolsAllowCapture === "final-executable-surface"
+      ? {
+          toolsAllowProvenance: {
+            version: 1 as const,
+            source: "final-executable-surface" as const,
+            callerOrigin,
+          },
+        }
+      : {}),
+    ...(identity.cronCreatorAuthorityGrant
+      ? { cronCreatorAuthorityGrant: identity.cronCreatorAuthorityGrant }
+      : {}),
   };
 }
 
@@ -59,24 +85,33 @@ export function resolveCronScheduledToolPolicyForCaller(
   }
   return policy;
 }
-function parseAgentIdFromSessionRef(value: string | undefined | null): string | undefined {
+function parseAgentIdFromSessionRef(
+  value: string | undefined | null,
+  fallbackAgentId?: string,
+): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? parseAgentSessionKey(trimmed)?.agentId : undefined;
+  return trimmed ? (parseAgentSessionKey(trimmed)?.agentId ?? fallbackAgentId) : undefined;
 }
 
-function parseAgentIdFromCronSessionTarget(value: string | undefined | null): string | undefined {
+function parseAgentIdFromCronSessionTarget(
+  value: string | undefined | null,
+  fallbackAgentId?: string,
+): string | undefined {
   const trimmed = value?.trim();
   return trimmed?.startsWith("session:")
-    ? parseAgentIdFromSessionRef(trimmed.slice("session:".length))
+    ? parseAgentIdFromSessionRef(trimmed.slice("session:".length), fallbackAgentId)
     : undefined;
 }
 
 function cronJobSessionRefsMatchCaller(job: CronJob, callerScope: CronCallerScope): boolean {
-  const sessionAgentId = parseAgentIdFromSessionRef(job.sessionKey);
+  const sessionAgentId = parseAgentIdFromSessionRef(job.sessionKey, callerScope.agentId);
   if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
     return false;
   }
-  const sessionTargetAgentId = parseAgentIdFromCronSessionTarget(job.sessionTarget);
+  const sessionTargetAgentId = parseAgentIdFromCronSessionTarget(
+    job.sessionTarget,
+    callerScope.agentId,
+  );
   return !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === callerScope.agentId;
 }
 
@@ -232,11 +267,17 @@ export function cronCreateMatchesCallerScope(params: {
   if (effectiveAgentId !== params.callerScope.agentId) {
     return false;
   }
-  const sessionAgentId = parseAgentIdFromSessionRef(params.job.sessionKey);
+  const sessionAgentId = parseAgentIdFromSessionRef(
+    params.job.sessionKey,
+    params.callerScope.agentId,
+  );
   if (sessionAgentId && normalizeAgentId(sessionAgentId) !== params.callerScope.agentId) {
     return false;
   }
-  const sessionTargetAgentId = parseAgentIdFromCronSessionTarget(params.job.sessionTarget);
+  const sessionTargetAgentId = parseAgentIdFromCronSessionTarget(
+    params.job.sessionTarget,
+    params.callerScope.agentId,
+  );
   return (
     !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === params.callerScope.agentId
   );
@@ -269,14 +310,14 @@ export function cronPatchSessionRefsMatchCaller(
   }
   const sessionAgentId =
     "sessionKey" in patch && typeof patch.sessionKey === "string"
-      ? parseAgentIdFromSessionRef(patch.sessionKey)
+      ? parseAgentIdFromSessionRef(patch.sessionKey, callerScope.agentId)
       : undefined;
   if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
     return false;
   }
   const sessionTargetAgentId =
     "sessionTarget" in patch && typeof patch.sessionTarget === "string"
-      ? parseAgentIdFromCronSessionTarget(patch.sessionTarget)
+      ? parseAgentIdFromCronSessionTarget(patch.sessionTarget, callerScope.agentId)
       : undefined;
   return !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === callerScope.agentId;
 }

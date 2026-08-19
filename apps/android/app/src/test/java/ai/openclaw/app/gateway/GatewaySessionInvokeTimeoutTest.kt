@@ -22,6 +22,37 @@ class GatewaySessionInvokeTimeoutTest {
   }
 
   @Test
+  fun buildGatewayWebSocketUrl_preservesAndEncodesContextPath() {
+    assertEquals(
+      "wss://gateway.example:443/openclaw%20gateway",
+      buildGatewayWebSocketUrl(
+        host = "gateway.example",
+        port = 443,
+        useTls = true,
+        contextPath = "/openclaw%20gateway",
+      ),
+    )
+    assertEquals(
+      "wss://gateway.example:443/openclaw%2Fgateway",
+      buildGatewayWebSocketUrl(
+        host = "gateway.example",
+        port = 443,
+        useTls = true,
+        contextPath = "/openclaw%2Fgateway",
+      ),
+    )
+    assertEquals(
+      "wss://gateway.example:443//openclaw",
+      buildGatewayWebSocketUrl(
+        host = "gateway.example",
+        port = 443,
+        useTls = true,
+        contextPath = "//openclaw",
+      ),
+    )
+  }
+
+  @Test
   fun resolveInvokeResultAckTimeoutMs_usesFloorWhenMissingOrTooSmall() {
     assertEquals(15_000L, resolveInvokeResultAckTimeoutMs(null))
     assertEquals(15_000L, resolveInvokeResultAckTimeoutMs(0L))

@@ -172,7 +172,7 @@ describe("extra-params: provider runtime handoff", () => {
     });
   });
 
-  it("keeps unsupported upstream transport values out of OpenClaw runtime hooks", () => {
+  it("supports cached WebSockets and filters unknown upstream transport values", () => {
     // Upstream transports can name modes OpenClaw does not own; unresolved values
     // must be filtered before plugin runtime hooks receive them.
     const settingsManager = {
@@ -185,6 +185,12 @@ describe("extra-params: provider runtime handoff", () => {
         settingsManager,
         effectiveExtraParams: { transport: "websocket-cached" },
       }),
+    ).toBe("websocket-cached");
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager,
+        effectiveExtraParams: { transport: "webtransport" },
+      }),
     ).toBeUndefined();
     expect(
       resolveExplicitSettingsTransport({
@@ -194,7 +200,7 @@ describe("extra-params: provider runtime handoff", () => {
         },
         sessionTransport: "websocket-cached",
       }),
-    ).toBeUndefined();
+    ).toBe("websocket-cached");
   });
 
   it("passes thinking-off intent through the provider runtime wrapper seam", () => {

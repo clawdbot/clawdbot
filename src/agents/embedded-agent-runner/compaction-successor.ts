@@ -3,8 +3,11 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+  type SessionTranscriptRuntimeTarget,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult } from "../../context-engine/types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -32,6 +35,7 @@ export async function resolveContextEngineCompactionSuccessor(params: {
     const resolvedTarget = await resolveAgentRunSessionTarget({
       agentId: target.agentId ?? current.agentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionId: target.sessionId ?? successorId ?? current.sessionId,
       sessionFile: successorFile,
       sessionKey: target.sessionKey ?? current.sessionKey,
@@ -81,7 +85,7 @@ export async function resolveContextEngineCompactionSuccessor(params: {
         })
       : undefined;
     const markerMatches = marker
-      ? listSessionEntries({
+      ? listSessionEntriesCore({
           agentId: marker.agentId,
           storePath: marker.storePath,
         }).filter(({ entry }) => entry.sessionId === marker.sessionId)
@@ -118,6 +122,7 @@ export async function resolveContextEngineCompactionSuccessor(params: {
     const resolvedTarget = await resolveAgentRunSessionTarget({
       agentId: legacyTarget.agentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionId: legacyTarget.sessionId,
       sessionKey: legacyTarget.sessionKey,
       sessionTarget: legacyTarget,

@@ -7,9 +7,9 @@ import {
   type NodePairingRequestInput,
   type NodePairingSupersededRequest,
   type RequestNodePairingResult,
-} from "../infra/node-pairing.js";
+} from "../infra/device-pairing-node.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
-import { createDeferred, type Deferred } from "../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL,
   buildRateLimitIdentityKey,
@@ -171,7 +171,7 @@ export function createNodeReapprovalCoordinator(
       const fingerprint = buildRequestFingerprint(params.input);
       const state = requestStates.get(nodeId);
       if (!state) {
-        const deferred = createDeferred<RequestNodePairingResult | null>();
+        const deferred = createDeferredCore<RequestNodePairingResult | null>();
         const nextState: NodeRequestState = { activeFingerprint: fingerprint };
         requestStates.set(nodeId, nextState);
         startFirstRequest(nodeId, nextState, {
@@ -183,13 +183,13 @@ export function createNodeReapprovalCoordinator(
         return deferred.promise;
       }
       if (state.queued?.fingerprint === fingerprint) {
-        const follower = createDeferred<RequestNodePairingResult | null>();
+        const follower = createDeferredCore<RequestNodePairingResult | null>();
         state.queued.params = params;
         state.queued.followers.push(follower);
         return follower.promise;
       }
 
-      const deferred = createDeferred<RequestNodePairingResult | null>();
+      const deferred = createDeferredCore<RequestNodePairingResult | null>();
       if (state.queued) {
         state.queued.deferred.resolve(null);
         for (const follower of state.queued.followers) {

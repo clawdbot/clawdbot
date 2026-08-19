@@ -1,40 +1,20 @@
 // Control UI tests cover About artifact identity against a mocked Gateway.
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI About mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
+
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const BUILT_AT = "2026-07-10T12:34:56.000Z";
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("shows and copies browser artifact identity, separately from the Gateway version", async () => {
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -55,7 +35,7 @@ describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
     await installMockGateway(page);
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/about`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/about`);
       expect(response?.status()).toBe(200);
       await page.getByRole("heading", { name: "Settings" }).waitFor();
 

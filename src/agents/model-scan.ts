@@ -5,8 +5,10 @@ import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
+  asPositiveSafeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -18,13 +20,13 @@ import {
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 /**
  * Scans remote provider model catalogs for configured providers.
  */
-import { readResponseWithLimit } from "../infra/http-body.js";
 import "../llm/ai-transport-host.js";
 import type { Context, Model, Tool } from "../llm/types.js";
-import { withTimeout } from "../node-host/with-timeout.js";
+import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
@@ -210,7 +212,7 @@ async function fetchOpenRouterModels(
   try {
     // fetch resolves after headers, so keep the shared timeout active until
     // the provider-controlled catalog body has been consumed.
-    return await withTimeout(
+    return await runAbortableTimeout(
       async (signal) => {
         res = await fetchImpl(OPENROUTER_MODELS_URL, {
           headers: { Accept: "application/json" },
@@ -233,20 +235,18 @@ async function fetchOpenRouterModels(
               return null;
             }
             const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+            const topProvider = asOptionalRecord(obj.top_provider);
 
             const contextLength =
-              typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
-                ? obj.context_length
-                : null;
+              asPositiveSafeInteger(topProvider?.context_length) ??
+              asPositiveSafeInteger(obj.context_length) ??
+              null;
 
             const maxCompletionTokens =
-              typeof obj.max_completion_tokens === "number" &&
-              Number.isFinite(obj.max_completion_tokens)
-                ? obj.max_completion_tokens
-                : typeof obj.max_output_tokens === "number" &&
-                    Number.isFinite(obj.max_output_tokens)
-                  ? obj.max_output_tokens
-                  : null;
+              asPositiveSafeInteger(topProvider?.max_completion_tokens) ??
+              asPositiveSafeInteger(obj.max_completion_tokens) ??
+              asPositiveSafeInteger(obj.max_output_tokens) ??
+              null;
 
             const supportedParameters = Array.isArray(obj.supported_parameters)
               ? normalizeStringEntries(
@@ -284,9 +284,7 @@ async function fetchOpenRouterModels(
       "OpenRouter model scan",
     );
   } finally {
-    if (res && !res.bodyUsed) {
-      await res.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(res);
   }
 }
 
@@ -308,7 +306,7 @@ async function probeTool(
   };
   const startedAt = Date.now();
   try {
-    const message = await withTimeout(
+    const message = await runAbortableTimeout(
       (signal) =>
         complete(model, context, {
           apiKey,
@@ -360,7 +358,7 @@ async function probeImage(
   };
   const startedAt = Date.now();
   try {
-    await withTimeout(
+    await runAbortableTimeout(
       (signal) =>
         complete(model, context, {
           apiKey,

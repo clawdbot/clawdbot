@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type AgentRingZeroToolScope = {
@@ -7,13 +8,6 @@ type AgentRingZeroToolScope = {
 };
 
 const activeRingZeroTools = new AsyncLocalStorage<AgentRingZeroToolScope>();
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
-    return false;
-  }
-  return "then" in value && typeof value.then === "function";
-}
 
 class HostScopedAgentToolAuthorizationError extends Error {
   readonly status = 403;

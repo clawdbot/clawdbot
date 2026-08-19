@@ -27,31 +27,31 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;
-  /** Temporary legacy migration session closed when normal enforcement resumes. */
-  isControlUiDeviceAuthMigrationSession?: boolean;
-  /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
-  isControlUiDeviceAuthMigration?: boolean;
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
   authenticatedUserId?: string;
+  /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
+  authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
+    avatarRevision: string;
     hasAvatar: boolean;
     updatedAt: number;
   };
   clientIp?: string;
   internal?: {
+    /** Handshake-attested direct-local transport; never accepted from wire params. */
+    isLocalClient?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
   };
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
-  invalidated?: boolean;
   invalidatedReason?: string;
 };
 

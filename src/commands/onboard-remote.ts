@@ -1,3 +1,5 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 /**
  * Interactive remote gateway onboarding.
  *
@@ -12,7 +14,6 @@ import {
   buildGatewayDiscoveryLabel,
   buildGatewayDiscoveryTarget,
 } from "../infra/gateway-discovery-targets.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
@@ -55,7 +56,7 @@ export function validateGatewayWebSocketUrl(value: string): string | undefined {
 export async function promptRemoteGatewayConfig(
   cfg: OpenClawConfig,
   prompter: WizardPrompter,
-  options?: { secretInputMode?: SecretInputMode },
+  options?: { secretInputMode?: SecretInputMode; edgeAuthOriginUrl?: string },
 ): Promise<OpenClawConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
@@ -284,6 +285,11 @@ export async function promptRemoteGatewayConfig(
     token = undefined;
     password = undefined;
   }
+  const edgeAuthOriginUrl = options?.edgeAuthOriginUrl ?? cfg.gateway?.remote?.url;
+  const edgeAuth =
+    edgeAuthOriginUrl && gatewayOriginScope(url) === gatewayOriginScope(edgeAuthOriginUrl)
+      ? cfg.gateway?.remote?.edgeAuth
+      : undefined;
 
   return {
     ...cfg,
@@ -292,6 +298,7 @@ export async function promptRemoteGatewayConfig(
       mode: "remote",
       remote: {
         url,
+        ...(edgeAuth !== undefined ? { edgeAuth } : {}),
         ...(token !== undefined ? { token } : {}),
         ...(password !== undefined ? { password } : {}),
         ...(pinnedDiscoveryFingerprint ? { tlsFingerprint: pinnedDiscoveryFingerprint } : {}),

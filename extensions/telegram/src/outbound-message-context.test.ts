@@ -133,6 +133,7 @@ describe("recordOutboundMessageForPromptContext", () => {
     const providerThread = await recordAndRead({
       ...common,
       messageId: 701,
+      successfulSendThread: { id: 77, scope: "forum" },
       message: {
         chat: { id: -1001, type: "supergroup", title: "QA" },
         date: 1_736_380_701,
@@ -143,6 +144,32 @@ describe("recordOutboundMessageForPromptContext", () => {
       },
     });
     expect(hasProviderObservedTelegramThreadBinding(providerThread, 77)).toBe(true);
+  });
+
+  it("records the successful channel Direct Messages spec ahead of raw message_thread_id", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: -1002,
+      messageId: 704,
+      messageThreadId: 999,
+      successfulSendThread: { id: 77, scope: "direct-messages" },
+      message: {
+        chat: {
+          id: -1002,
+          type: "supergroup",
+          title: "Channel replies",
+        },
+        date: 1_736_380_704,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 704,
+        message_thread_id: 999,
+        direct_messages_topic: { topic_id: 77 },
+        text: "Bot replied in channel Direct Messages",
+      },
+    });
+
+    expect(cached?.threadId).toBe("77");
+    expect(cached?.threadBinding?.threadSpec).toEqual({ scope: "direct-messages", id: 77 });
   });
 
   it("binds a successful General-topic response from trusted send context", async () => {

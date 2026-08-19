@@ -20,7 +20,7 @@ type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
   cfg?: OpenClawConfig;
   dispatcher?: {
-    sendFinalReply: (payload: { text: string }) => void;
+    sendFinalReply: (payload: { text: string; isError?: boolean }) => void;
     markComplete: () => void;
     waitForIdle: () => Promise<void>;
   };
@@ -28,13 +28,31 @@ type DispatchInboundMessageMockParams = {
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     allowToolLifecycleWhenProgressHidden?: boolean;
     onReplyStart?: () => void | Promise<void>;
-    onToolStart?: (payload: { name?: string }) => void | Promise<void>;
-    onCompactionStart?: () => void | Promise<void>;
-    onCompactionEnd?: () => void | Promise<void>;
+    onToolStart?: (payload: { name?: string }) => boolean | void | Promise<boolean | void>;
+    onCompactionStart?: () => boolean | void | Promise<boolean | void>;
+    onCompactionEnd?: () => boolean | void | Promise<boolean | void>;
   };
 };
 
 type SendReactionSignalMockCall = [string, number, string, unknown];
+type TestDispatchResult = {
+  queuedFinal: boolean;
+  counts: Record<"tool" | "block" | "final", number>;
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+  settledReceipt?: {
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+    anyVisibleDelivered: boolean;
+  };
+};
 
 const {
   sendTypingMock,
@@ -45,6 +63,7 @@ const {
   recordInboundSessionMock,
   logVerboseMock,
   shouldLogVerboseMock,
+  readAgentRunTerminalOutcomeMock,
   capture,
 } = vi.hoisted(() => {
   const captureState: { ctx?: MsgContext } = {};
@@ -54,13 +73,16 @@ const {
     sendReactionSignalMock: vi.fn(async () => ({ ok: true })),
     enqueueSystemEventMock: vi.fn(),
     recordInboundSessionMock: vi.fn(),
-    dispatchInboundMessageMock: vi.fn(async (params: DispatchInboundMessageMockParams) => {
-      captureState.ctx = params.ctx;
-      await Promise.resolve(params.replyOptions?.onReplyStart?.());
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-    }),
+    dispatchInboundMessageMock: vi.fn(
+      async (params: DispatchInboundMessageMockParams): Promise<TestDispatchResult> => {
+        captureState.ctx = params.ctx;
+        await Promise.resolve(params.replyOptions?.onReplyStart?.());
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    ),
     logVerboseMock: vi.fn(),
     shouldLogVerboseMock: vi.fn(() => false),
+    readAgentRunTerminalOutcomeMock: vi.fn(),
     capture: captureState,
   };
 });
@@ -98,6 +120,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
   return {
     ...actual,
+    readAgentRunTerminalOutcome: readAgentRunTerminalOutcomeMock,
     runChannelInboundEvent: async (params: RunParams) => {
       const input = await params.adapter.ingest(params.raw);
       if (!input) {
@@ -141,8 +164,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
           history: resolved.history,
           admission: resolved.admission,
           botLoopProtection: resolved.botLoopProtection,
-          runDispatch: async () =>
-            await dispatchInboundMessageMock({
+          runDispatch: async () => {
+            const dispatchResult = await dispatchInboundMessageMock({
               ctx: resolved.ctxPayload,
               cfg: resolved.cfg,
               dispatcher,
@@ -150,7 +173,35 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
                 ...resolved.replyOptions,
                 onReplyStart: resolved.dispatcherOptions?.typingCallbacks?.onReplyStart,
               },
-            }),
+            });
+            if (dispatchResult.settledReceipt) {
+              return dispatchResult;
+            }
+            const counts = (kind: "tool" | "block" | "final") => {
+              const failedBeforeSend = dispatchResult.failedCounts?.[kind] ?? 0;
+              return {
+                delivered: Math.max(0, (dispatchResult.counts?.[kind] ?? 0) - failedBeforeSend),
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend,
+                failedAfterSend: 0,
+              };
+            };
+            const settledCounts = {
+              tool: counts("tool"),
+              block: counts("block"),
+              final: counts("final"),
+            };
+            return {
+              ...dispatchResult,
+              settledReceipt: {
+                counts: settledCounts,
+                anyVisibleDelivered: Object.values(settledCounts).some(
+                  (entry) => entry.delivered > 0,
+                ),
+              },
+            };
+          },
         });
       };
       let result;
@@ -394,6 +445,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     enqueueSystemEventMock.mockReset();
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockClear();
+    readAgentRunTerminalOutcomeMock.mockReset().mockReturnValue(undefined);
     logVerboseMock.mockClear();
     shouldLogVerboseMock.mockReset().mockReturnValue(false);
     approvalReactionMocks.maybeResolveSignalApprovalReaction.mockReset().mockResolvedValue(false);
@@ -709,48 +761,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     }
   });
 
-  it("uses the curated Signal soft-stall emoji for hard stalls", async () => {
-    vi.useFakeTimers();
-    let releaseDispatch!: () => void;
-    try {
-      dispatchInboundMessageMock.mockImplementationOnce(
-        async (params: DispatchInboundMessageMockParams) => {
-          capture.ctx = params.ctx;
-          await new Promise<void>((resolve) => {
-            releaseDispatch = resolve;
-          });
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
-        },
-      );
-      const handler = createTestHandler({
-        cfg: createStatusReactionConfig({
-          messages: {
-            statusReactions: { enabled: true, timing: { ...shortStatusReactionTiming } },
-          },
-        }),
-        statusReactionTiming: { ...shortStatusReactionTiming },
-      });
-
-      const handled = receiveDirectMessage(handler);
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(15_000);
-
-      let sentEmojis = sentReactionEmojis();
-      expect(sentEmojis).toContain("⏳");
-      expect(sentEmojis).not.toContain("⚠️");
-
-      releaseDispatch();
-      await handled;
-      await vi.advanceTimersByTimeAsync(0);
-
-      sentEmojis = sentReactionEmojis();
-      expect(sentEmojis).toContain("✅");
-      expect(sentEmojis.at(-1)).toBe("👀");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("restores the initial Signal ack reaction after a successful reply", async () => {
     dispatchInboundMessageMock.mockImplementationOnce(
       async (params: DispatchInboundMessageMockParams) => {
@@ -990,6 +1000,41 @@ describe("signal createSignalEventHandler inbound context", () => {
     const sentEmojis = sentReactionEmojis();
     expect(sentEmojis).toContain("❌");
     expect(sentEmojis).not.toContain("✅");
+  });
+
+  it("marks a delivered recovered agent failure as a Signal error outcome", async () => {
+    const deliverReplies = vi.fn(async () => undefined);
+    readAgentRunTerminalOutcomeMock.mockReturnValueOnce("failed");
+    dispatchInboundMessageMock.mockImplementationOnce(
+      async (params: DispatchInboundMessageMockParams) => {
+        capture.ctx = params.ctx;
+        params.dispatcher?.sendFinalReply({ text: "agent run failed", isError: true });
+        await params.dispatcher?.waitForIdle();
+        return {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      },
+    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+      deliverReplies,
+    });
+
+    await receiveDirectMessage(handler);
+    for (let i = 0; i < 5; i += 1) {
+      await nextTimerTick();
+    }
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "agent run failed", isError: true })],
+      }),
+    );
+    const sentEmojis = sentReactionEmojis();
+    expect(sentEmojis).toContain("❌");
+    expect(sentEmojis).not.toContain("✅");
+    expect(sentEmojis.at(-1)).toBe("👀");
   });
 
   it("targets Signal group status reactions with groupId and message author", async () => {

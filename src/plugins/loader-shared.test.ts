@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import { createManifestPluginRecord, validatePluginConfig } from "./loader-shared.js";
+import {
+  createManifestPluginRecord,
+  createPluginCandidatesFromManifestRegistry,
+  validatePluginConfig,
+} from "./loader-shared.js";
+import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
 const emptyObjectSchema = {
@@ -54,6 +60,25 @@ describe("createManifestPluginRecord", () => {
   it("ignores malformed package build version metadata", () => {
     expect(createRecordWithBuildVersion(" 2026.7.2 ").builtWithOpenClawVersion).toBe("2026.7.2");
     expect(createRecordWithBuildVersion(42).builtWithOpenClawVersion).toBeUndefined();
+  });
+});
+
+describe("createPluginCandidatesFromManifestRegistry", () => {
+  it("preserves runtime child identity and package ownership", () => {
+    const childRecord = recordPluginManifestInstallOwner(
+      { ...manifestRecord, id: "example/child" },
+      "example",
+    );
+
+    const candidate = createPluginCandidatesFromManifestRegistry({
+      plugins: [childRecord],
+      diagnostics: [],
+    })[0];
+    expect(candidate).toMatchObject({
+      idHint: "example/child",
+      effectivePluginId: "example/child",
+    });
+    expect(resolvePluginCandidateInstallOwner(candidate!)).toBe("example");
   });
 });
 

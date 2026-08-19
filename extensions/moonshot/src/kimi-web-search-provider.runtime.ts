@@ -345,6 +345,7 @@ export async function executeKimiWebSearchProviderTool(
   args: Record<string, unknown>,
   opts?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
+  opts?.signal?.throwIfAborted();
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
     "kimi",
@@ -397,6 +398,7 @@ export async function executeKimiWebSearchProviderTool(
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
     signal: opts?.signal,
   });
+  opts?.signal?.throwIfAborted();
   if (!result.grounded) {
     return {
       error: "kimi_web_search_ungrounded",
@@ -515,7 +517,5 @@ export const testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
-  hasKimiSearchResults,
   extractKimiToolResultContent,
 } as const;
-export { testing as __testing };

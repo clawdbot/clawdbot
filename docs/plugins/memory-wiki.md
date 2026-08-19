@@ -13,8 +13,8 @@ navigable wiki: deterministic pages, structured claims with evidence,
 provenance, dashboards, and machine-readable digests.
 
 It does not replace the active memory plugin. Recall, promotion, indexing, and
-dreaming stay owned by whichever memory backend is configured
-(`memory-core`, QMD, Honcho, etc.). `memory-wiki` sits beside it and compiles
+dreaming stay owned by the configured memory plugin (`memory-core`, Honcho,
+and others). `memory-wiki` sits beside it and compiles
 knowledge into a maintained wiki layer.
 
 Enable the plugin before using its CLI, tools, or runtime integration:
@@ -35,9 +35,9 @@ Practical rule:
 - `wiki_search` / `wiki_get` when you want wiki-specific ranking, provenance, or page-level belief structure
 - `memory_search corpus=all` to span both layers in one call, when the active memory plugin supports corpus selection
 
-A common local-first setup: QMD as the active memory backend for recall, and
-`memory-wiki` in `bridge` mode for durable synthesized pages. See the
-QMD + bridge mode example under [Configuration](#configuration).
+A common local-first setup uses builtin memory for recall and `memory-wiki` in
+`bridge` mode for durable synthesized pages. See the bridge-mode example under
+[Configuration](#configuration).
 
 If bridge mode reports zero exported artifacts, the active memory plugin is
 not currently exposing public bridge inputs. Run `openclaw wiki doctor` first,
@@ -408,7 +408,10 @@ normalized agent id:
 ```json5
 {
   agents: {
-    list: [{ id: "support" }, { id: "marketing" }],
+    entries: {
+      support: { default: true },
+      marketing: {},
+    },
   },
   plugins: {
     entries: {
@@ -460,18 +463,15 @@ still read another agent's directory. Use [sandboxing](/gateway/sandboxing) or
 each other.
 </Warning>
 
-### Example: QMD + bridge mode
+### Example: builtin memory + bridge mode
 
-Use this when you want QMD for recall and `memory-wiki` for a maintained
-knowledge layer. Each layer stays focused: QMD keeps raw notes, session
-exports, and extra collections searchable, while `memory-wiki` compiles
-stable entities, claims, dashboards, and source pages.
+Use this when you want builtin memory for recall and `memory-wiki` for a
+maintained knowledge layer. Each layer stays focused: `memory-core` searches
+memory notes and eligible session sources, while `memory-wiki` compiles stable
+entities, claims, dashboards, and source pages.
 
 ```json5
 {
-  memory: {
-    backend: "qmd",
-  },
   plugins: {
     entries: {
       "memory-wiki": {
@@ -500,7 +500,7 @@ stable entities, claims, dashboards, and source pages.
 }
 ```
 
-This keeps QMD in charge of active memory recall, `memory-wiki` focused on
+This keeps builtin memory in charge of active recall, `memory-wiki` focused on
 compiled pages and dashboards, and prompt shape unchanged until you
 intentionally enable compiled digest prompts.
 
