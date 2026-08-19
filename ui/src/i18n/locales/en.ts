@@ -2466,7 +2466,7 @@ export const en: TranslationMap = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Warm an AWS or Hetzner worker with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Warm a direct or coordinator-backed AWS worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",

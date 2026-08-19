@@ -4,21 +4,25 @@ const CRABBOX_WORKER_BROWSER_PATH = "/usr/local/bin/openclaw-worker-browser";
 const CRABBOX_WORKER_TERMINAL_PATH = "/usr/local/bin/openclaw-worker-terminal";
 const CRABBOX_WORKER_BROWSER_CDP_PORT = 9222;
 
+function xfceDesktopEnvironment(): string[] {
+  return [
+    '[ -r /var/lib/crabbox/desktop.env ] || { echo "Crabbox desktop environment is unavailable" >&2; exit 1; }',
+    "grep -Fx 'CRABBOX_DESKTOP_ENV=xfce' /var/lib/crabbox/desktop.env >/dev/null || { echo \"Crabbox desktop environment is not XFCE\" >&2; exit 1; }",
+    "grep -Fx 'DISPLAY=:99' /var/lib/crabbox/desktop.env >/dev/null || { echo \"Crabbox XFCE display is not :99\" >&2; exit 1; }",
+    "export DISPLAY=:99",
+  ];
+}
+
 function browserLauncher(leaseId: string): string[] {
   return [
     "#!/bin/bash",
     "set -euo pipefail",
     '[ "$#" -eq 0 ] || { echo "openclaw-worker-browser does not accept arguments" >&2; exit 64; }',
-    '[ -r /var/lib/crabbox/desktop.env ] || { echo "Crabbox desktop environment is unavailable" >&2; exit 1; }',
-    '[ -r /var/lib/crabbox/browser.env ] || { echo "Crabbox browser environment is unavailable" >&2; exit 1; }',
-    ". /var/lib/crabbox/desktop.env",
-    ". /var/lib/crabbox/browser.env",
-    '[ "${CRABBOX_DESKTOP_ENV:-}" = "xfce" ] || { echo "Crabbox desktop environment is not XFCE" >&2; exit 1; }',
-    '[ "${DISPLAY:-}" = ":99" ] || { echo "Crabbox XFCE display is not :99" >&2; exit 1; }',
+    ...xfceDesktopEnvironment(),
+    '[ -x /usr/local/bin/crabbox-browser ] || { echo "Crabbox browser is unavailable" >&2; exit 1; }',
     'worker_home=$(getent passwd "$(id -u)" | cut -d: -f6)',
     'case "$worker_home" in /*) ;; *) echo "Crabbox worker home is invalid" >&2; exit 1 ;; esac',
     'export HOME="$worker_home"',
-    "export DISPLAY",
     `export CRABBOX_BROWSER_PROFILE="$worker_home/.cache/openclaw/worker-browser/${leaseId}"`,
     'mkdir -p "$CRABBOX_BROWSER_PROFILE"',
     'chmod 700 "$CRABBOX_BROWSER_PROFILE"',
@@ -47,11 +51,7 @@ function terminalLauncher(): string[] {
     "#!/bin/bash",
     "set -euo pipefail",
     '[ "$#" -eq 0 ] || { echo "openclaw-worker-terminal does not accept arguments" >&2; exit 64; }',
-    '[ -r /var/lib/crabbox/desktop.env ] || { echo "Crabbox desktop environment is unavailable" >&2; exit 1; }',
-    ". /var/lib/crabbox/desktop.env",
-    '[ "${CRABBOX_DESKTOP_ENV:-}" = "xfce" ] || { echo "Crabbox desktop environment is not XFCE" >&2; exit 1; }',
-    '[ "${DISPLAY:-}" = ":99" ] || { echo "Crabbox XFCE display is not :99" >&2; exit 1; }',
-    "export DISPLAY",
+    ...xfceDesktopEnvironment(),
     "nohup /usr/bin/xfce4-terminal >/dev/null 2>&1 </dev/null &",
     "terminal_pid=$!",
     "sleep 0.2",
@@ -75,11 +75,7 @@ export function createCrabboxWorkerDesktopSetup(leaseId: string, wallpaperBase64
     'worker_home=$(getent passwd "$worker_uid" | cut -d: -f6)',
     'case "$worker_home" in /*) ;; *) echo "Crabbox worker home is invalid" >&2; exit 1 ;; esac',
     'as_root() { if [ "$worker_uid" -eq 0 ]; then "$@"; else sudo -n -- "$@"; fi; }',
-    '[ -r /var/lib/crabbox/desktop.env ] || { echo "Crabbox desktop environment is unavailable" >&2; exit 1; }',
-    ". /var/lib/crabbox/desktop.env",
-    '[ "${CRABBOX_DESKTOP_ENV:-}" = "xfce" ] || { echo "Crabbox desktop environment is not XFCE" >&2; exit 1; }',
-    '[ "${DISPLAY:-}" = ":99" ] || { echo "Crabbox XFCE display is not :99" >&2; exit 1; }',
-    "export DISPLAY",
+    ...xfceDesktopEnvironment(),
     'for required_command in xfconf-query xfdesktop xrandr awk curl flock getent pgrep pkill python3; do command -v "$required_command" >/dev/null 2>&1 || { echo "Required Crabbox desktop command is unavailable: $required_command" >&2; exit 1; }; done',
     "setup_dir=$(mktemp -d)",
     "trap 'rm -rf -- \"$setup_dir\"' EXIT",
