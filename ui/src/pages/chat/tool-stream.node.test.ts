@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import {
   agentEvent,
@@ -246,10 +247,25 @@ describe("app-tool-stream throttled projections", () => {
 });
 
 describe("app-tool-stream result blocks", () => {
-  it("attaches parallel reviews without removing ambiguous vendor warnings", () => {
+  it("retains out-of-order review identities and lets a result fence every older review", () => {
     const host = createHost();
     const toolCallId = "call-reviewed";
-    const parallelToolCallId = "call-reviewed-parallel";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 4, "tool", {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "approved",
+        review: {
+          id: "review-b",
+          label: "Guardian",
+          status: "approved",
+          riskLevel: "low",
+          userAuthorization: "high",
+          rationale: "Newer live review.",
+        },
+      }),
+    );
     handleAgentEvent(
       host,
       agentEvent("run-1", 1, "tool", {
@@ -262,119 +278,160 @@ describe("app-tool-stream result blocks", () => {
     handleAgentEvent(
       host,
       agentEvent("run-1", 2, "tool", {
-        phase: "start",
-        name: "exec",
-        toolCallId: parallelToolCallId,
-        args: { command: "git diff --check" },
-      }),
-    );
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 3, "codex_app_server.guardian", {
-        phase: "warning",
-        message:
-          "Automatic approval review approved (risk: low, authorization: high): First safe command.",
-      }),
-    );
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 4, "codex_app_server.guardian", {
-        phase: "warning",
-        message:
-          "Automatic approval review approved (risk: low, authorization: high): First safe command.",
-      }),
-    );
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 5, "codex_app_server.guardian", {
-        phase: "warning",
-        message:
-          "Automatic approval review approved (risk: low, authorization: high): Second safe command.",
-      }),
-    );
-    expect(host.guardianNotices).toHaveLength(3);
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 6, "tool", {
         phase: "review",
         toolCallId,
-        guardianWarningMessage:
-          "Automatic approval review approved (risk: low, authorization: high): First safe command.",
+        approvalReviewOutcome: "approved",
         review: {
-          id: "review-1",
+          id: "review-a",
           label: "Guardian",
           status: "approved",
-          riskLevel: "low",
-          userAuthorization: "high",
-          rationale: "First safe command.",
+          rationale: "Older snapshot review.",
         },
       }),
     );
-    expect(host.guardianNotices?.map((notice) => notice.message)).toEqual([
-      "Automatic approval review approved (risk: low, authorization: high): First safe command.",
-      "Automatic approval review approved (risk: low, authorization: high): First safe command.",
-      "Automatic approval review approved (risk: low, authorization: high): Second safe command.",
-    ]);
     handleAgentEvent(
       host,
-      agentEvent("run-1", 7, "tool", {
+      agentEvent("run-1", 3, "tool", {
         phase: "review",
-        toolCallId: parallelToolCallId,
-        guardianWarningMessage:
-          "Automatic approval review approved (risk: low, authorization: high): Second safe command.",
-        review: {
-          id: "review-2",
-          label: "Guardian",
-          status: "approved",
-          riskLevel: "low",
-          userAuthorization: "high",
-          rationale: "Second safe command.",
-        },
+        toolCallId,
+        approvalReviewOutcome: "denied",
+        review: { id: "review-b", label: "Guardian", status: "denied" },
       }),
     );
 
-    expect(host.guardianNotices?.map((notice) => notice.message)).toEqual([
-      "Automatic approval review approved (risk: low, authorization: high): First safe command.",
-      "Automatic approval review approved (risk: low, authorization: high): First safe command.",
+    const identity = buildToolStreamIdentity("run-1", toolCallId);
+    const reviewed = host.toolStreamById.get(identity);
+    expect(readToolApprovalReviews(reviewed?.details).map((review) => review.id)).toEqual([
+      "review-a",
+      "review-b",
     ]);
-    expect(host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId))?.details).toEqual({
-      approvalReviews: [
-        {
-          id: "review-1",
-          label: "Guardian",
-          status: "approved",
-          riskLevel: "low",
-          userAuthorization: "high",
-          rationale: "First safe command.",
-        },
-      ],
-    });
-    expect(
-      host.toolStreamById.get(buildToolStreamIdentity("run-1", parallelToolCallId))?.details,
-    ).toEqual({
-      approvalReviews: [
-        expect.objectContaining({
-          id: "review-2",
-          status: "approved",
-          rationale: "Second safe command.",
-        }),
-      ],
+    expect(reviewed?.details).toMatchObject({
+      approvalReviewOutcome: "approved",
     });
 
     handleAgentEvent(
       host,
-      agentEvent("run-1", 8, "tool", {
+      agentEvent("run-1", 5, "tool", {
         phase: "result",
         name: "exec",
         toolCallId,
         result: { details: { runtime: "native" } },
       }),
     );
-    const content = host.chatToolMessages[0]?.content as Array<Record<string, unknown>>;
-    expect(content[1]?.details).toEqual({
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "tool", {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "denied",
+        review: { id: "review-c", label: "Guardian", status: "denied" },
+      }),
+    );
+
+    const completed = host.toolStreamById.get(identity);
+    expect(completed?.resultReceived).toBe(true);
+    expect(readToolApprovalReviews(completed?.details).map((review) => review.id)).toEqual([
+      "review-a",
+      "review-b",
+    ]);
+    expect(completed?.details).toMatchObject({
       runtime: "native",
-      approvalReviews: [expect.objectContaining({ id: "review-1", status: "approved" })],
+      approvalReviewOutcome: "approved",
+    });
+  });
+
+  it("keeps an early denial after live review rows exceed the display cap", () => {
+    const host = createHost();
+    const toolCallId = "call-many-reviews";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId,
+        args: { command: "printf reviewed" },
+      }),
+    );
+    for (let index = 0; index < 18; index += 1) {
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", index + 2, "tool", {
+          phase: "review",
+          toolCallId,
+          approvalReviewOutcome: "denied",
+          review: {
+            id: `review-${index}`,
+            label: "Guardian",
+            status: index === 0 ? "denied" : "approved",
+          },
+        }),
+      );
+    }
+
+    const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId));
+    expect(readToolApprovalReviews(entry?.details).map((review) => review.id)).toEqual(
+      Array.from({ length: 16 }, (_, index) => `review-${index + 2}`),
+    );
+    expect(entry?.details).toMatchObject({ approvalReviewOutcome: "denied" });
+  });
+
+  it("keeps an out-of-order denial after newer reviews fill the display cap", () => {
+    const host = createHost();
+    const toolCallId = "call-out-of-order-denial";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId,
+        args: { command: "printf reviewed" },
+      }),
+    );
+    for (let index = 0; index < 16; index += 1) {
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", index + 3, "tool", {
+          phase: "review",
+          toolCallId,
+          approvalReviewOutcome: "approved",
+          review: {
+            id: `newer-review-${index}`,
+            label: "Guardian",
+            status: "approved",
+          },
+        }),
+      );
+    }
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "denied",
+        review: { id: "older-denied-review", label: "Guardian", status: "denied" },
+      }),
+    );
+
+    const identity = buildToolStreamIdentity("run-1", toolCallId);
+    const reviewed = host.toolStreamById.get(identity);
+    expect(readToolApprovalReviews(reviewed?.details).map((review) => review.id)).toEqual(
+      Array.from({ length: 16 }, (_, index) => `newer-review-${index}`),
+    );
+    expect(reviewed?.details).toMatchObject({ approvalReviewOutcome: "denied" });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 19, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId,
+        approvalReviewOutcome: "approved",
+        result: { details: { runtime: "native", approvalReviewOutcome: "approved" } },
+      }),
+    );
+    expect(host.toolStreamById.get(identity)?.details).toMatchObject({
+      runtime: "native",
+      approvalReviewOutcome: "denied",
     });
   });
 

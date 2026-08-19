@@ -224,6 +224,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     }).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
+  const appServerHomeScope = resolveCodexAppServerHomeScope({
+    appServer: pluginConfig.appServer,
+  });
   const preparedAuthRoute = usesSupervisionConnection
     ? undefined
     : params.runtimePlan?.auth.modelRoute;
@@ -257,7 +260,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         authProfileId: resolvedStartupAuthProfileId,
         authProfileStore: params.authProfileStore,
         agentDir,
-        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
+        homeScope: appServerHomeScope,
         requirePreparedAuth: isCodexRemoteExecPlacementSandbox(sandbox),
         config: params.config,
         subscriptionProfileRequiredError:
@@ -270,7 +273,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     preparedAuth: startupPreparedAuth,
   } = authHandoff;
   const startupClientAuthProfileId =
-    usesSupervisionConnection || startupPreparedAuth?.kind === "api-key"
+    usesSupervisionConnection ||
+    appServerHomeScope === "user" ||
+    startupPreparedAuth?.kind === "api-key"
       ? null
       : startupAuthProfileId;
   const resolveReviewerPolicyContext = (binding: CodexAppServerThreadBinding | undefined) => {

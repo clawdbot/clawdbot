@@ -8,6 +8,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
+  readToolApprovalReviewOutcome,
   readToolApprovalReviews,
   resolveToolApprovalReviewOutcome,
 } from "../../../lib/chat/tool-approval-reviews.ts";
@@ -257,7 +258,11 @@ export function renderActivityGroup(
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
-  const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews);
+  const recordedReviewOutcomes = cards.flatMap((card) => {
+    const outcome = readToolApprovalReviewOutcome(card.details);
+    return outcome ? [outcome] : [];
+  });
+  const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews, recordedReviewOutcomes);
   const reviewer = approvalReviews[0]?.label ?? "Review";
   const reviewAriaLabel = reviewOutcome
     ? t(`chat.toolCards.review.${reviewOutcome === "reviewing" ? "reviewing" : reviewOutcome}`, {

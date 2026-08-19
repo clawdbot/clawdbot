@@ -57,24 +57,8 @@ function normalizeApprovalReviewStatus(status: string | undefined): string | und
   return status === "inProgress" ? "in_progress" : status === "timedOut" ? "timed_out" : status;
 }
 
-function guardianDecisionWarningMessage(params: {
-  status: string | undefined;
-  riskLevel: string | undefined;
-  userAuthorization: string | undefined;
-  rationale: string | null | undefined;
-}): string | undefined {
-  const { status, riskLevel, userAuthorization, rationale } = params;
-  if (!rationale) {
-    return undefined;
-  }
-  if (status === "timed_out") {
-    return rationale;
-  }
-  if ((status !== "approved" && status !== "denied") || !riskLevel || !userAuthorization) {
-    return undefined;
-  }
-  return `Automatic approval review ${status} (risk: ${riskLevel}, authorization: ${userAuthorization}): ${rationale}`;
-}
+const GUARDIAN_TIMEOUT_WARNING =
+  "Automatic approval review timed out while evaluating the requested approval.";
 
 export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
@@ -119,6 +103,7 @@ export function projectNormalizedToolItem(params: {
 
 export class CodexEventProjection {
   private reviewCount = 0;
+  private pendingGuardianWarning: string | undefined;
 
   constructor(
     private readonly threadId: string,
@@ -144,12 +129,24 @@ export class CodexEventProjection {
     const riskLevel = review ? readString(review, "riskLevel") : undefined;
     const userAuthorization = review ? readString(review, "userAuthorization") : undefined;
     const rationale = review ? readNullableString(review, "rationale") : undefined;
-    const guardianWarningMessage = guardianDecisionWarningMessage({
-      status,
-      riskLevel,
-      userAuthorization,
-      rationale,
-    });
+    // Codex emits the routine warning immediately before its structured terminal fact.
+    // Exact byte equality consumes only that duplicate; every other warning is flushed.
+    const expectedWarning =
+      status === "timed_out"
+        ? GUARDIAN_TIMEOUT_WARNING
+        : rationale &&
+            riskLevel &&
+            userAuthorization &&
+            (status === "approved" || status === "denied")
+          ? `Automatic approval review ${status} (risk: ${riskLevel}, authorization: ${userAuthorization}): ${rationale}`
+          : undefined;
+    const warningMatchesReview =
+      Boolean(targetItemId) && Boolean(reviewId) && this.pendingGuardianWarning === expectedWarning;
+    if (warningMatchesReview) {
+      this.pendingGuardianWarning = undefined;
+    } else {
+      this.flushPendingGuardianWarning();
+    }
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: {
@@ -175,14 +172,19 @@ export class CodexEventProjection {
         ...(userAuthorization ? { userAuthorization } : {}),
         ...(rationale ? { rationale } : {}),
       };
-      this.toolTranscript.recordToolApprovalReview(targetItemId, approvalReview);
+      const approvalReviewOutcome = this.toolTranscript.recordToolApprovalReview(
+        targetItemId,
+        reviewId,
+        status,
+        approvalReview,
+      );
       this.emitAgentEvent({
         stream: "tool",
         data: {
           phase: "review",
           toolCallId: targetItemId,
           hideFromChannelProgress: true,
-          ...(guardianWarningMessage ? { guardianWarningMessage } : {}),
+          approvalReviewOutcome,
           review: approvalReview,
         },
       });
@@ -190,9 +192,27 @@ export class CodexEventProjection {
   }
 
   handleGuardianWarning(params: JsonObject): void {
+    this.flushPendingGuardianWarning();
+    const message = readString(params, "message");
+    if (message) {
+      this.pendingGuardianWarning = message;
+      return;
+    }
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
-      data: { phase: "warning", message: readString(params, "message") },
+      data: { phase: "warning", message },
+    });
+  }
+
+  flushPendingGuardianWarning(): void {
+    const pending = this.pendingGuardianWarning;
+    if (!pending) {
+      return;
+    }
+    this.pendingGuardianWarning = undefined;
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: { phase: "warning", message: pending },
     });
   }
 
@@ -271,6 +291,13 @@ export class CodexEventProjection {
     }
     const { item } = params;
     const { name, status, args, meta, event } = projection;
+    const approvalReviewOutcome =
+      params.phase === "result"
+        ? this.toolTranscript.finalizeToolApprovalReviews(item.id)
+        : undefined;
+    if (event && approvalReviewOutcome) {
+      event.data.approvalReviewOutcome = approvalReviewOutcome;
+    }
     this.toolTranscript.recordTrajectoryEvent({ phase: params.phase, item, name, args, status });
     if (params.phase === "result") {
       this.toolProgress.recordNativeToolError({ item, name, meta, status });

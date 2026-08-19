@@ -235,6 +235,13 @@ export class CodexAppServerEventProjector {
     } else if (!isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
+    if (
+      notification.method !== "guardianWarning" &&
+      notification.method !== "item/autoApprovalReview/started" &&
+      notification.method !== "item/autoApprovalReview/completed"
+    ) {
+      this.eventProjection.flushPendingGuardianWarning();
+    }
     this.nativeToolLifecycleProjector.handleNotification(notification);
     this.assistantProjection.handleNotification(notification.method, params);
 
@@ -337,6 +344,7 @@ export class CodexAppServerEventProjector {
     toolTelemetry: CodexAppServerToolTelemetry,
     options?: { yieldDetected?: boolean },
   ): EmbeddedRunAttemptResult & { terminalTurnId: string } {
+    this.eventProjection.flushPendingGuardianWarning();
     return buildCodexAttemptResult({
       runParams: this.params,
       turnId: this.turnId,

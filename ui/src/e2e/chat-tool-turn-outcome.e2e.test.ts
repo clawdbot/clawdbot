@@ -687,17 +687,6 @@ suite.define(() => {
         ts: now + 1,
         sessionKey: "main",
         data: {
-          phase: "warning",
-          message: `Automatic approval review ${outcome} (risk: ${riskLevel}, authorization: ${userAuthorization}): ${rationale}`,
-        },
-      });
-      await gateway.emitGatewayEvent("agent", {
-        runId,
-        seq: 3,
-        stream: "codex_app_server.guardian",
-        ts: now + 2,
-        sessionKey: "main",
-        data: {
           phase: "completed",
           reviewId: `review-${outcome}`,
           targetItemId: toolCallId,
@@ -709,15 +698,15 @@ suite.define(() => {
       });
       await gateway.emitGatewayEvent("agent", {
         runId,
-        seq: 4,
+        seq: 3,
         stream: "tool",
-        ts: now + 3,
+        ts: now + 2,
         sessionKey: "main",
         data: {
           phase: "review",
           toolCallId,
           hideFromChannelProgress: true,
-          guardianWarningMessage: `Automatic approval review ${outcome} (risk: ${riskLevel}, authorization: ${userAuthorization}): ${rationale}`,
+          approvalReviewOutcome: outcome,
           review: {
             id: `review-${outcome}`,
             label: "Guardian",
@@ -730,9 +719,9 @@ suite.define(() => {
       });
       await gateway.emitGatewayEvent("agent", {
         runId,
-        seq: 5,
+        seq: 4,
         stream: "tool",
-        ts: now + 4,
+        ts: now + 3,
         sessionKey: "main",
         data: {
           toolCallId,
