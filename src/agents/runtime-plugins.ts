@@ -13,9 +13,9 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveUserPath } from "../utils.js";
-import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import {
   resolveAgentRuntimePluginLoadPlan,
+  resolveAgentRuntimePluginSelections,
   type AgentHarnessPluginSelection,
 } from "./harness/runtime-plugin-load-plan.js";
 
@@ -77,14 +77,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
     config: params.config,
     workspaceDir: workspaceDir ?? process.cwd(),
     ...(startupPluginIds === undefined ? {} : { basePluginIds: startupPluginIds }),
-    selections: [
-      ...collectConfiguredAgentHarnessRuntimes(params.config ?? {}).map((runtime) => ({
-        runtime,
-        provider: "",
-        modelId: "",
-      })),
-      ...(params.selections ?? []),
-    ],
+    selections: resolveAgentRuntimePluginSelections(params.config, params.selections ?? []),
     metadataSnapshot,
   };
   const plan = resolveAgentRuntimePluginLoadPlan(planParams);

@@ -1,4 +1,5 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -36,6 +37,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     retainIdleRunOwner?: boolean;
     catalogMode?: PreparedModelRuntimeCatalogMode;
     pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
   let normalizedInput = normalizePreparedModelRuntimeInput({
@@ -127,6 +129,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           provenance,
           options.catalogMode,
           options.pluginGeneration,
+          options.pluginMetadataSnapshot,
         );
       }
     } catch (error) {

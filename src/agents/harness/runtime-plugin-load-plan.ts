@@ -4,11 +4,18 @@ import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
 import {
   isTestDefaultMemorySlotDisabled,
+  normalizePluginsConfig,
   resolveEffectivePluginActivationState,
   resolveSelectedContextEnginePluginId,
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { hashJson } from "../../plugins/installed-plugin-index-hash.js";
+import { createInstalledPluginIndexScopeLookup } from "../../plugins/installed-plugin-index-scope-lookup.js";
+import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
+import type {
+  PluginMetadataSnapshot,
+  PluginMetadataSnapshotPluginIdScope,
+} from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   loadPluginRegistrySnapshot,
   normalizePluginsConfigWithRegistry,
@@ -23,6 +30,7 @@ import {
   OPENCLAW_AGENT_RUNTIME_ID,
   normalizeOptionalAgentRuntimeId,
 } from "../agent-runtime-id.js";
+import { collectConfiguredAgentHarnessRuntimes } from "../harness-runtimes.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
@@ -84,6 +92,96 @@ function resolveSelectedMemoryPluginIds(params: {
   }).activated
     ? [plugin.pluginId]
     : [];
+}
+
+export function resolveAgentRuntimePluginSelections(
+  config: OpenClawConfig | undefined,
+  selections: readonly AgentHarnessPluginSelection[],
+): AgentHarnessPluginSelection[] {
+  return [
+    ...collectConfiguredAgentHarnessRuntimes(config ?? {}).map((runtime) => ({
+      runtime,
+      provider: "",
+      modelId: "",
+    })),
+    ...selections,
+  ];
+}
+
+function resolveAgentRuntimeMetadataPluginIds(params: {
+  config?: OpenClawConfig;
+  selections: readonly AgentHarnessPluginSelection[];
+  shorthandModelIds?: readonly string[];
+  index: InstalledPluginIndex;
+}): string[] | undefined {
+  if (!normalizePluginsConfig(params.config?.plugins).enabled) {
+    return [];
+  }
+  const lookup = createInstalledPluginIndexScopeLookup(params.index);
+  const pluginIds = new Set<string>();
+  lookup.addShorthandModelOwners(pluginIds, params.shorthandModelIds ?? []);
+  const selections = resolveAgentRuntimePluginSelections(params.config, params.selections);
+  const providerIds = dedupePluginIds(selections.map((selection) => selection.provider));
+  for (const providerId of providerIds) {
+    const providerPluginIds = new Set<string>();
+    lookup.addDirectProviderOwners(providerPluginIds, [providerId]);
+    if (providerPluginIds.size === 0) {
+      lookup.addProviderContributionOwners(providerPluginIds, [providerId]);
+    }
+    if (providerPluginIds.size !== 1) {
+      return undefined;
+    }
+    for (const pluginId of providerPluginIds) {
+      pluginIds.add(pluginId);
+    }
+  }
+  const runtimeIds = dedupePluginIds(
+    selections
+      .map((selection) => resolveSelectedAgentHarnessRuntime(selection, params.config))
+      .filter(
+        (runtime) => !isDefaultAgentRuntimeId(runtime) && runtime !== OPENCLAW_AGENT_RUNTIME_ID,
+      ),
+  );
+  if (!lookup.hasAgentHarnessOwners(runtimeIds)) {
+    return undefined;
+  }
+  lookup.addAgentHarnessOwners(pluginIds, runtimeIds);
+  // Metadata retains every memory candidate so the canonical runtime plan can
+  // select the active memory owner and any manifest-declared companion sidecar.
+  lookup.addMemoryPluginIds(pluginIds);
+  const contextEnginePluginId = resolveSelectedContextEnginePluginId(params.config);
+  if (contextEnginePluginId) {
+    pluginIds.add(contextEnginePluginId);
+  }
+  if (!lookup.hasInstalledPluginIds(pluginIds)) {
+    return undefined;
+  }
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Narrows cold manifest preparation to candidates needed by one selected runtime generation. */
+export function createAgentRuntimeMetadataPluginIdScope(params: {
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  selections: readonly AgentHarnessPluginSelection[];
+  shorthandModelIds?: readonly string[];
+}): PluginMetadataSnapshotPluginIdScope {
+  return {
+    key: hashJson({
+      kind: "agent-runtime",
+      config: params.config ?? null,
+      workspaceDir: params.workspaceDir,
+      selections: params.selections,
+      shorthandModelIds: params.shorthandModelIds ?? [],
+    }),
+    resolve: ({ index }) =>
+      resolveAgentRuntimeMetadataPluginIds({
+        config: params.config,
+        selections: params.selections,
+        shorthandModelIds: params.shorthandModelIds,
+        index,
+      }),
+  };
 }
 
 // Every selected model provider must join the immutable run generation before
