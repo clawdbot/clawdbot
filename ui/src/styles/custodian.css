@@ -198,7 +198,7 @@ openclaw-custodian-page {
   gap: 4px;
   margin: 0;
   padding-left: 20px;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: 12px;
 }
 
