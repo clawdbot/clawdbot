@@ -362,7 +362,7 @@ export class GatewayClient {
   private pendingStop: PendingStop | null = null;
   private transportValidated = false;
   private suppressedTransientPreHelloCleanCloses = 0;
-  private maxPayloadBytes = DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES;
+  private maxPayloadBytes: number | undefined;
 
   constructor(opts: GatewayClientOptions) {
     // Defaults keep the package inert until device identity support is used.

@@ -4,7 +4,6 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
 export {
-  DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES,
   resolveGatewayMaxPayloadBytes,
   validateGatewayRequestFrame,
 } from "@openclaw/gateway-client/browser";

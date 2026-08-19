@@ -19,7 +19,7 @@ type PayloadHarness = {
     hello: { auth?: HelloOk["auth"]; policy?: Partial<HelloOk["policy"]> },
     assembled: unknown,
   ) => void;
-  maxPayloadBytes: number;
+  maxPayloadBytes: number | undefined;
 };
 
 function protocolHarness(client: GatewayClient): ProtocolHarness {
@@ -98,7 +98,7 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
-  test("keeps the default request payload limit when hello omits policy", async () => {
+  test("keeps the default request payload limit for an invalid policy", async () => {
     const { client, send } = createOpenGatewayClient(25);
     const harness = payloadHarness(client);
     harness.handleConnectHello({ auth: { role: "operator", scopes: [] } }, {});
@@ -155,7 +155,7 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
-  test("resets the request payload limit when reconnecting to a policyless Gateway", async () => {
+  test("does not add a post-auth request limit for a policyless Gateway", async () => {
     const { client, send } = createOpenGatewayClient(25);
     const harness = payloadHarness(client);
     harness.handleConnectHello(
@@ -181,7 +181,7 @@ describe("GatewayClient", () => {
     });
 
     await expect(request).resolves.toEqual({ status: "ok" });
-    expect(harness.maxPayloadBytes).toBe(25 * 1024 * 1024);
+    expect(harness.maxPayloadBytes).toBeUndefined();
     expect(send).toHaveBeenCalledTimes(1);
     client.stop();
   });

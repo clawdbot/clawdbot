@@ -51,7 +51,14 @@ const mocks = vi.hoisted(() => ({
       details: { path: params.path, ...details, media: { ...media, mediaUrl: params.path } },
     };
   }),
-  listNodes: vi.fn(async () => []),
+  listNodes: vi.fn(async () => [
+    {
+      nodeId: "node-1",
+      platform: "macos",
+      connected: true,
+      invocableCommands: ["canvas.present"],
+    },
+  ]),
   resolveNodeIdFromList: vi.fn(() => "node-1"),
   saveMediaBuffer: vi.fn<typeof import("openclaw/plugin-sdk/media-store").saveMediaBuffer>(
     async (buffer) => ({
@@ -85,7 +92,14 @@ describe("Canvas tool", () => {
     mocks.callGatewayTool.mockReset();
     mocks.imageResultFromFile.mockClear();
     mocks.listNodes.mockClear();
-    mocks.listNodes.mockResolvedValue([]);
+    mocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        platform: "macos",
+        connected: true,
+        invocableCommands: ["canvas.present"],
+      },
+    ]);
     mocks.resolveNodeIdFromList.mockClear();
     mocks.resolveNodeIdFromList.mockReturnValue("node-1");
     mocks.saveMediaBuffer.mockClear();
