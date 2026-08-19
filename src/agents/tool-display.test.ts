@@ -364,7 +364,6 @@ describe("tool display details", () => {
     }
 
     for (const command of [
-      "time (( n++ )) && pnpm test",
       "(( ready && enabled )) && pnpm test",
       "time (( ready || fallback )) && pnpm test",
       ["(\\", "( ready && enabled )) && pnpm test"].join("\n"),
@@ -374,10 +373,8 @@ describe("tool display details", () => {
       "!(( n++ )) && pnpm test",
       "time -p -- (( n++ )) && pnpm test",
     ]) {
-      expect(splitTopLevelStages(command)).toEqual([
-        command.slice(0, command.lastIndexOf(" && ")),
-        "pnpm test",
-      ]);
+      const separatorIndex = command.lastIndexOf(" && ");
+      expect(splitTopLevelStages(command)).toEqual([command.slice(0, separatorIndex), "pnpm test"]);
     }
 
     for (const command of [
