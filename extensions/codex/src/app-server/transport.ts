@@ -36,9 +36,13 @@ export function closeCodexAppServerTransport(
   child: CodexAppServerTransport,
   options: { forceKillDelayMs?: number } = {},
 ): void {
-  terminateCodexAppServerDescendants(child);
-  child.stdin.end?.();
-  child.stdin.destroy?.();
+  const resumeRoot = terminateCodexAppServerDescendants(child);
+  try {
+    child.stdin.end?.();
+    child.stdin.destroy?.();
+  } finally {
+    resumeRoot?.();
+  }
   const forceKillDelayMs = options.forceKillDelayMs ?? 1_000;
   const forceKill = setTimeout(
     () => {

@@ -16,7 +16,9 @@ type PosixProcess = {
 
 const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
 
-export function terminateCodexAppServerDescendants(child: ContainableTransport): void {
+export function terminateCodexAppServerDescendants(
+  child: ContainableTransport,
+): (() => void) | undefined {
   const rootPid = child.pid;
   if (process.platform === "win32" || !rootPid || hasExited(child)) {
     return;
@@ -35,6 +37,7 @@ export function terminateCodexAppServerDescendants(child: ContainableTransport):
   if (!signalSameRoot(root, "SIGSTOP")) {
     return;
   }
+  let resumeRootOnUnwind = true;
   try {
     const descendants = quiesceDescendants(root, initialDescendants, stoppedDescendants);
     if (!descendants) {
@@ -48,11 +51,22 @@ export function terminateCodexAppServerDescendants(child: ContainableTransport):
         signalSameProcess(descendant, "SIGKILL");
       }
     }
+    resumeRootOnUnwind = false;
+    let resumed = false;
+    return () => {
+      if (resumed) {
+        return;
+      }
+      resumed = true;
+      signalSameRoot(root, "SIGCONT");
+    };
   } finally {
     for (const descendant of stoppedDescendants.values()) {
       signalSameProcess(descendant, "SIGCONT");
     }
-    signalSameRoot(root, "SIGCONT");
+    if (resumeRootOnUnwind) {
+      signalSameRoot(root, "SIGCONT");
+    }
   }
 }
 
