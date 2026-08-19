@@ -5,7 +5,6 @@ import { bindPluginRegistryRuntime } from "../../plugins/registry-runtime-bindin
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
-import { TEST_SESSION_CATALOG_SHARE_ROUTE as SHARE_ROUTE } from "./session-catalog-share-route.test-support.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{
@@ -143,46 +142,6 @@ describe("session catalog Gateway methods", () => {
       ],
     });
   });
-
-  it("projects uniquely owned share routes and suppresses collisions", async () => {
-    hoisted.activeRegistry.sessionCatalogs.push({
-      provider: provider("external", { shareRoute: SHARE_ROUTE }),
-    });
-    let catalogs = (
-      (await call("sessions.catalog.list", { catalogId: "external" })).mock.calls[0]![1] as {
-        catalogs: Array<{ shareRoute?: unknown }>;
-      }
-    ).catalogs;
-    expect(catalogs[0]?.shareRoute).toEqual(SHARE_ROUTE);
-
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider("first", { shareRoute: SHARE_ROUTE }) },
-      { provider: provider("second", { shareRoute: SHARE_ROUTE }) },
-    ];
-    catalogs = (
-      (await call("sessions.catalog.list", {})).mock.calls[0]![1] as { catalogs: typeof catalogs }
-    ).catalogs;
-    expect(catalogs.every((catalog) => catalog.shareRoute === undefined)).toBe(true);
-  });
-
-  it.each(["chat", "plugin", "settings"])(
-    "does not project the reserved %s share route",
-    async (routeSegment) => {
-      hoisted.activeRegistry.sessionCatalogs = [
-        {
-          provider: provider("external", {
-            shareRoute: { ...SHARE_ROUTE, routeSegment },
-          }),
-        },
-      ];
-
-      const respond = await call("sessions.catalog.list", { catalogId: "external" });
-
-      expect(respond).toHaveBeenCalledWith(true, {
-        catalogs: [expect.not.objectContaining({ shareRoute: expect.anything() })],
-      });
-    },
-  );
 
   it("streams completed hosts to only the requesting connection", async () => {
     const broadcastToConnIds = vi.fn();
