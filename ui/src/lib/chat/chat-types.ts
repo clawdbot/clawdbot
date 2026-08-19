@@ -115,8 +115,15 @@ export type ChatItem =
       action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
-  | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
-  | { kind: "reading-indicator"; key: string; startedAt: number }
+  | {
+      kind: "stream";
+      key: string;
+      text: string;
+      startedAt: number;
+      isStreaming: boolean;
+      runId?: string;
+    }
+  | { kind: "reading-indicator"; key: string; startedAt: number; runId?: string }
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
@@ -177,6 +184,7 @@ export type MessageGroup = {
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
+  runId?: string;
 };
 
 /** Content item types in a normalized message */

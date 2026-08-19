@@ -1,5 +1,9 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -16,6 +20,7 @@ import {
   safeNormalizeMessage,
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations } from "./stream-causal-boundary.ts";
+import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 
 export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
   const record = asRecord(message);
@@ -24,6 +29,19 @@ export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean
   }
   const fallback = asRecord(record?.openclawStreamFallback);
   return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
+}
+
+function transcriptRunId(message: unknown): string | undefined {
+  const identity = readSessionMessageIdentity(message);
+  if (identity?.runId) {
+    return identity.runId;
+  }
+  const record = asRecord(message);
+  return (
+    readLiveTerminalRunId(message) ??
+    normalizeOptionalString(record?.runId) ??
+    normalizeOptionalString(asRecord(record?.openclawStreamFallback)?.runId)
+  );
 }
 
 function stampReplyAttribution(
@@ -78,6 +96,8 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
     const timestamp = normalized.timestamp || Date.now();
+    const runId =
+      role === "assistant" || role === "tool" ? transcriptRunId(item.message) : undefined;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
@@ -96,6 +116,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
+      currentGroup.runId !== runId ||
       splitsAssistantCommentary ||
       splitsRuntimeActivity ||
       (shouldSplitBySender &&
@@ -114,6 +135,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,
         isStreaming: false,
+        ...(runId ? { runId } : {}),
       };
     } else {
       currentGroup.messages.push({
@@ -468,9 +490,10 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
 }
 
 type RenderChatItem = ChatItem | MessageGroup;
-type StreamRunRenderItem = {
+export type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;
+  runId?: string;
   parts: Array<
     Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" }>
   >;
@@ -486,17 +509,128 @@ export function coalesceStreamRuns(
   const flush = () => {
     const [first] = run;
     if (first) {
-      result.push({ kind: "stream-run", key: `stream-run:${first.key}`, parts: run });
+      result.push({
+        kind: "stream-run",
+        key: `stream-run:${first.key}`,
+        parts: run,
+        ...(first.runId ? { runId: first.runId } : {}),
+      });
       run = [];
     }
   };
   for (const item of items) {
     if (item.kind === "stream" || item.kind === "reading-indicator") {
+      if (run.length > 0 && run[0]?.runId !== item.runId) {
+        flush();
+      }
       run.push(item);
       continue;
     }
     flush();
     result.push(item);
+  }
+  flush();
+  return result;
+}
+
+type AgentRunRenderItemBase = {
+  kind: "agent-run";
+  key: string;
+  runId: string;
+  parts: Array<MessageGroup | StreamRunRenderItem>;
+};
+
+export type AgentRunRenderItem =
+  | (AgentRunRenderItemBase & { state: "active" })
+  | (AgentRunRenderItemBase & { state: "terminal"; actionMessageKey: string | null });
+
+function agentRunPartId(item: RenderChatItem | StreamRunRenderItem): string | undefined {
+  if (item.kind === "group" && (item.role === "assistant" || item.role === "tool")) {
+    return item.runId;
+  }
+  return item.kind === "stream-run" ? item.runId : undefined;
+}
+
+function agentRunPartStartsBoundary(item: RenderChatItem | StreamRunRenderItem): boolean {
+  return (
+    item.kind === "group" &&
+    asRecord(asRecord(item.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true
+  );
+}
+
+function agentRunHasAssistantContent(parts: AgentRunRenderItem["parts"]): boolean {
+  return parts.some(
+    (part) =>
+      part.kind === "stream-run" ||
+      (part.role === "assistant" && assistantGroupHasVisibleReplyContent(part)),
+  );
+}
+
+function terminalAgentRunMessageKey(parts: AgentRunRenderItem["parts"]): string | null {
+  const lastPart = parts.at(-1);
+  if (
+    lastPart?.kind !== "group" ||
+    lastPart.role !== "assistant" ||
+    !assistantGroupHasVisibleReplyContent(lastPart)
+  ) {
+    return null;
+  }
+  return lastPart.messages.at(-1)?.key ?? null;
+}
+
+export function coalesceAgentRunItems(
+  items: Array<RenderChatItem | StreamRunRenderItem>,
+  activeRunId?: string | null,
+): Array<RenderChatItem | StreamRunRenderItem | AgentRunRenderItem> {
+  const result: Array<RenderChatItem | StreamRunRenderItem | AgentRunRenderItem> = [];
+  let runId: string | undefined;
+  let parts: AgentRunRenderItem["parts"] = [];
+  const flush = () => {
+    const first = parts[0];
+    if (!first || !runId) {
+      return;
+    }
+    if (parts.length === 1 || !agentRunHasAssistantContent(parts)) {
+      result.push(...parts);
+    } else {
+      const base = {
+        kind: "agent-run",
+        key: `agent-run:${runId}:${first.key}`,
+        runId,
+        parts,
+      } as const;
+      result.push(
+        runId === activeRunId
+          ? { ...base, state: "active" }
+          : {
+              ...base,
+              state: "terminal",
+              actionMessageKey: terminalAgentRunMessageKey(parts),
+            },
+      );
+    }
+    parts = [];
+    runId = undefined;
+  };
+
+  for (const item of items) {
+    const itemRunId = agentRunPartId(item);
+    if (!itemRunId) {
+      flush();
+      result.push(item);
+      continue;
+    }
+    if (runId && (runId !== itemRunId || agentRunPartStartsBoundary(item))) {
+      flush();
+    }
+    runId = itemRunId;
+    parts.push(item);
+    if (
+      item.kind === "stream-run" &&
+      item.parts.some((part) => part.kind === "reading-indicator")
+    ) {
+      flush();
+    }
   }
   flush();
   return result;
@@ -515,7 +649,7 @@ type ActivityRunRenderItem = {
   groups: MessageGroup[];
 };
 
-type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
+type TurnRenderItem = RenderChatItem | StreamRunRenderItem | AgentRunRenderItem;
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
@@ -605,7 +739,12 @@ export function collapseCompletedTurnWork(
   const turns: TurnRenderItem[][] = [];
   let currentTurn: TurnRenderItem[] = [];
   for (const item of items) {
-    if (item.kind !== "stream-run" && chatItemStartsUserTurn(item) && currentTurn.length > 0) {
+    if (
+      item.kind !== "stream-run" &&
+      item.kind !== "agent-run" &&
+      chatItemStartsUserTurn(item) &&
+      currentTurn.length > 0
+    ) {
       turns.push(currentTurn);
       currentTurn = [];
     }

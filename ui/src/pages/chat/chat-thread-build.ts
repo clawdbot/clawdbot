@@ -571,6 +571,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           text: visibleText,
           startedAt: segment.ts,
           isStreaming: false,
+          ...(normalizeOptionalString(segment.runId)
+            ? { runId: normalizeOptionalString(segment.runId) }
+            : {}),
         };
         timestampedProjectionItems.push(streamItem);
         applyRunBounds(
@@ -639,6 +642,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       text,
       startedAt: segment.ts,
       isStreaming: false,
+      ...(normalizeOptionalString(segment.runId)
+        ? { runId: normalizeOptionalString(segment.runId) }
+        : {}),
     };
     timestampedProjectionItems.push(commentaryItem);
     applyRunBounds(
@@ -720,6 +726,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,
+        ...(normalizeOptionalString(props.runId)
+          ? { runId: normalizeOptionalString(props.runId) }
+          : {}),
       };
       const liveTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
       const liveTurnBounds = liveTurnRunId ? findRunTurnBounds(items, liveTurnRunId) : null;
@@ -732,7 +741,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
   if (showWorkingIndicator) {
-    items.push({ kind: "reading-indicator", ...resolveProgress() });
+    items.push({
+      kind: "reading-indicator",
+      ...resolveProgress(),
+      ...(normalizeOptionalString(props.runId)
+        ? { runId: normalizeOptionalString(props.runId) }
+        : {}),
+    });
   }
   // Future queued turns are a causal ceiling for every current-run projection.
   // Append them after tools, streams, progress, and prompts so none can cross the
