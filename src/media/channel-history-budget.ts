@@ -128,10 +128,13 @@ export function createChannelHistoryMediaBudget(deps: ChannelHistoryMediaBudgetD
         }
       });
     },
-    async enforce(): Promise<void> {
+    async enforce(this: void): Promise<void> {
       await queue(pruneToLimits);
     },
-    setLimitsForTest(limits?: { maxBytes: number; maxFiles: number; ttlMs?: number }): void {
+    setLimitsForTest(
+      this: void,
+      limits?: { maxBytes: number; maxFiles: number; ttlMs?: number },
+    ): void {
       limitsForTest = limits
         ? {
             maxBytes: limits.maxBytes,
