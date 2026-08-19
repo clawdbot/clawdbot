@@ -55,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
+  listAvailableManifestContractValues: vi.fn(() => ["clawrouter", "deepseek", "kimi"]),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
 }));
 
@@ -106,6 +107,11 @@ vi.mock("../../secrets/runtime.js", () => ({
 vi.mock("../../agents/model-provider-auth.js", () => ({
   clearCurrentProviderAuthState: mocks.clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread: mocks.warmCurrentProviderAuthStateOffMainThread,
+}));
+
+vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
+  listAvailableManifestContractValues: mocks.listAvailableManifestContractValues,
+  loadManifestContractSnapshot: vi.fn(() => ({ index: {}, plugins: [] })),
 }));
 
 import {
@@ -257,6 +263,7 @@ function resetAuthStatusMocks(): void {
   });
   mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
   mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValue(false);
+  mocks.listAvailableManifestContractValues.mockReturnValue(["clawrouter", "deepseek", "kimi"]);
 }
 
 afterEach(() => {
@@ -1030,6 +1037,40 @@ describe("models.authStatus", () => {
         { label: "7d", usedPercent: 3 },
       ],
     });
+  });
+
+  it("loads API-key usage for providers declared by the manifest contract", async () => {
+    mocks.listAvailableManifestContractValues.mockReturnValue(["manifest-usage"]);
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [createApiKeyProfile("manifest-usage")],
+      providers: [createStaticApiKeyProvider("manifest-usage")],
+    });
+
+    await readAuthStatus();
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      providers: ["manifest-usage"],
+      agentDir: "/tmp/agent",
+      timeoutMs: 3500,
+    });
+  });
+
+  it("does not load API-key usage when manifest discovery fails", async () => {
+    mocks.listAvailableManifestContractValues.mockImplementation(() => {
+      throw new Error("invalid manifest");
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [createApiKeyProfile("deepseek")],
+      providers: [createStaticApiKeyProvider("deepseek")],
+    });
+
+    await readAuthStatus();
+
+    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
   it("serves stale usage immediately while one background refresh replaces it", async () => {

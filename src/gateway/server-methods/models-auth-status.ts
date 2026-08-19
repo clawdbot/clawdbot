@@ -48,6 +48,10 @@ import { coerceSecretRef, hasConfiguredSecretInput } from "../../config/types.se
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  listAvailableManifestContractValues,
+  loadManifestContractSnapshot,
+} from "../../plugins/manifest-contract-eligibility.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
@@ -79,7 +83,22 @@ export type {
 } from "./models-auth-status.types.js";
 
 const log = createSubsystemLogger("models-auth-status");
-const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek", "kimi"]);
+
+function resolveApiKeyUsageStatusProviders(cfg: OpenClawConfig): ReadonlySet<UsageProviderId> {
+  try {
+    const snapshot = loadManifestContractSnapshot({ config: cfg });
+    return new Set(
+      listAvailableManifestContractValues({
+        snapshot,
+        contract: "usageProviders",
+        config: cfg,
+      }),
+    );
+  } catch (err) {
+    log.warn(`usage provider manifest discovery failed: ${formatForLog(err)}`);
+    return new Set();
+  }
+}
 
 /**
  * Invalidate auxiliary usage and prepared provider-auth state after an auth
@@ -605,6 +624,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         providers: statusProviderIds.size > 0 ? [...statusProviderIds] : undefined,
         allowKeychainPrompt: false,
       });
+      const apiKeyUsageStatusProviders = resolveApiKeyUsageStatusProviders(cfg);
 
       // Usage queries usually need refreshable credentials. Keep API-key status
       // enrichment explicit so static auth providers are not polled by default.
