@@ -320,6 +320,13 @@ export function createBoardHandlers(
             // Reconstructed or revoked source leases may be pinned only as read-only content.
           }
           const allowedTools = interactive ? await mcpApp.resolveAllowedToolNames(active) : [];
+          if (interactive) {
+            try {
+              await requireMcpAppInteraction(view);
+            } catch {
+              interactive = false;
+            }
+          }
           content = {
             kind: "mcp-app",
             descriptor: {
@@ -330,7 +337,7 @@ export function createBoardHandlers(
             },
             interactive,
           };
-          declared = allowedTools.length > 0 ? { tools: allowedTools } : undefined;
+          declared = interactive && allowedTools.length > 0 ? { tools: allowedTools } : undefined;
         } else if (requestParams.content.kind === "registered") {
           const registration = resolveBoardWidgetContentKind(
             getActivePluginRegistry(),

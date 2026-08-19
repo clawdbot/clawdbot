@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
@@ -11,6 +12,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
 
 const READY_TYPE = "openclaw-mcp-parity-ready";
+const APP_URI = "ui://parity/app";
 
 function readOption(name) {
   const index = process.argv.indexOf(name);
@@ -65,6 +67,43 @@ function buildProbeResult({ label, marker, generation, expiryCalls }) {
     : response;
 }
 
+function waitForFile(filePath) {
+  if (fs.existsSync(filePath)) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const directory = path.dirname(filePath);
+    const filename = path.basename(filePath);
+    const watcher = fs.watch(directory, (_event, changed) => {
+      if (changed && changed.toString() !== filename) {
+        return;
+      }
+      if (fs.existsSync(filePath)) {
+        watcher.close();
+        resolve();
+      }
+    });
+    watcher.once("error", reject);
+    if (fs.existsSync(filePath)) {
+      watcher.close();
+      resolve();
+    }
+  });
+}
+
+async function holdNextCatalogList(catalogGate) {
+  if (
+    !catalogGate?.notificationSent ||
+    catalogGate.claimed ||
+    !fs.existsSync(path.join(catalogGate.directory, "arm"))
+  ) {
+    return;
+  }
+  catalogGate.claimed = true;
+  fs.writeFileSync(path.join(catalogGate.directory, "started"), "started\n", { flag: "wx" });
+  await waitForFile(path.join(catalogGate.directory, "release"));
+}
+
 function createProbeServer(label, catalogState = { rotated: false }, control = {}) {
   catalogState.generations ??= {};
   const generation = (catalogState.generations[label] ?? 0) + 1;
@@ -105,6 +144,38 @@ function createProbeServer(label, catalogState = { rotated: false }, control = {
   server.registerTool("parity_hidden", initialToolConfig, async ({ marker }) =>
     buildProbeResult({ label: `${label}-hidden`, marker, generation }),
   );
+  if (control.appFixture) {
+    const appTool = server.registerTool("parity_app", initialToolConfig, async ({ marker }) => {
+      fs.appendFileSync(
+        control.appFixture.eventPath,
+        `${JSON.stringify({ type: "parity_app_call", marker })}\n`,
+      );
+      if (marker === "notify-list-changed") {
+        control.appFixture.catalogGate.notificationSent = true;
+        server.sendToolListChanged();
+        // The SDK helper is fire-and-forget. Yield once so the notification is
+        // queued before the successful call lets the next request begin.
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      return buildProbeResult({ label: `${label}-app`, marker, generation });
+    });
+    appTool.update({ _meta: { ui: { resourceUri: APP_URI } } });
+    server.registerResource(
+      "parity_app",
+      APP_URI,
+      { mimeType: "text/html;profile=mcp-app" },
+      async (uri) => ({
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "text/html;profile=mcp-app",
+            text: "<!doctype html><main>Parity MCP App</main>",
+            _meta: { ui: { csp: { connectDomains: [] } } },
+          },
+        ],
+      }),
+    );
+  }
   return server;
 }
 
@@ -236,6 +307,17 @@ async function runHttp() {
   const sessions = new Map();
   const records = new Set();
   const catalogState = { rotated: false, expiryCalls: 0 };
+  const appFixtureEnabled = process.env.MCP_APP_GRANT_REVALIDATION_FIXTURE === "1";
+  const catalogGateDirectory = process.env.MCP_APP_CATALOG_GATE_DIR;
+  const appEventPath = process.env.MCP_APP_EVENT_PATH;
+  if (appFixtureEnabled && (!catalogGateDirectory || !appEventPath)) {
+    throw new Error("MCP App grant fixture requires catalog gate and event paths");
+  }
+  const catalogGate = appFixtureEnabled
+    ? { directory: catalogGateDirectory, notificationSent: false, claimed: false }
+    : undefined;
+  const appFixture =
+    catalogGate && appEventPath ? { catalogGate, eventPath: appEventPath } : undefined;
   let failStreamableGets = 0;
   let terminalSseOnce = false;
   const route = (handler) => (req, res, next) => void handler(req, res).catch(next);
@@ -295,6 +377,7 @@ async function runHttp() {
           },
         });
         const server = createProbeServer(`${labelPrefix}-streamable-http`, catalogState, {
+          appFixture,
           breakNotifications: () => {
             failStreamableGets = 2;
             setTimeout(() => createdTransport.closeStandaloneSSEStream(), 25);
@@ -306,6 +389,9 @@ async function runHttp() {
       } else {
         rpcError(res, -32000, "Missing Streamable HTTP session");
         return;
+      }
+      if (req.method === "POST" && req.body?.method === "tools/list") {
+        await holdNextCatalogList(catalogGate);
       }
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
