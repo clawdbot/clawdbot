@@ -292,6 +292,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     // coordinator path is gone, so none of its credentials may be wired.
     const crabbox = workflowStep("Install Crabbox CLI");
     expect(crabbox.run).toContain("github.com/openclaw/crabbox.git");
+    // Every variable the restored step reads must exist, or `set -u` kills it.
+    expect((parse(workflowText) as Workflow).env?.CRABBOX_REF).toBe("main");
     expect(crabbox.run).toContain('grep -q -- "-desktop"');
     expect(workflowText).not.toContain("CRABBOX_ACCESS_CLIENT_ID");
     expect(workflowText).not.toContain("CRABBOX_ACCESS_CLIENT_SECRET");

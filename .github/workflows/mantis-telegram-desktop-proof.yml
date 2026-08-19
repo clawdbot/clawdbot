@@ -27,6 +27,9 @@ permissions:
   pull-requests: write
 
 env:
+  # Crabbox CLI source for the local-container desktop provider. No coordinator
+  # credential reaches this build, so tracking main is the same trust as before.
+  CRABBOX_REF: main
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
