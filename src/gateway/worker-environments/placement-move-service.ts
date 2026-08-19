@@ -20,12 +20,14 @@ import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-life
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerMovePlacement = Extract<WorkerDispatchPlacement, { state: "local" | "active" }>;
 type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
+type WorkerPlacementMoveSourceDisposition = "reconcile" | "abandon";
 const RESTART_AUTHORITY_EXPIRED =
   "Cloud worker move request authority expired after Gateway restart; retry move";
 
 export type WorkerPlacementMoveBarrier = (
   params: MoveSessionIdentity & {
     authorize?: WorkerPlacementAuthorization;
+    sourceDisposition: WorkerPlacementMoveSourceDisposition;
     begin: () => {
       intent: WorkerPlacementMoveIntent;
       placement: WorkerDrainingDispatchPlacement;
@@ -123,6 +125,7 @@ export function createWorkerPlacementMoveService(options: {
         sessionId: request.sessionId,
         sessionKey: request.sessionKey,
         agentId: request.agentId,
+        sourceDisposition: request.abandonSource ? "abandon" : "reconcile",
         authorize,
         begin: () => {
           if (request.abandonSource) {

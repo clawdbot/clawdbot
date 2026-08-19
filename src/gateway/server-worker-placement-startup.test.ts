@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  runExclusiveSessionLifecycleMutation,
+} from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
   createDispatch: vi.fn(),
@@ -102,6 +106,7 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
 });
 
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
 import { createWorkerPlacementMoveService } from "./worker-environments/placement-move-service.js";
 
 describe("worker placement startup health lifetime", () => {
@@ -532,6 +537,110 @@ describe("worker placement startup health lifetime", () => {
 });
 
 describe("worker placement move destination", () => {
+  it.each([
+    { sourceDisposition: "abandon" as const, settlesImmediately: true },
+    { sourceDisposition: "reconcile" as const, settlesImmediately: false },
+  ])(
+    "$sourceDisposition move interruption preserves its settlement contract",
+    async ({ sourceDisposition, settlesImmediately }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        vi.useFakeTimers();
+        const sessionId = "session-move-source";
+        const sessionKey = "agent:main:move-source";
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          cfg: {},
+          key: sessionKey,
+          agentId: "main",
+          clone: false,
+        });
+        const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
+        const onInterrupt = vi.fn();
+        const admission = await beginSessionWorkAdmission({
+          scope: target.storePath,
+          identities,
+          assertAllowed: () => undefined,
+          onInterrupt,
+        });
+        const waitForTurnClaimRelease = vi.fn().mockResolvedValue(undefined);
+        runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+          read: vi.fn(),
+          version: vi.fn(() => 0),
+          sweep: vi.fn().mockResolvedValue(undefined),
+        });
+        runtimeFactoryMocks.createDispatch.mockReturnValue({
+          dispatch: vi.fn(),
+          forceDestroyEnvironment: vi.fn(),
+          move: vi.fn(),
+          reclaim: vi.fn(),
+          reconcile: vi.fn(),
+          reconcileActive: vi.fn(),
+        });
+        createGatewayWorkerPlacementRuntime({
+          placements: {
+            get: () => undefined,
+            list: () => [],
+            waitForTurnClaimRelease,
+            retireSessionPlacement: vi.fn(),
+            pruneOrphanedWorkspaceReconciliations: () => [],
+            listWorkspaceReconciliationOwners: () => [],
+            listPendingWorkspaceResults: () => [],
+          } as never,
+          environments: {} as never,
+          gatewayNamespace: "gateway-test",
+          revokeSessionAuthority: vi.fn(),
+          warn: vi.fn(),
+        });
+        const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as
+          | {
+              runMoveBarrier: Parameters<
+                typeof createWorkerPlacementMoveService
+              >[0]["runMoveBarrier"];
+            }
+          | undefined;
+        if (!dispatchOptions) {
+          throw new Error("worker placement move barrier was not captured");
+        }
+        const begin = vi.fn(() => ({
+          intent: {},
+          placement: { state: "draining" },
+          joined: false,
+        }));
+        const operation = dispatchOptions.runMoveBarrier({
+          sessionId,
+          sessionKey,
+          agentId: "main",
+          sourceDisposition,
+          begin,
+        } as never);
+        let settled = false;
+        void operation.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
+        try {
+          await vi.waitFor(() => expect(begin).toHaveBeenCalledOnce());
+          expect(onInterrupt).toHaveBeenCalledOnce();
+          expect(settled).toBe(settlesImmediately);
+          expect(waitForTurnClaimRelease).not.toHaveBeenCalled();
+          if (!settlesImmediately) {
+            await vi.advanceTimersByTimeAsync(15_000);
+            await expect(operation).rejects.toThrow("placement move interrupted");
+          } else {
+            await expect(operation).resolves.toMatchObject({ placement: { state: "draining" } });
+          }
+        } finally {
+          admission.release();
+          await operation.catch(() => undefined);
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
   it("rejects a remote-exec paired-device move before reclaiming the active source", async () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),

@@ -9,6 +9,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+  startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -333,7 +334,14 @@ export function createGatewayWorkerPlacementRuntime(
           void nodeWorkspaceRetention.schedule(request.deviceId);
         }
       },
-      runMoveBarrier: async ({ sessionId, sessionKey, agentId, authorize, begin }) => {
+      runMoveBarrier: async ({
+        sessionId,
+        sessionKey,
+        agentId,
+        sourceDisposition,
+        authorize,
+        begin,
+      }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const { resolveGatewaySessionStoreTargetWithStore } = sessionRuntime;
         const target = resolveGatewaySessionStoreTargetWithStore({
@@ -366,6 +374,15 @@ export function createGatewayWorkerPlacementRuntime(
             begun = begin();
             clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
+            if (sourceDisposition === "abandon") {
+              // Explicit abandonment revokes the old owner locally; its unreachable
+              // transport acknowledgement cannot delay the exact force-abandon owner.
+              startSessionWorkAdmissionInterruption({
+                scope: target.storePath,
+                identities: lifecycleIdentities,
+              });
+              return;
+            }
             const released = await interruptSessionWorkAdmissions({
               scope: target.storePath,
               identities: lifecycleIdentities,

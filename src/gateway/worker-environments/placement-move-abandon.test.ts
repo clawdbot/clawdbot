@@ -73,7 +73,8 @@ describe("offline device placement abandonment", () => {
   }
 
   it("forces the exact offline device local and closes its stale turn claim", async () => {
-    const harness = createHarness(placements);
+    let afterMoveBegin = () => {};
+    const harness = createHarness(placements, { afterMoveBegin: () => afterMoveBegin() });
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
@@ -89,6 +90,10 @@ describe("offline device placement abandonment", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
+    placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    afterMoveBegin = () => {
+      placements.markWorkspaceResultPending(claim);
+    };
 
     await expect(harness.service.move(requestFor(active))).resolves.toMatchObject({
       state: "local",
@@ -97,7 +102,42 @@ describe("offline device placement abandonment", () => {
 
     expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
+    expect(harness.log).toEqual(
+      expect.arrayContaining([
+        "placement:draining",
+        "placement:reconciling",
+        "placement:failed",
+        "teardown:destroy",
+        "placement:local",
+      ]),
+    );
+    expect(harness.log.indexOf("placement:draining")).toBeLessThan(
+      harness.log.indexOf("placement:reconciling"),
+    );
+    expect(harness.log.indexOf("placement:reconciling")).toBeLessThan(
+      harness.log.indexOf("placement:failed"),
+    );
+    expect(harness.log.indexOf("placement:failed")).toBeLessThan(
+      harness.log.indexOf("teardown:destroy"),
+    );
+    expect(harness.log.indexOf("teardown:destroy")).toBeLessThan(
+      harness.log.indexOf("placement:local"),
+    );
     expect(placements.validateTurnClaim(claim)).toBe(false);
+    expect(placements.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
+    expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
+    expect(() => placements.acceptWorkspaceResult(claim)).toThrow(
+      "Cannot update stale worker workspace result",
+    );
+    expect(
+      placements.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "late-tool-result",
+        requestDigest: "late-tool-result-digest",
+        resultJson: '{"status":"late"}',
+      }),
+    ).toBe(false);
     expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
   });
 
