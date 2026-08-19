@@ -273,8 +273,8 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.onNavigate?.(item.action.routeId);
       return;
     }
-    const { custodianSessionStore } = await import("../pages/custodian/custodian-session-store.ts");
-    custodianSessionStore.presentAlert(item.action.alert);
+    const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
+    custodianAlertStore.present(item.action.alert);
     const snapshot = this.context?.gateway.snapshot;
     if (canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
       window.dispatchEvent(

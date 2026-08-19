@@ -21,6 +21,7 @@ import "../../styles/chat/layout.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
+import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
@@ -42,12 +43,14 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   private subscribedStore: CustodianSessionStore | null = null;
   private storeCleanup: (() => void) | null = null;
+  private alertCleanup: (() => void) | null = null;
   private lastMessageId: number | null = null;
   private markdownHost: HTMLElement | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
     this.subscribeToStore();
+    this.alertCleanup = custodianAlertStore.subscribe(() => this.requestUpdate());
   }
 
   override disconnectedCallback(): void {
@@ -57,6 +60,8 @@ class CustodianSurface extends OpenClawLightDomElement {
     }
     this.storeCleanup?.();
     this.storeCleanup = null;
+    this.alertCleanup?.();
+    this.alertCleanup = null;
     this.subscribedStore = null;
     super.disconnectedCallback();
   }
@@ -81,6 +86,15 @@ class CustodianSurface extends OpenClawLightDomElement {
   }
 
   override updated(): void {
+    const store = this.store;
+    if (
+      store.chatAvailable &&
+      !store.sending &&
+      !store.hasUnresolvedQuestion() &&
+      !store.setupRequired
+    ) {
+      custodianAlertStore.askIfReady((question) => void store.send(question));
+    }
     const transcript = this.querySelector<HTMLElement>(".custodian__messages");
     if (transcript) {
       // Caretaker turns render through the assistant bubble, so they carry the
@@ -120,11 +134,11 @@ class CustodianSurface extends OpenClawLightDomElement {
   override render() {
     const store = this.store;
     const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.resourceBasePath);
-    const alertCard = store.alert
+    const alertCard = custodianAlertStore.alert
       ? renderCustodianAlertCard({
-          alert: store.alert,
+          alert: custodianAlertStore.alert,
           context: this.context,
-          onDismiss: () => store.dismissAlert(),
+          onDismiss: () => custodianAlertStore.dismiss(),
         })
       : nothing;
     if (store.setupRequired) {

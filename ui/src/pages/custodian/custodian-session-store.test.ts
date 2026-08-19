@@ -3,19 +3,11 @@
 import { buildSystemAgentSessionInvalidatedErrorDetails } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CustodianAlert } from "../../components/custodian-alert-contract.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
 import { custodianErrorMessage } from "./transcript.ts";
-
-const TEST_ALERT: CustodianAlert = {
-  id: "cron-failed:nightly",
-  title: "1 automation failed",
-  facts: ["Nightly backup: disk full"],
-  question: "Why did Nightly backup fail?",
-};
 
 describe("CustodianSessionStore", () => {
   beforeEach(() => {
@@ -72,41 +64,6 @@ describe("CustodianSessionStore", () => {
     expect(store.hasRealUserTurn()).toBe(true);
     expect(firstSurfaceUpdates).toHaveBeenCalled();
     expect(panelSurfaceUpdates).toHaveBeenCalled();
-  });
-
-  it("asks exactly once for each presented alert id", async () => {
-    const request = vi.fn((_method: string, params: { sessionId?: string; message?: string }) =>
-      Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" }),
-    );
-    const { context } = createContext(request);
-    const store = new CustodianSessionStore();
-    store.connect(context, "caretaker");
-    await waitForFast(() => expect(store.sending).toBe(false));
-
-    store.presentAlert(TEST_ALERT);
-    store.presentAlert(TEST_ALERT);
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: TEST_ALERT.question });
-    await waitForFast(() => expect(store.sending).toBe(false));
-    store.presentAlert(TEST_ALERT);
-    await Promise.resolve();
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("presents and dismisses an alert without requiring chat", () => {
-    const store = new CustodianSessionStore();
-    const listener = vi.fn();
-    store.subscribe(listener);
-
-    store.presentAlert(TEST_ALERT);
-    expect(store.alert).toBe(TEST_ALERT);
-    expect(store.messages).toEqual([]);
-    expect(listener).toHaveBeenCalledOnce();
-
-    store.dismissAlert();
-    expect(store.alert).toBeNull();
-    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("restores a live wizard interaction from the rejoin projection", async () => {
