@@ -161,10 +161,18 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const abandoned = workflowStep("Clean up abandoned Mantis sessions");
     expect(abandoned.if).toBe("${{ always() }}");
     expect(abandoned.run).toContain("sudo pkill -TERM -u codex");
+    expect(abandoned.run).toContain('lane_uid="$(sudo stat -c %u "/proc/$lane_pid")"');
+    expect(abandoned.run).toContain('[[ "$lane_pgid" == "$lane_pid" ]]');
+    expect(abandoned.run).toContain('[[ "$lane_exe" == /usr/local/lib/mantis-toolchain/node ]]');
+    expect(abandoned.run).toContain('sudo kill -TERM -- "-$lane_pgid"');
+    expect(abandoned.run).toContain('sudo kill -KILL -- "-$lane_pgid"');
     expect(abandoned.run).toContain('abort --lane "$lane"');
+    expect(abandoned.run).toContain('echo "safe_to_release=true" >> "$GITHUB_OUTPUT"');
 
     const cleanupStep = workflowStep("Release Telegram QA user lease");
-    expect(cleanupStep.if).toBe("${{ always() }}");
+    expect(cleanupStep.if).toBe(
+      "${{ always() && steps.abandoned_cleanup.outputs.safe_to_release == 'true' }}",
+    );
     expect(cleanupStep.env?.OPENCLAW_QA_CONVEX_SECRET_CI).toContain(
       "secrets.OPENCLAW_QA_CONVEX_SECRET_CI",
     );
@@ -177,6 +185,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(cleanupStep.run).toContain("/usr/local/lib/mantis-toolchain/node --import tsx");
     expect(workflowStep("Clean up abandoned Mantis sessions").run).toContain(
       "${lane}.starting.json",
+    );
+    expect(workflowStep("Remove private Mantis runtime state").if).toBe(
+      "${{ always() && steps.abandoned_cleanup.outputs.safe_to_release == 'true' }}",
     );
 
     const returnArtifactsStep = workflowStep("Return proof artifacts to the runner");
@@ -398,6 +409,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(install.run).toContain(
       '"${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-lane.ts" "\\$@"',
     );
+    const laneWrapper = install.run.slice(
+      install.run.indexOf('cat >"${RUNNER_TEMP}/telegram-mantis-lane"'),
+      install.run.indexOf('cat >"${RUNNER_TEMP}/openclaw-telegram-mantis-lane"'),
+    );
+    expect(laneWrapper).toContain("exec /usr/bin/setsid env -i");
     expect(install.run).toContain("sudo apt-get update");
     expect(install.run).toContain("sudo apt-get install -y ffmpeg");
     expect(install.run).toContain(

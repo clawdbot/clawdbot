@@ -290,7 +290,7 @@ jobs:
           cat >"${RUNNER_TEMP}/telegram-mantis-lane" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
-          exec env -i \
+          exec /usr/bin/setsid env -i \
             HOME=/var/lib/mantis-sut \
             OPENCLAW_BUILD_PRIVATE_QA=1 \
             OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
@@ -668,20 +668,65 @@ jobs:
           allow-bot-users: github-actions[bot]
 
       - name: Clean up abandoned Mantis sessions
+        id: abandoned_cleanup
         if: ${{ always() }}
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           result=0
           sudo pkill -TERM -u codex 2>/dev/null || true
+          session_root="${{ steps.telegram_credential.outputs.session_root }}"
+          if [[ -z "$session_root" ]]; then
+            echo "safe_to_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$session_root" == /tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} ]]
+          lock="$session_root/harness.lock"
+          if sudo test -f "$lock"; then
+            lane_pid="$(sudo cat "$lock")"
+            [[ "$lane_pid" =~ ^[1-9][0-9]*$ ]]
+            if sudo test -d "/proc/$lane_pid"; then
+              sut_uid="$(id -u mantis-sut)"
+              lane_uid="$(sudo stat -c %u "/proc/$lane_pid")"
+              lane_pgid="$(sudo ps -o pgid= -p "$lane_pid" | tr -d ' ')"
+              lane_exe="$(sudo readlink -f "/proc/$lane_pid/exe")"
+              lane_args="$(sudo cat "/proc/$lane_pid/cmdline" | tr '\0' '\n')"
+              [[ "$lane_uid" == "$sut_uid" ]]
+              [[ "$lane_pgid" == "$lane_pid" ]]
+              [[ "$lane_exe" == /usr/local/lib/mantis-toolchain/node ]]
+              grep -Fxq "$GITHUB_WORKSPACE/scripts/e2e/telegram-mantis-lane.ts" <<<"$lane_args"
+              sudo kill -TERM -- "-$lane_pgid" 2>/dev/null || true
+              deadline=$((SECONDS + 10))
+              while sudo kill -0 -- "-$lane_pgid" 2>/dev/null && ((SECONDS < deadline)); do
+                sleep 1
+              done
+              if sudo kill -0 -- "-$lane_pgid" 2>/dev/null; then
+                sudo kill -KILL -- "-$lane_pgid" 2>/dev/null || true
+              fi
+              deadline=$((SECONDS + 5))
+              while sudo kill -0 -- "-$lane_pgid" 2>/dev/null && ((SECONDS < deadline)); do
+                sleep 1
+              done
+              ! sudo kill -0 -- "-$lane_pgid" 2>/dev/null
+            else
+              sudo rm -f "$lock"
+            fi
+          fi
           for lane in baseline candidate; do
-            active="${{ steps.telegram_credential.outputs.session_root }}/${lane}.active.json"
-            starting="${{ steps.telegram_credential.outputs.session_root }}/${lane}.starting.json"
+            active="$session_root/${lane}.active.json"
+            starting="$session_root/${lane}.starting.json"
             if sudo test -f "$active" || sudo test -f "$starting"; then
               sudo -u mantis-sut /usr/local/lib/mantis-toolchain/telegram-mantis-lane \
                 abort --lane "$lane" || result=1
             fi
           done
+          if sudo test -f "$lock"; then
+            echo "Mantis harness lock remained after cleanup." >&2
+            result=1
+          fi
+          if ((result == 0)); then
+            echo "safe_to_release=true" >> "$GITHUB_OUTPUT"
+          fi
           exit "$result"
 
       - name: Restore and validate trusted lane evidence
@@ -900,7 +945,7 @@ jobs:
           fi
 
       - name: Release Telegram QA user lease
-        if: ${{ always() }}
+        if: ${{ always() && steps.abandoned_cleanup.outputs.safe_to_release == 'true' }}
         env:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -919,7 +964,7 @@ jobs:
             --lease-file "$lease_file"
 
       - name: Remove private Mantis runtime state
-        if: ${{ always() }}
+        if: ${{ always() && steps.abandoned_cleanup.outputs.safe_to_release == 'true' }}
         env:
           SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
           SUT_CREDENTIAL_DIR: ${{ steps.telegram_credential.outputs.sut_credential_dir }}
