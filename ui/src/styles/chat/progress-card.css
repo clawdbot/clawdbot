@@ -31,6 +31,14 @@
   place-items: center;
 }
 
+.session-hovercard__avatar > .channel-avatar {
+  box-sizing: border-box;
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  flex: 0 0 34px;
+}
+
 .session-hovercard__heading {
   display: grid;
   gap: 2px;
