@@ -31,7 +31,7 @@ async function bindReservedPort(port: number) {
 
 describe("reserveQaGatewayPort", () => {
   it("keeps the selected port unavailable until release", async () => {
-    const reservation = await reserveQaGatewayPort();
+    const reservation = await reserveQaGatewayPort(net.createServer());
 
     await expect(bindReservedPort(reservation.port)).rejects.toMatchObject({ code: "EADDRINUSE" });
     await reservation.release();
@@ -41,7 +41,7 @@ describe("reserveQaGatewayPort", () => {
   });
 
   it("closes probes before releasing the reserved port", async () => {
-    const reservation = await reserveQaGatewayPort();
+    const reservation = await reserveQaGatewayPort(net.createServer());
     const probe = net.createConnection({ host: "127.0.0.1", port: reservation.port });
     const probeClosed = new Promise<void>((resolve) => {
       probe.once("close", () => resolve());
