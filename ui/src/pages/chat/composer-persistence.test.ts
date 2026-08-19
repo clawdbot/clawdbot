@@ -1190,27 +1190,6 @@ describe("chat composer persistence", () => {
     ]);
   });
 
-  it("does not persist Skill Workshop revision requests for reconnect replay", () => {
-    const item: ChatQueueItem = {
-      ...reconnectItem("rich", 1),
-      attachments: [
-        {
-          id: "att-1",
-          mimeType: "image/png",
-          fileName: "screen.png",
-          dataUrl: "data:image/png;base64,AAA",
-        },
-      ],
-      skillWorkshopRevision: { proposalId: "proposal-1", agentId: "owner" },
-    };
-    const state = createState();
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, item)).toBe(false);
-
-    const restored = createState();
-    expect(restoreChatComposerState(restored)).toBe(false);
-    expect(restored.chatQueue).toEqual([]);
-  });
-
   it("normalizes interrupted and in-flight states before durable replay", () => {
     const state = createState();
     const sending: ChatQueueItem = {

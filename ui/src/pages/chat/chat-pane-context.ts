@@ -430,9 +430,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           applyChatAgentsList(state, agentsList, startupClient);
         }
         state.requestUpdate?.();
-        if (state.sessionKey === startupSessionKey) {
-          this.sendPendingSkillWorkshopRevision(startupSessionKey);
-        }
       };
       this.connectedClient = startupClient;
       setQuestionPromptClient(this.questionPromptState, startupClient);

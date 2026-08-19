@@ -3595,7 +3595,9 @@ export const en: TranslationMap = {
         "Tell the agent what should change. The proposal stays pending and the workshop will create a revised version.",
       placeholder:
         "Example: Make this use Gmail labels instead of unread search, and add a safer dry-run step.",
-      preparing: "Preparing revision handoff",
+      preparing: "Waiting for chat admission",
+      notAdmitted:
+        "Revision request was not admitted. Your instructions are still available; review the error and retry. {error}",
       send: "Send revision",
     },
     queue: {
