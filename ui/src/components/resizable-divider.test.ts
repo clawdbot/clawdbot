@@ -221,4 +221,22 @@ describe("resizable-divider", () => {
     expect([...divider.classList]).toEqual([]);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
+
+  it("stops dragging when the window loses focus", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    const releasePointerCapture = vi.fn();
+    divider.setPointerCapture = vi.fn();
+    divider.releasePointerCapture = releasePointerCapture;
+    divider.hasPointerCapture = vi.fn(() => true);
+    divider.addEventListener("resize", resized);
+
+    dispatchPointer(divider, "pointerdown", 100);
+    window.dispatchEvent(new Event("blur"));
+
+    expect([...divider.classList]).toEqual([]);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    dispatchPointer(document, "pointermove", 220);
+    expect(resized).not.toHaveBeenCalled();
+  });
 });

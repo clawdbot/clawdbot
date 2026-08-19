@@ -150,6 +150,7 @@ class ResizableDivider extends OpenClawLitElement {
     document.addEventListener("pointermove", this.handlePointerMove);
     document.addEventListener("pointerup", this.handlePointerUp);
     document.addEventListener("pointercancel", this.handlePointerUp);
+    window.addEventListener("blur", this.handlePointerUp);
 
     e.preventDefault();
   };
@@ -230,6 +231,7 @@ class ResizableDivider extends OpenClawLitElement {
     document.removeEventListener("pointermove", this.handlePointerMove);
     document.removeEventListener("pointerup", this.handlePointerUp);
     document.removeEventListener("pointercancel", this.handlePointerUp);
+    window.removeEventListener("blur", this.handlePointerUp);
   }
 
   private emitResize(nextRatio: number) {
