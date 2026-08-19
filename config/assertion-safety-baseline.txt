@@ -2100,7 +2100,6 @@ src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	2
 src/agents/tool-images.ts	3
 src/agents/tool-mutation-names.ts	2
-src/agents/tool-policy-pipeline.ts	1
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
