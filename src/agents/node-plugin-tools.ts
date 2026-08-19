@@ -47,11 +47,21 @@ function mapMcpPayloadToAgentToolResult(
   if (payload.structuredContent !== undefined || !isRecord(projected.details)) {
     return projected;
   }
+  const textContent = Array.isArray(payload.content)
+    ? payload.content.flatMap((block) =>
+        isRecord(block) && block.type === "text" && typeof block.text === "string"
+          ? [{ type: "text" as const, text: block.text }]
+          : [],
+      )
+    : [];
+  if (textContent.length === 0) {
+    return projected;
+  }
   return {
     ...projected,
     details: {
       ...projected.details,
-      content: projected.content.filter((block) => block.type === "text"),
+      content: textContent,
     },
   };
 }

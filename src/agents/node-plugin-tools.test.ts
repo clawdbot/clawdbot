@@ -447,7 +447,23 @@ describe("createNodePluginTools", () => {
       });
     }
     vi.mocked(callGatewayTool).mockResolvedValueOnce({
-      payload: { content: [{ type: "text", text: "node-b" }] },
+      payload: {
+        content: [
+          {
+            type: "image",
+            data: 42,
+            mimeType: "image/png",
+            annotations: { audience: ["assistant"], canary: "malformed-annotations" },
+            _meta: { canary: "malformed-meta" },
+          },
+          {
+            type: "text",
+            text: "node-b",
+            annotations: { canary: "text-annotations" },
+            _meta: { canary: "text-meta" },
+          },
+        ],
+      },
     });
 
     const { codeModeTools, compacted } = createCodeModeHarness([
