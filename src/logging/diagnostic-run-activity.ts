@@ -32,10 +32,12 @@ import {
   clearRecoveredOwnerEmbeddedRuns,
   clearRecoveredOwnerMarkers,
   countActiveCoreModelCalls,
+  type DiagnosticRecoveryClearResult,
   type DiagnosticRecoveryEmbeddedRun,
   type DiagnosticRecoveryModelCall,
   type DiagnosticRecoveryTool,
   hasEmbeddedRunStartedAfter,
+  hasActivityMarkerStartedAfter,
   markerBelongsToRecoveredOwner,
   ownerRefsForRecovery,
   ownerRefsForStartedEvent,
@@ -570,26 +572,21 @@ function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string
   return params.workKey ?? params.sessionId;
 }
 
-// Reconciles a session's terminal embedded-run activity at once. Used when an
-// authority (stuck-session recovery) declares the lane idle and the per-run
-// markDiagnosticEmbeddedRunEnded may have been bypassed. Clears the embedded-run
-// owners AND their tool/model markers, matching the default teardown so the lane
-// cannot be left as idle + orphaned tool/model activity (which
-// isIdleQueuedRecoverableSessionStall still treats as recoverable).
+// Reconciles terminal activity when recovery declares the lane idle and per-run
+// teardown may have been bypassed. Clears embedded-run owners and their markers
+// so the lane cannot retain recoverable activity after becoming idle.
 export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   sessionId?: string;
   sessionKey?: string;
   activeSessionId?: string;
   recoveryStartedAfterEmbeddedRunSequence?: number;
   recoveryStartedAfterDiagnosticEventSequence?: number;
-}): { cleared: boolean; blockedByActiveEmbeddedRun: boolean } {
-  const shouldCreateCutoffActivity =
-    params.recoveryStartedAfterDiagnosticEventSequence !== undefined;
+}): DiagnosticRecoveryClearResult {
   const activity = resolveSessionActivity({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     runId: params.activeSessionId,
-    create: shouldCreateCutoffActivity,
+    create: params.recoveryStartedAfterDiagnosticEventSequence !== undefined,
   });
   if (!activity) {
     return { cleared: false, blockedByActiveEmbeddedRun: false };
@@ -649,6 +646,9 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     }
     embeddedRunIndex.clear(activity);
   }
+  if (hasActivityMarkerStartedAfter(activity, params.recoveryStartedAfterDiagnosticEventSequence)) {
+    return { cleared: false, blockedByActiveEmbeddedRun: false, blockedByFreshActivity: true };
+  }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   activity.activeCoreModelCalls.clear();
@@ -679,10 +679,6 @@ function markDiagnosticRunProgressForTest(params: RunProgressEvent): void {
   applyRunProgress(params, params.progressKind === "semantic");
 }
 
-function markDiagnosticToolStartedForTest(params: DiagnosticToolStartedActivityEvent): void {
-  recordToolStarted(params);
-}
-
 function markDiagnosticModelStartedForTest(params: ModelStartedActivityEvent): void {
   recordModelStarted(params, undefined, true);
 }
@@ -698,7 +694,7 @@ function installDiagnosticRunActivityTestApi(): void {
   ] = {
     markDiagnosticModelStartedForTest,
     markDiagnosticRunProgressForTest,
-    markDiagnosticToolStartedForTest,
+    markDiagnosticToolStartedForTest: recordToolStarted,
   };
 }
 

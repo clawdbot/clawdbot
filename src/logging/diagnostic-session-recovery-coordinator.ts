@@ -2,6 +2,8 @@
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   getInternalDiagnosticEventSequence,
+  hasPendingInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import {
   clearDiagnosticEmbeddedRunActivityForSession,
@@ -73,6 +75,10 @@ function emitSessionRecoveryCompleted(params: {
   });
 }
 
+function recoveryRequestKey(request: StuckSessionRecoveryRequest): string | undefined {
+  return resolveStuckSessionRecoveryRef(request);
+}
+
 function isRecoveryPromiseLike(
   value: void | StuckSessionRecoveryOutcome | Promise<void | StuckSessionRecoveryOutcome>,
 ): value is Promise<void | StuckSessionRecoveryOutcome> {
@@ -81,18 +87,46 @@ function isRecoveryPromiseLike(
   );
 }
 
+function hasQueuedFreshActivityForRecovery(params: {
+  request: StuckSessionRecoveryRequest;
+  recoveryStartedAfterDiagnosticEventSequence?: number;
+}): boolean {
+  return hasPendingInternalDiagnosticEvent((event) => {
+    if (event.type !== "tool.execution.started" && event.type !== "model.call.started") {
+      return false;
+    }
+    if (
+      params.recoveryStartedAfterDiagnosticEventSequence === undefined ||
+      event.seq <= params.recoveryStartedAfterDiagnosticEventSequence
+    ) {
+      return false;
+    }
+    return (
+      (params.request.sessionId !== undefined && event.sessionId === params.request.sessionId) ||
+      (params.request.sessionKey !== undefined && event.sessionKey === params.request.sessionKey)
+    );
+  });
+}
+
 function applyRecoveryOutcomeToDiagnosticState(params: {
   request: StuckSessionRecoveryRequest;
   outcome: StuckSessionRecoveryOutcome | undefined;
   recoveryStartedAfterEmbeddedRunSequence?: number;
   recoveryStartedAfterDiagnosticEventSequence?: number;
-}): void {
+}): void | Promise<void> {
   if (!params.outcome) {
     return;
   }
   if (params.outcome.status !== "aborted" && params.outcome.status !== "released") {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
     return;
+  }
+  // Draining can dispatch another matching start. Re-enter until no start is
+  // queued, then inspect the resulting activity before declaring the lane idle.
+  if (hasQueuedFreshActivityForRecovery(params)) {
+    return waitForDiagnosticEventsDrained().then(() =>
+      applyRecoveryOutcomeToDiagnosticState(params),
+    );
   }
   const expectedState = params.request.expectedState ?? "processing";
   const currentState = peekDiagnosticSessionState(params.request);
@@ -129,7 +163,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     recoveryStartedAfterEmbeddedRunSequence: params.recoveryStartedAfterEmbeddedRunSequence,
     recoveryStartedAfterDiagnosticEventSequence: params.recoveryStartedAfterDiagnosticEventSequence,
   });
-  if (activityClear.blockedByActiveEmbeddedRun) {
+  if (activityClear.blockedByActiveEmbeddedRun || activityClear.blockedByFreshActivity) {
     emitSessionRecoveryCompleted({
       request: params.request,
       outcome: params.outcome,
@@ -166,7 +200,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
 function requestStuckSessionRecoveryOutcome(
   params: RequestStuckSessionRecoveryParams,
 ): Promise<StuckSessionRecoveryOutcome | undefined> {
-  const inFlightKey = resolveStuckSessionRecoveryRef(params.request);
+  const inFlightKey = recoveryRequestKey(params.request);
   if (inFlightKey && recoveryRequestsInFlight.has(inFlightKey)) {
     const outcome: StuckSessionRecoveryOutcome = {
       status: "skipped",
@@ -194,12 +228,15 @@ function requestStuckSessionRecoveryOutcome(
     }
   };
   const completeRecovery = (outcome: StuckSessionRecoveryOutcome | undefined) => {
-    applyRecoveryOutcomeToDiagnosticState({
+    const applied = applyRecoveryOutcomeToDiagnosticState({
       request: params.request,
       outcome,
       recoveryStartedAfterEmbeddedRunSequence,
       recoveryStartedAfterDiagnosticEventSequence,
     });
+    if (isRecoveryPromiseLike(applied)) {
+      return applied.then(() => outcome);
+    }
     return outcome;
   };
   const failRecovery = (err: unknown) => {
@@ -211,12 +248,15 @@ function requestStuckSessionRecoveryOutcome(
       sessionKey: params.request.sessionKey,
       error: String(err),
     };
-    applyRecoveryOutcomeToDiagnosticState({
+    const applied = applyRecoveryOutcomeToDiagnosticState({
       request: params.request,
       outcome,
       recoveryStartedAfterEmbeddedRunSequence,
       recoveryStartedAfterDiagnosticEventSequence,
     });
+    if (isRecoveryPromiseLike(applied)) {
+      return applied.then(() => outcome);
+    }
     return outcome;
   };
   try {
@@ -228,14 +268,18 @@ function requestStuckSessionRecoveryOutcome(
         .finally(clearInFlight);
     }
     const outcome = completeRecovery(result ?? undefined);
+    if (isRecoveryPromiseLike(outcome)) {
+      return outcome.finally(clearInFlight);
+    }
     clearInFlight();
     return Promise.resolve(outcome);
   } catch (err) {
-    try {
-      return Promise.resolve(failRecovery(err));
-    } finally {
-      clearInFlight();
+    const outcome = failRecovery(err);
+    if (isRecoveryPromiseLike(outcome)) {
+      return outcome.finally(clearInFlight);
     }
+    clearInFlight();
+    return Promise.resolve(outcome);
   }
 }
 

@@ -37,6 +37,12 @@ type DiagnosticRecoveryActivity = {
   recoveredOwnerStartEventCutoffs: Map<string, number>;
 };
 
+export type DiagnosticRecoveryClearResult = {
+  cleared: boolean;
+  blockedByActiveEmbeddedRun: boolean;
+  blockedByFreshActivity?: boolean;
+};
+
 export function ownerRefsForRecovery(params: {
   sessionId?: string;
   activeSessionId?: string;
@@ -76,6 +82,18 @@ export function activityMarkerStartedAfter(
   sequence: number | undefined,
 ): boolean {
   return sequence !== undefined && marker.sequence !== undefined && marker.sequence > sequence;
+}
+
+export function hasActivityMarkerStartedAfter(
+  activity: Pick<DiagnosticRecoveryActivity, "activeTools" | "activeModelCalls">,
+  sequence: number | undefined,
+): boolean {
+  if (sequence === undefined) {
+    return false;
+  }
+  return [...activity.activeTools.values(), ...activity.activeModelCalls.values()].some((marker) =>
+    activityMarkerStartedAfter(marker, sequence),
+  );
 }
 
 export function clearRecoveredOwnerEmbeddedRuns(
