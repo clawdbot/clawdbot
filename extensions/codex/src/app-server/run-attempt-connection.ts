@@ -101,10 +101,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         });
   preDynamicStartupStages.mark("sandbox");
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
-    // The explicit session mode replaces legacy per-session execSecurity/execAsk.
-    // Global/agent policy and approvals-file floors remain authoritative.
+    // Explicit modes replace legacy fields; full also replaces approval-file floors.
+    permissionMode: params.permissionMode,
     execOverrides: params.execOverrides,
-    approvals: loadExecApprovals(),
+    approvals: params.permissionMode === "full" ? undefined : loadExecApprovals(),
     config: params.config,
     agentId: sessionAgentId,
   });

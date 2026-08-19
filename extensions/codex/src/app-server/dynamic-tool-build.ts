@@ -264,6 +264,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         config: params.config,
         elevated: params.bashElevated,
       },
+      sessionPermissionPolicy:
+        params.permissionMode && params.sessionRoot
+          ? { mode: params.permissionMode, root: params.sessionRoot }
+          : undefined,
       sandbox: input.sandbox,
       messageProvider: resolveCodexMessageToolProvider(params),
       toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,

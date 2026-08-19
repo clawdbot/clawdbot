@@ -2141,7 +2141,10 @@ describe("Codex app-server dynamic tool build", () => {
       await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
       expect(factoryOptions).toHaveLength(1);
-      expect(factoryOptions[0]).toMatchObject({ exec: { mode: execMode } });
+      expect(factoryOptions[0]).toMatchObject({
+        exec: { mode: execMode },
+        sessionPermissionPolicy: { mode: permissionMode, root: workspaceDir },
+      });
     },
   );
 
