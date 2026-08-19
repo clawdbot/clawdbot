@@ -197,19 +197,8 @@ actor MacNodeRuntime {
     /// One branch per advertised native command keeps command ownership explicit.
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
-        if command.hasPrefix("canvas."), !Self.canvasCommands.contains(command) {
-            return Self.errorResponse(
-                req,
-                code: .invalidRequest,
-                message: "INVALID_REQUEST: unknown command")
-        }
-        if Self.canvasCommands.contains(command), !Self.canvasEnabled() {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "CANVAS_DISABLED: enable Canvas in Settings"))
+        if let rejection = Self.canvasCommandRejection(req) {
+            return rejection
         }
         if let cuaResponse = await handleCuaInvokeIfSelected(req) {
             return cuaResponse
@@ -276,6 +265,25 @@ actor MacNodeRuntime {
         OpenClawCanvasCommand.hide.rawValue,
         OpenClawCanvasCommand.navigate.rawValue,
     ]
+
+    private static func canvasCommandRejection(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse? {
+        guard req.command.hasPrefix("canvas.") else { return nil }
+        guard self.canvasCommands.contains(req.command) else {
+            return self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: unknown command")
+        }
+        guard self.canvasEnabled() else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(
+                    code: .unavailable,
+                    message: "CANVAS_DISABLED: enable Canvas in Settings"))
+        }
+        return nil
+    }
 
     private func handleCuaInvokeIfSelected(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse? {
         guard self.computerControlProvider() == .cua,
