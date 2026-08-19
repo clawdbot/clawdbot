@@ -47,8 +47,7 @@ Ask the agent to use `show_widget` and target the node panel. The tool exposes
 ```
 
 The result identifies the selected Mac when presentation succeeds. OpenClaw
-currently selects only a connected macOS node that declares both
-`canvas.present` and `canvas.navigate`.
+currently selects only a connected macOS node that declares `canvas.present`.
 
 ## Node commands
 

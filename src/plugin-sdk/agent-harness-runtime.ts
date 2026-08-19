@@ -204,7 +204,6 @@ export { callGatewayTool } from "../agents/tools/gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
 export {
   listNodes,
-  resolveEligibleNodeFromList,
   resolveNodeIdFromList,
   selectDefaultNodeFromList,
 } from "../agents/tools/nodes-utils.js";
