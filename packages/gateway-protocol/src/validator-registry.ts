@@ -9,6 +9,10 @@ import type {
   WebPushVapidPublicKeyParams,
 } from "./schema-modules.js";
 import type { ValidationError } from "./validation-errors.js";
+export {
+  validateSessionsDispatchParams,
+  validateSessionsMoveParams,
+} from "./session-placement-validators.js";
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = compile(S.CommandsListParamsSchema);
@@ -240,10 +244,8 @@ export const validateSessionTypingParams = compile(S.SessionTypingParamsSchema);
 export const validateSessionsCreateParams = compile(S.SessionsCreateParamsSchema);
 export const validateSessionsRecoverParams = compile(S.SessionsRecoverParamsSchema);
 export const validateSessionsSendParams = compile(S.SessionsSendParamsSchema);
-export const validateSessionsDispatchParams = compile(S.SessionsDispatchParamsSchema);
 export const validateSessionsReclaimParams = compile(S.SessionsReclaimParamsSchema);
 export const validateSessionsReclaimResult = compile(S.SessionsReclaimResultSchema);
-export const validateSessionsMoveParams = compile(S.SessionsMoveParamsSchema);
 export const validateSessionsMoveResult = compile(S.SessionsMoveResultSchema);
 export const validateSessionsMessagesSubscribeParams = compile(
   S.SessionsMessagesSubscribeParamsSchema,

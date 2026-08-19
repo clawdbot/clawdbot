@@ -39,10 +39,6 @@ export const SOURCE_REPO = "/tmp/source-repo";
 export const TARGET_REPO = "/tmp/target-repo";
 export const REFRESHED_RESEARCH_WORKSPACE = "/home/peter/research-next";
 export const MOVED_WORKSPACE = "/home/peter/openclaw-next";
-export const NODE_HOME = "/Users/peter";
-export const NODE_PICKED = "/Users/peter/Projects";
-export const NODE_UNC = "\\\\server\\share\\repo";
-export const EXEC_ONLY_PICKED = "C:\\Users\\peter\\repo";
 const LOCATOR_TEXT_READ_TIMEOUT_MS = 500;
 const LOCATOR_TEXT_POLL_TIMEOUT_MS = 10_000;
 

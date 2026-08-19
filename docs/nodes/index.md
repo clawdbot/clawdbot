@@ -468,6 +468,14 @@ contains its complete JavaScript dependency closure; the node does not install
 packages or execute lifecycle scripts. Later turns reuse the immutable artifact
 while its receipt still matches the Gateway's current build.
 
+You can also enroll and enable a service host in one step with
+`openclaw connect --service --session-host`. In Control UI New Session, a
+write-scoped operator selects a Gateway project or folder and then the paired
+device. OpenClaw creates a session-owned managed worktree on the Gateway,
+dispatches it with the exact `deviceId`, and sends the first turn only after the
+device placement becomes active. New Session does not bind `execNode` or browse
+the device filesystem.
+
 The Devices page shows the validated Gateway-owned worker version in the node's
 metadata. If the retained artifact is missing or fails validation, Devices shows
 a **worker missing** warning; start a new session on that device to reinstall the
@@ -486,6 +494,24 @@ Gateway-owned workspace transfer and result reconciliation. Each node runs at
 most two worker processes by default. A third launch waits up to 10 seconds for
 a durable slot; while both slots are occupied, the node remains available for
 status and cancellation but is not selected for a new session turn.
+
+The picker derives every device row from `environments.list`. A device is
+selectable only when current inventory reports status `available`,
+`sessionHost: true`, valid exact worker slots, and at least one available slot.
+Connected non-hosts, saturated hosts, hosts without current capacity,
+update-required or otherwise outdated hosts, and unavailable hosts remain
+visible but disabled with an actionable reason. Enable hosting with
+`openclaw connect --service --session-host` or the `nodeHost.workerRuns`
+setting, then restart the node host. Update-required hosts must be upgraded and
+restarted before selection.
+
+When a known session host disconnects, its paired-device record preserves only
+the last accepted current-v5 hosting consent. The offline row remains visible
+and disabled with status unavailable. A current disabled or empty v5
+publication records false; older v1-v4 and update-required dialects do not
+overwrite the last current fact. Connected inventory always wins over stored
+history, a missing stored value means false, and exact worker slots are never
+persisted or shown as offline capacity.
 
 If the device is offline before a turn is dispatched, the Gateway waits up to
 10 seconds and then returns a visible retry/reconnect error while keeping the

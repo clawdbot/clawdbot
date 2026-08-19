@@ -392,6 +392,28 @@ describe("listGatewayMethods", () => {
     }
   });
 
+  it("advertises placement mutations with target-aware scopes", () => {
+    const advertisedMethods = listGatewayMethods();
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+    const scopes = new Map([
+      ["sessions.dispatch", "dynamic"],
+      ["sessions.move", "dynamic"],
+      ["sessions.reclaim", "operator.write"],
+    ]);
+
+    for (const [method, scope] of scopes) {
+      expect(advertisedMethods).toContain(method);
+      expect(coreGatewayHandlers[method]).toEqual(expect.any(Function));
+      expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain(method);
+      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
+        name: method,
+        scope,
+        startup: "unavailable-until-sidecars",
+        controlPlaneWrite: true,
+      });
+    }
+  });
+
   it("classifies proposal evaluation as a control-plane write", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 

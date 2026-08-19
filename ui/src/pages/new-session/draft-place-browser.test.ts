@@ -71,9 +71,6 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
     gateway,
     () => ({
       context,
-      nodes: [],
-      folder: "",
-      execNode: "",
       isAdmin: false,
     }),
     {
@@ -125,7 +122,6 @@ describe("DraftPlaceBrowser", () => {
         sessions: [{ execCwd: "/workspace/recent" }],
         workspace: "/workspace",
         workspaceRoots: ["/workspace"],
-        execNodes: [],
         isAdmin: false,
       }),
     ).toEqual([

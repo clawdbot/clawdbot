@@ -320,6 +320,38 @@ describe("environment gateway methods", () => {
     });
   });
 
+  it("projects durable offline session-host identity through list and status without slots", async () => {
+    vi.mocked(listNodePairing).mockResolvedValue({
+      paired: [
+        {
+          nodeId: "node-offline-host",
+          displayName: "Offline Host",
+          commands: ["system.run"],
+          sessionHost: true,
+        },
+      ],
+    } as never);
+
+    const [, listPayload] = await callEnvironmentMethod(
+      "environments.list",
+      {},
+      { connectedNodes: [] },
+    );
+    const [, statusPayload] = await callEnvironmentMethod(
+      "environments.status",
+      { environmentId: "node:node-offline-host" },
+      { connectedNodes: [] },
+    );
+    const listed = (
+      listPayload as { environments: Array<Record<string, unknown>> }
+    ).environments.find((environment) => environment.id === "node:node-offline-host");
+
+    expect(listed).toMatchObject({ status: "unavailable", sessionHost: true });
+    expect(listed).not.toHaveProperty("workerSlots");
+    expect(statusPayload).toMatchObject({ status: "unavailable", sessionHost: true });
+    expect(statusPayload).not.toHaveProperty("workerSlots");
+  });
+
   it("projects the same exact slots and redacted bundle status through list and status", async () => {
     vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(
       new Map([["node-live", { total: 2, available: 1 }]]),

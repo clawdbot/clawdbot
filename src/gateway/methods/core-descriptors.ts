@@ -438,7 +438,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   [
     "sessions.dispatch",
     "sessions-dispatch",
-    "operator.write",
+    "dynamic",
     "2026.7",
     { startup: true, controlPlaneWrite: true },
   ],
@@ -537,7 +537,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   [
     "sessions.move",
     "sessions-dispatch",
-    "operator.write",
+    "dynamic",
     "2026.8",
     { startup: true, controlPlaneWrite: true },
   ],
