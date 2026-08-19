@@ -201,6 +201,12 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
+      await page.waitForFunction(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: { context: { cloudStartup?: unknown } };
+        };
+        return app.runtime?.context.cloudStartup !== undefined;
+      });
       const startupError = await page.evaluate(
         (key) =>
           new Promise<string>((resolve, reject) => {
