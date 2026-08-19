@@ -5,8 +5,12 @@ type AlertListener = () => void;
 class CustodianAlertStore {
   alert: CustodianAlert | null = null;
 
-  // Shared by the page and panel singleton so observing both surfaces cannot ask twice.
-  private readonly askedIds = new Set<string>();
+  // Ask-once is scoped to the current presentation, not to the alert id forever.
+  // A failed automation keeps one incident id across recover-then-fail-again, so
+  // a permanent id set would silently swallow the explanation every later time
+  // the same job breaks. Presenting is user-initiated, so re-arming here cannot
+  // spam turns, and both observing surfaces still share the one flag.
+  private askedPresented = false;
   private readonly listeners = new Set<AlertListener>();
 
   subscribe(listener: AlertListener): () => void {
@@ -16,6 +20,7 @@ class CustodianAlertStore {
 
   present(alert: CustodianAlert): void {
     this.alert = alert;
+    this.askedPresented = false;
     this.emit();
   }
 
@@ -26,10 +31,10 @@ class CustodianAlertStore {
 
   askIfReady(send: (question: string) => void): void {
     const alert = this.alert;
-    if (!alert || this.askedIds.has(alert.id)) {
+    if (!alert || this.askedPresented) {
       return;
     }
-    this.askedIds.add(alert.id);
+    this.askedPresented = true;
     send(alert.question);
   }
 

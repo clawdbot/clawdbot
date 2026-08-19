@@ -24,17 +24,30 @@ afterEach(() => {
 });
 
 describe("CustodianAlertStore", () => {
-  it("asks exactly once for each presented alert id", () => {
+  it("asks once per presentation so both surfaces cannot double-send", () => {
     const send = vi.fn();
     const incident = alert("ask-once");
 
     custodianAlertStore.present(incident);
     custodianAlertStore.askIfReady(send);
     custodianAlertStore.askIfReady(send);
+
+    expect(send).toHaveBeenCalledExactlyOnceWith(incident.question);
+  });
+
+  // A failed automation keeps one incident id across recover-then-fail-again;
+  // an id-keyed dedupe would show the renewed alert and never explain it.
+  it("re-arms the explanation when the same incident is presented again", () => {
+    const send = vi.fn();
+    const incident = alert("recurring-incident");
+
+    custodianAlertStore.present(incident);
+    custodianAlertStore.askIfReady(send);
+    custodianAlertStore.dismiss();
     custodianAlertStore.present(incident);
     custodianAlertStore.askIfReady(send);
 
-    expect(send).toHaveBeenCalledExactlyOnceWith(incident.question);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it("presents, emits, and dismisses an alert", () => {
