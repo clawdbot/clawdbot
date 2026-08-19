@@ -87,8 +87,9 @@ unchanged. Those exact bytes are the canonical campaign template for this run.
 
 In **Initialize campaign**, first ensure the repository has a
 `release-validation` label. Check for the exact label with
-`gh label list --search release-validation --json name`; create it only when
-absent with `gh label create release-validation --color 0E8A16 --description
+`gh label list --search release-validation --json name --jq
+'any(.[]; .name == "release-validation")'`; create it only when that exact-name
+check returns `false` with `gh label create release-validation --color 0E8A16 --description
 "OpenClaw release-validation campaign"`. Do not use `--force` or alter an
 existing label. Apply `release-validation` with `gh issue edit <number>
 --add-label release-validation` to the canonical issue whether it is reused or
