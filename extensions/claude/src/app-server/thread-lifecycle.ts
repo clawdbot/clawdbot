@@ -95,6 +95,12 @@ export type ThreadLifecycleOutcome = {
    */
   outcome: "resumed" | "forked" | "started";
   /**
+   * True when this turn ran on a forked thread whose binding was deliberately
+   * NOT persisted, so the durable session still points at the parent thread.
+   * See isTransientToolPolicyTurn.
+   */
+  transient?: boolean;
+  /**
    * Populated when outcome="forked" or outcome="started" with a binding
    * present (vs first-ever turn for this session).
    */
@@ -165,14 +171,18 @@ async function startOrResumeClaudeThreadLocked(
     }
   } else if (existing && rotationReason) {
     embeddedAgentLog.info(
-      "claude-bridge: rotating thread via thread/fork (transcript preserved, new SDK session)",
+      isTransientToolPolicyTurn(params)
+        ? "claude-bridge: forking a TRANSIENT thread for a narrowed tool policy (durable binding retained)"
+        : "claude-bridge: rotating thread via thread/fork (transcript preserved, new SDK session)",
       {
         sessionKey: identity.sessionKey,
         sessionId: identity.sessionId,
         previousThreadId: existing.threadId,
         reason: rotationReason,
+        ...(isTransientToolPolicyTurn(params) ? { trigger: params.trigger } : {}),
       },
     );
+    const transient = isTransientToolPolicyTurn(params);
     try {
       const forkedThreadId = await forkThreadOnCatalogDrift({
         client,
@@ -187,12 +197,14 @@ async function startOrResumeClaudeThreadLocked(
         dynamicToolsFingerprint,
         effectiveWorkspace,
         nativeDisallowedTools,
+        persistBinding: !transient,
       });
       return {
         threadId: forkedThreadId,
         outcome: "forked",
         rotationReason,
         forkedFromThreadId: existing.threadId,
+        ...(transient ? { transient: true } : {}),
       };
     } catch (err) {
       if (!isThreadNotFound(err)) {
@@ -228,6 +240,32 @@ async function startOrResumeClaudeThreadLocked(
 }
 
 // ── decision: should we rotate? ─────────────────────────────────────────────
+
+/**
+ * Whether this turn's tool catalog is a deliberate, temporary narrowing that
+ * the NEXT turn will not inherit — so the durable thread binding must survive
+ * it untouched.
+ *
+ * Today that means memory-flush runs. `trigger === "memory"` rebuilds the tool
+ * list down to `read` plus an append-only `write` pinned to one file
+ * (src/agents/agent-tools.ts:118, :857-872). That is a security restriction,
+ * not a catalog malfunction, so the narrowed catalog MUST be the one actually
+ * registered for the turn — it cannot be papered over.
+ *
+ * But the narrowing is also transient: the next ordinary turn gets the full
+ * catalog back. Rotating the durable binding into and out of it costs two
+ * transcript copies, two new SDK session ids (so a cold prompt cache twice)
+ * and two subprocess teardowns, which is how a memory flush silently kills
+ * whatever the previous turn backgrounded.
+ *
+ * Mirrors codex's `shouldStartTransientNoToolThread`
+ * (extensions/codex/src/app-server/thread-fingerprints.ts:198). Codex only
+ * covers a catalog that arrives empty; a memory-flush catalog arrives with two
+ * tools, so the emptiness test alone would miss it.
+ */
+export function isTransientToolPolicyTurn(params: EmbeddedRunAttemptParams): boolean {
+  return params.trigger === "memory";
+}
 
 function classifyRotationReason(
   existing: ClaudeAppServerBinding | null,
@@ -322,6 +360,14 @@ async function forkThreadOnCatalogDrift(args: {
   dynamicToolsFingerprint: string;
   effectiveWorkspace: string;
   nativeDisallowedTools: readonly string[];
+  /**
+   * When false, fork the thread (so this turn gets the transcript AND the
+   * correct narrowed catalog) but leave the binding pointing at the parent —
+   * see isTransientToolPolicyTurn. The fork itself is what enforces the
+   * narrowed policy; skipping the binding write is what keeps the durable
+   * session, its warm prompt cache, and its live subprocess intact.
+   */
+  persistBinding: boolean;
 }): Promise<string> {
   const {
     client,
@@ -336,6 +382,7 @@ async function forkThreadOnCatalogDrift(args: {
     dynamicToolsFingerprint,
     effectiveWorkspace,
     nativeDisallowedTools,
+    persistBinding,
   } = args;
 
   // Carry the CURRENT openclaw policy envelope into the fork — not just
@@ -374,6 +421,9 @@ async function forkThreadOnCatalogDrift(args: {
   const response = assertThreadStartResponse(rawResponse);
   const newThreadId = response.thread.id;
 
+  if (!persistBinding) {
+    return newThreadId;
+  }
   await bindingStore.write(identity, {
     threadId: newThreadId,
     cwd: effectiveWorkspace,
