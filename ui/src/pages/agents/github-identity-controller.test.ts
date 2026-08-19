@@ -7,14 +7,27 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { GitHubIdentityController } from "./github-identity-controller.js";
 
-const availableStatus = {
-  agentId: "main",
+const availableIdentity = {
   source: "agent-override",
+  credentialKind: "managed-oauth",
   credentialState: "available",
-  account: { login: "managed-user", avatarUrl: null },
+  account: { login: "managed-user" },
   gitAuthor: { name: "Agent Author", email: null },
   evidence: "github-api",
+  accessExpiresAtMs: 1_900_000_000_000,
+  refreshState: "available",
+  oauthScopes: ["repo"],
+  repositoryGrants: "unknown",
 } as const;
+
+function availableStatus(scope: "system" | "agent" = "agent") {
+  return {
+    agentId: "main",
+    selectedScope: scope,
+    selected: { scope, configured: true, identity: availableIdentity },
+    effective: availableIdentity,
+  } as const;
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -29,8 +42,11 @@ function createController(behavior: { beforeDispatch?: () => void; refreshError?
       if (method === "secrets.store.set" || method === "secrets.store.delete") {
         return { ok: true };
       }
-      if (method === "tools.github.configure" || method === "tools.github.status") {
-        return availableStatus;
+      if (method === "tools.github.configure") {
+        return availableStatus((params.scope as "system" | "agent") ?? "system");
+      }
+      if (method === "tools.github.status") {
+        return availableStatus((params.selectedScope as "system" | "agent") ?? "system");
       }
       throw new Error(`unexpected method ${method}`);
     }),
@@ -86,8 +102,9 @@ function sync(
     connected: true,
     agentId: "main",
     config,
-    supported: true,
+    statusReadable: true,
     configurable: true,
+    authorizable: true,
     clientRevision: 1,
     ...overrides,
   });
@@ -155,7 +172,7 @@ describe("GitHubIdentityController", () => {
     });
     expect(requests[1]?.params).not.toHaveProperty("token");
     expect(requests[1]?.params.secretName).toBe(requests[0]?.params.name);
-    expect(controller.status).toEqual(availableStatus);
+    expect(controller.status).toEqual(availableStatus("agent"));
     expect(controller.draft.token).toBe("");
   });
 
@@ -189,7 +206,7 @@ describe("GitHubIdentityController", () => {
       "secrets.store.set",
       "tools.github.configure",
     ]);
-    expect(controller.status).toEqual(availableStatus);
+    expect(controller.status).toEqual(availableStatus("system"));
     expect(controller.draft.token).toBe("");
     expect(controller.error).toContain("GitHub identity was updated");
     expect(controller.error).toContain("authoritative config refresh unavailable");
@@ -234,7 +251,7 @@ describe("GitHubIdentityController", () => {
             configure.mode === "managed" ? { github: { profileId: action.expectedProfileId } } : {},
         };
         hashCounter += 1;
-        return availableStatus;
+        return availableStatus("system");
       }
       throw new Error(`unexpected method ${method}`);
     });
@@ -276,7 +293,7 @@ describe("GitHubIdentityController", () => {
         "config.get",
       ]);
       expect(controller.busy).toBe(false);
-      expect(controller.status).toEqual(availableStatus);
+      expect(controller.status).toEqual(availableStatus("system"));
       expect(controller.scope).toBe("system");
       expect(controller.draft).toEqual({
         token: "",
@@ -338,9 +355,18 @@ describe("GitHubIdentityController", () => {
     expect(requests[1]?.params).toMatchObject({ agentId: "main" });
   });
 
-  it("does not call methods hidden by an older Gateway", async () => {
+  it("does not dispatch without the required operator scopes", async () => {
     const { controller, client, requests } = createController();
-    sync(controller, client, {}, { supported: false, configurable: false });
+    sync(
+      controller,
+      client,
+      {},
+      {
+        statusReadable: false,
+        configurable: false,
+        authorizable: false,
+      },
+    );
     controller.setDraft("token", "unused-token");
     await controller.verify();
     await controller.configure();
@@ -365,7 +391,7 @@ describe("GitHubIdentityController", () => {
       sync(controller, client);
       const pending = controller.verify();
       sync(controller, client, {}, revisions);
-      resolveStatus?.(availableStatus);
+      resolveStatus?.(availableStatus("system"));
       await pending;
       expect(controller.status).toBeNull();
       expect(controller.loading).toBe(false);
@@ -404,10 +430,10 @@ describe("GitHubIdentityController", () => {
 
   it("invalidates an in-flight status on effective identity change and verifies once", async () => {
     const host = { requestUpdate: vi.fn() };
-    const resolvers: Array<(value: typeof availableStatus) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof availableStatus>) => void> = [];
     const request = vi.fn(
       async () =>
-        await new Promise<typeof availableStatus>((resolve) => {
+        await new Promise<ReturnType<typeof availableStatus>>((resolve) => {
           resolvers.push(resolve);
         }),
     );
@@ -424,23 +450,145 @@ describe("GitHubIdentityController", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(controller.draft.name).toBe("dirty author");
 
-    resolvers[0]?.(availableStatus);
-    resolvers[1]?.(availableStatus);
+    resolvers[0]?.(availableStatus("system"));
+    resolvers[1]?.(availableStatus("system"));
     await initial;
     await Promise.resolve();
-    expect(controller.status).toEqual(availableStatus);
+    expect(controller.status).toEqual(availableStatus("system"));
     expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("rejects status returned for a different agent", async () => {
     const host = { requestUpdate: vi.fn() };
     const client = {
-      request: vi.fn(async () => ({ ...availableStatus, agentId: "reviewer" })),
+      request: vi.fn(async () => ({ ...availableStatus("system"), agentId: "reviewer" })),
     } as unknown as GatewayBrowserClient;
     const controller = createStatusOnlyController(client, host.requestUpdate);
     sync(controller, client);
     await controller.verify();
     expect(controller.status).toBeNull();
-    expect(controller.error).toContain("different agent");
+    expect(controller.error).toContain("different target");
+  });
+
+  it("waits for each authoritative poll deadline and adopts successful OAuth status", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const pollTimes: number[] = [];
+    const pollResults = [
+      { status: "slow_down" as const, nextPollAtMs: 1_800_000_015_000 },
+      { status: "success" as const, githubStatus: availableStatus("system") },
+    ];
+    const request = vi.fn(async (method: string) => {
+      if (method === "tools.github.authorize.start") {
+        return {
+          requestId: "github-device-11111111111111111111111111111111",
+          userCode: "ABCD-1234",
+          verificationUri: "https://github.com/login/device",
+          expiresAtMs: 1_800_000_060_000,
+          pollIntervalMs: 5_000,
+          nextPollAtMs: 1_800_000_005_000,
+        };
+      }
+      if (method === "tools.github.authorize.poll") {
+        pollTimes.push(Date.now());
+        return pollResults.shift();
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const runExternalMutation: RuntimeConfigCapability["runExternalMutation"] = async (task) => ({
+      ok: true,
+      value: await task(client),
+      refresh: { ok: true },
+    });
+    const controller = new GitHubIdentityController({
+      requestUpdate: vi.fn(),
+      runExternalMutation,
+    });
+    sync(controller, client);
+
+    await controller.startAuthorization();
+    expect(controller.authorization).toMatchObject({ phase: "code", userCode: "ABCD-1234" });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(pollTimes).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pollTimes).toEqual([1_800_000_005_000]);
+    expect(controller.authorization).toMatchObject({ phase: "pending", slowedDown: true });
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(pollTimes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pollTimes).toEqual([1_800_000_005_000, 1_800_000_015_000]);
+    expect(controller.status).toEqual(availableStatus("system"));
+    expect(controller.authorization).toEqual({ phase: "idle" });
+  });
+
+  it.each([
+    { label: "selected agent changes", overrides: { agentId: "reviewer" } },
+    { label: "connection generation changes", overrides: { clientRevision: 2 } },
+    { label: "administrator access is lost", overrides: { authorizable: false } },
+  ])("cancels the exact authorization when $label", async ({ overrides }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const request = vi.fn(async (method: string) => {
+      if (method === "tools.github.authorize.start") {
+        return {
+          requestId: "github-device-22222222222222222222222222222222",
+          userCode: "WXYZ-9876",
+          verificationUri: "https://github.com/login/device",
+          expiresAtMs: 1_800_000_060_000,
+          pollIntervalMs: 5_000,
+          nextPollAtMs: 1_800_000_005_000,
+        };
+      }
+      return { cancelled: true };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const controller = createStatusOnlyController(client);
+    sync(controller, client);
+    await controller.startAuthorization();
+
+    sync(controller, client, {}, overrides);
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("tools.github.authorize.cancel", {
+      requestId: "github-device-22222222222222222222222222222222",
+    });
+    expect(controller.authorization).toEqual({ phase: "idle" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(request.mock.calls.some(([method]) => method === "tools.github.authorize.poll")).toBe(
+      false,
+    );
+  });
+
+  it("locks scope during authorization and cancels the exact request on demand", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const request = vi.fn(async (method: string) =>
+      method === "tools.github.authorize.start"
+        ? {
+            requestId: "github-device-33333333333333333333333333333333",
+            userCode: "ABCD-5678",
+            verificationUri: "https://github.com/login/device",
+            expiresAtMs: 1_800_000_060_000,
+            pollIntervalMs: 5_000,
+            nextPollAtMs: 1_800_000_005_000,
+          }
+        : { cancelled: true },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const controller = createStatusOnlyController(client);
+    sync(controller, client);
+    await controller.startAuthorization();
+
+    controller.selectScope("agent");
+    expect(controller.scope).toBe("system");
+    controller.cancelAuthorization();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("tools.github.authorize.cancel", {
+      requestId: "github-device-33333333333333333333333333333333",
+    });
+    expect(controller.authorization).toEqual({ phase: "idle" });
   });
 });

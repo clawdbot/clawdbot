@@ -61,6 +61,27 @@ const schemaNames = new Map<string, string>([
   ["WorkerDesktopLaunchParams", "WorkerDesktopLaunchParams"],
   ["WorkerDesktopLaunchResult", "WorkerDesktopLaunchResult"],
   ["ProjectsListResult", "ProjectsListResult"],
+  ["GitHubIdentityFacts", "GitHubIdentityFacts"],
+  ["GitHubSelectedIdentity", "GitHubSelectedIdentity"],
+  ["ToolsGitHubStatusParams", "ToolsGitHubStatusParams"],
+  ["ToolsGitHubStatusResult", "ToolsGitHubStatusResult"],
+  ["ToolsGitHubAuthorizeStartParams", "ToolsGitHubAuthorizeStartParams"],
+  ["ToolsGitHubAuthorizeStartResult", "ToolsGitHubAuthorizeStartResult"],
+  ["ToolsGitHubAuthorizePollParams", "ToolsGitHubAuthorizePollParams"],
+  ["ToolsGitHubAuthorizePendingResult", "ToolsGitHubAuthorizePendingResult"],
+  ["ToolsGitHubAuthorizeSlowDownResult", "ToolsGitHubAuthorizeSlowDownResult"],
+  ["ToolsGitHubAuthorizeAccessDeniedResult", "ToolsGitHubAuthorizeAccessDeniedResult"],
+  ["ToolsGitHubAuthorizeExpiredResult", "ToolsGitHubAuthorizeExpiredResult"],
+  [
+    "ToolsGitHubAuthorizeIncorrectDeviceCodeResult",
+    "ToolsGitHubAuthorizeIncorrectDeviceCodeResult",
+  ],
+  ["ToolsGitHubAuthorizeNetworkErrorResult", "ToolsGitHubAuthorizeNetworkErrorResult"],
+  ["ToolsGitHubAuthorizeFailedResult", "ToolsGitHubAuthorizeFailedResult"],
+  ["ToolsGitHubAuthorizeSuccessResult", "ToolsGitHubAuthorizeSuccessResult"],
+  ["ToolsGitHubAuthorizePollResult", "ToolsGitHubAuthorizePollResult"],
+  ["ToolsGitHubAuthorizeCancelParams", "ToolsGitHubAuthorizeCancelParams"],
+  ["ToolsGitHubAuthorizeCancelResult", "ToolsGitHubAuthorizeCancelResult"],
   ["SessionGitHubPublicationRequested", "SessionGitHubPublicationRequested"],
   ["SessionGitHubPublicationPublishing", "SessionGitHubPublicationPublishing"],
   ["SessionGitHubPublicationPublished", "SessionGitHubPublicationPublished"],
@@ -325,6 +346,13 @@ function emitWireModels(): string[] {
     const fields: string[] = [];
     for (const property of properties) {
       fields.push(...property.annotation, property.declaration);
+    }
+    if (properties.length === 0 && variant) {
+      return [
+        `@SerialName(${JSON.stringify(variant.literal)})`,
+        "@Serializable",
+        `data object ${name} : ${variant.unionName}`,
+      ].join("\n");
     }
     return [
       ...(variant ? [`@SerialName(${JSON.stringify(variant.literal)})`] : []),

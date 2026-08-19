@@ -1,6 +1,11 @@
+import { resolveSafeTimeoutDelayMs } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ToolsGitHubStatusResult } from "../../api/types.ts";
+import type {
+  ToolsGitHubAuthorizePollResult,
+  ToolsGitHubAuthorizeStartResult,
+  ToolsGitHubStatusResult,
+} from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -16,6 +21,30 @@ type RequestOwner = {
   clientRevision: number;
   agentRevision: number;
   requestRevision: number;
+};
+
+type AuthorizationPresentation = ToolsGitHubAuthorizeStartResult & {
+  phase: "code" | "pending" | "network_error";
+  slowedDown?: boolean;
+  retryAtMs?: number;
+};
+
+type GitHubAuthorizationState =
+  | { phase: "idle" }
+  | { phase: "starting" }
+  | AuthorizationPresentation
+  | {
+      phase: "access_denied" | "expired" | "incorrect_device_code" | "failed";
+      message?: string;
+    };
+
+type AuthorizationOperation = {
+  owner: RequestOwner;
+  scope: GitHubIdentityScope;
+  controller: AbortController;
+  requestId?: string;
+  start?: ToolsGitHubAuthorizeStartResult;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 type GitHubIdentityHost = {
@@ -40,12 +69,15 @@ function readDraft(value: unknown): GitHubIdentityDraft {
 export class GitHubIdentityController {
   status: ToolsGitHubStatusResult | null = null;
   scope: GitHubIdentityScope = "system";
+  authorization: GitHubAuthorizationState = { phase: "idle" };
   loading = false;
   busy = false;
   error: string | null = null;
-  supported = false;
+  statusReadable = false;
   configurable = false;
+  authorizable = false;
   tokenRevealed = false;
+  patVisible = false;
 
   private agentId: string | null = null;
   private client: GatewayBrowserClient | null = null;
@@ -58,16 +90,41 @@ export class GitHubIdentityController {
   private verificationQueued = false;
   private mutationOwner: RequestOwner | null = null;
   private mutationIdentityChanged = false;
+  private authorizationOperation: AuthorizationOperation | null = null;
   private drafts: Record<GitHubIdentityScope, GitHubIdentityDraft> = {
     system: readDraft(undefined),
     agent: readDraft(undefined),
   };
   private draftDirty: Record<GitHubIdentityScope, boolean> = { system: false, agent: false };
   private configFingerprints: Record<GitHubIdentityScope, string> = { system: "", agent: "" };
+
   constructor(private readonly host: GitHubIdentityHost) {}
 
+  get authorizationActive(): boolean {
+    return (
+      this.authorization.phase === "starting" ||
+      this.authorization.phase === "code" ||
+      this.authorization.phase === "pending" ||
+      this.authorization.phase === "network_error"
+    );
+  }
+
+  get connectionReady(): boolean {
+    return this.connected && this.client !== null;
+  }
+
+  get draft(): GitHubIdentityDraft {
+    return this.drafts[this.scope];
+  }
+
   private queueVerification() {
-    if (this.verificationQueued || !this.supported || !this.connected || !this.agentId) {
+    if (
+      this.verificationQueued ||
+      !this.statusReadable ||
+      !this.connected ||
+      !this.agentId ||
+      this.authorizationActive
+    ) {
       return;
     }
     this.verificationQueued = true;
@@ -82,8 +139,9 @@ export class GitHubIdentityController {
     connected: boolean;
     agentId: string | null;
     config: Record<string, unknown> | null;
-    supported: boolean;
+    statusReadable: boolean;
     configurable: boolean;
+    authorizable: boolean;
     clientRevision: number;
   }) {
     const clientChanged =
@@ -92,15 +150,22 @@ export class GitHubIdentityController {
       this.clientRevision !== params.clientRevision;
     const agentChanged = this.agentId !== params.agentId;
     const capabilityChanged =
-      this.supported !== params.supported || this.configurable !== params.configurable;
+      this.statusReadable !== params.statusReadable ||
+      this.configurable !== params.configurable ||
+      this.authorizable !== params.authorizable;
+    if (this.authorizationActive && (clientChanged || agentChanged || !params.authorizable)) {
+      this.retireAuthorization(true);
+      this.authorization = { phase: "idle" };
+    }
     if (clientChanged || agentChanged || capabilityChanged) {
       this.requestRevision += 1;
     }
     this.client = params.client;
     this.connected = params.connected;
     this.clientRevision = params.clientRevision;
-    this.supported = params.supported;
+    this.statusReadable = params.statusReadable;
     this.configurable = params.configurable;
+    this.authorizable = params.authorizable;
     this.agentId = params.agentId;
     if (agentChanged) {
       this.agentRevision += 1;
@@ -118,12 +183,14 @@ export class GitHubIdentityController {
     const mutationOwner = this.mutationOwner;
     const mutationOwnsIdentityChange =
       identityChanged && mutationOwner !== null && this.busy && this.isCurrent(mutationOwner);
-    // The config coordinator publishes its authoritative refresh before resolving.
-    // Keep that exact mutation current so it can adopt the RPC result and unlock the UI.
     if (mutationOwnsIdentityChange) {
       this.mutationIdentityChanged = true;
     } else if (identityChanged) {
       this.requestRevision += 1;
+      if (this.authorizationActive) {
+        this.retireAuthorization(true);
+        this.authorization = { phase: "idle" };
+      }
     }
     if (clientChanged || agentChanged || capabilityChanged) {
       this.mutationOwner = null;
@@ -135,6 +202,8 @@ export class GitHubIdentityController {
       this.loading = false;
       this.busy = false;
       this.tokenRevealed = false;
+      this.patVisible = false;
+      this.authorization = { phase: "idle" };
       this.drafts = { system: readDraft(values.system), agent: readDraft(values.agent) };
       this.draftDirty = { system: false, agent: false };
       this.configFingerprints = {
@@ -163,12 +232,30 @@ export class GitHubIdentityController {
     }
   }
 
-  get draft(): GitHubIdentityDraft {
-    return this.drafts[this.scope];
+  selectScope(scope: GitHubIdentityScope) {
+    if (scope === this.scope || this.authorizationActive) {
+      return;
+    }
+    this.retireAuthorization(true);
+    this.requestRevision += 1;
+    this.scope = scope;
+    this.status = null;
+    this.error = null;
+    this.tokenRevealed = false;
+    this.authorization = { phase: "idle" };
+    this.host.requestUpdate();
+    this.queueVerification();
   }
 
-  selectScope(scope: GitHubIdentityScope) {
-    this.scope = scope;
+  showPatFallback() {
+    if (!this.authorizationActive) {
+      this.patVisible = true;
+      this.host.requestUpdate();
+    }
+  }
+
+  hidePatFallback() {
+    this.patVisible = false;
     this.tokenRevealed = false;
     this.host.requestUpdate();
   }
@@ -185,6 +272,10 @@ export class GitHubIdentityController {
     };
     this.draftDirty = { ...this.draftDirty, [this.scope]: true };
     this.host.requestUpdate();
+  }
+
+  dispose() {
+    this.retireAuthorization(true);
   }
 
   private captureRequest(): RequestOwner | null {
@@ -209,6 +300,196 @@ export class GitHubIdentityController {
       this.agentRevision === owner.agentRevision &&
       this.requestRevision === owner.requestRevision
     );
+  }
+
+  private isCurrentAuthorization(operation: AuthorizationOperation): boolean {
+    return (
+      this.authorizationOperation === operation &&
+      this.scope === operation.scope &&
+      this.authorizable &&
+      this.isCurrent(operation.owner)
+    );
+  }
+
+  private cancelAuthorizationRequest(operation: AuthorizationOperation) {
+    if (!operation.requestId) {
+      return;
+    }
+    void operation.owner.client
+      .request("tools.github.authorize.cancel", { requestId: operation.requestId })
+      .catch(() => undefined);
+  }
+
+  private retireAuthorization(notifyServer: boolean) {
+    const operation = this.authorizationOperation;
+    this.authorizationOperation = null;
+    if (!operation) {
+      return;
+    }
+    if (operation.timer !== undefined) {
+      clearTimeout(operation.timer);
+    }
+    operation.controller.abort();
+    if (notifyServer) {
+      this.cancelAuthorizationRequest(operation);
+    }
+  }
+
+  cancelAuthorization() {
+    this.retireAuthorization(true);
+    this.authorization = { phase: "idle" };
+    this.busy = false;
+    this.host.requestUpdate();
+  }
+
+  private scheduleAuthorizationPoll(operation: AuthorizationOperation, nextPollAtMs: number) {
+    if (!this.isCurrentAuthorization(operation) || !operation.start) {
+      return;
+    }
+    if (operation.timer !== undefined) {
+      clearTimeout(operation.timer);
+    }
+    const expiresAtMs = operation.start.expiresAtMs;
+    const scheduledAtMs = Math.min(nextPollAtMs, expiresAtMs);
+    const delayMs = resolveSafeTimeoutDelayMs(Math.max(0, scheduledAtMs - Date.now()), {
+      minMs: 0,
+    });
+    operation.timer = setTimeout(() => {
+      operation.timer = undefined;
+      if (!this.isCurrentAuthorization(operation)) {
+        return;
+      }
+      if (Date.now() >= expiresAtMs) {
+        this.authorizationOperation = null;
+        this.authorization = { phase: "expired" };
+        this.host.requestUpdate();
+        return;
+      }
+      void this.pollAuthorization(operation);
+    }, delayMs);
+  }
+
+  async startAuthorization() {
+    if (!this.authorizable || this.authorizationActive || this.busy) {
+      return;
+    }
+    const owner = this.captureRequest();
+    if (!owner) {
+      return;
+    }
+    const operation: AuthorizationOperation = {
+      owner,
+      scope: this.scope,
+      controller: new AbortController(),
+    };
+    this.authorizationOperation = operation;
+    this.authorization = { phase: "starting" };
+    this.error = null;
+    this.patVisible = false;
+    this.host.requestUpdate();
+    try {
+      const result = await owner.client.request<ToolsGitHubAuthorizeStartResult>(
+        "tools.github.authorize.start",
+        { scope: operation.scope, agentId: owner.agentId },
+        { signal: operation.controller.signal },
+      );
+      operation.requestId = result.requestId;
+      operation.start = result;
+      if (!this.isCurrentAuthorization(operation)) {
+        this.cancelAuthorizationRequest(operation);
+        return;
+      }
+      this.authorization = { ...result, phase: "code" };
+      this.host.requestUpdate();
+      this.scheduleAuthorizationPoll(operation, result.nextPollAtMs);
+    } catch (error) {
+      if (!this.isCurrentAuthorization(operation)) {
+        return;
+      }
+      this.authorizationOperation = null;
+      if (!(error instanceof Error && error.name === "AbortError")) {
+        this.authorization = { phase: "failed", message: formatUiError(error) };
+        this.host.requestUpdate();
+      }
+    }
+  }
+
+  private async pollAuthorization(operation: AuthorizationOperation) {
+    if (!operation.requestId || !operation.start || !this.isCurrentAuthorization(operation)) {
+      return;
+    }
+    this.authorization = { ...operation.start, phase: "pending" };
+    this.mutationOwner = operation.owner;
+    this.mutationIdentityChanged = false;
+    this.busy = true;
+    this.host.requestUpdate();
+    let succeeded = false;
+    try {
+      const mutation = await this.host.runExternalMutation(
+        (client) => {
+          if (client !== operation.owner.client) {
+            throw new Error("Connection changed before GitHub authorization was checked.");
+          }
+          return client.request<ToolsGitHubAuthorizePollResult>(
+            "tools.github.authorize.poll",
+            { requestId: operation.requestId },
+            { signal: operation.controller.signal },
+          );
+        },
+        {
+          canDispatch: () => this.isCurrentAuthorization(operation),
+          dispatchError: "Access changed before GitHub authorization was checked.",
+        },
+      );
+      if (!mutation.ok) {
+        throw new Error(mutation.error);
+      }
+      if (!this.isCurrentAuthorization(operation)) {
+        return;
+      }
+      const result = mutation.value;
+      if (result.status === "pending" || result.status === "slow_down") {
+        this.authorization = {
+          ...operation.start,
+          phase: "pending",
+          ...(result.status === "slow_down" ? { slowedDown: true } : {}),
+        };
+        this.scheduleAuthorizationPoll(operation, result.nextPollAtMs);
+        return;
+      }
+      if (result.status === "network_error") {
+        this.authorization = {
+          ...operation.start,
+          phase: "network_error",
+          retryAtMs: result.retryAtMs,
+        };
+        this.scheduleAuthorizationPoll(operation, result.retryAtMs);
+        return;
+      }
+      this.authorizationOperation = null;
+      if (result.status === "success") {
+        this.applyMutationStatus(
+          operation.owner,
+          operation.scope,
+          result.githubStatus,
+          { ...this.drafts[operation.scope], token: "" },
+          mutation.refresh.ok ? null : mutation.refresh.error,
+        );
+        this.authorization = { phase: "idle" };
+        succeeded = true;
+        return;
+      }
+      this.authorization = { phase: result.status };
+    } catch (error) {
+      if (this.isCurrentAuthorization(operation)) {
+        this.authorizationOperation = null;
+        if (!(error instanceof Error && error.name === "AbortError")) {
+          this.authorization = { phase: "failed", message: formatUiError(error) };
+        }
+      }
+    } finally {
+      this.finishMutation(operation.owner, succeeded);
+    }
   }
 
   private async deleteSetupHandoff(client: GatewayBrowserClient, secretName: string) {
@@ -257,23 +538,29 @@ export class GitHubIdentityController {
     if (!this.isCurrent(owner)) {
       return;
     }
-    if (status.agentId !== owner.agentId) {
-      throw new Error("Gateway returned GitHub identity status for a different agent.");
+    if (
+      status.agentId !== owner.agentId ||
+      status.selectedScope !== scope ||
+      status.selected.scope !== scope
+    ) {
+      throw new Error("Gateway returned GitHub identity status for a different target.");
     }
     this.status = status;
     this.drafts = { ...this.drafts, [scope]: nextDraft };
     this.draftDirty = { ...this.draftDirty, [scope]: false };
     this.tokenRevealed = false;
+    this.patVisible = false;
     this.error = refreshError
       ? `GitHub identity was updated, but its configuration refresh failed: ${refreshError}`
       : null;
   }
 
   async verify() {
-    if (!this.supported || this.loading || this.busy) {
+    if (!this.statusReadable || this.loading || this.busy || this.authorizationActive) {
       return;
     }
     const owner = this.captureRequest();
+    const scope = this.scope;
     if (!owner) {
       return;
     }
@@ -283,10 +570,15 @@ export class GitHubIdentityController {
     try {
       const status = await owner.client.request<ToolsGitHubStatusResult>("tools.github.status", {
         agentId: owner.agentId,
+        selectedScope: scope,
       });
       if (this.isCurrent(owner)) {
-        if (status.agentId !== owner.agentId) {
-          throw new Error("Gateway returned GitHub identity status for a different agent.");
+        if (
+          status.agentId !== owner.agentId ||
+          status.selectedScope !== scope ||
+          status.selected.scope !== scope
+        ) {
+          throw new Error("Gateway returned GitHub identity status for a different target.");
         }
         this.status = status;
       }
@@ -305,7 +597,14 @@ export class GitHubIdentityController {
   async configure() {
     const scope = this.scope;
     const draft = { ...this.draft };
-    if (!this.client || !this.connected || !this.agentId || !this.configurable || this.busy) {
+    if (
+      !this.client ||
+      !this.connected ||
+      !this.agentId ||
+      !this.configurable ||
+      this.busy ||
+      this.authorizationActive
+    ) {
       return;
     }
     if (!draft.token.trim()) {
@@ -381,7 +680,7 @@ export class GitHubIdentityController {
 
   async inherit() {
     const scope = this.scope;
-    if (!this.configurable || this.busy) {
+    if (!this.configurable || this.busy || this.authorizationActive) {
       return;
     }
     const owner = this.captureRequest();

@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import type { ToolsGitHubStatusResult } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  GitHubIdentityFacts,
+  ToolsGitHubStatusResult,
+} from "../../packages/gateway-protocol/src/index.js";
 import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,13 +15,14 @@ import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
 
 const GITHUB_HOST = "github.com";
 const PROFILE_COMMAND_TIMEOUT_MS = 15_000;
 const PROFILE_OUTPUT_LIMIT_BYTES = 32 * 1024;
 const MANAGED_GITHUB_ROOT_SEGMENTS = ["credentials", "github"] as const;
 
-type GitHubToolAccount = { accountId: number; login: string; avatarUrl: string | null };
+export type GitHubToolAccount = { accountId: number; login: string; avatarUrl: string | null };
 
 export function createManagedGitHubProfileId(): string {
   return `ghp_${randomBytes(16).toString("hex")}`;
@@ -82,6 +86,29 @@ function resolveGitHubToolIdentity(params: {
       agentId: params.agentId,
       env: params.env,
       scope: source === "agent-override" ? "agent" : "system",
+      profileId: config.profileId,
+    }),
+  };
+}
+
+function resolveScopedGitHubToolIdentity(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  scope: "system" | "agent";
+  env?: NodeJS.ProcessEnv;
+}): ResolvedGitHubToolIdentity | undefined {
+  const config = resolveConfiguredGitHubToolIdentity(params);
+  if (!config) {
+    return params.scope === "system" ? { source: "system-detected" as const } : undefined;
+  }
+  const source = params.scope === "system" ? "system-configured" : "agent-override";
+  return {
+    source,
+    config,
+    profileDir: resolveManagedGitHubProfileDir({
+      agentId: params.agentId,
+      env: params.env,
+      scope: params.scope,
       profileId: config.profileId,
     }),
   };
@@ -254,7 +281,7 @@ async function readGitAuthor(env: NodeJS.ProcessEnv, cwd: string) {
   return author;
 }
 
-async function isPrivateManagedProfile(profileDir: string): Promise<boolean> {
+export async function isPrivateManagedGitHubProfile(profileDir: string): Promise<boolean> {
   try {
     const [profile, hosts] = await Promise.all([
       fs.lstat(profileDir),
@@ -279,16 +306,51 @@ async function isPrivateManagedProfile(profileDir: string): Promise<boolean> {
 export async function resolveGitHubToolIdentityStatus(params: {
   config: OpenClawConfig;
   agentId: string;
+  selectedScope: "system" | "agent";
   env?: NodeJS.ProcessEnv;
 }): Promise<ToolsGitHubStatusResult> {
-  const identity = resolveGitHubToolIdentity(params);
+  const effectiveIdentity = resolveGitHubToolIdentity(params);
+  const selectedIdentity = resolveScopedGitHubToolIdentity({
+    ...params,
+    scope: params.selectedScope,
+  });
+  const effective = await resolveGitHubIdentityFacts({ ...params, identity: effectiveIdentity });
+  const selectedMatchesEffective =
+    selectedIdentity?.source === effectiveIdentity.source &&
+    (selectedIdentity?.source === "system-detected" ||
+      (effectiveIdentity.source !== "system-detected" &&
+        selectedIdentity?.config.profileId === effectiveIdentity.config.profileId));
+  const selected = !selectedIdentity
+    ? null
+    : selectedMatchesEffective
+      ? effective
+      : await resolveGitHubIdentityFacts({ ...params, identity: selectedIdentity });
+  return {
+    agentId: params.agentId,
+    selectedScope: params.selectedScope,
+    selected: {
+      scope: params.selectedScope,
+      configured: selectedIdentity?.source !== "system-detected" && selectedIdentity !== undefined,
+      identity: selected,
+    },
+    effective,
+  };
+}
+
+async function resolveGitHubIdentityFacts(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  identity: ResolvedGitHubToolIdentity;
+  env?: NodeJS.ProcessEnv;
+}): Promise<GitHubIdentityFacts> {
+  const identity = params.identity;
   const managed = identity.source !== "system-detected";
   const localIdentityEnv = localIdentityEnvironmentForIdentity(identity);
   const nativeEnv = params.env ?? {};
   const probeEnv: NodeJS.ProcessEnv = managed
     ? { ...nativeEnv, GH_TOKEN: undefined, GITHUB_TOKEN: undefined, ...localIdentityEnv }
     : nativeEnv;
-  const profileAvailable = !managed || (await isPrivateManagedProfile(identity.profileDir));
+  const profileAvailable = !managed || (await isPrivateManagedGitHubProfile(identity.profileDir));
   const workspaceDir = resolveAgentWorkspaceDir(params.config, params.agentId);
   const [probe, author] = await Promise.all([
     profileAvailable ? probeAccount(probeEnv) : undefined,
@@ -308,11 +370,27 @@ export async function resolveGitHubToolIdentityStatus(params: {
           : managed
             ? "configured_unavailable"
             : "unavailable";
+  const oauth =
+    managed && identity.config.kind === "oauth"
+      ? inspectGitHubOAuthRecord(identity.config.profileId)
+      : { state: "missing" as const };
+  const oauthRecord = oauth.state === "valid" ? oauth.record : undefined;
+  const refreshState =
+    !managed || identity.config.kind !== "oauth"
+      ? "not_applicable"
+      : oauth.state !== "valid"
+        ? "unavailable"
+        : (oauth.record.refreshFailure ??
+          (oauth.record.refreshExpiresAtMs <= Date.now() ? "expired" : "available"));
   return {
-    agentId: params.agentId,
     source: identity.source,
+    credentialKind: !managed
+      ? "native"
+      : identity.config.kind === "oauth"
+        ? "managed-oauth"
+        : "managed-pat",
     credentialState,
-    account: account ? { login: account.login, avatarUrl: account.avatarUrl } : null,
+    account: account ? { login: account.login } : null,
     gitAuthor: author,
     evidence: account
       ? "github-api"
@@ -321,6 +399,10 @@ export async function resolveGitHubToolIdentityStatus(params: {
         : probe
           ? "unverified"
           : "none",
+    accessExpiresAtMs: oauthRecord?.accessExpiresAtMs ?? null,
+    refreshState,
+    oauthScopes: [...(oauthRecord?.scopes ?? [])],
+    repositoryGrants: "unknown",
   };
 }
 
@@ -353,7 +435,7 @@ export async function prepareGitHubPublicationIdentity(params: {
 }): Promise<PreparedGitHubPublicationIdentity> {
   const identity = resolveGitHubToolIdentity(params);
   const managed = identity.source !== "system-detected";
-  if (managed && !(await isPrivateManagedProfile(identity.profileDir))) {
+  if (managed && !(await isPrivateManagedGitHubProfile(identity.profileDir))) {
     throw new Error("The configured GitHub identity profile is unavailable.");
   }
   const hostEnv = params.env ?? process.env;
@@ -387,6 +469,10 @@ export async function prepareGitHubPublicationIdentity(params: {
   });
 }
 
+export async function removeManagedGitHubProfile(profileDir: string): Promise<void> {
+  await fs.rm(profileDir, { recursive: true, force: true });
+}
+
 async function makePrivateTree(root: string): Promise<void> {
   await fs.chmod(root, 0o700);
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
@@ -406,6 +492,7 @@ export async function installManagedGitHubProfile(params: {
   profileDir: string;
   token: string;
   commitConfig: (account: GitHubToolAccount) => Promise<void>;
+  retainProfileOnCommitFailure?: boolean;
 }): Promise<GitHubToolAccount> {
   const token = params.token.trim();
   if (!token || /[\r\n]/u.test(token)) {
@@ -444,7 +531,7 @@ export async function installManagedGitHubProfile(params: {
     committed = true;
     return verified.account;
   } finally {
-    if (published && !committed) {
+    if (published && !committed && !params.retainProfileOnCommitFailure) {
       await fs.rm(params.profileDir, { recursive: true, force: true });
     }
     await fs.rm(stagingRoot, { recursive: true, force: true });

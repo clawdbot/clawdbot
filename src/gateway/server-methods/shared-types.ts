@@ -375,6 +375,9 @@ type GatewayResidentBridgeContext = {
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
   workerPlacementDispatchService?: WorkerPlacementDispatchContract;
   githubPublicationService?: import("../github-publication.js").GitHubPublicationCoordinator;
+  githubOAuthService?: ReturnType<
+    typeof import("../github-oauth-lifecycle.js").createGitHubOAuthLifecycle
+  >;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
