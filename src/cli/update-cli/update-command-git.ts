@@ -104,7 +104,6 @@ export async function retireStandaloneGitWrapper(params: {
     }
     try {
       await fs.unlink(wrapperPath);
-      return {};
     } catch (error) {
       return { error: `Could not retire ${wrapperPath}: ${String(error)}` };
     }
