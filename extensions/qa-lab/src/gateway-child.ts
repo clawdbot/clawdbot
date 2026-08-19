@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -500,7 +501,7 @@ export async function startQaGatewayChild(params: {
     };
     for (let attempt = 1; attempt <= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS; attempt += 1) {
       if (!reuseStartupLaunchState) {
-        gatewayPortReservation = await reserveQaGatewayPort();
+        gatewayPortReservation = await reserveQaGatewayPort(() => net.createServer());
         gatewayPort = gatewayPortReservation.port;
         baseUrl = `http://127.0.0.1:${gatewayPort}`;
         wsUrl = `ws://127.0.0.1:${gatewayPort}`;

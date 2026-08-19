@@ -29,7 +29,7 @@ async function bindReservedPort(port: number) {
 
 describe("reserveQaGatewayPort", () => {
   it("keeps the selected port unavailable until release", async () => {
-    const reservation = await reserveQaGatewayPort();
+    const reservation = await reserveQaGatewayPort(() => net.createServer());
 
     await expect(bindReservedPort(reservation.port)).rejects.toMatchObject({ code: "EADDRINUSE" });
     await reservation.release();

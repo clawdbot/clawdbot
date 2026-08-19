@@ -1,8 +1,14 @@
 // Qa Lab plugin module reserves Gateway ports across pre-spawn setup.
-import net from "node:net";
+type QaGatewayPortServer = {
+  once(event: "error", listener: (error: Error) => void): void;
+  off(event: "error", listener: (error: Error) => void): void;
+  listen(port: number, host: string, listener: () => void): void;
+  address(): { port: number } | string | null;
+  close(callback?: (error?: Error) => void): void;
+};
 
-export async function reserveQaGatewayPort() {
-  const server = net.createServer();
+export async function reserveQaGatewayPort(createServer: () => QaGatewayPortServer) {
+  const server = createServer();
   const port = await new Promise<number>((resolve, reject) => {
     const handleError = (error: Error) => {
       server.close(() => {});
