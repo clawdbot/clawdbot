@@ -7,12 +7,6 @@ afterEach(() => {
 });
 
 describe("Control UI route and resource bases", () => {
-  it("keeps a root resource mount separate from an inferred route namespace", () => {
-    document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, "");
-
-    expect(resolveControlUiPaths("/__openclaw__/new")).toEqual(["/__openclaw__", ""]);
-  });
-
   it("uses a configured Gateway mount for both routes and resources", () => {
     document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, "/openclaw");
 

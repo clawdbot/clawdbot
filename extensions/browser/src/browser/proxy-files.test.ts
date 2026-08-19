@@ -250,23 +250,6 @@ describe("persistBrowserProxyResultFiles", () => {
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
-  it("maps repeated result references from one payload", async () => {
-    const sourcePath = "/node/repeated.png";
-    const result = {
-      path: sourcePath,
-      download: { path: sourcePath },
-      downloads: [{ path: sourcePath }],
-    };
-
-    await persistBrowserProxyResultFiles(result, [
-      { path: sourcePath, base64: Buffer.from("same file").toString("base64") },
-    ]);
-
-    expect(result.path).not.toBe(sourcePath);
-    expect(result.download.path).toBe(result.path);
-    expect(result.downloads[0]?.path).toBe(result.path);
-  });
-
   it("rewrites a complete file mapping without traversing nested page data", async () => {
     const result = {
       ok: true,

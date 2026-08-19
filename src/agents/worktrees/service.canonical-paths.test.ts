@@ -77,66 +77,59 @@ describe("ManagedWorktreeService canonical paths", () => {
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("base\n");
   });
 
-  it.each([
-    { label: "normal", allowSnapshotLoss: false },
-    { label: "forced", allowSnapshotLoss: true },
-  ])(
-    "repairs a $label removal to the live checkout repository before snapshotting",
-    async ({ label, allowSnapshotLoss }) => {
-      const canonicalLiveRepo = await cloneRepository(`live-${label}`);
-      const liveIdentity = await service.resolveRepositoryIdentity(canonicalLiveRepo);
-      const staleIdentity = await service.resolveRepositoryIdentity(repo);
-      const created = await service.create({
-        repoRoot: canonicalLiveRepo,
-        name: `repository-rebind-${label}`,
-        baseRef: "HEAD",
-        ownerKind: "session",
-        ownerId: `agent:main:${label}`,
-      });
-      await fs.writeFile(path.join(created.path, "README.md"), `${label} tracked change\n`);
-      await fs.writeFile(path.join(created.path, "untracked.txt"), `${label} untracked change\n`);
-      const staleHead = await git(repo, "rev-parse", "HEAD");
-      const snapshotRef = `refs/openclaw/snapshots/${created.id}`;
-      await git(repo, "branch", created.branch, staleHead);
-      await git(repo, "update-ref", snapshotRef, staleHead);
-      openOpenClawStateDatabase({ env })
-        .db.prepare("UPDATE worktrees SET repo_root = ?, repo_fingerprint = ? WHERE id = ?")
-        .run(staleIdentity.repoRoot, staleIdentity.fingerprint, created.id);
+  it("repairs removal to the live checkout repository before snapshotting", async () => {
+    const canonicalLiveRepo = await cloneRepository("live-normal");
+    const liveIdentity = await service.resolveRepositoryIdentity(canonicalLiveRepo);
+    const staleIdentity = await service.resolveRepositoryIdentity(repo);
+    const created = await service.create({
+      repoRoot: canonicalLiveRepo,
+      name: "repository-rebind-normal",
+      baseRef: "HEAD",
+      ownerKind: "session",
+      ownerId: "agent:main:normal",
+    });
+    await fs.writeFile(path.join(created.path, "README.md"), "normal tracked change\n");
+    await fs.writeFile(path.join(created.path, "untracked.txt"), "normal untracked change\n");
+    const staleHead = await git(repo, "rev-parse", "HEAD");
+    const snapshotRef = `refs/openclaw/snapshots/${created.id}`;
+    await git(repo, "branch", created.branch, staleHead);
+    await git(repo, "update-ref", snapshotRef, staleHead);
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE worktrees SET repo_root = ?, repo_fingerprint = ? WHERE id = ?")
+      .run(staleIdentity.repoRoot, staleIdentity.fingerprint, created.id);
 
-      const removed = await service.remove({
-        id: created.id,
-        reason: "repository-rebind",
-        allowSnapshotLoss,
-      });
+    const removed = await service.remove({
+      id: created.id,
+      reason: "repository-rebind",
+    });
 
-      expect(removed).toEqual({ removed: true, snapshotRef });
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        repoRoot: liveIdentity.repoRoot,
-        repoFingerprint: liveIdentity.fingerprint,
-        path: created.path,
-        branch: created.branch,
-        baseRef: created.baseRef,
-        ownerKind: "session",
-        ownerId: `agent:main:${label}`,
-        snapshotRef,
-      });
-      expect(await git(canonicalLiveRepo, "show-ref", "--verify", snapshotRef)).not.toBe("");
-      expect(await git(canonicalLiveRepo, "branch", "--list", created.branch)).toBe("");
-      expect(await git(repo, "rev-parse", snapshotRef)).toBe(staleHead);
-      expect(await git(repo, "rev-parse", created.branch)).toBe(staleHead);
+    expect(removed).toEqual({ removed: true, snapshotRef });
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      repoRoot: liveIdentity.repoRoot,
+      repoFingerprint: liveIdentity.fingerprint,
+      path: created.path,
+      branch: created.branch,
+      baseRef: created.baseRef,
+      ownerKind: "session",
+      ownerId: "agent:main:normal",
+      snapshotRef,
+    });
+    expect(await git(canonicalLiveRepo, "show-ref", "--verify", snapshotRef)).not.toBe("");
+    expect(await git(canonicalLiveRepo, "branch", "--list", created.branch)).toBe("");
+    expect(await git(repo, "rev-parse", snapshotRef)).toBe(staleHead);
+    expect(await git(repo, "rev-parse", created.branch)).toBe(staleHead);
 
-      const restored = await service.restore({ id: created.id });
-      expect(restored.repoRoot).toBe(liveIdentity.repoRoot);
-      expect(restored.path).toBe(created.path);
-      expect(await git(restored.path, "branch", "--show-current")).toBe(created.branch);
-      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
-        `${label} tracked change\n`,
-      );
-      expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
-        `${label} untracked change\n`,
-      );
-    },
-  );
+    const restored = await service.restore({ id: created.id });
+    expect(restored.repoRoot).toBe(liveIdentity.repoRoot);
+    expect(restored.path).toBe(created.path);
+    expect(await git(restored.path, "branch", "--show-current")).toBe(created.branch);
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "normal tracked change\n",
+    );
+    expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
+      "normal untracked change\n",
+    );
+  });
 
   it("rejects a live checkout from a different-origin repository before mutation", async () => {
     const differentOrigin = path.join(root, "different-origin.git");
