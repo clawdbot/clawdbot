@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import {
@@ -568,7 +569,7 @@ describe("ask_user execution", () => {
     );
   });
 
-  it("cancels instead of waiting when originating prompt delivery fails", async () => {
+  it("terminates after a visible prompt fails to attach its controls", async () => {
     const sessionKey = "agent:main:delivery-failure";
     const reservation = reserveAskUserPromptDelivery({
       toolCallId: "call-delivery-failure",
@@ -600,9 +601,16 @@ describe("ask_user execution", () => {
     );
     await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
 
-    settleAskUserPromptDelivery(reservation.questionId, new Error("channel unavailable"));
+    settleAskUserPromptDelivery(
+      reservation.questionId,
+      new ReplyDispatchDeliveryError("failed-deliver"),
+    );
 
-    await expect(pending).rejects.toThrow("ask_user prompt delivery failed");
+    await expect(pending).resolves.toMatchObject({
+      terminate: true,
+      details: { status: "delivery_failed" },
+      content: [expect.objectContaining({ text: expect.stringMatching(/no retry\/fallback/i) })],
+    });
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.resolve",
       { timeoutMs: 10_000 },
@@ -648,7 +656,10 @@ describe("ask_user execution", () => {
     );
     await vi.waitFor(() => expect(waitCalls).toBe(1));
 
-    settleAskUserPromptDelivery(reservation.questionId, new Error("channel unavailable"));
+    settleAskUserPromptDelivery(
+      reservation.questionId,
+      new ReplyDispatchDeliveryError("failed-deliver"),
+    );
 
     await expect(pending).resolves.toMatchObject({ details: { status: "answered", answers } });
     expect(waitCalls).toBe(2);

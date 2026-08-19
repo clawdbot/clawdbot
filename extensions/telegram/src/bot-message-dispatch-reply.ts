@@ -16,6 +16,7 @@ import {
   deliverFinalAnswerText,
   emitPreviewFinalizedHook,
   normalizeDeliveryPayload,
+  registerTelegramQuestionDeliveryForMessage,
   sendPayload,
 } from "./bot-message-dispatch-delivery.js";
 import {
@@ -47,6 +48,7 @@ import {
   type TelegramDroppedControl,
   type TelegramInlineButtons,
 } from "./button-types.js";
+import { mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
 import {
   buildTelegramErrorScopeKey,
   isSilentErrorPolicy,
@@ -427,8 +429,28 @@ export async function deliverReply(
             onPlatformSendDispatch: info.onPlatformSendDispatch,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
           });
-    if (segment.lane === "answer" && info.kind !== "final" && result.kind === "preview-finalized") {
+    const finalizedPreview =
+      segment.lane === "answer" &&
+      info.kind !== "final" &&
+      (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial");
+    if (finalizedPreview) {
       await emitPreviewFinalizedHook(turn, result);
+      if (result.kind === "preview-finalized-partial") {
+        markFinalDelivered(turn);
+        throw mergeTelegramPartialDeliveryError(result.error, {
+          receipt: result.delivery.receipt,
+          content: result.delivery.content,
+          messageIds: result.delivery.receipt.platformMessageIds,
+          visibleReplySent: true,
+        });
+      }
+    }
+    if (segment.lane === "answer" && info.kind === "tool" && result.kind === "preview-updated") {
+      const messageId = turn.answerLane.stream?.messageId();
+      const text = turn.answerLane.stream?.lastDeliveredText?.();
+      if (typeof messageId === "number" && text) {
+        registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, { messageId, text });
+      }
     }
     if (segment.lane === "answer" && info.kind === "block" && result.kind === "preview-updated") {
       turn.activeAnswerBlockDelivery = {
