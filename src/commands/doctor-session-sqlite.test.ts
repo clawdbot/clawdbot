@@ -1218,7 +1218,6 @@ describe("runDoctorSessionSqlite", () => {
       storePath: expectedStorePath,
       validationBeforeArchive: "passed",
     });
-    expect(target.plannedMoves).toHaveLength(4);
     expect(target.completedMoves).toHaveLength(4);
     expect(target.plannedMoves.map((move) => path.basename(move.sourcePath)).toSorted()).toEqual([
       "orphan.jsonl",

@@ -322,7 +322,6 @@ describe("registerPluginHttpRoute", () => {
       throwOnFailure: true,
     });
 
-    expect(registry.httpRoutes).toHaveLength(2);
     expect(registry.httpRoutes.map((route) => route.source)).toEqual(["prefix", "sms-exact"]);
   });
 

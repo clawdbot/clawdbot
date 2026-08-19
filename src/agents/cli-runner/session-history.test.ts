@@ -836,7 +836,6 @@ describe("loadCliSessionReseedMessages", () => {
           sessionKey: "agent:main:main",
           agentId: "main",
         });
-        expect(reseed).toHaveLength(2);
         expectCompactionSummary(reseed[0], "safe compacted summary");
         expectMessageFields(reseed[1], { role: "user", content: "post-compaction ask" });
         expect(reseed.map((message) => requireRecord(message, "reseed message").timestamp)).toEqual(
