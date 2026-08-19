@@ -346,8 +346,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         }
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
-        let response = try await gateway.request(OpenClawChatGatewayRequests.modelsList())
+    func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice] {
+        let response = try await gateway.request(OpenClawChatGatewayRequests.modelsList(agentID: agentID))
         return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(response)
     }
 
