@@ -294,7 +294,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(crabbox.run).toContain("github.com/openclaw/crabbox.git");
     // Every variable the restored step reads must exist, or `set -u` kills it.
     expect((parse(workflowText) as Workflow).env?.CRABBOX_REF).toBe("main");
-    expect(crabbox.run).toContain('grep -q -- "-desktop"');
+    // Never pipe into `grep -q` under pipefail: the writer dies of SIGPIPE on the
+    // first match and the assertion fails precisely when it should pass.
+    expect(crabbox.run).toContain('crabbox_warmup_help="$(crabbox warmup --help 2>&1)"');
+    expect(crabbox.run).not.toMatch(/\|\s*grep -q/u);
     expect(workflowText).not.toContain("CRABBOX_ACCESS_CLIENT_ID");
     expect(workflowText).not.toContain("CRABBOX_ACCESS_CLIENT_SECRET");
     expect(workflowText).not.toContain("CRABBOX_COORDINATOR");

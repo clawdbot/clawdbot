@@ -267,7 +267,10 @@ jobs:
           sudo install -m 0755 "$install_dir/crabbox" /usr/local/bin/crabbox
           crabbox --version
           crabbox media preview --help >/dev/null
-          crabbox warmup --help 2>&1 | grep -q -- "-desktop"
+          # Capture first: piping into `grep -q` closes the pipe on the first match,
+          # and pipefail then reports the writer's SIGPIPE as a failed assertion.
+          crabbox_warmup_help="$(crabbox warmup --help 2>&1)"
+          grep -q -- "-desktop" <<<"$crabbox_warmup_help"
 
       - name: Build local Telegram Desktop image
         shell: bash
