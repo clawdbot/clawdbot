@@ -116,6 +116,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
     const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
     const lease = workflowStep("Install TDLib and restore Telegram QA user");
+    const leaseRun = lease.run;
+    if (!leaseRun) {
+      throw new Error("Telegram credential step must be a shell step");
+    }
 
     expect(workflow.concurrency).toBeUndefined();
     expect(liveWorkflow.concurrency).toBeUndefined();
@@ -125,13 +129,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     // The Convex credential is the authoritative mutex, so acquiring it is the lock.
     expect(steps.some((step) => /Wait for older/u.test(step.name ?? ""))).toBe(false);
     expect(workflow.permissions?.actions).toBe("read");
-    expect(lease.run).toContain("lease-restore");
-    expect(lease.run).toContain("until node --import tsx");
-    expect(lease.run).toContain("deadline=$(( SECONDS + 15 * 60 ))");
-    expect(lease.run).toContain("still leased by another run after 15 minutes");
-    expect(lease.run).toContain("sleep 60");
-    expect(lease.run.indexOf('echo "lease_file=$credential_dir/lease.json"')).toBeLessThan(
-      lease.run.indexOf("until node --import tsx"),
+    expect(leaseRun).toContain("lease-restore");
+    expect(leaseRun).toContain("until node --import tsx");
+    expect(leaseRun).toContain("deadline=$(( SECONDS + 15 * 60 ))");
+    expect(leaseRun).toContain("still leased by another run after 15 minutes");
+    expect(leaseRun).toContain("sleep 60");
+    expect(leaseRun.indexOf('echo "lease_file=$credential_dir/lease.json"')).toBeLessThan(
+      leaseRun.indexOf("until node --import tsx"),
     );
   });
 
@@ -164,6 +168,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(abandoned.run).toContain('lane_uid="$(sudo stat -c %u "/proc/$lane_pid")"');
     expect(abandoned.run).toContain('[[ "$lane_pgid" == "$lane_pid" ]]');
     expect(abandoned.run).toContain('[[ "$lane_exe" == /usr/local/lib/mantis-toolchain/node ]]');
+    expect(abandoned.run).toContain(
+      "/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-mantis-lane.mjs",
+    );
     expect(abandoned.run).toContain('sudo kill -TERM -- "-$lane_pgid"');
     expect(abandoned.run).toContain('sudo kill -KILL -- "-$lane_pgid"');
     expect(abandoned.run).toContain('abort --lane "$lane"');
@@ -384,52 +391,68 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).not.toContain("CRABBOX_ACCESS_CLIENT_SECRET");
     expect(workflowText).not.toContain("CRABBOX_COORDINATOR");
     const install = workflowStep("Install local proof tools");
-    expect(install.run).toContain("test -f scripts/e2e/telegram-user-driver.py");
-    expect(install.run).toContain('node_bin="$(command -v node)"');
-    expect(install.run).toContain('corepack_bin="$(command -v corepack)"');
-    expect(install.run).toContain(
+    const installRun = install.run;
+    if (!installRun) {
+      throw new Error("Proof tool installation must be a shell step");
+    }
+    expect(installRun).toContain("test -f scripts/e2e/telegram-user-driver.py");
+    expect(installRun).toContain('node_bin="$(command -v node)"');
+    expect(installRun).toContain('corepack_bin="$(command -v corepack)"');
+    expect(installRun).toContain(
       'corepack_root="$(dirname "$(dirname "$(readlink -f "$corepack_bin")")")"',
     );
-    expect(install.run).toContain("/usr/local/lib/mantis-toolchain/node");
-    expect(install.run).toContain("/usr/local/lib/mantis-toolchain/pnpm");
-    expect(install.run).toContain(
+    expect(installRun).toContain("/usr/local/lib/mantis-toolchain/node");
+    expect(installRun).toContain("/usr/local/lib/mantis-toolchain/pnpm");
+    expect(installRun).toContain(
       'sudo install -m 0755 "$node_bin" /usr/local/lib/mantis-toolchain/node',
     );
-    expect(install.run).toContain(
+    expect(installRun).toContain(
       'sudo cp -a "$corepack_root" /usr/local/lib/mantis-toolchain/corepack',
     );
-    expect(install.run).toContain("/usr/local/lib/mantis-toolchain/corepack/dist/corepack.js pnpm");
-    expect(install.run).not.toContain("${RUNNER_TEMP}/mantis-node");
-    expect(install.run).toContain(
+    expect(installRun).toContain("/usr/local/lib/mantis-toolchain/corepack/dist/corepack.js pnpm");
+    expect(installRun).not.toContain("${RUNNER_TEMP}/mantis-node");
+    expect(installRun).toContain(
       'sudo install -m 0755 "$uv_bin" /usr/local/lib/mantis-toolchain/uv',
     );
-    expect(install.run).not.toContain("${RUNNER_TEMP}/mantis-uv");
-    expect(install.run).toContain("/usr/local/bin/openclaw-telegram-mantis-lane");
-    expect(install.run).toContain("/usr/local/bin/openclaw-telegram-desktop-recorder");
-    expect(install.run).toContain(
+    expect(installRun).not.toContain("${RUNNER_TEMP}/mantis-uv");
+    expect(installRun).toContain("/usr/local/bin/openclaw-telegram-mantis-lane");
+    expect(installRun).toContain("/usr/local/bin/openclaw-telegram-desktop-recorder");
+    expect(installRun).toContain(
+      "node node_modules/esbuild/bin/esbuild scripts/e2e/telegram-mantis-lane.ts",
+    );
+    expect(installRun).toContain(
+      "node node_modules/esbuild/bin/esbuild scripts/e2e/telegram-desktop-recorder.ts",
+    );
+    expect(installRun).toContain(
+      "/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-mantis-lane.mjs",
+    );
+    expect(installRun).toContain(
+      "/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-desktop-recorder.mjs",
+    );
+    expect(installRun).not.toContain(
       '"${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-lane.ts" "\\$@"',
     );
-    const laneWrapper = install.run.slice(
-      install.run.indexOf('cat >"${RUNNER_TEMP}/telegram-mantis-lane"'),
-      install.run.indexOf('cat >"${RUNNER_TEMP}/openclaw-telegram-mantis-lane"'),
+    const laneWrapper = installRun.slice(
+      installRun.indexOf('cat >"${RUNNER_TEMP}/telegram-mantis-lane"'),
+      installRun.indexOf('cat >"${RUNNER_TEMP}/openclaw-telegram-mantis-lane"'),
     );
     expect(laneWrapper).toContain("exec /usr/bin/setsid env -i");
-    expect(install.run).toContain("sudo apt-get update");
-    expect(install.run).toContain("sudo apt-get install -y ffmpeg");
-    expect(install.run).toContain(
+    expect(installRun).toContain("sudo apt-get update");
+    expect(installRun).toContain("sudo apt-get install -y ffmpeg");
+    expect(installRun).toContain(
       "sudo ln -s /usr/bin/ffmpeg /usr/local/lib/mantis-toolchain/ffmpeg",
     );
-    expect(install.run).toContain(
+    expect(installRun).toContain(
       "sudo ln -s /usr/bin/ffprobe /usr/local/lib/mantis-toolchain/ffprobe",
     );
-    expect(install.run).toContain(
+    expect(installRun).toContain(
       "PATH=/usr/local/lib/mantis-toolchain:/usr/local/bin:/usr/bin:/bin",
     );
-    expect(install.run).not.toContain("dangerouslyAllowAllBuilds");
-    expect(install.run).not.toContain("ffmpeg-static");
-    expect(install.run).not.toContain("ffprobe-static");
-    expect(install.run).not.toContain("BtbN/FFmpeg-Builds");
-    expect(install.run).not.toContain("ffmpeg-master-latest-linux64-gpl.tar.xz");
+    expect(installRun).not.toContain("dangerouslyAllowAllBuilds");
+    expect(installRun).not.toContain("ffmpeg-static");
+    expect(installRun).not.toContain("ffprobe-static");
+    expect(installRun).not.toContain("BtbN/FFmpeg-Builds");
+    expect(installRun).not.toContain("ffmpeg-master-latest-linux64-gpl.tar.xz");
 
     const image = workflowStep("Build local Telegram Desktop image");
     expect(image.run).toContain("bash scripts/mantis/build-telegram-desktop-image.sh");

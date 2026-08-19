@@ -881,7 +881,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       sshPort: "22",
       sshUser: "user",
     }));
-    const sshRun = vi.fn(async () => ({ stderr: "", stdout: "" }));
+    const sshCommands: string[] = [];
+    const sshRun = vi.fn(async ({ command }: { command: string }) => {
+      sshCommands.push(command);
+      return { stderr: "", stdout: "" };
+    });
     const operations = {
       createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
       createMotionPreview: vi.fn(async () => ({})),
@@ -895,8 +899,8 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     await stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations);
 
     expect(inspectCrabbox).toHaveBeenCalledTimes(2);
-    expect(sshRun.mock.calls[0]?.[0].command).toContain('xdotool windowmap "$win"');
-    expect(sshRun.mock.calls[0]?.[0].command).toContain('xdotool windowactivate --sync "$win"');
+    expect(sshCommands[0]).toContain('xdotool windowmap "$win"');
+    expect(sshCommands[0]).toContain('xdotool windowactivate --sync "$win"');
     expect(inspectCrabbox).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ provider: "docker" }),
