@@ -15,7 +15,6 @@ import {
   pluginTool,
   mcpTool,
   createCodeModeHarness,
-  testing,
 } from "./code-mode.test-support.js";
 import {
   createToolSearchCatalogRef,
@@ -33,15 +32,6 @@ describe("Code Mode catalog and model-visible surface", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetCodeModeTestState();
-  });
-
-  it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname).toBe(
-      "/repo/dist/agents/code-mode.worker.js",
-    );
-    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/selection-abc123.js").pathname).toBe(
-      "/repo/dist/agents/code-mode.worker.js",
-    );
   });
 
   it("hides all normal tools behind exec and wait", () => {
@@ -265,11 +255,33 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(parameters.properties?.restartSafe?.description).toContain(
       "Leave unset for ordinary calls",
     );
+    expect(parameters.properties?.restartSafe?.description).toContain("not proven replay-safe");
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
     expect(parameters).toMatchObject({ required: ["code"] });
     expect(parameters.properties).not.toHaveProperty("command");
+  });
+
+  it("drops the nodes namespace hint when the run catalog cannot resolve it", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    // The compacted catalog is known and holds no openclaw:core:nodes entry
+    // (owner-only surfaces filter it); advertising the namespace anyway sends
+    // the model into guaranteed unknown-tool failures.
+    const execTool = expectDefined(compacted.tools[0], "exec tool test invariant");
+    expect(catalogRef.current?.entries.some((entry) => entry.id === "openclaw:core:nodes")).toBe(
+      false,
+    );
+    expect(execTool.description).not.toContain("paired Gateway nodes");
   });
 
   it("keeps code-mode exec guidance compact without advertising unavailable namespaces", () => {
@@ -291,6 +303,9 @@ describe("Code Mode catalog and model-visible surface", () => {
 
     expect(execTool.description.length).toBeLessThan(2_400);
     expect(execTool.description).toContain("parallelize independent work only");
+    expect(execTool.description).toContain("`setTimeout` and `clearTimeout`");
+    expect(execTool.description).toContain("65536 bytes");
+    expect(execTool.description).toContain("rerun with narrower args");
     expect(codeDescription).toEqual(expect.any(String));
     expect(String(codeDescription).length).toBeLessThan(620);
     expect(codeDescription).not.toContain("MCP namespace globals");

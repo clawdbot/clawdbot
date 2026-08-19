@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -39,6 +40,12 @@ const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
 
 export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
+
+export function sessionObserverScopeKey(sessionKey: string, agentId: string): string {
+  return parseAgentSessionKey(sessionKey)
+    ? sessionKey
+    : `agent:${normalizeAgentId(agentId)}:${sessionKey}`;
+}
 type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
 type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
@@ -288,12 +295,6 @@ export async function defaultPersistDigest(params: {
     return true;
   }
   return missingEntry ? null : false;
-}
-
-export function isTerminalLifecycleEvent(event: AgentEventPayload): boolean {
-  return (
-    event.stream === "lifecycle" && (event.data.phase === "end" || event.data.phase === "error")
-  );
 }
 
 export async function synthesizeSessionObserverTerminalDigest(params: {

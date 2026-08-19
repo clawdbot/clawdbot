@@ -11,7 +11,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
@@ -27,7 +27,6 @@ import {
 } from "../../agents/simple-completion-runtime.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
@@ -46,6 +45,7 @@ import {
   providerHasGenericConfig,
   providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
   resolveTransport,
@@ -54,8 +54,8 @@ import {
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
-async function loadModelCatalogForInspection(cfg: OpenClawConfig) {
-  const prepared = await loadPreparedModelCatalog({ config: cfg, readOnly: true });
+async function loadModelCatalogForInspection(cfg: OpenClawConfig, agentId?: string) {
+  const prepared = await loadPreparedModelCatalog({ config: cfg, agentId, readOnly: true });
   const metadataSnapshot = loadManifestMetadataSnapshot({ config: cfg, env: process.env });
   const manifest = planEffectiveModelCatalogRows({
     registry: metadataSnapshot.manifestRegistry,
@@ -168,6 +168,7 @@ async function runModelRun(params: {
   model?: string;
   thinking?: ThinkLevel;
   transport: CapabilityTransport;
+  agent?: string;
 }) {
   const explicitModelOverride = requireProviderModelOverride(params.model);
   const cfg =
@@ -177,7 +178,7 @@ async function runModelRun(params: {
           targetIds: getModelsCommandSecretTargetIds(),
         })
       : getRuntimeConfig();
-  const agentId = resolveDefaultAgentId(cfg);
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer model run");
   const modelRef = await canonicalizeModelRunRef({
     raw: params.model,
     cfg,
@@ -342,11 +343,12 @@ async function runModelRun(params: {
   } satisfies CapabilityEnvelope;
 }
 
-async function buildModelProviders() {
+async function buildModelProviders(rawAgentId?: string) {
   const cfg = getRuntimeConfig();
-  const catalog = await loadModelCatalogForInspection(cfg);
+  const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
+  const catalog = await loadModelCatalogForInspection(cfg, agentId);
   const selectedProvider = resolveSelectedProviderFromModelRef(
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+    resolveAgentEffectiveModelPrimary(cfg, agentId),
   );
   const grouped = new Map<
     string,
@@ -368,6 +370,7 @@ async function buildModelProviders() {
       configured: providerHasGenericConfig({
         cfg,
         providerId: entry.provider,
+        agentId,
         envVars: getProviderEnvVars(entry.provider),
       }),
       selected: selectedProvider === entry.provider,
@@ -402,7 +405,7 @@ async function runModelAuthStatus() {
 
 async function runModelAuthLogout(provider: string, agent?: string) {
   const cfg = getRuntimeConfig();
-  const agentId = agent?.trim() || resolveDefaultAgentId(cfg);
+  const agentId = resolveCapabilityProviderAgentId(cfg, agent, "infer model auth logout");
   const agentDir = resolveAgentDir(cfg, agentId);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
@@ -454,6 +457,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--thinking <level>", "Thinking level override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
+    .option(
+      "--agent <id>",
+      "Agent whose model and credentials own the run (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -471,6 +478,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           model: opts.model as string | undefined,
           thinking,
           transport,
+          agent: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -511,10 +519,11 @@ export function registerModelCapabilityCommands(capability: Command): void {
   model
     .command("providers")
     .description("List model providers from the catalog")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await buildModelProviders();
+        const result = await buildModelProviders(opts.agent as string | undefined);
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
@@ -543,7 +552,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .command("logout")
     .description("Remove saved auth profiles for one provider")
     .requiredOption("--provider <id>", "Provider id")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option(
+      "--agent <id>",
+      "Agent id (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {

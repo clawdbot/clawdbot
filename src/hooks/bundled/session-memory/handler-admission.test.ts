@@ -56,6 +56,7 @@ describe("session-memory gateway admission", () => {
       },
     ]);
     const event = createInternalHookEvent("command", "reset", sessionKey, {
+      agentId: "main",
       cfg,
       previousSessionEntry: { sessionId },
       workspaceDir: tempDir,

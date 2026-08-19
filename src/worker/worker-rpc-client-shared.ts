@@ -7,7 +7,7 @@ import type { WorkerInferenceErrorShape } from "../../packages/gateway-protocol/
 import type { WorkerConnection } from "./worker-connection.js";
 
 export type TranscriptResponseError = WorkerTranscriptCommitErrorShape | WorkerErrorShape;
-export type LiveResponseError = WorkerLiveEventErrorShape | WorkerErrorShape;
+type LiveResponseError = WorkerLiveEventErrorShape | WorkerErrorShape;
 export type InferenceResponseError = WorkerInferenceErrorShape | WorkerErrorShape;
 
 export function fenceForOwnershipError(

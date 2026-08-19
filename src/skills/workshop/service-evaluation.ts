@@ -39,6 +39,18 @@ const MAX_EVALUATION_METRICS = 64;
 
 export class SkillProposalCreateTargetConflictError extends Error {}
 
+export class SkillProposalRevisionChangedError extends Error {
+  constructor(
+    readonly expectedRevisionHash: string,
+    readonly currentRevisionHash: string,
+  ) {
+    super(
+      `Skill proposal revision changed (expected ${expectedRevisionHash}, current ${currentRevisionHash}); reload and retry.`,
+    );
+    this.name = "SkillProposalRevisionChangedError";
+  }
+}
+
 export async function evaluateSkillProposal(
   input: SkillProposalEvaluateInput,
 ): Promise<SkillProposalEvaluateResult> {
@@ -96,6 +108,7 @@ export async function evaluateSkillProposal(
   const rawOutcomes = bundles
     ? await runSkillProposalEvaluators(
         {
+          ...(correlationId ? { correlationId } : {}),
           proposal: {
             id: read.record.id,
             kind: read.record.kind,
@@ -214,9 +227,7 @@ export function listSkillProposalEvents(
 export function assertExpectedRevisionHash(actual: string, expected?: string): void {
   const normalized = normalizeOptionalString(expected);
   if (normalized && normalized !== actual) {
-    throw new Error(
-      `Skill proposal revision changed (expected ${normalized}, current ${actual}); reload and retry.`,
-    );
+    throw new SkillProposalRevisionChangedError(normalized, actual);
   }
 }
 

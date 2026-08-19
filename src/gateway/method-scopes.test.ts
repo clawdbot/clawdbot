@@ -39,6 +39,27 @@ afterEach(() => {
 });
 
 describe("method scope resolution", () => {
+  it("requires write scope before sessions.assignOwner visibility is considered", () => {
+    const params = {
+      key: "agent:main:shared",
+      owner: { type: "human", id: "profile-next" },
+    };
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.assignOwner", params)).toEqual([
+      "operator.write",
+    ]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.assignOwner", ["operator.read"], params),
+    ).toEqual({
+      allowed: false,
+      missingScope: "operator.write",
+    });
+    expect(
+      authorizeOperatorScopesForMethod("sessions.assignOwner", ["operator.write"], params),
+    ).toEqual({
+      allowed: true,
+    });
+  });
+
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
@@ -57,8 +78,9 @@ describe("method scope resolution", () => {
     ["taskSuggestions.dismiss", ["operator.write"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
-    ["sessions.dispatch", ["operator.admin"]],
-    ["sessions.reclaim", ["operator.admin"]],
+    ["sessions.dispatch", ["operator.write"]],
+    ["sessions.reclaim", ["operator.write"]],
+    ["sessions.move", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["sessions.patchMany", ["operator.write"]],
@@ -73,7 +95,7 @@ describe("method scope resolution", () => {
     ["environments.destroy", ["operator.admin"]],
     ["worktrees.list", ["operator.read"]],
     ["worktrees.branches", ["operator.write"]],
-    ["worktrees.create", ["operator.admin"]],
+    ["worktrees.create", ["operator.write"]],
     ["projects.list", ["operator.read"]],
     ["users.prefs.get", ["operator.read"]],
     ["users.prefs.set", ["operator.write"]],
@@ -82,8 +104,10 @@ describe("method scope resolution", () => {
     ["projects.add", ["operator.write"]],
     ["projects.searchRemote", ["operator.read"]],
     ["sessions.groups.list", ["operator.read"]],
+    ["sessions.groups.defaults", ["operator.write"]],
     ["sessions.groups.put", ["operator.write"]],
     ["sessions.groups.rename", ["operator.write"]],
+    ["sessions.groups.update", ["operator.write"]],
     ["sessions.groups.delete", ["operator.write"]],
     ["sessions.catalog.list", ["operator.read"]],
     ["sessions.catalog.read", ["operator.read"]],
@@ -94,6 +118,7 @@ describe("method scope resolution", () => {
     ["session.discussion.open", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
+    ["diagnostics.lanes", ["operator.read"]],
     ["gateway.restart.preflight", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
     ["hooks.status", ["operator.read"]],
@@ -119,7 +144,9 @@ describe("method scope resolution", () => {
     ["secrets.store.list", ["operator.admin"]],
     ["secrets.store.set", ["operator.admin"]],
     ["secrets.store.delete", ["operator.admin"]],
-    ["config.schema", ["operator.admin"]],
+    ["tools.github.status", ["operator.read"]],
+    ["tools.github.configure", ["operator.admin"]],
+    ["config.schema", ["operator.read"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
@@ -399,6 +426,84 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
+  it.each([
+    [
+      "device dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", deviceId: "device-1" },
+      "operator.write",
+    ],
+    [
+      "profile dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", profileId: "development" },
+      "operator.admin",
+    ],
+    [
+      "configured-default dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread" },
+      "operator.admin",
+    ],
+    [
+      "gateway move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+      "operator.write",
+    ],
+    [
+      "device move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "device", deviceId: "device-1" },
+      },
+      "operator.write",
+    ],
+    [
+      "profile move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "profile", profileId: "development" },
+      },
+      "operator.admin",
+    ],
+  ] as const)(
+    "derives %s authorization from its placement target",
+    (_name, method, params, scope) => {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod(method, params)).toEqual([scope]);
+      expect(authorizeOperatorScopesForMethod(method, [scope], params)).toEqual({ allowed: true });
+      if (scope === "operator.admin") {
+        expect(authorizeOperatorScopesForMethod(method, ["operator.write"], params)).toEqual({
+          allowed: false,
+          missingScope: "operator.admin",
+        });
+      }
+    },
+  );
+
+  it.each([
+    [
+      "sessions.dispatch",
+      { key: "agent:main:thread", profileId: "development", deviceId: "device-1" },
+    ],
+    ["sessions.move", { key: "agent:main:thread", target: { kind: "profile" } }],
+  ] as const)("keeps malformed %s params write-scoped for handler validation", (method, params) => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(method, params)).toEqual([
+      "operator.write",
+    ]);
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"], params)).toEqual({
+      allowed: true,
+    });
+  });
+
   it("keeps sessions.create project IDs at write scope", () => {
     const params = { projectId: "openclaw", worktree: true };
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
@@ -619,6 +724,21 @@ describe("method scope resolution", () => {
         archivedOnly: true,
         expectedSessionId: "sess-1",
       }),
+    ).toEqual({ allowed: true });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.delete", {
+        key: "agent:main:old",
+        archivedOnly: true,
+        expectedSessionId: "sess-1",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.write"], {
+        key: "agent:main:old",
+        archivedOnly: true,
+        expectedSessionId: "sess-1",
+        futureField: true,
+      }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.delete", {
@@ -687,7 +807,7 @@ describe("operator scope authorization", () => {
     ["health", ["operator.read"], { allowed: true }],
     ["health", ["operator.write"], { allowed: true }],
     ["config.schema.lookup", ["operator.read"], { allowed: true }],
-    ["config.schema", ["operator.read"], { allowed: false, missingScope: "operator.admin" }],
+    ["config.schema", ["operator.read"], { allowed: true }],
     ["config.patch", ["operator.admin"], { allowed: true }],
   ])("authorizes %s for scopes %j", (method, scopes, expected) => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
@@ -866,6 +986,7 @@ describe("core gateway method classification", () => {
     expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
     expect(isGatewayMethodClassified("node.pluginTools.update")).toBe(true);
     expect(isGatewayMethodClassified("node.skills.update")).toBe(true);
+    expect(isGatewayMethodClassified("node.runnerInventory.update")).toBe(true);
   });
 
   it("classifies every exposed core gateway handler method", () => {

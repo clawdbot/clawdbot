@@ -4,6 +4,7 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
@@ -22,7 +23,6 @@ type AgentOAuthCredential = {
 /** Credential value shape consumed by agent runtimes after auth-profile normalization. */
 type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
-export type PreparedAgentCredentialModes = Readonly<Record<string, "api_key" | "oauth" | "token">>;
 
 type ResolveAgentCredentialMapOptions = {
   includeSecretRefPlaceholders?: boolean;

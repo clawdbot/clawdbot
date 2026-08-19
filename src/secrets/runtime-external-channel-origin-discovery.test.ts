@@ -8,6 +8,15 @@ const { loadPluginMetadataSnapshotMock, loadChannelSecretContractApiMock } = vi.
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+  resolvePluginMetadataSnapshot: (params: unknown) => {
+    const snapshot = loadPluginMetadataSnapshotMock(params) as {
+      plugins: Array<{ id: string; origin: string }>;
+    };
+    return {
+      ...snapshot,
+      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
+    };
+  },
   listPluginOriginsFromMetadataSnapshot: (snapshot: {
     plugins: Array<{ id: string; origin: string }>;
   }) => new Map(snapshot.plugins.map((record) => [record.id, record.origin])),

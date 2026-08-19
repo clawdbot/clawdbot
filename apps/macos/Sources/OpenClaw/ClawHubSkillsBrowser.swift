@@ -63,20 +63,19 @@ struct ClawHubSkillsBrowser: View {
                         ForEach(Array(self.model.results.enumerated()), id: \.element.id) { index, skill in
                             ClawHubSkillResultRow(
                                 skill: skill,
-                                installed: skill.version.map {
-                                    SkillManagementContract.installed(
-                                        self.installedSkills,
-                                        slug: skill.slug,
-                                        version: $0)
-                                } ?? SkillManagementContract.installed(
+                                installed: SkillManagementContract.installed(
                                     self.installedSkills,
-                                    slug: skill.slug),
-                                isBusy: self.model.reviewingSlug == skill.slug || self.model.installingSlug.map {
-                                    SkillManagementContract.sameClawHubSkill($0, skill.slug)
+                                    searchResult: skill),
+                                isBusy: self.model.reviewingSlug == skill.reference || self.model.installingSlug.map {
+                                    SkillManagementContract.sameClawHubSkill($0, skill.reference)
                                 } == true,
                                 showsDivider: index != self.model.results.count - 1)
                             {
-                                Task { await self.model.review(skill) }
+                                Task {
+                                    if let skills = await self.model.act(on: skill) {
+                                        self.onInstalled(skills)
+                                    }
+                                }
                             }
                         }
                     }
@@ -122,12 +121,34 @@ private struct ClawHubSkillResultRow: View {
     let installed: Bool
     let isBusy: Bool
     let showsDivider: Bool
-    let onReview: () -> Void
+    let onAction: () -> Void
+
+    /// Same-slug rows share a display name and often a summary, so the reference always shows:
+    /// it is the only thing that tells them apart and what install sends back. An unscanned source
+    /// says so here, because that row never opens a review card that could carry the warning.
+    private var subtitle: String {
+        var parts = [String]()
+        if let summary = self.skill.summary {
+            parts.append(summary)
+        }
+        parts.append(self.skill.reference)
+        if self.skill.isUnscannedSource {
+            parts.append(String(localized: "Not scanned by ClawHub"))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var actionTitle: String {
+        if self.installed {
+            return "Installed"
+        }
+        return self.skill.canReadDetails ? "Review" : "Install"
+    }
 
     var body: some View {
         SettingsCardRow(
             title: .verbatim(self.skill.displayName),
-            subtitle: .verbatim(self.skill.summary ?? self.skill.slug),
+            subtitle: .verbatim(self.subtitle),
             showsDivider: self.showsDivider)
         {
             if let version = self.skill.version {
@@ -135,7 +156,8 @@ private struct ClawHubSkillResultRow: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Button(self.installed ? "Installed" : "Review", action: self.onReview)
+            // Install-only sources get no Review button: the Gateway cannot answer detail for them.
+            Button(self.actionTitle, action: self.onAction)
                 .buttonStyle(.bordered)
                 .disabled(self.isBusy || self.installed)
         }
@@ -215,7 +237,9 @@ private struct ClawHubReviewDetails: View {
             if let summary = self.review.summary {
                 Text(summary).foregroundStyle(.secondary)
             }
-            LabeledContent("Version", value: self.review.version)
+            if let version = self.review.version {
+                LabeledContent("Version", value: version)
+            }
             LabeledContent("Publisher", value: self.review.author)
         }
     }
@@ -286,16 +310,37 @@ private final class ClawHubSkillsBrowserModel {
         }
     }
 
+    /// Routes a row to the only action its source supports. Install-only results skip review and
+    /// install the exact reference search returned, so the picked source is the installed source.
+    func act(on skill: ClawHubSkillSummary) async -> [SkillStatus]? {
+        guard skill.canReadDetails else {
+            guard let route = await GatewayConnection.shared.captureRoute() else {
+                self.notice = Notice(
+                    title: "Could not install skill",
+                    message: ClawHubSkillsBrowserError.gatewayUnavailable.localizedDescription,
+                    warning: nil,
+                    isError: true)
+                return nil
+            }
+            return await self.install(
+                ClawHubSkillInstallReview(directInstall: skill),
+                route: route,
+                acknowledgeRisk: false)
+        }
+        await self.review(skill)
+        return nil
+    }
+
     func review(_ skill: ClawHubSkillSummary) async {
         guard self.reviewingSlug == nil else { return }
-        self.reviewingSlug = skill.slug
+        self.reviewingSlug = skill.reference
         self.notice = nil
         defer { self.reviewingSlug = nil }
         do {
             guard let route = await GatewayConnection.shared.captureRoute() else {
                 throw ClawHubSkillsBrowserError.gatewayUnavailable
             }
-            let detail = try await GatewayConnection.shared.skillsDetail(slug: skill.slug, on: route)
+            let detail = try await GatewayConnection.shared.skillsDetail(slug: skill.reference, on: route)
             guard let review = ClawHubSkillInstallReview(detail: detail, fallback: skill) else {
                 throw ClawHubSkillsBrowserError.missingInstallVersion
             }
@@ -325,7 +370,7 @@ private final class ClawHubSkillsBrowserModel {
                 acknowledgeRisk: acknowledgeRisk,
                 on: route)
             let report = try await GatewayConnection.shared.skillsStatus(on: route)
-            guard SkillManagementContract.installed(report.skills, slug: review.slug, version: review.version) else {
+            guard installedAfter(report.skills, review: review) else {
                 self.sheet = nil
                 self.notice = Notice(
                     title: "Install result unknown",
@@ -362,7 +407,7 @@ private final class ClawHubSkillsBrowserModel {
             return nil
         } catch {
             if let report = try? await GatewayConnection.shared.skillsStatus(on: route),
-               SkillManagementContract.installed(report.skills, slug: review.slug, version: review.version)
+               installedAfter(report.skills, review: review)
             {
                 self.sheet = nil
                 self.notice = Notice(
@@ -381,6 +426,18 @@ private final class ClawHubSkillsBrowserModel {
             return nil
         }
     }
+}
+
+/// An install-only source resolves to a commit, not a release, and its reference is not a
+/// `@owner/slug` spelling, so confirmation matches the reference the Gateway recorded.
+private func installedAfter(_ skills: [SkillStatus], review: ClawHubSkillInstallReview) -> Bool {
+    if let requestedReference = review.requestedReference {
+        return SkillManagementContract.installed(skills, requestedReference: requestedReference)
+    }
+    guard let version = review.version else {
+        return SkillManagementContract.installed(skills, slug: review.slug)
+    }
+    return SkillManagementContract.installed(skills, slug: review.slug, version: version)
 }
 
 private enum ClawHubSkillsBrowserError: LocalizedError {

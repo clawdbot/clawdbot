@@ -8,8 +8,11 @@ import type {
   PageState,
   PendingObservedDialog,
 } from "./pw-session-contracts.js";
-import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
-import { OBSERVED_DIALOG_TIMEOUT_MS, MAX_RECENT_DIALOGS } from "./pw-session-contracts.js";
+import {
+  BrowserObservedDialogBlockedError,
+  OBSERVED_DIALOG_TIMEOUT_MS,
+  MAX_RECENT_DIALOGS,
+} from "./pw-session-contracts.js";
 
 export function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
   const parsed = parseFiniteNumber(timeoutMs);

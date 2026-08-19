@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
@@ -21,11 +21,11 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { resolveUserPath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
-import { applySystemAgentModelSelection, createQuickstartNotePrompter } from "./setup-apply.js";
+import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
   persistActivatedSetupInference,
   type SetupInferenceActivationPersistenceState,
@@ -56,6 +56,7 @@ import {
   resolveSetupAgentRuntimeId,
 } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
+import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   type SystemAgentOwnerPluginArtifactSnapshot,
@@ -124,6 +125,7 @@ async function activateSetupInferenceUnredacted(
   // The source snapshot includes raw compatibility migrations for comparison,
   // while the writer still projects changes back onto the untouched authored bytes.
   const sourceCfg: OpenClawConfig = snapshot.sourceConfig ?? snapshot.config;
+  const routeAgentId = resolveSystemAgentTargetAgentId(cfg, params.agentId);
   const workspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace)
     : (
@@ -141,6 +143,7 @@ async function activateSetupInferenceUnredacted(
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
   let codexRegistryNeedsReload = false;
   let codexRegistryReloaded = false;
+  let codexReloadedRuntimeConfig: OpenClawConfig | undefined;
   let codexProbePluginRegistry: PluginRegistry | undefined;
   try {
     const plan = await buildTestPlan({
@@ -162,6 +165,7 @@ async function activateSetupInferenceUnredacted(
         : {}),
       ...(codexCliApiKey ? { codexCliApiKey } : {}),
       deps,
+      routeAgentId,
     });
     if ("error" in plan) {
       return {
@@ -178,13 +182,14 @@ async function activateSetupInferenceUnredacted(
       const stagedConfig = await applySystemAgentModelSelection({
         config: plan.config,
         model: plan.persistModelRef,
+        ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
       });
       testPlan = {
         ...plan,
         config: stagedConfig,
-        routeAgentId: resolveDefaultAgentId(stagedConfig),
+        routeAgentId: resolveSystemAgentTargetAgentId(stagedConfig, params.agentId),
       };
     }
 
@@ -250,10 +255,14 @@ async function activateSetupInferenceUnredacted(
         }
       }
       const normalizedCodexConfig = normalizePluginTargetConfig(ensured.cfg, "codex");
-      const enabledCodex = enablePluginInConfig(
-        configureCodexCliPreparedAuth(normalizedCodexConfig),
-        "codex",
+      const preparedAuth = configureCodexCliPreparedAuth(
+        normalizedCodexConfig,
+        codexCliApiKey ? "agent" : "user",
       );
+      if (!preparedAuth.ok) {
+        return { ok: false, status: "unavailable", error: preparedAuth.error };
+      }
+      const enabledCodex = enablePluginInConfig(preparedAuth.value, "codex");
       if (!enabledCodex.enabled) {
         return {
           ok: false,
@@ -282,6 +291,9 @@ async function activateSetupInferenceUnredacted(
       await refreshPluginRegistry({
         config: testPlan.config,
         reason: "source-changed",
+        ...(testPlan.config.plugins?.installs
+          ? { installRecords: testPlan.config.plugins.installs }
+          : {}),
         workspaceDir: workspace,
         policyPluginIds: ["codex"],
         traceCommand: "openclaw-setup-probe",
@@ -324,12 +336,13 @@ async function activateSetupInferenceUnredacted(
       ...(codexRegistryNeedsReload ? { allowCurrent: false } : {}),
     });
     const routeDeps = { pluginMetadataPlugins: routeMetadataSnapshot.plugins };
-    const baselineRoute = await projectDefaultInferenceRoute(cfg, routeDeps);
-    const verifiedRoute = await projectDefaultInferenceRoute(testPlan.config, routeDeps);
+    const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
+    const baselineRoute = await projectInferenceRoute(cfg, requestedAgentId, routeDeps);
+    const verifiedRoute = await projectInferenceRoute(testPlan.config, requestedAgentId, routeDeps);
     const stagedRoute = verifiedRoute.route;
     const stagedExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(
       testPlan.config,
-      undefined,
+      requestedAgentId,
       routeDeps,
     );
     if (
@@ -351,10 +364,12 @@ async function activateSetupInferenceUnredacted(
     const baselineTargetModelMetadata = projectSetupTargetModelMetadata(
       cfg,
       stagedRoute.modelLabel,
+      requestedAgentId,
     );
     const sourceTargetModelMetadata = projectSetupTargetModelMetadata(
       sourceCfg,
       stagedRoute.modelLabel,
+      requestedAgentId,
     );
     // OpenClaw executes through the reserved agent id but reuses the default
     // route's agent directory. Only a submitted key stays in the isolated store.
@@ -519,7 +534,7 @@ async function activateSetupInferenceUnredacted(
           ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
           : undefined;
       const latestRoute = latestRuntime
-        ? await projectDefaultInferenceRoute(latestRuntime, routeDeps)
+        ? await projectInferenceRoute(latestRuntime, requestedAgentId, routeDeps)
         : undefined;
       if (!latestRoute || !sameDefaultInferenceRoute(latestRoute, verifiedRoute)) {
         return {
@@ -530,7 +545,11 @@ async function activateSetupInferenceUnredacted(
         };
       }
       const latestResolvedRoute = latestRuntime
-        ? await resolveSystemAgentConfiguredRouteFromConfig(latestRuntime, undefined, routeDeps)
+        ? await resolveSystemAgentConfiguredRouteFromConfig(
+            latestRuntime,
+            requestedAgentId,
+            routeDeps,
+          )
         : null;
       if (!latestResolvedRoute) {
         return {
@@ -581,14 +600,35 @@ async function activateSetupInferenceUnredacted(
       ({ committedConfig, autoLocalModelLeanApplied, codexInstallOwnership } = persistenceState);
     }
     if (codexRegistryNeedsReload && committedConfig) {
-      codexRegistryReloaded = await reloadCodexRegistryAfterActivation({
+      const reloadedRuntimeConfig = await reloadCodexRegistryAfterActivation({
         readSnapshot,
         workspaceDir: workspace,
         deps,
+        requireValidConfig: true,
       });
+      codexRegistryReloaded = reloadedRuntimeConfig !== null;
+      codexReloadedRuntimeConfig = reloadedRuntimeConfig ?? undefined;
       if (!codexRegistryReloaded) {
         throw new SetupInferenceActivationIndeterminateError(
           "Inference activation committed, but the active plugin registry could not be reloaded. Restart the Gateway before using Codex inference.",
+        );
+      }
+    }
+    if (committedConfig && params.surface === "gateway" && params.kind === "codex-cli") {
+      try {
+        // The writer returns authored config, while prepared owners are keyed to the Gateway's
+        // materialized runtime snapshot. Publishing the authored shape strands metadata/probes.
+        if (!codexReloadedRuntimeConfig) {
+          throw new Error("committed runtime config is unavailable");
+        }
+        const refreshPreparedModelRuntimeSnapshots =
+          deps.refreshPreparedModelRuntimeSnapshots ??
+          (await import("../agents/prepared-model-runtime.js"))
+            .refreshPreparedModelRuntimeSnapshots;
+        await refreshPreparedModelRuntimeSnapshots(codexReloadedRuntimeConfig);
+      } catch (error) {
+        throw new SetupInferenceActivationIndeterminateError(
+          `Inference activation committed, but the prepared model catalog could not be refreshed (${error instanceof Error ? error.message : String(error)}). Restart the Gateway before using the new inference route.`,
         );
       }
     }
@@ -643,11 +683,12 @@ async function activateSetupInferenceUnredacted(
     if (codexRegistryNeedsReload && !codexRegistryReloaded) {
       // The probe loaded discovery against staged config. Restore the live
       // registry from the latest persisted config before another request runs.
-      codexRegistryReloaded = await reloadCodexRegistryAfterActivation({
-        readSnapshot,
-        workspaceDir: workspace,
-        deps,
-      });
+      codexRegistryReloaded =
+        (await reloadCodexRegistryAfterActivation({
+          readSnapshot,
+          workspaceDir: workspace,
+          deps,
+        })) !== null;
       if (!codexRegistryReloaded) {
         codexCleanupError = new SetupInferenceActivationIndeterminateError(
           "Inference activation could not restore the active plugin registry after its Codex probe. Restart the Gateway before retrying.",

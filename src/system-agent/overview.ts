@@ -1,9 +1,6 @@
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 // OpenClaw overview gathers config, agent, tool, docs, source, and gateway status.
-import {
-  listAgentEntries,
-  resolveAgentEffectiveModelPrimary,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentEntries, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import {
   OPENCLAW_DOCS_URL,
   OPENCLAW_SOURCE_URL,
@@ -91,8 +88,7 @@ function issueMessages(snapshot: ConfigFileSnapshot): string[] {
   });
 }
 
-function buildAgentSummaries(cfg: OpenClawConfig): SystemAgentSummary[] {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): SystemAgentSummary[] {
   const entries = listAgentEntries(cfg);
   if (entries.length === 0) {
     return [
@@ -150,7 +146,7 @@ export async function loadSystemAgentOverview(
   const readSnapshot = deps.readConfigFileSnapshot ?? readConfigFileSnapshot;
   const snapshot = await readSnapshot();
   const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveSystemAgentTargetAgentId(cfg);
   const defaultModel =
     resolveAgentEffectiveModelPrimary(cfg, defaultAgentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
@@ -192,7 +188,7 @@ export async function loadSystemAgentOverview(
       issues: issueMessages(snapshot),
       hash: snapshot.hash ?? null,
     },
-    agents: buildAgentSummaries(cfg),
+    agents: buildAgentSummaries(cfg, defaultAgentId),
     defaultAgentId,
     defaultModel,
     tools: {

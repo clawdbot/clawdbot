@@ -5,6 +5,7 @@
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type queueAgentHarnessMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
@@ -14,6 +15,7 @@ import {
 import { buildCodexUserInput } from "./user-input.js";
 
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
+type AgentHarnessQueueMessageOptions = NonNullable<Parameters<typeof queueAgentHarnessMessage>[2]>;
 
 export class CodexSteeringAcceptedUnconfirmedError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -28,6 +30,7 @@ export type CodexSteeringQueueOptions = {
   images?: EmbeddedRunAttemptParams["images"];
   isInboundUserMessage?: boolean;
   onQueueAccepted?: (accepted: boolean) => void;
+  userTurnTranscriptRecorder?: AgentHarnessQueueMessageOptions["userTurnTranscriptRecorder"];
 };
 
 /**

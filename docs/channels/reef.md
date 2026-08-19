@@ -158,5 +158,6 @@ When a peer's inbound guard rejects a delivered message, Reef verifies the signe
 - `channels status` shows `running` but not `connected`: the relay WebSocket is reconnecting; check network reachability of the relay URL.
 - Every inbound message denied with `guard_failure`: the guard provider call is failing — most commonly `apiKeyEnv` is unset in the Gateway environment or the key has no credits.
 - Pairing request never appears: the recipient's channel reconciles with the relay every 30 seconds; check `openclaw pairing list reef` after that, and confirm the requester used a fresh code (codes expire after 15 minutes).
+- Pairing fails with a Reef protocol compatibility error: update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.
 
 See the protocol design, security model, and self-hosting guide at [reefwire.ai/docs](https://reefwire.ai/docs/).

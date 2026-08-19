@@ -1,5 +1,6 @@
 /** Gateway-backed archive and delete commands for stored sessions. */
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -138,7 +139,19 @@ function outputLifecycleResults(
 ): void {
   const ok = results.every((result) => result.ok);
   if (json) {
-    writeRuntimeJson(runtime, { ok, operation, dryRun, results });
+    writeRuntimeJson(
+      runtime,
+      ok
+        ? { ok, operation, dryRun, results }
+        : {
+            ...formatCliJsonFailure(
+              `Session ${operation} did not complete for every requested key.`,
+            ),
+            operation,
+            dryRun,
+            results,
+          },
+    );
   } else {
     for (const result of results) {
       switch (result.status) {
@@ -194,6 +207,7 @@ async function runSessionsLifecycleCommand(
   try {
     sessions = await listRequestedSessions(keys.filter(Boolean), opts.agent, rpcOptions);
   } catch (error) {
+    rethrowExpectedCliError(error);
     const message = formatErrorMessage(error);
     outputLifecycleResults(
       operation,

@@ -13,6 +13,7 @@ import {
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
 import type { AgentHarness } from "./harness/types.js";
+import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 type IsolatedCliRunParams = {
   preparedRunAdmission: PreparedAgentRunAdmission;
@@ -106,6 +107,9 @@ vi.mock("../infra/tmp-openclaw-dir.js", () => ({
 
 import { runIsolatedCompletion } from "./isolated-completion.js";
 
+let preparedModelRuntime: object;
+let releaseRuntimeLease: ReturnType<typeof vi.fn>;
+
 function assistant(
   content: AssistantMessage["content"],
   stopReason: AssistantMessage["stopReason"] = "stop",
@@ -143,12 +147,17 @@ function request() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  preparedModelRuntime = {
+    config: {},
+    metadataSnapshot: createEmptyPluginMetadataSnapshot("/tmp/workspace"),
+    pluginRegistry: createEmptyPluginRegistry(),
+    workspaceDir: "/tmp/workspace",
+    createStores: () => ({ modelRegistry: {} }),
+  };
+  releaseRuntimeLease = vi.fn();
   mocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
-    snapshot: {
-      pluginRegistry: createEmptyPluginRegistry(),
-      createStores: () => ({ modelRegistry: {} }),
-    },
-    release: vi.fn(),
+    snapshot: preparedModelRuntime,
+    release: releaseRuntimeLease,
   });
   mocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
   mocks.resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
@@ -519,6 +528,11 @@ describe("runIsolatedCompletion", () => {
     await runIsolatedCompletion(request());
 
     expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
+    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({ preparedModelRuntime, workspaceDir: "/tmp/workspace" }),
+    );
+    expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
+    expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
       expect.objectContaining({ authorization: expect.objectContaining({ owner: "host" }) }),
     );
@@ -546,8 +560,15 @@ describe("runIsolatedCompletion", () => {
       usage: expect.objectContaining({ input: 1, output: 1, totalTokens: 2 }),
     });
     expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: undefined, bindAuthOwner: true }),
+      expect.objectContaining({
+        profileId: undefined,
+        bindAuthOwner: true,
+        preparedModelRuntime,
+        workspaceDir: "/tmp/workspace",
+      }),
     );
+    expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
+    expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     expect(runIsolatedCompletionHarness).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",

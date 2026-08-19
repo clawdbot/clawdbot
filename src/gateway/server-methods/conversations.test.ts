@@ -131,13 +131,15 @@ describe("conversations.list Gateway handler", () => {
 
     await invokeList({ handler, context: context(), respond });
 
-    expect(runConversationList).toHaveBeenCalledWith({
-      config: {},
-      agentId: "main",
-      channel: "reef",
-      query: "@molty",
-      limit: 50,
-    });
+    expect(runConversationList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.any(Object),
+        agentId: "main",
+        channel: "reef",
+        query: "@molty",
+        limit: 50,
+      }),
+    );
     expect(respond).toHaveBeenCalledWith(true, listed, undefined);
   });
 
@@ -163,6 +165,26 @@ describe("conversations.list Gateway handler", () => {
 });
 
 describe("conversations.send Gateway handler", () => {
+  it("rejects a source session owned by another agent", async () => {
+    const runConversationSend = vi.fn();
+    const handler = createConversationHandlers({ runConversationSend })["conversations.send"]!;
+    const respond = vi.fn<RespondFn>();
+
+    await invokeSend({
+      handler,
+      context: context(),
+      respond,
+      request: { ...sendRequest, sourceSessionKey: "agent:ops:main" },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST", message: expect.stringContaining("ops") }),
+    );
+    expect(runConversationSend).not.toHaveBeenCalled();
+  });
+
   it("owns the send and rejects operation-id reuse with different source input", async () => {
     const runConversationSend = vi.fn(async () => sendResult);
     const handler = createConversationHandlers({
@@ -227,7 +249,11 @@ describe("conversations.send Gateway handler", () => {
       handler,
       context: gatewayContext,
       respond: otherRespond,
-      request: { ...sendRequest, agentId: "other-agent" },
+      request: {
+        ...sendRequest,
+        agentId: "other-agent",
+        sourceSessionKey: "agent:other-agent:telegram:direct:operator",
+      },
     });
     await vi.waitFor(() => expect(runConversationSend).toHaveBeenCalledTimes(2));
     finishMain?.(sendResult);
@@ -241,6 +267,26 @@ describe("conversations.send Gateway handler", () => {
 });
 
 describe("conversations.turn Gateway handler", () => {
+  it("rejects a source session owned by another agent", async () => {
+    const runConversationTurn = vi.fn();
+    const handler = createConversationHandlers({ runConversationTurn })["conversations.turn"]!;
+    const respond = vi.fn<RespondFn>();
+
+    await invoke({
+      handler,
+      context: context(),
+      respond,
+      request: { ...request, sourceSessionKey: "agent:ops:main" },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST", message: expect.stringContaining("ops") }),
+    );
+    expect(runConversationTurn).not.toHaveBeenCalled();
+  });
+
   it("validates requests before entering the correlation service", async () => {
     const runConversationTurn = vi.fn();
     const handler = createConversationHandlers({
@@ -355,7 +401,11 @@ describe("conversations.turn Gateway handler", () => {
       handler,
       context: gatewayContext,
       respond: otherRespond,
-      request: { ...request, agentId: "other-agent" },
+      request: {
+        ...request,
+        agentId: "other-agent",
+        sourceSessionKey: "agent:other-agent:telegram:direct:operator",
+      },
     });
     await vi.waitFor(() => expect(runConversationTurn).toHaveBeenCalledTimes(2));
     finish?.(result);

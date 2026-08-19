@@ -6,28 +6,11 @@ import {
   type PluginBoundaryReportResult,
 } from "../../scripts/plugin-boundary-report.js";
 
-function requirePluginSdkSummary(summary: {
-  pluginSdk?: {
-    crossOwnerReservedImportCount?: unknown;
-    unusedReservedCount?: unknown;
-  };
-}) {
-  if (!summary.pluginSdk) {
-    throw new Error("Expected plugin SDK summary");
-  }
-  return summary.pluginSdk;
-}
-
 describe("plugin-boundary-report", () => {
   let summaryResult: PluginBoundaryReportResult;
 
   beforeAll(() => {
-    summaryResult = createPluginBoundaryReport([
-      "--summary",
-      "--json",
-      "--fail-on-cross-owner",
-      "--fail-on-unclassified-unused-reserved",
-    ]);
+    summaryResult = createPluginBoundaryReport(["--summary", "--json"]);
   });
 
   it("emits compact CI-safe summary JSON", () => {
@@ -43,10 +26,6 @@ describe("plugin-boundary-report", () => {
           readerSample?: unknown;
           dueForReview?: unknown;
         }>;
-      };
-      pluginSdk?: {
-        crossOwnerReservedImportCount?: unknown;
-        unusedReservedCount?: unknown;
       };
       memoryHostSdk?: {
         implementation?: unknown;
@@ -70,9 +49,6 @@ describe("plugin-boundary-report", () => {
       expect((record.readerSample as unknown[]).length).toBeLessThanOrEqual(5);
       expect(record.dueForReview).toEqual(expect.any(Boolean));
     }
-    const pluginSdk = requirePluginSdkSummary(summary);
-    expect(pluginSdk.crossOwnerReservedImportCount).toBe(0);
-    expect(pluginSdk.unusedReservedCount).toBe(0);
     expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
       summary.memoryHostSdk?.implementation,
     );

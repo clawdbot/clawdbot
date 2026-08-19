@@ -1,37 +1,29 @@
 /** Detached task-ledger integration for cron runs. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { isCronTimeoutErrorText } from "../execution-error-constants.js";
-
-function requireCronAgentId(agentId: string | undefined): string {
-  if (!agentId?.trim()) {
-    throw new Error("Cron task run requires an agent id or prepared configured default.");
-  }
-  return normalizeAgentId(agentId);
-}
-
-function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
-}
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import {
   createRunningTaskRunCore,
   finalizeTaskRunById,
   finalizeTaskRunByRunIdCore,
   findTaskByRunId,
-  listTaskRecordsUnsorted,
   recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
+import { listTaskRecordsByRuntimeSourceIdInDatabase } from "../../tasks/task-registry.store.sqlite.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import {
+  CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+  resolveCronJobEffectiveAgentId,
+} from "../agent-id.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
+  cronQuietTriggerTaskDetail,
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
   cronTaskRecordToScriptRunResult,
@@ -39,10 +31,26 @@ import {
   resolveCronTaskRecordTimestamp,
 } from "../task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
-import type { CronJob, CronRunErrorClassification, CronRunStatus } from "../types.js";
+import type {
+  CronCompletionStatus,
+  CronJob,
+  CronRunErrorClassification,
+  CronRunStatus,
+} from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
+
+function requireCronAgentId(agentId: string | undefined): string {
+  if (!agentId?.trim()) {
+    throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+  }
+  return normalizeAgentId(agentId);
+}
+
+function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
+  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+}
 
 const activeCronTaskRunId = new AsyncLocalStorage<string>();
 
@@ -54,44 +62,6 @@ export function withCronTaskRunId<T>(taskRunId: string | undefined, run: () => T
 
 export function getActiveCronTaskRunId(): string | undefined {
   return activeCronTaskRunId.getStore();
-}
-
-/** Converts cron ids into bounded session-key path segments with a fallback for empty input. */
-export function normalizeCronLaneSegment(value: string | undefined, fallback: string): string {
-  const normalized = normalizeOptionalLowercaseString(value)
-    ?.replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64);
-  return normalized || fallback;
-}
-
-/** Builds the main-session child key used to isolate one cron run's task transcript. */
-export function resolveMainSessionCronRunSessionKey(
-  job: CronJob,
-  startedAt: number,
-  configuredDefaultAgentId: string | undefined,
-): string {
-  const agentId = resolveCronJobEffectiveAgentId(job, configuredDefaultAgentId);
-  const jobSegment = normalizeCronLaneSegment(job.id, "job");
-  const runSegment = normalizeCronLaneSegment(String(Math.max(0, Math.floor(startedAt))), "run");
-  return `agent:${agentId}:cron:${jobSegment}:run:${runSegment}`;
-}
-
-function resolveCronTaskChildSessionKey(params: {
-  state: CronServiceState;
-  job: CronJob;
-  startedAt: number;
-}): string | undefined {
-  if (params.job.sessionTarget === "main" && params.job.payload.kind === "systemEvent") {
-    return resolveMainSessionCronRunSessionKey(
-      params.job,
-      params.startedAt,
-      resolveCurrentDefaultAgentId(params.state),
-    );
-  }
-  // Agent turns publish their exact transcript key after setup. This also
-  // avoids inventing links for headless command/script/heartbeat work.
-  return undefined;
 }
 
 /** Updates an active cron task with the exact transcript identity reported by its runner. */
@@ -140,14 +110,15 @@ function createCronTaskRunId(jobId: string, startedAt: number, publicRunId?: str
   return `${createCronExecutionId(jobId, startedAt)}:${discriminator}`;
 }
 
-function findLatestCronTaskRunForRecovery(
+function findLatestCronTaskRunForRecoveryFromRecords(
+  records: readonly TaskRecord[],
   jobId: string,
   startedAt: number,
   storeKey: string,
 ): TaskRecord | undefined {
   const executionRunId = createCronExecutionId(jobId, startedAt);
   const prefix = `${executionRunId}:`;
-  return listTaskRecordsUnsorted()
+  return records
     .filter((task) => {
       if (task.runtime !== "cron" || task.sourceId !== jobId) {
         return false;
@@ -174,57 +145,66 @@ function findLatestCronTaskRunForRecovery(
     )[0];
 }
 
-/** Finds the unique task identity owned by one persisted cron reservation. */
-export function tryFindCronTaskRunIdForRecovery(
-  state: CronServiceState,
+type FinalizedCronTaskRun = {
+  entry: CronRunLogEntry & { status: CronRunStatus };
+  scriptResult?: { scriptStateChanged: true; scriptState?: JsonValue };
+  triggerEval?: { fired: boolean; stateChanged: boolean; state?: JsonValue };
+};
+
+function finalizedCronTaskRun(
+  task: TaskRecord | undefined,
   jobId: string,
-  startedAt: number,
-): string | undefined {
-  try {
-    return findLatestCronTaskRunForRecovery(jobId, startedAt, cronStoreKey(state.deps.storePath))
-      ?.runId;
-  } catch (error) {
-    state.deps.log.warn({ jobId, error }, "cron: failed to read task ledger recovery record");
+): FinalizedCronTaskRun | undefined {
+  if (task?.runtime !== "cron" || task.sourceId !== jobId || task.endedAt === undefined) {
     return undefined;
   }
+  const triggerEval = cronTaskRecordToTriggerEval(task);
+  const storedEntry = cronTaskRecordToRunLogEntry(task);
+  const entry =
+    storedEntry ??
+    (task.status === "succeeded" && triggerEval?.fired === false
+      ? {
+          ts: task.endedAt,
+          jobId,
+          action: "finished" as const,
+          status: "ok" as const,
+          ...(task.startedAt === undefined
+            ? {}
+            : {
+                runAtMs: task.startedAt,
+                durationMs: Math.max(0, task.endedAt - task.startedAt),
+              }),
+        }
+      : undefined);
+  if (!entry?.status) {
+    return undefined;
+  }
+  const scriptResult = cronTaskRecordToScriptRunResult(task);
+  return {
+    entry: { ...entry, status: entry.status },
+    ...(scriptResult ? { scriptResult } : {}),
+    ...(triggerEval ? { triggerEval } : {}),
+  };
 }
 
-/** Finds a completed canonical cron row for startup crash recovery. */
-export function tryFindFinalizedCronTaskRun(
-  state: CronServiceState,
-  jobId: string,
-  startedAt: number,
-):
-  | {
-      entry: CronRunLogEntry & { status: CronRunStatus };
-      scriptResult?: { scriptStateChanged: true; scriptState?: JsonValue };
-      triggerEval?: { fired: true; stateChanged: boolean; state?: JsonValue };
-    }
-  | undefined {
-  try {
-    const task = findLatestCronTaskRunForRecovery(
-      jobId,
-      startedAt,
-      cronStoreKey(state.deps.storePath),
-    );
-    if (task?.runtime !== "cron" || task.sourceId !== jobId || task.endedAt === undefined) {
-      return undefined;
-    }
-    const entry = cronTaskRecordToRunLogEntry(task);
-    if (!entry?.status) {
-      return undefined;
-    }
-    const triggerEval = cronTaskRecordToTriggerEval(task);
-    const scriptResult = cronTaskRecordToScriptRunResult(task);
-    return {
-      entry: { ...entry, status: entry.status },
-      ...(scriptResult ? { scriptResult } : {}),
-      ...(triggerEval ? { triggerEval } : {}),
-    };
-  } catch (error) {
-    state.deps.log.warn({ jobId, error }, "cron: failed to read finalized task ledger record");
-    return undefined;
-  }
+/** Re-reads task recovery facts on the caller's exact SQLite transaction. */
+export function findCronTaskRunRecoveryInDatabase(params: {
+  database: DatabaseSync;
+  jobId: string;
+  startedAt: number;
+  storeKey: string;
+}): { taskRunId?: string; finalized?: FinalizedCronTaskRun } {
+  const task = findLatestCronTaskRunForRecoveryFromRecords(
+    listTaskRecordsByRuntimeSourceIdInDatabase(params.database, "cron", params.jobId),
+    params.jobId,
+    params.startedAt,
+    params.storeKey,
+  );
+  const finalized = finalizedCronTaskRun(task, params.jobId);
+  return {
+    ...(task?.runId ? { taskRunId: task.runId } : {}),
+    ...(finalized ? { finalized } : {}),
+  };
 }
 
 function tryCreateCronTaskRunRecord(params: {
@@ -236,16 +216,7 @@ function tryCreateCronTaskRunRecord(params: {
   childSessionKey?: string;
 }): string | undefined {
   try {
-    const explicitJobAgentId = params.job?.agentId?.trim();
-    const childSessionKey =
-      params.childSessionKey ??
-      (params.job
-        ? resolveCronTaskChildSessionKey({
-            state: params.state,
-            job: params.job,
-            startedAt: params.startedAt,
-          })
-        : undefined);
+    const childSessionKey = params.childSessionKey;
     const effectiveJobAgentId = params.job
       ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
       : undefined;
@@ -258,7 +229,6 @@ function tryCreateCronTaskRunRecord(params: {
       childSessionKey,
       agentId:
         effectiveJobAgentId ??
-        (explicitJobAgentId ? normalizeAgentId(explicitJobAgentId) : undefined) ??
         (childSessionKey
           ? resolveAgentIdFromSessionKey(
               childSessionKey,
@@ -298,32 +268,48 @@ export function tryFinishCronTaskRunWithoutHistory(
   result: {
     taskRunId?: string;
     status: "ok" | "error" | "skipped";
+    completionStatus?: CronCompletionStatus;
     error?: unknown;
     endedAt: number;
     summary?: string;
     childSessionKey?: string;
     sessionKey?: string;
+    triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
   },
 ): void {
   if (!result.taskRunId) {
     return;
   }
-  const error = result.status === "error" ? normalizeCronRunErrorText(result.error) : undefined;
+  const error =
+    result.status !== "ok" && result.error !== undefined
+      ? normalizeCronRunErrorText(result.error)
+      : undefined;
+  const quietTriggerEval =
+    result.triggerEval?.fired === false
+      ? { ...result.triggerEval, fired: false as const }
+      : undefined;
   try {
     finalizeTaskRunByRunIdCore({
       runId: result.taskRunId,
       runtime: "cron",
-      status:
-        result.status === "ok" || result.status === "skipped"
-          ? "succeeded"
-          : isCronTimeoutErrorText(error)
-            ? "timed_out"
-            : "failed",
+      status: cronRunStatusToTaskStatus({
+        status: result.status,
+        completionStatus: quietTriggerEval ? "succeeded" : result.completionStatus,
+        error,
+      }),
       endedAt: result.endedAt,
       lastEventAt: result.endedAt,
       error,
       terminalSummary: result.summary,
       childSessionKey: result.childSessionKey ?? result.sessionKey ?? null,
+      ...(quietTriggerEval
+        ? {
+            detail: cronQuietTriggerTaskDetail(
+              cronStoreKey(state.deps.storePath),
+              quietTriggerEval,
+            ),
+          }
+        : {}),
     });
   } catch (cause) {
     state.deps.log.warn(

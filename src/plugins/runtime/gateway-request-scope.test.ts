@@ -14,7 +14,11 @@ const TEST_SCOPE: PluginRuntimeGatewayRequestScope = {
 };
 
 describe("gateway request scope", () => {
-  afterEach(() => resetPluginRuntimeStateForTest());
+  afterEach(() => {
+    vi.doUnmock("../current-plugin-metadata-snapshot.js");
+    vi.resetModules();
+    resetPluginRuntimeStateForTest();
+  });
   async function importGatewayRequestScopeModule() {
     return await import("./gateway-request-scope.js");
   }
@@ -56,6 +60,17 @@ describe("gateway request scope", () => {
       });
     });
   }
+
+  it("does not import the plugin metadata control plane", async () => {
+    vi.resetModules();
+    vi.doMock("../current-plugin-metadata-snapshot.js", () => {
+      throw new Error("gateway request scope must remain lightweight");
+    });
+
+    const runtimeScope = await importGatewayRequestScopeModule();
+
+    expect(runtimeScope.withPluginRuntimeGatewayRequestScope).toBeTypeOf("function");
+  });
 
   it("reuses AsyncLocalStorage across reloaded module instances", async () => {
     const first = await importGatewayRequestScopeModule();

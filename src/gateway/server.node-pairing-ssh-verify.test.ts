@@ -1,6 +1,6 @@
 // SSH-verified node pairing e2e: real gateway server on the LAN self-connect
 // harness, with the SSH probe runtime mocked at the module boundary.
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { writeConfigFile } from "../config/config.js";
 import {
   getPairedDevice,
@@ -12,7 +12,7 @@ import type {
   NodeIdentityProbeResult,
 } from "./node-pairing-ssh-verify.runtime.js";
 import { installGatewayTestHooks } from "./test-helpers.js";
-import { withLanNodePairingAttempt } from "./test-helpers.lan-pairing.js";
+import { describeWithLanNodePairingServer } from "./test-helpers.lan-pairing.js";
 
 const probeMock = vi.hoisted(() =>
   vi.fn<(params: NodeIdentityProbeParams) => Promise<NodeIdentityProbeResult>>(),
@@ -54,14 +54,14 @@ type PairingRequiredDetails = {
   pauseReconnect?: boolean;
 };
 
-describe("gateway ssh-verified node pairing auto-approve", () => {
+describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve", (attempt) => {
   beforeEach(() => {
     // Each case uses a distinct identityName, matching the host+device cooldown key.
     probeMock.mockReset();
   });
 
   test("approves device pairing and the first capability surface on a key match", async () => {
-    await withLanNodePairingAttempt({
+    await attempt({
       identityName: "ssh-verify-key-match",
       run: async ({ lanIp, loaded, connectNode }) => {
         probeMock.mockImplementation(async () => ({
@@ -100,7 +100,7 @@ describe("gateway ssh-verified node pairing auto-approve", () => {
   });
 
   test("does not ssh-approve a pending request that carries scopes from an earlier attempt", async () => {
-    await withLanNodePairingAttempt({
+    await attempt({
       identityName: "ssh-verify-scoped-refresh",
       run: async ({ loaded, connectNode }) => {
         // Seed a scoped pending request (as an earlier interactive attempt
@@ -134,7 +134,7 @@ describe("gateway ssh-verified node pairing auto-approve", () => {
   });
 
   test("leaves the pairing pending when the remote identity does not match", async () => {
-    await withLanNodePairingAttempt({
+    await attempt({
       identityName: "ssh-verify-key-mismatch",
       run: async ({ loaded, connectNode }) => {
         // A different key than the pending request: assembled from words so the
@@ -167,9 +167,9 @@ describe("gateway ssh-verified node pairing auto-approve", () => {
   });
 
   test("sshVerify: false disables the probe and keeps default reconnect pause behavior", async () => {
-    await withLanNodePairingAttempt({
+    await attempt({
       identityName: "ssh-verify-disabled",
-      beforeStart: async () => {
+      configure: async () => {
         await writeConfigFile({
           gateway: { nodes: { pairing: { sshVerify: false } } },
         });

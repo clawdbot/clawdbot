@@ -36,6 +36,7 @@ import {
   toolOutputRawEchoSignature,
   truncateToolTranscriptText,
 } from "./event-projector-tool-output.js";
+import { codexApprovalTimeoutText, type CodexApprovalKind } from "./plugin-approval-roundtrip.js";
 import type {
   CodexDynamicToolCallOutputContentItem,
   CodexThreadItem,
@@ -77,6 +78,7 @@ export type ToolTranscriptResultInput = {
 };
 
 type ToolProgressRawSignature = { length: number; prefix: string };
+type NativeToolStatus = ReturnType<typeof itemStatus>;
 type ToolProgressEchoState = {
   displayTexts: string[];
   streamedDisplayText?: string;
@@ -100,6 +102,7 @@ export class CodexToolProgressProjection {
   private readonly sideEffectingNativeIds = new Set<string>();
   private readonly sideEffectingDynamicIds = new Set<string>();
   private readonly transcriptProgressCallIds = new Set<string>();
+  readonly approvalTimeoutKinds = new Map<string, CodexApprovalKind>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
 
   constructor(private readonly params: EmbeddedRunAttemptParams) {}
@@ -122,6 +125,11 @@ export class CodexToolProgressProjection {
 
   get hasPotentialSideEffects(): boolean {
     return this.sideEffectingNativeIds.size > 0 || this.sideEffectingDynamicIds.size > 0;
+  }
+
+  approvalTimeoutExplanation(itemId: string, status: NativeToolStatus): string | undefined {
+    const kind = isNonSuccessItemStatus(status) && this.approvalTimeoutKinds.get(itemId);
+    return kind ? codexApprovalTimeoutText(kind) : undefined;
   }
 
   setLastToolError(error: EmbeddedRunAttemptResult["lastToolError"]): void {
@@ -260,15 +268,27 @@ export class CodexToolProgressProjection {
     item: CodexThreadItem;
     name: string;
     meta?: string;
-    status: ReturnType<typeof itemStatus>;
+    status: NativeToolStatus;
   }): void {
     const executionStarted = params.status !== "blocked";
     const mutatingAction = executionStarted && isMutatingNativeToolItem(params.item);
     const actionFingerprint = mutatingAction ? nativeToolActionFingerprint(params.item) : undefined;
     const isFailure = isNonSuccessItemStatus(params.status);
+    const approvalTimeoutExplanation = this.approvalTimeoutExplanation(
+      params.item.id,
+      params.status,
+    );
     const error = isFailure
-      ? itemToolError(params.item, params.status, this.output.textByItem)
+      ? (approvalTimeoutExplanation ??
+        itemToolError(params.item, params.status, this.output.textByItem))
       : undefined;
+    const failure = error
+      ? {
+          ...(approvalTimeoutExplanation ? { errorCode: "approval_timeout" as const } : {}),
+          error,
+          ...(approvalTimeoutExplanation ? { timedOut: true } : {}),
+        }
+      : {};
     const terminalResolution = this.params.observeToolTerminal?.({
       toolCallId: params.item.id,
       toolName: params.name,
@@ -276,7 +296,7 @@ export class CodexToolProgressProjection {
       ...(params.meta ? { meta: params.meta } : {}),
       executionStarted,
       outcome: isFailure ? "failure" : "success",
-      ...(isFailure ? { failure: error ? { error } : {} } : {}),
+      ...(isFailure ? { failure } : {}),
       nativeMutation: {
         mutatingAction,
         replaySafe: !mutatingAction,
@@ -291,7 +311,7 @@ export class CodexToolProgressProjection {
       this.lastNativeToolError = {
         toolName: params.name,
         ...(params.meta ? { meta: params.meta } : {}),
-        ...(error ? { error } : {}),
+        ...failure,
         ...(mutatingAction ? { mutatingAction: true } : {}),
         ...(actionFingerprint ? { actionFingerprint } : {}),
       };

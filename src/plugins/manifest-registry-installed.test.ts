@@ -681,6 +681,8 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
                 {
                   key: "useEnv",
                   kind: "boolean",
+                  envVars: ["INSTALLED_TOKEN", "INSTALLED_TOKEN_FILE"],
+                  envVarMode: "any",
                   cli: {
                     flags: "--use-env",
                     negatedFlags: "--no-use-env",
@@ -740,6 +742,8 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         {
           key: "useEnv",
           kind: "boolean",
+          envVars: ["INSTALLED_TOKEN", "INSTALLED_TOKEN_FILE"],
+          envVarMode: "any",
           cli: {
             flags: "--use-env",
             negatedFlags: "--no-use-env",

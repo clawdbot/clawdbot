@@ -2,6 +2,7 @@
 import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasCompletedMessagingToolDeliveryEvidence,
@@ -220,7 +221,6 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   payloadCount: number;
   hasTerminalToolPresentation?: boolean;
   aborted: boolean;
-  promptError?: unknown;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
@@ -314,10 +314,8 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     params.payloadCount !== 0 ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
-    ((params.promptError != null ||
-      params.timedOut ||
-      params.attempt.terminal.kind === "timeout") &&
-      !idlePromptTimeout) ||
+    ((params.timedOut || params.attempt.terminal.kind === "timeout") && !idlePromptTimeout) ||
+    (terminal.kind === "failed" && !params.attempt.settledTurnFinalizationContext) ||
     (assistant?.stopReason === "toolUse" ? !allToolsProvenSettled : !emptyStopAfterSettledTools) ||
     hasUnsettledToolError ||
     hasAsyncActivity(params.attempt.toolMetas) ||
@@ -342,7 +340,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     return null;
   }
   return hasSettledTerminalToolFailure
-    ? `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If any tool failed, state that failure plainly and do not claim it succeeded.`
+    ? `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`
     : SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
 }
 

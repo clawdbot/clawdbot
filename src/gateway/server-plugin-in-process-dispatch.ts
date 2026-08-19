@@ -4,6 +4,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import {
   dispatchGatewayRequestInProcessRaw,
   type GatewayMethodDispatchResponse,
@@ -11,8 +12,13 @@ import {
 } from "./server-in-process-dispatch.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
-import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import type {
+  GatewayAgentRunTaskOwner,
+  GatewayContextResolver,
+  GatewayRequestContext,
+  GatewayRequestOptions,
+  TrustedAgentToolCaller,
+} from "./server-methods/types.js";
 import {
   createSyntheticPluginRuntimeClient,
   mergePluginRuntimeClientInternal,
@@ -29,7 +35,8 @@ const loadInternalAgentTurnFacade = createLazyRuntimeModule(
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
-  agentRunTracking?: "plugin_subagent";
+  agentToolCaller?: TrustedAgentToolCaller;
+  agentRunTracking?: GatewayAgentRunTaskOwner;
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
@@ -46,6 +53,7 @@ type DispatchGatewayMethodInProcessOptions = {
   syntheticScopes?: string[];
   timeoutMs?: number;
   signal?: AbortSignal;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 type ResolvedInProcessGatewayDispatch = {
@@ -60,11 +68,12 @@ function resolveInProcessGatewayDispatch(
   options?: DispatchGatewayMethodInProcessOptions,
 ): ResolvedInProcessGatewayDispatch {
   const scope = getPluginRuntimeGatewayRequestScope();
-  const context = scope?.context ?? getFallbackGatewayContext();
+  const context =
+    options?.resolveGatewayContext?.() ?? scope?.resolveGatewayContext?.() ?? scope?.context;
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
-      `In-process gateway dispatch requires a gateway request scope (method: ${method}). No scope set and no fallback context available.`,
+      `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
   if (options?.requireScopedClient === true && !scope?.client) {
@@ -80,8 +89,9 @@ function resolveInProcessGatewayDispatch(
   const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
     ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
     : undefined;
-  const syntheticClient = createSyntheticPluginRuntimeClient({
+  const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
+    agentToolCaller: options?.agentToolCaller,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
@@ -97,6 +107,13 @@ function resolveInProcessGatewayDispatch(
     ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: options?.syntheticScopes,
   });
+  const agentRuntimeIdentity = readInProcessAgentRuntimeIdentity(options);
+  const syntheticClient = agentRuntimeIdentity
+    ? {
+        ...baseSyntheticClient,
+        internal: { ...baseSyntheticClient.internal, agentRuntimeIdentity },
+      }
+    : baseSyntheticClient;
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
     pluginRuntimeOwnerId ||
@@ -158,6 +175,7 @@ export async function dispatchGatewayMethodInProcessRaw(
         context: resolved.context,
         expectFinal: options?.expectFinal,
         isWebchatConnect: resolved.isWebchatConnect,
+        methodRegistry: resolved.context.getGatewayMethodRegistry?.(),
         onAccepted: options?.onAccepted,
         onSignalAbort: options?.onSignalAbort,
         requestIdPrefix: "plugin-subagent",
@@ -168,8 +186,11 @@ export async function dispatchGatewayMethodInProcessRaw(
 }
 
 /** Live request context for trusted built-in tools that need direct runtime state. */
-export function getInProcessGatewayRequestContext(): GatewayRequestContext | undefined {
-  return getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
+export function getInProcessGatewayRequestContext(
+  resolveGatewayContext?: GatewayContextResolver,
+): GatewayRequestContext | undefined {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  return resolveGatewayContext?.() ?? scope?.resolveGatewayContext?.() ?? scope?.context;
 }
 
 export async function dispatchGatewayMethodInProcess<T>(
@@ -183,6 +204,9 @@ export async function dispatchGatewayMethodInProcess<T>(
       const facade = createInternalAgentTurnFacade({
         client: resolved.client,
         getContext: () => resolved.context,
+        ...(resolved.context.getGatewayMethodRegistry
+          ? { getMethodRegistry: resolved.context.getGatewayMethodRegistry }
+          : {}),
         isWebchatConnect: resolved.isWebchatConnect,
       });
       return method === "agent"

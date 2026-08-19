@@ -43,6 +43,9 @@ const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
 export function createStartupChecker(deps: GatewayStartupStateDeps): StartupChecker {
   return (): StartupResult => {
     const uptimeMs = Date.now() - deps.startedAt;
+    if (deps.getGatewayDraining?.()) {
+      return { ok: false, status: "draining", uptimeMs };
+    }
     if (deps.getStartupPending?.()) {
       return {
         ok: false,
@@ -50,9 +53,6 @@ export function createStartupChecker(deps: GatewayStartupStateDeps): StartupChec
         uptimeMs,
         pendingReason: deps.getStartupPendingReason?.() ?? "startup-sidecars",
       };
-    }
-    if (deps.getGatewayDraining?.()) {
-      return { ok: false, status: "draining", uptimeMs };
     }
     return { ok: true, status: "started", uptimeMs };
   };

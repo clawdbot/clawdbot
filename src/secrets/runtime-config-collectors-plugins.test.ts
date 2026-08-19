@@ -10,6 +10,10 @@ const { loadPluginManifestRegistryForPluginRegistryMock } = vi.hoisted(() => ({
   loadPluginManifestRegistryForPluginRegistryMock: vi.fn(),
 }));
 
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: () => loadPluginManifestRegistryForPluginRegistryMock(),
+}));
+
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistryForPluginRegistryMock,
 }));
@@ -158,6 +162,53 @@ describe("collectPluginConfigAssignments", () => {
     const assignment = requireAssignment(context, 0);
     expect(assignment.path).toBe("plugins.entries.acpx.config.mcpServers.github.env.GITHUB_TOKEN");
     expect(assignment.expected).toBe("string");
+  });
+
+  it("collects contracts from a secondary agent workspace registry", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "research-secret",
+          origin: "workspace",
+          configContracts: {
+            secretInputs: {
+              bundledDefaultEnabled: false,
+              paths: [{ path: "apiKey", expected: "string" }],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          ops: { workspace: "/srv/ops" },
+          research: { workspace: "/srv/research" },
+        },
+      },
+      plugins: {
+        entries: {
+          "research-secret": {
+            enabled: true,
+            config: { apiKey: envRef("RESEARCH_API_KEY") },
+          },
+        },
+      },
+    };
+    const context = makeContext(config);
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: loadablePluginOrigins([["research-secret", "workspace"]]),
+    });
+
+    expect(context.assignments).toMatchObject([
+      { path: "plugins.entries.research-secret.config.apiKey" },
+    ]);
   });
 
   it("collects from a supplied manifest registry without cold registry loading", () => {

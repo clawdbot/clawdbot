@@ -1,4 +1,4 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import type { CodexCliApiKeyCredential } from "../agents/cli-credentials.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
@@ -67,6 +67,7 @@ export async function buildTestPlan(params: {
   deps: ActivateSetupInferenceDeps;
 }): Promise<SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }> {
   const { kind, cfg, workspaceDir } = params;
+  const routeAgentId = resolveSystemAgentTargetAgentId(cfg, params.routeAgentId);
   const resolveRouteModelRef = (defaultModelRef: string): string | { error: string } => {
     const modelRef = params.modelRef?.trim() || defaultModelRef;
     const selected = parseRef(modelRef);
@@ -172,6 +173,7 @@ export async function buildTestPlan(params: {
             modelRef,
             providerId: ref.provider,
             pluginId: choice.pluginId,
+            agentId: routeAgentId,
           })
         : {
             config: projectManualInferenceConfig({
@@ -180,6 +182,7 @@ export async function buildTestPlan(params: {
               modelRef,
               providerId: ref.provider,
               pluginId: choice.pluginId,
+              agentId: routeAgentId,
             }),
             profiles: [] as ProviderAuthResult["profiles"],
             selectedProfileId: undefined,
@@ -191,7 +194,7 @@ export async function buildTestPlan(params: {
         agentDir: params.agentDir,
         config: prepared.config,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(prepared.config),
+        routeAgentId,
         ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
         persistModelRef: modelRef,
         manualAuth: {
@@ -265,7 +268,7 @@ export async function buildTestPlan(params: {
         modelRef,
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
+        routeAgentId,
         persistModelRef: modelRef,
       };
     }
@@ -281,7 +284,7 @@ export async function buildTestPlan(params: {
         modelRef,
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
+        routeAgentId,
         persistModelRef: modelRef,
       };
     }
@@ -304,6 +307,7 @@ export async function buildTestPlan(params: {
           selectedProfileId: "openai:codex-cli-api-key",
           modelRef,
           providerId: ref.provider,
+          agentId: routeAgentId,
         });
         return {
           runner: "embedded",
@@ -312,7 +316,7 @@ export async function buildTestPlan(params: {
           agentHarnessRuntimeOverride: "codex",
           config: preparedAuth.config,
           agentId: "openclaw",
-          routeAgentId: resolveDefaultAgentId(preparedAuth.config),
+          routeAgentId,
           agentDir: params.agentDir,
           cleanupBundleMcpOnRunEnd: true,
           authProfileId: preparedAuth.selectedProfileId,
@@ -332,7 +336,7 @@ export async function buildTestPlan(params: {
         agentHarnessRuntimeOverride: "codex",
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
+        routeAgentId,
         agentDir: params.agentDir,
         cleanupBundleMcpOnRunEnd: true,
         persistModelRef: modelRef,
@@ -350,7 +354,7 @@ export async function buildTestPlan(params: {
         modelRef,
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
+        routeAgentId,
         persistModelRef: modelRef,
       };
     }
@@ -366,7 +370,7 @@ export async function buildTestPlan(params: {
         modelRef,
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
+        routeAgentId,
         persistModelRef: modelRef,
       };
     }
@@ -475,12 +479,17 @@ export async function buildTestPlan(params: {
             if (!guidedSetup) {
               return { error: "That provider setup is not available on this Gateway." };
             }
-            const candidate = await guidedSetup.detect({
-              config: preparedConfig,
-              env: process.env,
-              workspaceDir: params.pluginWorkspaceDir,
-              ...(params.signal ? { signal: params.signal } : {}),
-            });
+            const selectedModelRef = result.defaultModel
+              ? normalizeAgentModelRefForConfig(result.defaultModel)
+              : "";
+            const candidate = selectedModelRef
+              ? { modelRef: selectedModelRef }
+              : await guidedSetup.detect({
+                  config: preparedConfig,
+                  env: process.env,
+                  workspaceDir: params.pluginWorkspaceDir,
+                  ...(params.signal ? { signal: params.signal } : {}),
+                });
             if (!candidate) {
               return {
                 error: `${resolved.provider.label} setup completed, but no compatible model was found. Add a compatible model and try again.`,
@@ -554,7 +563,7 @@ export async function buildTestPlan(params: {
       const modelRef = result.defaultModel
         ? normalizeAgentModelRefForConfig(result.defaultModel)
         : "";
-      if (!modelRef || result.profiles.length === 0) {
+      if (!modelRef) {
         return {
           error: `${resolved.provider.label} does not expose a starter model for app-guided setup.`,
         };
@@ -569,20 +578,34 @@ export async function buildTestPlan(params: {
         (profile) =>
           normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
       );
-      if (!matchingProfile) {
+      if (result.profiles.length > 0 && !matchingProfile) {
         return {
           error: `${resolved.provider.label} did not return credentials for its starter model.`,
         };
       }
-      const preparedAuth = prepareManualAuthForActivation({
-        baseConfig: enableResult.config,
-        preparedConfig,
-        profiles: result.profiles,
-        selectedProfileId: matchingProfile.profileId,
-        modelRef,
-        providerId: ref.provider,
-        ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
-      });
+      const preparedAuth = matchingProfile
+        ? prepareManualAuthForActivation({
+            baseConfig: enableResult.config,
+            preparedConfig,
+            profiles: result.profiles,
+            selectedProfileId: matchingProfile.profileId,
+            modelRef,
+            providerId: ref.provider,
+            ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
+            agentId: routeAgentId,
+          })
+        : {
+            config: projectManualInferenceConfig({
+              baseConfig: enableResult.config,
+              preparedConfig,
+              modelRef,
+              providerId: ref.provider,
+              ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
+              agentId: routeAgentId,
+            }),
+            profiles: [] as ProviderAuthResult["profiles"],
+            selectedProfileId: undefined,
+          };
       return {
         runner: "embedded",
         ...ref,
@@ -590,8 +613,10 @@ export async function buildTestPlan(params: {
         agentDir: params.agentDir,
         config: preparedAuth.config,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(preparedAuth.config),
-        authProfileId: preparedAuth.selectedProfileId,
+        routeAgentId,
+        ...(preparedAuth.selectedProfileId
+          ? { authProfileId: preparedAuth.selectedProfileId }
+          : {}),
         persistModelRef: modelRef,
         manualAuth: {
           profiles: preparedAuth.profiles,

@@ -58,6 +58,7 @@ export async function dispatchRaftWake(params: {
       }),
       resolveTurn: async (input) => {
         const ctxPayload = channelRuntime.inbound.buildContext({
+          channelIngress: "unsupported",
           channel: RAFT_CHANNEL_ID,
           accountId: ctx.accountId,
           messageId: input.id,

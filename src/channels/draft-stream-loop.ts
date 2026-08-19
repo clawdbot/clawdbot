@@ -3,7 +3,7 @@
  *
  * Sends the latest pending draft text with single-flight edit semantics.
  */
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 /** Throttled draft-stream sender used by channels that edit in-progress replies. */
 export type DraftStreamLoop<T = string> = {

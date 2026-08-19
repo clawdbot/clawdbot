@@ -99,7 +99,31 @@ separately when first pairing with a Gateway origin.
 
 ### Continue in the terminal
 
-For Gateway-backed continuation, pass the URL or reference to `openclaw tui`:
+From the Control UI, open the session header menu and choose **Continue in
+terminal…**. The dialog copies a credential-free `openclaw resume` command with
+one opaque, versioned handoff argument. The argument encodes only the exact
+agent-qualified session key and selected Gateway WebSocket URL. The key is
+bounded to 512 user-perceived characters. Its URL-safe alphabet needs no shell
+quoting, so the command is safe to paste in common POSIX shells, PowerShell, and
+`cmd.exe`. Run it in an OpenClaw CLI profile that is already configured for that
+Gateway; the terminal authenticates independently. The Gateway canonicalizes
+the key before the TUI attaches, and a missing session produces recovery
+guidance instead of creating another session. The session ACL still applies.
+
+Query-routed Gateway URLs cannot produce this credential-free command because
+Gateway authentication and stored device scope are not query-aware. The Control
+UI does not strip or copy the query. Use a manually authenticated CLI target
+with explicit `--token` or `--password`, or configure a queryless Gateway URL.
+
+You can also choose or query a recent session directly:
+
+```bash
+openclaw resume
+openclaw resume agent:main:deploy-monitor
+```
+
+For Gateway-backed continuation from a URL or short reference, pass the target
+to `openclaw tui`:
 
 ```bash
 openclaw tui https://claw.example.com/dashboard/main/deploy-monitor-6db92d48
@@ -136,7 +160,21 @@ launch options.
 
 A URL or gateway shorthand authoritatively selects one normalized Gateway
 origin. OpenClaw never reuses configured credentials or a stored device token
-from another origin for that target.
+from another origin for that target. The credential-free command copied by
+**Continue in terminal…** has a narrower rule: `openclaw resume` may reuse the
+current CLI profile only when its explicit WebSocket URL byte-for-byte matches
+that profile's mode: local and public-origin targets are eligible only in local
+mode, while only `gateway.remote.url` is eligible in remote mode. It never
+searches other profiles, and any host, port, or path mismatch returns to the
+normal explicit-credential requirement. Exact direct-local targets may reuse
+the local listener's certificate fingerprint, and exact configured remote
+targets may reuse the configured remote pin. A public-origin target does not
+inherit the local listener's pin; pass `--tls-fingerprint` explicitly if that
+proxy origin needs one. The payload contains no credentials; explicit `--token`,
+`--password`, or `--tls-fingerprint` values supplied beside the handoff still
+take priority. Handoff resolution suppresses ambient
+`OPENCLAW_GATEWAY_TOKEN` and `OPENCLAW_GATEWAY_PASSWORD` fallback while keeping
+those explicit values and exact-target configured credentials eligible.
 
 On first contact:
 
@@ -149,6 +187,13 @@ On first contact:
    in SQLite under that exact normalized Gateway origin.
 4. Later connections to the same origin can use the stored device token. An
    explicit `--token` or `--password` always wins for the entire connection.
+
+The Control UI continuation command does not perform these first-contact steps
+or carry their credentials. Configure or pair the terminal independently before
+using it. If the CLI rejects an invalid or truncated handoff, copy a fresh
+command from the Control UI instead of editing the opaque argument. If the
+session was deleted after the command was copied, return to the Control UI and
+copy a command from an available session.
 
 Revoke or remove the device from the same Gateway's **Devices** page when that
 client should no longer connect. Tokens do not cross origins. Read-only probes

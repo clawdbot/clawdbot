@@ -1,4 +1,5 @@
 /** CLI entrypoint for channel message actions. */
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -7,7 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
@@ -15,14 +16,15 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
-import { parsePositiveIntOrUndefined } from "../cli/program/helpers.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "../infra/outbound/message-account-selection.js";
+import { isMessageBroadcastSuccessful } from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -48,6 +50,7 @@ function extractMessageId(payload: unknown): string | undefined {
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
   const messageId = extractMessageId(result.payload);
   return {
+    ...(result.kind === "broadcast" ? { ok: isMessageBroadcastSuccessful(result) } : {}),
     action: result.action,
     channel: result.channel,
     dryRun: result.dryRun,
@@ -64,6 +67,7 @@ export async function messageCommand(
   runtime: RuntimeEnv,
 ) {
   const loadedRaw = getRuntimeConfig();
+  const compatibilityAgentId = tryGetLegacyDefaultAgentId(loadedRaw);
   const rawAction = normalizeOptionalString(opts.action) ?? "";
   const actionInput = rawAction || "send";
   const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
@@ -106,6 +110,7 @@ export async function messageCommand(
     runtime,
     autoEnable: true,
   });
+  const agentId = compatibilityAgentId ?? resolveSystemAgentTargetAgentId(cfg);
   const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
     (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );
@@ -128,7 +133,7 @@ export async function messageCommand(
       action,
       params: opts,
       deps: outboundDeps,
-      agentId: resolveDefaultAgentId(cfg),
+      agentId,
       senderIsOwner: opts.senderIsOwner !== false,
       conversationReadOrigin: "direct-operator",
       broadcastAccountPlan,
@@ -155,12 +160,13 @@ export async function messageCommand(
 
   if (json) {
     writeRuntimeJson(runtime, buildMessageCliJson(result));
-    return;
+    return result;
   }
 
   const { formatMessageCliText } = await import("./message-format.js");
-  const displayLimit = parsePositiveIntOrUndefined(opts.limit);
+  const displayLimit = parseStrictPositiveInteger(opts.limit);
   for (const line of formatMessageCliText(result, { displayLimit })) {
     runtime.log(line);
   }
+  return result;
 }

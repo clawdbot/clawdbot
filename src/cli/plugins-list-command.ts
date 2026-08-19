@@ -55,6 +55,7 @@ export async function runPluginsListCommand(
   if (opts.json) {
     const payload = {
       workspaceDir: report.workspaceDir,
+      workspaceScope: report.workspaceScope,
       registry: {
         source: report.registrySource,
         diagnostics: report.registryDiagnostics,
@@ -75,6 +76,14 @@ export async function runPluginsListCommand(
     resolvePluginSourceRoots,
     theme,
   } = await loadHumanListModules();
+
+  const workspaceScopeDiagnostic = report.diagnostics.find(
+    (diagnostic) => diagnostic.code === "workspace-scope-omitted",
+  );
+  if (workspaceScopeDiagnostic) {
+    runtime.log(theme.warn(`Warning: ${workspaceScopeDiagnostic.message}`));
+    runtime.log("");
+  }
 
   if (list.length === 0) {
     const message =

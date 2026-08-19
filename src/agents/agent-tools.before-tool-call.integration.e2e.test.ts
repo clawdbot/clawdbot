@@ -218,6 +218,32 @@ describe("before_tool_call hook integration", () => {
     expect(consumeTrackedToolExecutionStarted("call-1")).toBeUndefined();
   });
 
+  it("consumes private execution validation through the standard update slot", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({ enabled: false });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "Read", execute }));
+    const validate = vi.fn(() => {
+      throw new Error("invalid projected arguments");
+    });
+    const validationControl = {
+      [Symbol.for("openclaw.internalToolExecutionValidation")]: true,
+      toolCallId: "call-private-validation",
+      validate,
+    };
+
+    await expect(
+      Reflect.apply(tool.execute, tool, [
+        "call-private-validation",
+        { path: 47 },
+        undefined,
+        validationControl,
+      ]),
+    ).rejects.toThrow("invalid projected arguments");
+
+    expect(validate).toHaveBeenCalledWith({ path: 47 });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("records structured replay trust only for concrete core-owned tools", async () => {
     beforeToolCallHook = installBeforeToolCallHook({ enabled: false });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });

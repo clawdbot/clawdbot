@@ -303,6 +303,36 @@ describe("kimi web search provider", () => {
     });
   });
 
+  it("does not cache a grounded Kimi result completed after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Kimi search cancelled after response");
+    const grounded = {
+      search_results: [{ title: "OpenClaw", url: "https://github.com/openclaw/openclaw" }],
+      choices: [{ finish_reason: "stop", message: { content: "OpenClaw is on GitHub." } }],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return jsonResponse(grounded);
+      })
+      .mockResolvedValueOnce(jsonResponse(grounded));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
+      const tool = createKimiWebSearchProvider().createTool({ config: {}, searchConfig: {} });
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
+      const query = "unique Kimi late-cancel cache regression";
+
+      await expect(tool.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
+      await tool.execute({ query });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("uses config apiKey when provided", () => {
     expect(testing.resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
   });

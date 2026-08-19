@@ -1,9 +1,3 @@
-import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-export function parseQaProgressBooleanEnv(value: string | undefined): boolean | undefined {
-  return parseBooleanValue(value);
-}
-
 export function sanitizeQaProgressValue(value: string): string {
   let normalized = "";
   for (const char of value) {

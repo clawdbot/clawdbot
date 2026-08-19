@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
 /** Secret-free proof that one exact provider/model transport completed with usable auth. */
@@ -24,7 +25,7 @@ const materializations = new Map<string, RuntimeAuthMaterialization[]>();
 const listeners = new Set<RuntimeAuthMaterializationMutationListener>();
 
 function ownerKey(agentDir?: string): string {
-  return resolveAuthProfileDatabasePath(agentDir);
+  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
 }
 
 function notify(agentDir?: string): void {
@@ -119,6 +120,11 @@ export function getPreparedRuntimeAuthMaterializations(
 
 export function clearRuntimeAuthMaterializations(agentDir?: string): void {
   materializations.delete(ownerKey(agentDir));
+}
+
+/** Clears materializations for an already resolved canonical auth database owner. */
+export function clearRuntimeAuthMaterializationsAtDatabasePath(databasePath: string): void {
+  materializations.delete(databasePath);
 }
 
 export function clearAllRuntimeAuthMaterializations(): void {

@@ -121,7 +121,6 @@ describe("check-deadcode-exports", () => {
       expect.arrayContaining([
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-        ".github/actions/register-bind-mount-cleanup/main.cjs!",
         "apps/android/scripts/build-release-artifacts.ts!",
         "security/opengrep/check-rule-metadata.mjs!",
         "skills/meme-maker/scripts/meme.mjs!",
@@ -256,7 +255,6 @@ describe("check-deadcode-exports", () => {
         "browser-control-auth.ts!",
         "browser-config.ts!",
         "browser-doctor.ts!",
-        "browser-host-inspection.ts!",
         "browser-maintenance.ts!",
         "browser-profiles.ts!",
       ]),

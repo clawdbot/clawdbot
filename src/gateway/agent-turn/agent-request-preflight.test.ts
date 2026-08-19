@@ -449,3 +449,51 @@ describe("agent request restart recovery preflight", () => {
     );
   });
 });
+
+describe("agent request session ownership preflight", () => {
+  function runBareSessionPreflight(owner?: string) {
+    const respond = vi.fn();
+    const result = prepareAgentRequestPreflight({
+      request: {
+        message: "continue",
+        sessionKey: "global",
+        idempotencyKey: "bare-session-run",
+      },
+      io: createAgentTurnIo(respond),
+      context: {
+        getRuntimeConfig: () => ({
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: owner ? { sessionStore: { agentId: owner } } : undefined,
+            entries: { ops: {}, research: {} },
+          },
+        }),
+        dedupe: new Map(),
+      },
+      client: null,
+    } as never);
+    return { respond, result };
+  }
+
+  it("admits a bare key owned by the configured fixed store", () => {
+    const { respond, result } = runBareSessionPreflight("ops");
+
+    expect(result).toBeDefined();
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("rejects an ownerless bare key with a typed selection error", () => {
+    const { respond, result } = runBareSessionPreflight();
+
+    expect(result).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("has no explicit owner"),
+      }),
+    );
+  });
+});

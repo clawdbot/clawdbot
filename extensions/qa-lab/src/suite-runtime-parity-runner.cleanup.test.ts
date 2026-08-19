@@ -286,7 +286,7 @@ describe("runtime parity suite transport cleanup", () => {
         fastMode: childParams.fastMode ?? true,
         channelDriver: childParams.channelDriver,
         enabledPluginIds: childParams.enabledPluginIds ?? [],
-        gatewayConfigPatch: undefined,
+        gatewayConfigPatches: [],
         gatewayRuntimeOptions: undefined,
         concurrency: 1,
         progressEnabled: true,

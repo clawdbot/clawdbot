@@ -20,9 +20,9 @@
 
 .channels-tile {
   display: grid;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
+  width: var(--channels-art-size, 44px);
+  height: var(--channels-art-size, 44px);
+  flex: 0 0 var(--channels-art-size, 44px);
   place-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -390,7 +390,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
 .channels-wizard__qr img {
   width: min(260px, 70vw);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--brand-logo-chip-bg);
   padding: var(--space-2);
 }
 

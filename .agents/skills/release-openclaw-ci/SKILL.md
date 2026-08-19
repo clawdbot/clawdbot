@@ -127,6 +127,8 @@ Start product performance evidence as early as the Code SHA exists, in
 parallel with other release work:
 
 ```bash
+# Full Release Validation profile gate: true for stable, false for beta.
+fail_on_regression=true
 gh workflow run openclaw-performance.yml \
   --repo openclaw/openclaw \
   --ref main \
@@ -135,7 +137,7 @@ gh workflow run openclaw-performance.yml \
   -f repeat=3 \
   -f deep_profile=false \
   -f live_openai_candidate=false \
-  -f fail_on_regression=true
+  -f fail_on_regression="$fail_on_regression"
 ```
 
 - Do not wait for full release validation to start this early perf signal.
@@ -163,6 +165,16 @@ node scripts/full-release-validation-at-sha.mjs \
   --sha <code-sha> \
   --target-ref release/YYYY.M.PATCH
 ```
+
+For regular `release/*` validation, never raw-dispatch the workflow without
+`target_context_ref` (the helper's `--target-ref` records it); the
+extended-stable `.33+` canonical-branch dispatch below is the one exception —
+there the SHA-pinned helper's `release-ci/*` identity is rejected, so it
+dispatches without `target_context_ref` by design. Trusted-workflow
+release-branch CI passes `target_ref` + `release_candidate_ref`; never
+`release_gate` there — it requires workflow head == target. (The PR-head
+ci.yml fallback below is a different dispatch and does use
+`release_gate=true`.)
 
 For immutable workflow proof on a moving `main`, use
 `pnpm ci:full-release --sha <code-sha> --target-ref
@@ -227,6 +239,8 @@ For a one-shot snapshot:
 node scripts/release-ci-summary.mjs <full-release-run-id>
 ```
 
+`release-ci-summary` accepts Full Release Validation parent runs only.
+Diverged release-branch logs: `--first-parent` plus a bounded count.
 Stop watchers before ending the turn or switching strategy.
 
 ## Failure Triage

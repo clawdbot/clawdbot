@@ -164,6 +164,7 @@ export async function assembleHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -188,7 +189,7 @@ export async function assembleHarnessContextEngine(params: {
     return undefined;
   }
   const contextEngine = params.contextEngine;
-  const messages = stripRuntimeContextCustomMessages(params.messages);
+  const messages = stripRuntimeContextCustomMessages(params.messages).slice();
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
   const assemble = () =>
@@ -213,7 +214,7 @@ export async function assembleHarnessContextEngine(params: {
             {
               availableTools: new Set(params.availableTools),
               citationsMode: params.citationsMode,
-              agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+              agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
               agentSessionKey: params.sessionKey,
               sandboxed: params.sandboxed,
             },

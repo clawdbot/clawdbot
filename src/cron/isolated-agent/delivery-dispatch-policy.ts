@@ -15,7 +15,7 @@ import {
   loadDeliveryQueueEntry,
   type DeliveryQueueCompletionRetention,
 } from "../../infra/delivery-queue-sqlite.js";
-import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
+import * as deliveryRecovery from "../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
@@ -254,6 +254,9 @@ function summarizeDirectCronDeliveryError(error: unknown): string {
 }
 
 function isTransientDirectCronDeliveryError(error: unknown): boolean {
+  if (deliveryRecovery.findPlatformMessageRejectedError(error)) {
+    return false;
+  }
   const message = summarizeDirectCronDeliveryError(error);
   if (!message) {
     return false;
@@ -261,7 +264,7 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
   if (PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) {
     return false;
   }
-  return isProvenDeliveryNotSentError(error);
+  return deliveryRecovery.isProvenDeliveryNotSentError(error);
 }
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
   return isFastTestRuntimeEnv() ? [0, 0, 0] : [5_000, 10_000, 20_000];

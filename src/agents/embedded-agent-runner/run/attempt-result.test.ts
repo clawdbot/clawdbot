@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { completeEmbeddedAttemptResult, createMcpAttemptCarryover } from "./attempt-result.js";
+import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 
 function completeResult(params?: {
   successfulNestedToolNames?: string[];
   latestMcpAppChannelView?: { viewId: string };
+  lastToolRecovery?: { toolName: string };
   clientToolCallSlots?: Array<{
     toolCallId: string;
     name: string;
@@ -11,6 +13,8 @@ function completeResult(params?: {
     completed: boolean;
   }>;
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
+  yieldDetected?: boolean;
+  yieldAcknowledgment?: string;
   toolMetas?: Array<{
     toolName: string;
     meta?: string;
@@ -42,6 +46,7 @@ function completeResult(params?: {
       getLastAssistantTextMessageIndex: () => undefined,
       getLastCompactionTokensAfter: () => undefined,
       getLastToolError: () => undefined,
+      getLastToolRecovery: () => params?.lastToolRecovery,
       getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
       getLatestMcpConnectAction: () => undefined,
       getMessagingToolSentMediaUrls: () => [],
@@ -61,7 +66,8 @@ function completeResult(params?: {
       sessionIdUsed: "session-1",
       messagesSnapshot: [],
       successfulNestedToolNames: params?.successfulNestedToolNames,
-      yieldDetected: false,
+      yieldDetected: params?.yieldDetected ?? false,
+      yieldAcknowledgment: params?.yieldAcknowledgment,
       didDeliverSourceReplyViaMessageTool: false,
       diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
     } as never,
@@ -80,6 +86,47 @@ function completeResult(params?: {
 }
 
 describe("attempt result projection", () => {
+  it("projects the last recovered tool", () => {
+    expect(completeResult({ lastToolRecovery: { toolName: "write" } }).lastToolRecovery).toEqual({
+      toolName: "write",
+    });
+  });
+
+  it("carries the explicit yield acknowledgment separately from continuation context", () => {
+    expect(
+      completeResult({
+        yieldDetected: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      }),
+    ).toMatchObject({
+      yieldDetected: true,
+      yieldAcknowledgment: "Research started; results will follow.",
+    });
+  });
+
+  it("counts each failed tool call in the trace summary", () => {
+    expect(
+      buildTraceToolSummary({
+        toolMetas: [
+          { toolName: "bash", meta: "exit=1", isError: true },
+          { toolName: "bash", meta: "exit=2", isError: true },
+          { toolName: "bash", meta: "exit=0" },
+        ],
+        fallbackHadFailure: false,
+      }),
+    ).toEqual({ calls: 3, tools: ["bash"], failures: 2 });
+  });
+
+  it("defaults missing replay metadata to replay-unsafe", () => {
+    const attempt = completeResult();
+    delete (attempt as Partial<typeof attempt>).replayMetadata;
+
+    expect(normalizeEmbeddedRunAttemptResult(attempt as never).replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
   it("carries the newest MCP presentation state across retry attempts", () => {
     const carryover = createMcpAttemptCarryover();
     const first = {

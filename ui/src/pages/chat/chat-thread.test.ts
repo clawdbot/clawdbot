@@ -262,6 +262,105 @@ describe("assistant commentary grouping", () => {
     resetChatThreadState(paneId);
   });
 
+  it("scopes reused live tool IDs to their own run boundaries", () => {
+    const sharedToolCallId = "call-shared";
+    const groups = messageGroups({
+      runId: "run-a",
+      messages: [
+        userMessage("Run A", 1, { __openclaw: { idempotencyKey: "run-a:user" } }),
+        userMessage("Steer A", 2, { __openclaw: { idempotencyKey: "steer-a:user" } }),
+        userMessage("Run B", 3, { __openclaw: { idempotencyKey: "run-b:user" } }),
+        userMessage("Steer B", 4, { __openclaw: { idempotencyKey: "steer-b:user" } }),
+      ],
+      streamSegments: [
+        {
+          text: "Run A output",
+          ts: 100,
+          runId: "run-a",
+          toolCallId: sharedToolCallId,
+          boundaryRunId: "steer-a",
+        },
+        {
+          text: "Run B output",
+          ts: 101,
+          runId: "run-b",
+          toolCallId: sharedToolCallId,
+          boundaryRunId: "steer-b",
+        },
+      ],
+      toolMessages: [
+        toolResultMessage(sharedToolCallId, "shell", "Run A tool", 100, { runId: "run-a" }),
+        toolResultMessage(sharedToolCallId, "shell", "Run B tool", 101, { runId: "run-b" }),
+      ],
+    });
+    const groupIndex = (predicate: (message: Record<string, unknown>) => boolean) =>
+      groups.findIndex((group) =>
+        group.messages.some(({ message }) => predicate(requireRecord(message))),
+      );
+
+    const runAToolIndex = groupIndex((message) => message.runId === "run-a");
+    const runBToolIndex = groupIndex((message) => message.runId === "run-b");
+    const steerAIndex = groupIndex((message) => message.content === "Steer A");
+    const steerBIndex = groupIndex((message) => message.content === "Steer B");
+    expect(runAToolIndex).toBeGreaterThanOrEqual(0);
+    expect(runBToolIndex).toBeGreaterThanOrEqual(0);
+    expect(runAToolIndex).toBeLessThan(steerAIndex);
+    expect(runBToolIndex).toBeLessThan(steerBIndex);
+  });
+
+  it("keeps a post-steer tool segment and card after a textless steer", () => {
+    const toolCallId = "call-after-steer";
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "active-run",
+        messages: [
+          userMessage("Original", 1, {
+            __openclaw: { idempotencyKey: "active-run:user" },
+          }),
+          userMessage("Steer", 2, {
+            __openclaw: {
+              idempotencyKey: "steer-run:user",
+              steerTargetRunId: "active-run",
+            },
+          }),
+        ],
+        streamSegments: [
+          {
+            text: "",
+            ts: 2,
+            runId: "active-run",
+            boundaryRunId: "steer-run",
+            boundaryMarker: true,
+          },
+          {
+            text: "After steer",
+            ts: 3,
+            runId: "active-run",
+            afterBoundaryRunId: "steer-run",
+            toolCallId,
+          },
+        ],
+        toolMessages: [
+          toolResultMessage(toolCallId, "shell", "Tool after steer", 4, {
+            runId: "active-run",
+          }),
+        ],
+      }),
+    );
+    const itemText = (item: (typeof items)[number]) =>
+      item.kind === "stream"
+        ? item.text
+        : item.kind === "group"
+          ? item.messages.map(({ message }) => JSON.stringify(message)).join(" ")
+          : "";
+    const steerIndex = items.findIndex((item) => itemText(item).includes("Steer"));
+    const segmentIndex = items.findIndex((item) => itemText(item).includes("After steer"));
+    const toolIndex = items.findIndex((item) => itemText(item).includes("Tool after steer"));
+
+    expect(segmentIndex).toBeGreaterThan(steerIndex);
+    expect(toolIndex).toBeGreaterThan(steerIndex);
+  });
+
   it("keeps current live work above a future queued user turn when it becomes stable", () => {
     const paneId = "clock-skew-future-queue-transition";
     const activeUser = userMessage("Active prompt", 2_000, {
@@ -330,6 +429,30 @@ describe("assistant commentary grouping", () => {
     expect(visibleKinds(liveItems)).toEqual(["user", "stream", "user"]);
     expect(visibleKinds(stableItems)).toEqual(["user", "assistant", "user"]);
     resetChatThreadState(paneId);
+  });
+
+  it("keeps an active stream above an already persisted queued user", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-active",
+        messages: [
+          userMessage("Active prompt", 2_000, {
+            __openclaw: { idempotencyKey: "run-active:user" },
+          }),
+          userMessage("Queued follow-up", 3_000, {
+            __openclaw: { idempotencyKey: "run-future:user" },
+          }),
+        ],
+        stream: "Current partial reply",
+        streamStartedAt: 1_000,
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+      "user",
+    ]);
   });
 
   it("keeps current-run segments below their user boundary under clock skew", () => {
@@ -631,7 +754,6 @@ describe("collapseCompletedTurnWork", () => {
     const work = requireWorkGroup(items[1]);
     expect(work.groups).toHaveLength(2);
     expect(work.durationMs).toBe(9_000);
-    expect(work.hasError).toBe(false);
     expect(requireGroup(items[2]).role).toBe("assistant");
   });
 
@@ -695,7 +817,7 @@ describe("collapseCompletedTurnWork", () => {
     expect(requireGroup(items[1]).role).toBe("tool");
   });
 
-  it("does not flag errors once the turn recovered with a reply", () => {
+  it("collapses failed work once the turn recovered with a reply", () => {
     const items = collapsedItems({
       messages: [
         userMessage("go", 1_000),
@@ -704,7 +826,7 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(requireWorkGroup(items[1]).hasError).toBe(false);
+    expect(requireWorkGroup(items[1]).groups).toHaveLength(1);
   });
 
   it("keeps work after the final reply visible", () => {
@@ -967,15 +1089,6 @@ describe("coalesceActivityRuns", () => {
 
     expect(singleton[0]).toBe(groups[0]);
     expect(coalesceActivityRuns(searchInput, { searchActive: true })).toBe(searchInput);
-  });
-
-  it("retains each member group's recovered or active error outcome", () => {
-    const groups = projectedToolGroups();
-    groups[0]!.turnSucceeded = true;
-    groups[1]!.turnSucceeded = false;
-    const run = requireActivityRun(coalesceActivityRuns(groups.slice(0, 2))[0]);
-
-    expect(run.groups.map((group) => group.turnSucceeded)).toEqual([true, false]);
   });
 });
 
@@ -1249,24 +1362,6 @@ describe("buildCachedChatItems working spark", () => {
 
   it("shows the spark while a run works with nothing streaming", () => {
     expect(hasReadingIndicator({ runWorking: true })).toBe(true);
-  });
-
-  it("adds the plan to the active stream run and removes it when the run stops", () => {
-    const planStatus = {
-      steps: [{ step: "Inspect the route", status: "in_progress" as const }],
-    };
-    const activeItems = buildCachedChatItems(
-      createProps({ runActive: true, runWorking: true, planStatus }),
-    );
-
-    expect(coalesceStreamRuns(activeItems)).toMatchObject([
-      { kind: "stream-run", parts: [{ kind: "reading-indicator" }, { kind: "plan" }] },
-    ]);
-
-    const idleItems = buildCachedChatItems(
-      createProps({ runActive: false, runWorking: false, planStatus }),
-    );
-    expect(idleItems.some((item) => item.kind === "plan")).toBe(false);
   });
 
   it("keeps the run start time on the working indicator", () => {
@@ -1701,25 +1796,6 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.senderLabel)).toEqual([null, "Forwarded from main"]);
-  });
-
-  it("marks earlier tool groups as succeeded when the same turn has an assistant reply", () => {
-    const groups = messageGroups({
-      messages: [
-        userMessage("search", 1000),
-        toolResultMessage("call-1", "web_search", JSON.stringify({ error: "No matches" }), 1001, {
-          isError: true,
-        }),
-        assistantMessage("I found another route.", 1002),
-        userMessage("again", 1003),
-        toolResultMessage("call-2", "web_search", JSON.stringify({ error: "No matches" }), 1004, {
-          isError: true,
-        }),
-      ],
-    });
-
-    const toolGroups = groups.filter((group) => group.role === "tool");
-    expect(toolGroups.map((group) => group.turnSucceeded)).toEqual([true, false]);
   });
 
   it("coalesces adjacent tool calls and results into one activity item", () => {
@@ -2612,6 +2688,31 @@ describe("buildCachedChatItems", () => {
         startedAt: 1,
         isStreaming: true,
       },
+    ]);
+  });
+
+  it("keeps an unkeyed preamble from corrupting the accumulated prefix tracker", () => {
+    // A standalone (itemId-less) preamble whose text is not part of the
+    // cumulative run text must not become the prefix baseline — pre-fix the
+    // next cumulative snapshot re-rendered every earlier segment's text.
+    const items = buildCachedChatItems(
+      createProps({
+        streamSegments: [
+          { text: "First thought.", ts: 1, toolCallId: "call-1" },
+          { text: "Standalone preamble", ts: 2 },
+          { text: "First thought. After tool.", ts: 3, toolCallId: "call-2" },
+        ],
+        toolMessages: [
+          chatMessage("toolResult", "Tool one", 2),
+          chatMessage("toolResult", "Tool two", 4),
+        ],
+      }),
+    );
+
+    expect(items.filter((item) => item.kind === "stream")).toMatchObject([
+      { text: "First thought." },
+      { text: "Standalone preamble" },
+      { text: "After tool." },
     ]);
   });
 
@@ -4088,115 +4189,4 @@ function mcpAppLiveResult(viewId: string, toolCallId: string, timestamp: number 
   );
 }
 
-describe("tool turn outcome annotation (#89683)", () => {
-  function failedTool(timestamp: number) {
-    return chatMessage("toolResult", JSON.stringify({ status: "failed", exitCode: 1 }), timestamp, {
-      toolName: "shell",
-      isError: true,
-    });
-  }
-  function assistantReply(text: string, timestamp: number) {
-    return assistantMessage([{ type: "text", text }], timestamp);
-  }
-  function toolGroups(messages: unknown[]): MessageGroup[] {
-    return messageGroups({ messages }).filter((group) => group.role === "tool");
-  }
-
-  it.each([
-    {
-      name: "marks a failed tool followed by an assistant reply as turnSucceeded",
-      reply: assistantReply("No matches found.", 3),
-      expected: true,
-    },
-    {
-      name: "leaves a terminal failed tool (no assistant reply) as not-succeeded",
-      reply: null,
-      expected: false,
-    },
-  ])("$name", ({ reply, expected }) => {
-    const tools = toolGroups([
-      userMessage("search foo", 1),
-      failedTool(2),
-      ...(reply ? [reply] : []),
-    ]);
-    expect(tools).toHaveLength(1);
-    expect(groupAt(tools, 0).turnSucceeded).toBe(expected);
-  });
-
-  it("does not count an assistant group without reply text as success", () => {
-    const tools = toolGroups([
-      userMessage("search foo", 1),
-      failedTool(2),
-      assistantMessage([], 3),
-    ]);
-    expect(groupAt(tools, 0).turnSucceeded).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "scopes adjacent autonomous turns at an empty forwarded boundary",
-      content: [],
-    },
-    {
-      name: "does not treat a forwarded message as the prior turn's reply",
-      content: [{ type: "text", text: "Start the next autonomous task." }],
-    },
-  ])("$name", ({ content }) => {
-    const tools = toolGroups([
-      failedTool(1),
-      assistantMessage(content, 2, {
-        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        senderLabel: "Forwarded from main",
-      }),
-      failedTool(3),
-      assistantReply("Recovered on the next autonomous turn.", 4),
-    ]);
-    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
-  });
-
-  it("treats an ordinary labeled assistant message as a reply", () => {
-    const tools = toolGroups([
-      userMessage("check the service", 1),
-      failedTool(2),
-      assistantMessage([{ type: "text", text: "Parzival recovered the service." }], 3, {
-        senderLabel: "Parzival",
-      }),
-    ]);
-    expect(groupAt(tools, 0).turnSucceeded).toBe(true);
-  });
-
-  it("does not treat non-text assistant content as a turn boundary", () => {
-    const tools = toolGroups([
-      userMessage("make a preview", 1),
-      failedTool(2),
-      assistantMessage([createAssistantCanvasBlock({ suffix: "tool_turn_outcome" })], 3),
-      failedTool(4),
-      assistantReply("Done.", 5),
-    ]);
-    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, true]);
-  });
-
-  it("scopes the outcome per turn at user boundaries", () => {
-    const tools = toolGroups([
-      userMessage("first", 1),
-      failedTool(2),
-      assistantReply("done", 3),
-      userMessage("second", 4),
-      failedTool(5),
-    ]);
-    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
-  });
-
-  it("keeps internal system notices as semantic user-turn boundaries", () => {
-    const tools = toolGroups([
-      failedTool(1),
-      userMessage("[System] Continue the interrupted turn.", 2, {
-        provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-      }),
-      failedTool(3),
-      assistantReply("Recovered on the next turn.", 4),
-    ]);
-    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

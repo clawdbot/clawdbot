@@ -4,6 +4,11 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import {
+  type AgentRunResultView,
+  extractAgentRunTerminalError,
+  extractAgentRunText,
+} from "../agents/agent-run-result.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -28,10 +33,7 @@ import {
   setupInferenceLog,
 } from "./setup-inference-core.js";
 import {
-  type RunResult,
   type SetupInferenceTestPlan,
-  extractRunTerminalError,
-  extractRunText,
   extractRunWinnerError,
   mapFailoverReasonToSetupStatus,
   resolveStrictSetupAuthProfileError,
@@ -160,7 +162,8 @@ export async function reloadCodexRegistryAfterActivation(params: {
   >;
   workspaceDir: string;
   deps: ActivateSetupInferenceDeps;
-}): Promise<boolean> {
+  requireValidConfig?: boolean;
+}): Promise<OpenClawConfig | null> {
   let snapshot: Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>;
   try {
     snapshot = await params.readSnapshot();
@@ -168,7 +171,13 @@ export async function reloadCodexRegistryAfterActivation(params: {
     setupInferenceLog.warn(
       "Could not read config while reloading the plugin registry after Codex activation.",
     );
-    return false;
+    return null;
+  }
+  if (params.requireValidConfig && (!snapshot.exists || !snapshot.valid)) {
+    setupInferenceLog.warn(
+      "Could not reload the plugin registry after Codex activation because the committed config is unavailable.",
+    );
+    return null;
   }
   const runtimeConfig =
     snapshot.exists && snapshot.valid
@@ -203,12 +212,12 @@ export async function reloadCodexRegistryAfterActivation(params: {
       activationSourceConfig: sourceConfig,
       workspaceDir: params.workspaceDir,
     });
-    return true;
+    return runtimeConfig;
   } catch {
     setupInferenceLog.warn(
       "Could not reload the active plugin registry after Codex inference activation.",
     );
-    return false;
+    return null;
   }
 }
 
@@ -488,6 +497,18 @@ export async function runSetupInferenceTest(params: {
   const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
+  const failed = (status: SetupInferenceFailureStatus, error: string) => {
+    setupInferenceLog.warn("Inference setup probe failed.", {
+      event: "setup_inference_probe_failed",
+      provider: plan.provider,
+      model: plan.model,
+      runner: plan.runner,
+      status,
+      timeoutMs,
+      durationMs: Date.now() - started,
+    });
+    return { ok: false as const, status, error };
+  };
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     plan.config,
     runId,
@@ -499,7 +520,7 @@ export async function runSetupInferenceTest(params: {
     if (plan.runner === "cli") {
       const unsupportedError = resolveToolFreeCliSetupError(plan);
       if (unsupportedError) {
-        return { ok: false, status: "unavailable", error: unsupportedError };
+        return failed("unavailable", unsupportedError);
       }
     }
     const strictProfileError = resolveStrictSetupAuthProfileError({
@@ -508,10 +529,10 @@ export async function runSetupInferenceTest(params: {
       deps,
     });
     if (strictProfileError) {
-      return { ok: false, status: "auth", error: strictProfileError };
+      return failed("auth", strictProfileError);
     }
 
-    let result: RunResult;
+    let result: AgentRunResultView;
     if (plan.runner === "cli") {
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
       result = (await runCli({
@@ -540,7 +561,7 @@ export async function runSetupInferenceTest(params: {
           successfulAuth = binding;
         },
         ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as RunResult;
+      })) as AgentRunResultView;
     } else {
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
@@ -589,39 +610,32 @@ export async function runSetupInferenceTest(params: {
           successfulAuth = binding;
         },
         ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as RunResult;
+      })) as AgentRunResultView;
     }
     if (params.signal?.aborted) {
       throw new SetupInferenceCancelledError();
     }
-    const terminalError = extractRunTerminalError(result);
+    const terminalError = extractAgentRunTerminalError(result);
     if (terminalError) {
       const described = describeFailoverError(new Error(terminalError));
-      return {
-        ok: false,
-        status: mapFailoverReasonToSetupStatus(described.reason),
-        error: described.message,
-      };
+      return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
     }
-    const text = extractRunText(result)?.trim();
+    const text = extractAgentRunText(result)?.trim();
     if (!text) {
-      return {
-        ok: false,
-        status: "format",
-        error: "The model started but did not send a reply. Try again or pick another option.",
-      };
+      return failed(
+        "format",
+        "The model started but did not send a reply. Try again or pick another option.",
+      );
     }
     const winnerError = await extractRunWinnerError(plan, result);
     if (winnerError) {
-      return { ok: false, status: "unknown", error: winnerError };
+      return failed("unknown", winnerError);
     }
     if (requireExecutionOwner && !successfulAuth) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse.",
-      };
+      return failed(
+        "unknown",
+        "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse.",
+      );
     }
     return {
       ok: true,
@@ -633,11 +647,7 @@ export async function runSetupInferenceTest(params: {
     };
   } catch (error) {
     const described = describeFailoverError(error);
-    return {
-      ok: false,
-      status: mapFailoverReasonToSetupStatus(described.reason),
-      error: described.message,
-    };
+    return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
   } finally {
     preparedRunAdmission.close();
   }

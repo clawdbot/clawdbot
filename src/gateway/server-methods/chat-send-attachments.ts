@@ -13,9 +13,10 @@ import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
-import { deleteMediaBuffer, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
+  discardPreparedInboundMedia,
   MediaOffloadError,
   type OffloadedRef,
   logAttachmentFailure,
@@ -166,9 +167,7 @@ async function prestageMediaPathOffloads(params: {
       workspaceDir: sandbox.workspaceDir,
     };
   } catch (err) {
-    await Promise.allSettled(
-      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
-    );
+    await discardPreparedInboundMedia(params.offloadedRefs);
     if (err instanceof MediaOffloadError || err instanceof UnsupportedAttachmentError) {
       throw err;
     }
@@ -213,24 +212,32 @@ export async function prepareChatSendAttachments(params: {
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.prepare_attachments",
         async () => {
-          const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-            loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
-            agentId,
-            provider: resolvedSessionModel.provider,
-            model: resolvedSessionModel.model,
-          });
-          const supportsImages =
-            supportsSessionModelImages ||
-            explicitOriginTargetsAcpSession(explicitOrigin) ||
-            explicitOriginTargetsPlugin;
+          const imageSupport: { value: boolean | undefined } = {
+            value:
+              explicitOriginTargetsAcpSession(explicitOrigin) || explicitOriginTargetsPlugin
+                ? true
+                : undefined,
+          };
+          const resolveSupportsImages = async (): Promise<boolean> => {
+            imageSupport.value ??= await resolveGatewayModelSupportsImages({
+              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+              loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
+              agentId,
+              provider: resolvedSessionModel.provider,
+              model: resolvedSessionModel.model,
+            });
+            return imageSupport.value;
+          };
           const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: context.logGateway,
-            supportsImages,
+            supportsImages: imageSupport.value ?? resolveSupportsImages,
             acceptNonImage: true,
           });
-          parsedMessage = supportsImages
+          // The parser owns MIME classification. An unresolved capability means no image was seen,
+          // so post-processing must not trigger catalog discovery for a non-image attachment.
+          const parsedSupportsImages = imageSupport.value !== false;
+          parsedMessage = parsedSupportsImages
             ? parsed.message
             : stripImageMediaMarkers(parsed.message, parsed.offloadedRefs);
           parsedImages = parsed.images;
@@ -242,7 +249,7 @@ export async function prepareChatSendAttachments(params: {
             workspaceDir: mediaPathOffloadWorkspaceDir,
           } = await prestageMediaPathOffloads({
             offloadedRefs,
-            includeImageRefs: !supportsImages,
+            includeImageRefs: !parsedSupportsImages,
             cfg,
             sessionKey,
             agentId,

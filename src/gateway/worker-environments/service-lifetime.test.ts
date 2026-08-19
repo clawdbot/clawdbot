@@ -37,6 +37,44 @@ describe("worker environment service", () => {
     );
   });
 
+  it("prunes terminal environments after provider reconciliation", async () => {
+    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
+
+    await support.createService(support.createProvider()).reconcileOnce();
+
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
+  it.each(["SQLITE_BUSY", "SQLITE_LOCKED"])(
+    "continues reconciliation when terminal cleanup fails with %s",
+    async (code) => {
+      const prune = vi
+        .spyOn(support.testState.store, "pruneTerminalEnvironments")
+        .mockImplementation(() => {
+          throw Object.assign(new Error("database is locked"), { code });
+        });
+
+      await expect(
+        support.createService(support.createProvider()).reconcileOnce(),
+      ).resolves.toBeUndefined();
+      expect(prune).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("propagates non-lock terminal cleanup failures", async () => {
+    const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
+    const prune = vi
+      .spyOn(support.testState.store, "pruneTerminalEnvironments")
+      .mockImplementation(() => {
+        throw error;
+      });
+
+    await expect(support.createService(support.createProvider()).reconcileOnce()).rejects.toBe(
+      error,
+    );
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
   it("waits for timed-out provider work during shutdown", async () => {
     let finishProvision: (() => void) | undefined;
     const provisionPending = new Promise<void>((resolve) => {
@@ -81,8 +119,20 @@ describe("worker environment service", () => {
   it("owns and clears one periodic reconciliation timer", async () => {
     vi.useFakeTimers();
     const liveEvents = support.createLiveEvents();
-    const workerService = support.createService(support.createProvider(), { liveEvents });
+    const unsubscribeTurnClaimClosed = vi.fn();
+    const placementStore = {
+      readWorkerTurnClaim: vi.fn(),
+      validateWorkerTurn: vi.fn(() => false),
+      isWorkerTurnToolAuthorized: vi.fn(() => false),
+      updateAckCursors: vi.fn(),
+      registerTurnClaimClosedHandler: vi.fn(() => unsubscribeTurnClaimClosed),
+    };
+    const workerService = support.createService(support.createProvider(), {
+      liveEvents,
+      placementStore,
+    });
 
+    expect(placementStore.registerTurnClaimClosedHandler).toHaveBeenCalledOnce();
     workerService.start();
     workerService.start();
     expect(liveEvents.start).toHaveBeenCalledOnce();
@@ -90,6 +140,7 @@ describe("worker environment service", () => {
     await workerService.stop();
 
     expect(liveEvents.clear).toHaveBeenCalledTimes(2);
+    expect(unsubscribeTurnClaimClosed).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 

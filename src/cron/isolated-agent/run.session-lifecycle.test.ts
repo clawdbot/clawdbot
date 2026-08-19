@@ -251,7 +251,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     expect(result).toEqual(
       expect.objectContaining({
         status: "error",
-        error: "agent run aborted for restart",
+        error: "agent run aborted for restart | OPENCLAW_RESTART_ABORT",
       }),
     );
     expect(mutationCommitted).toBe(true);
@@ -402,7 +402,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
     ).resolves.toMatchObject({
       status: "error",
-      error: `CronSessionLifecycleClaimError: Session "${sessionKey}" changed while starting work. Retry.`,
+      error: `Session "${sessionKey}" changed while starting work. Retry.`,
       executionStarted: true,
     });
   });

@@ -83,7 +83,7 @@ function createCleanupTestContext(): QaSuiteResolvedRunContext {
     fastMode: true,
     channelDriver: "live",
     enabledPluginIds: [],
-    gatewayConfigPatch: undefined,
+    gatewayConfigPatches: [],
     gatewayRuntimeOptions: undefined,
     concurrency: 1,
     progressEnabled: false,
@@ -157,6 +157,13 @@ describe("isolated QA suite transport cleanup", () => {
     expect(lab.stop).toHaveBeenCalledOnce();
     expect(lab.setLatestReport).toHaveBeenCalledWith(
       expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
+    );
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ status: "running" }),
+    );
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ status: "running" }),
     );
     expect((thrown as Error).message.split("\n")[0]).toBe(
       "QA scenarios passed, but cleanup failed",

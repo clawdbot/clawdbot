@@ -3120,5 +3120,33 @@ describe("listControlledSubagentRuns", () => {
       ),
     ).toBe(2);
   });
+
+  it("partitions duplicate bare controller keys by owning agent", () => {
+    const now = Date.now();
+    for (const agentId of ["research", "ops"]) {
+      addSubagentRunForTests({
+        runId: `run-${agentId}`,
+        childSessionKey: `agent:${agentId}:subagent:child`,
+        controllerSessionKey: "global",
+        requesterSessionKey: "global",
+        requesterAgentId: agentId,
+        requesterDisplayKey: "global",
+        task: `${agentId} task`,
+        cleanup: "keep",
+        createdAt: now,
+        startedAt: now,
+      });
+    }
+
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { research: {}, ops: {} },
+      },
+    } as OpenClawConfig;
+    expect(listControlledSubagentRuns("global", "research", cfg).map((run) => run.runId)).toEqual([
+      "run-research",
+    ]);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

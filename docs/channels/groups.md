@@ -137,10 +137,28 @@ For reusable sender allowlists, see [Access groups](/channels/access-groups).
 
 ## Session keys
 
-- Group sessions use `agent:<agentId>:<channel>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
+- By default, group sessions use `agent:<agentId>:<channel>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
 - Telegram forum topics add `:topic:<threadId>` to the group id so each topic has its own session.
 - Direct chats use the main session (or per-sender sessions if `session.dmScope` is configured).
 - Heartbeats run in the configured heartbeat session (default: the agent main session); group sessions do not run their own heartbeats.
+
+Set a binding's `session.groupScope` to `"main"` when a trusted room should
+share the agent's main conversation:
+
+```json5
+{
+  bindings: [
+    {
+      agentId: "main",
+      match: { channel: "slack", peer: { kind: "channel", id: "C0123TEAM" } },
+      session: { groupScope: "main" },
+    },
+  ],
+}
+```
+
+The global `session.groupScope` supports `"per-group"` (default) or `"main"`.
+This does not change group admission, mention gating, or reply routing.
 
 <a id="pattern-personal-dms-public-groups-single-agent"></a>
 
@@ -148,7 +166,13 @@ For reusable sender allowlists, see [Access groups](/channels/access-groups).
 
 Yes — this works well if your "personal" traffic is **DMs** and your "public" traffic is **groups**.
 
-Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups always use **non-main** session keys (`agent:main:<channel>:group:<id>`). If you enable sandboxing with `mode: "non-main"`, those group sessions run in the configured sandbox backend while your main DM session stays on-host. Docker is the default backend if you do not choose one.
+Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups use **non-main** session keys (`agent:main:<channel>:group:<id>`) under the default `groupScope: "per-group"`. If you enable sandboxing with `mode: "non-main"`, those group sessions run in the configured sandbox backend while your main DM session stays on-host. Docker is the default backend if you do not choose one.
+
+<Warning>
+A room configured with `groupScope: "main"` is a main session and is not
+covered by sandbox `mode: "non-main"`. Do not merge untrusted or public rooms
+into main when you rely on that sandbox boundary.
+</Warning>
 
 This gives you one agent "brain" (shared workspace + memory), but two execution postures:
 
@@ -214,7 +238,7 @@ Related:
 
 - Configuration keys and defaults: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox)
 - Debugging why a tool is blocked: [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
-- Bind mounts details: [Sandboxing](/gateway/sandboxing#custom-bind-mounts)
+- Bind mounts details: [Sandboxing](/gateway/sandboxing#multiple-folders-for-one-agent)
 
 ## Display labels
 

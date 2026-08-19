@@ -939,7 +939,7 @@ describe("cron tool", () => {
     const tool = createTestCronTool();
 
     expect(tool.description).toContain(
-      "needs cron.triggers.enabled — if off, say so; never model-poll instead",
+      "available unless cron.triggers.enabled=false — if off, say so; never model-poll instead",
     );
     expect(tool.description).toContain("Quiet headless check, no model");
     expect(tool.description).toContain("trigger.state");

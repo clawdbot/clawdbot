@@ -66,7 +66,7 @@ describe("sessionsTailCommand", () => {
         list: [{ id: "main" }, { id: "ops" }],
       },
     });
-    storePath = path.join(tmpDir, "sessions.json");
+    storePath = path.join(tmpDir, "sessions.sqlite");
   });
 
   afterEach(() => {
@@ -132,7 +132,7 @@ describe("sessionsTailCommand", () => {
       }),
     ]);
 
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
 
     const output = vi
       .mocked(runtime.log)
@@ -165,7 +165,7 @@ describe("sessionsTailCommand", () => {
       }),
     ]);
 
-    await sessionsTailCommand({ store: storePath, sessionKey, tail: "2" }, runtime);
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey, tail: "2" }, runtime);
 
     const output = vi
       .mocked(runtime.log)
@@ -179,7 +179,10 @@ describe("sessionsTailCommand", () => {
   it("rejects tail counts that exceed JavaScript safe integer precision", async () => {
     const runtime = makeRuntime();
 
-    await sessionsTailCommand({ store: storePath, sessionKey, tail: "9007199254740992" }, runtime);
+    await sessionsTailCommand(
+      { agent: "main", store: storePath, sessionKey, tail: "9007199254740992" },
+      runtime,
+    );
 
     expect(runtime.error).toHaveBeenCalledWith(
       "--tail must be a non-negative integer, for example --tail 25.",
@@ -199,7 +202,7 @@ describe("sessionsTailCommand", () => {
       }),
     ]);
 
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
 
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
@@ -230,7 +233,7 @@ describe("sessionsTailCommand", () => {
       }),
     ]);
 
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
 
     const output = runtimeOutput(runtime);
     expect(output).toContain("current ok");
@@ -266,7 +269,7 @@ describe("sessionsTailCommand", () => {
     });
 
     const run = sessionsTailCommand(
-      { store: storePath, sessionKey, tail: "1", follow: true },
+      { agent: "main", store: storePath, sessionKey, tail: "1", follow: true },
       runtime,
     );
     try {

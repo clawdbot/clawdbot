@@ -4,6 +4,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { serializeConfigForm } from "../config-form-utils.ts";
+import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import {
   adoptConfigSetAck,
   applyConfigSnapshot,
@@ -35,7 +36,7 @@ function readAckHash(ack: unknown): string | null {
  * their edit, so callers surface a reload affordance instead.
  */
 function isConfigBaseHashConflictError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = formatUiError(err);
   return message.includes("config changed since last load");
 }
 
@@ -87,7 +88,12 @@ export type RuntimeConfigDispatchOptions = {
   canDispatch?: () => boolean;
 };
 
-export type ConfigMethod = "config.set" | "config.apply" | "config.patch" | "config.openFile";
+export type ConfigMethod =
+  | "config.set"
+  | "config.apply"
+  | "config.patch"
+  | "config.openFile"
+  | "config.schema";
 
 export type ConfigWriteCoordinator = {
   prepareDiscard: () => Promise<void>;
@@ -150,7 +156,7 @@ export async function executeConfigExternalMutation<T>(
         : isDefinitiveConfigMutationRejection(error)
           ? "rejected"
           : "error",
-      error: error instanceof Error ? error.message : String(error),
+      error: formatUiError(error),
     };
   }
   const refreshFailure = (error: string): RuntimeConfigExternalMutationResult<T> => ({
@@ -174,7 +180,7 @@ export async function executeConfigExternalMutation<T>(
     }
     return { ok: true, value, refresh: { ok: true } };
   } catch (error) {
-    return refreshFailure(error instanceof Error ? error.message : String(error));
+    return refreshFailure(formatUiError(error));
   }
 }
 
@@ -201,7 +207,7 @@ export async function loadConfig(
     return true;
   } catch (err) {
     if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
-      state.lastError = String(err);
+      state.lastError = formatUiError(err);
     }
     return false;
   } finally {
@@ -230,7 +236,7 @@ export async function loadConfigSchema(state: RuntimeConfigState) {
     applyConfigSchema(state, res);
   } catch (err) {
     if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
-      state.lastError = String(err);
+      state.lastError = formatUiError(err);
     }
   } finally {
     if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
@@ -537,7 +543,7 @@ export async function patchConfig(
     return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
-      state.lastError = String(err);
+      state.lastError = formatUiError(err);
     }
     return false;
   }
@@ -605,7 +611,7 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
       return;
     }
     if (!res.ok) {
-      let errorMessage = res.error || "Failed to open config file";
+      let errorMessage = formatUiExternalText(res.error, "Failed to open config file");
       const path = res.path || state.configSnapshot?.path;
       if (path) {
         if (await copyToClipboard(path)) {
@@ -615,14 +621,14 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
         }
       }
       if (isCurrent()) {
-        state.lastError = errorMessage;
+        state.lastError = formatUiExternalText(errorMessage);
       }
     }
   } catch (err) {
     if (!isCurrent()) {
       return;
     }
-    const errorMessage = String(err);
+    const errorMessage = formatUiError(err);
     const path = state.configSnapshot?.path;
     if (path) {
       await copyToClipboard(path);

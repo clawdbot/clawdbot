@@ -26,6 +26,7 @@ import {
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import {
   createTelegramActionGate,
   resolveDefaultTelegramAccountId,
@@ -33,6 +34,7 @@ import {
 } from "./accounts.js";
 import { TELEGRAM_CALLBACK_DATA_MAX_BYTES } from "./approval-callback-data.js";
 import {
+  appendTelegramDroppedControlFallback,
   resolveTelegramInlineButtons,
   type TelegramButtonBuildOptions,
   type TelegramDroppedControl,
@@ -154,8 +156,9 @@ function readTelegramThreadId(params: Record<string, unknown>) {
 }
 
 function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
+  const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
   const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: accountId ?? resolveDefaultTelegramAccountId(cfg),
+    agentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: resolvedAccountId }),
   });
   return resolveTopicNameCacheScope(storePath);
 }
@@ -288,30 +291,6 @@ function readTelegramSendContent(params: {
   };
 }
 
-function renderTelegramDroppedControlFallback(controls: readonly TelegramDroppedControl[]): string {
-  return renderMessagePresentationFallbackText({
-    presentation: {
-      blocks: [
-        {
-          type: "buttons",
-          buttons: controls.map((control) => ({ label: control.label, value: "unavailable" })),
-        },
-      ],
-    },
-  });
-}
-
-function appendTelegramDroppedControlFallback(
-  text: string,
-  controls: readonly TelegramDroppedControl[],
-): string {
-  const fallback = renderTelegramDroppedControlFallback(controls);
-  if (!fallback || text === fallback || text.endsWith(`\n\n${fallback}`)) {
-    return text;
-  }
-  return [text, fallback].filter(Boolean).join("\n\n");
-}
-
 function buildTelegramControlDegradation(
   controls: readonly TelegramDroppedControl[],
   fallbackDelivered: boolean,
@@ -400,7 +379,7 @@ function getLastDurableTelegramActionResult(
       lastResult?.messageId ??
       receipt.primaryPlatformMessageId ??
       receipt.platformMessageIds.at(-1),
-    chatId: lastResult?.chatId,
+    chatId: lastResult?.target?.kind === "chat" ? lastResult.target.id : undefined,
   };
 }
 
@@ -562,8 +541,7 @@ export async function handleTelegramAction(
       droppedControls.length > 0 && resolvedContent.hasExplicitContent
         ? appendTelegramDroppedControlFallback(resolvedContent.content, droppedControls)
         : resolvedContent.content;
-    const droppedControlFallback =
-      droppedControls.length > 0 ? renderTelegramDroppedControlFallback(droppedControls) : "";
+    const droppedControlFallback = appendTelegramDroppedControlFallback("", droppedControls);
     const hasOnlyDroppedControlFallback =
       !resolvedContent.hasExplicitContent &&
       droppedControlFallback.length > 0 &&

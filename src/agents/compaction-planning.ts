@@ -226,12 +226,6 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
   return BASE_CHUNK_RATIO;
 }
 
-/** Returns whether one message exceeds the safe summarization context share. */
-export function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
-  const tokens = estimateMessagesTokens([msg]) * SAFETY_MARGIN;
-  return tokens > contextWindow * 0.5;
-}
-
 /** Builds sanitized chunks for summarization prompts. */
 export function buildSummaryChunks(params: {
   messages: AgentMessage[];

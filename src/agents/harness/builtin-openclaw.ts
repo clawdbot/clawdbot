@@ -73,6 +73,7 @@ function buildRestrictedFinalizationAttempt(
     disableTools: true,
     disableTrajectory: true,
     skipPreparedUserTurnMessage: true,
+    suppressNextUserMessagePersistence: true,
     initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
   };
 }

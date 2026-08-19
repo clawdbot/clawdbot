@@ -18,3 +18,10 @@ export const NodeHostAgentRunsSchema = z
   })
   .strict()
   .optional();
+
+export const NodeHostWorkerRunsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .optional();

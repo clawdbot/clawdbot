@@ -900,7 +900,7 @@
           }
         ],
         "contracts": {
-          "memoryEmbeddingProviders": ["mistral"],
+          "embeddingProviders": ["mistral"],
           "mediaUnderstandingProviders": ["mistral"],
           "realtimeTranscriptionProviders": ["mistral"]
         },
@@ -1288,6 +1288,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/pixverse-provider",
           "npmSpec": "@openclaw/pixverse-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.26"
@@ -2273,7 +2274,7 @@
           }
         ],
         "contracts": {
-          "memoryEmbeddingProviders": [
+          "embeddingProviders": [
             "voyage"
           ]
         },

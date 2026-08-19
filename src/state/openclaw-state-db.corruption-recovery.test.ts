@@ -11,6 +11,7 @@ import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  evictOpenClawStateDatabaseAfterCorruption,
   getOpenClawStateDatabaseIfOpen,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -167,6 +168,40 @@ describe("isSqliteCorruptionError", () => {
 });
 
 describe("shared state write transaction corruption recovery", () => {
+  it("preserves the shared WAL when evicting a poisoned cache owner", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const cached = openOpenClawStateDatabase({ env });
+    insertProbeEvent(env, "committed-before-eviction");
+    const walPath = `${cached.path}-wal`;
+    const walBytesBeforeEviction = fs.statSync(walPath).size;
+    const { DatabaseSync } = requireNodeSqlite();
+    const peer = new DatabaseSync(cached.path);
+
+    try {
+      peer.exec("BEGIN;");
+      peer.prepare("SELECT count(*) FROM diagnostic_events").get();
+      const evictionStartedAt = performance.now();
+      expect(
+        evictOpenClawStateDatabaseAfterCorruption(
+          cached,
+          sqliteError("database disk image is malformed", 11),
+        ),
+      ).toBe(true);
+      const evictionElapsedMs = performance.now() - evictionStartedAt;
+
+      expect(getOpenClawStateDatabaseIfOpen({ env })).toBeUndefined();
+      expect(evictionElapsedMs).toBeLessThan(250);
+      expect(fs.statSync(walPath).size).toBe(walBytesBeforeEviction);
+      expect(peer.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(
+        peer.prepare("SELECT event_key FROM diagnostic_events WHERE scope = ?").get(PROBE_SCOPE),
+      ).toEqual({ event_key: "committed-before-eviction" });
+    } finally {
+      peer.exec("ROLLBACK;");
+      peer.close();
+    }
+  });
+
   it("evicts the cached handle so a repaired file recovers without a process restart", () => {
     const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const { databasePath, healthySnapshot, poisoned } = prepareCorruptedCachedDatabase(env);

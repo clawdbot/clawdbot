@@ -24,6 +24,14 @@ enum CapabilityAuthorizationStatus: Equatable, Sendable {
 }
 
 enum PermissionManager {
+    /// UNUserNotificationCenter.current() aborts with NSInternalInconsistencyException
+    /// ("bundleProxyForCurrentProcess is nil") in unbundled processes such as
+    /// `swift build` dev binaries. Every notification-center call must check this
+    /// first so unbundled invocations degrade to not-granted instead of crashing.
+    static var notificationCenterAvailable: Bool {
+        Bundle.main.bundleIdentifier != nil
+    }
+
     static func isNotificationAuthorized(status: UNAuthorizationStatus) -> Bool {
         status == .authorized || status == .provisional
     }
@@ -75,6 +83,7 @@ enum PermissionManager {
     }
 
     private static func ensureNotifications(interactive: Bool) async -> Bool {
+        guard self.notificationCenterAvailable else { return false }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         if self.isNotificationAuthorized(status: settings.authorizationStatus) {
@@ -213,6 +222,10 @@ enum PermissionManager {
         for cap in caps {
             switch cap {
             case .notifications:
+                guard self.notificationCenterAvailable else {
+                    results[cap] = .notGranted
+                    break
+                }
                 let center = UNUserNotificationCenter.current()
                 let settings = await center.notificationSettings()
                 results[cap] = self.isNotificationAuthorized(status: settings.authorizationStatus)

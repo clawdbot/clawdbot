@@ -31,13 +31,18 @@ import {
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   listSessionTranscriptCorpusEntriesForAgentSync,
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
-import type { MemorySessionSyncTarget } from "./types.js";
-import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
+import type {
+  MemorySessionSyncTarget,
+  MemoryEntryProvenance,
+  MemoryOriginClass,
+  MemorySessionKind,
+} from "./types.js";
 
 export {
   listSessionTranscriptCorpusEntriesForAgent,
@@ -775,11 +780,13 @@ export async function buildSessionEntry(
           const records = loadTranscriptEventsSync({
             ...sqliteIdentity,
           });
+          const resetRecallCutoff = resolveSessionResetRecallCutoff(records);
           const raw = serializeTranscriptEvents(records);
           return {
             mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
             path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
             raw,
+            resetRecallCutoff,
             size: stats.sizeBytes,
           };
         })()
@@ -959,7 +966,7 @@ export async function buildSessionEntry(
       lineProvenance.push(...renderedLines.map(() => memoryProvenance));
     }
     const content = collected.join("\n");
-    return {
+    const entry: SessionFileEntry = {
       path: memoryPath,
       absPath,
       mtimeMs,
@@ -971,7 +978,9 @@ export async function buildSessionEntry(
           "\n" +
           messageTimestampsMs.join(",") +
           "\n" +
-          JSON.stringify(lineProvenance),
+          JSON.stringify(lineProvenance) +
+          "\n" +
+          JSON.stringify(rawSource?.resetRecallCutoff ?? { state: "absent" }),
       ),
       content,
       lineMap,
@@ -981,6 +990,13 @@ export async function buildSessionEntry(
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
+    Object.defineProperty(entry, Symbol.for("openclaw.memory.sessionResetRecallCutoff"), {
+      configurable: false,
+      enumerable: false,
+      value: rawSource?.resetRecallCutoff ?? { state: "absent" },
+      writable: false,
+    });
+    return entry;
   } catch (err) {
     void logSessionFileReadFailure(absPath, err);
     return null;

@@ -6,18 +6,11 @@ import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const META_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
 
-function ensureMetaResponsesReplayFields(payloadObj: Record<string, unknown>): void {
-  const existing = payloadObj.include;
-  const include = filterStringEntries(existing);
-  if (!include.includes(META_REASONING_ENCRYPTED_CONTENT_INCLUDE)) {
-    include.push(META_REASONING_ENCRYPTED_CONTENT_INCLUDE);
+export function wrapMetaProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  if (ctx.provider !== "meta" || (ctx.sourceApi ?? ctx.model?.api) !== "openai-responses") {
+    return undefined;
   }
-  payloadObj.include = include;
-  payloadObj.store = false;
-}
-
-function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model, options }) => {
+  return createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload, model, options }) => {
     if (model.provider !== "meta") {
       return;
     }
@@ -29,13 +22,11 @@ function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamF
     if (!model.reasoning) {
       return;
     }
-    ensureMetaResponsesReplayFields(payload);
+    const include = filterStringEntries(payload.include);
+    if (!include.includes(META_REASONING_ENCRYPTED_CONTENT_INCLUDE)) {
+      include.push(META_REASONING_ENCRYPTED_CONTENT_INCLUDE);
+    }
+    payload.include = include;
+    payload.store = false;
   });
-}
-
-export function wrapMetaProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  if (ctx.provider !== "meta" || (ctx.sourceApi ?? ctx.model?.api) !== "openai-responses") {
-    return undefined;
-  }
-  return createMetaResponsesWrapper(ctx.streamFn);
 }

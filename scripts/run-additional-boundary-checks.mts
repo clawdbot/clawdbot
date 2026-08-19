@@ -62,6 +62,8 @@ export const BOUNDARY_CHECKS = (
     ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
     ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
     ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
+    ["lint:no-chained-type-assertions", "pnpm", ["run", "lint:no-chained-type-assertions"]],
+    ["lint:no-widen-then-assert", "pnpm", ["run", "lint:no-widen-then-assert"]],
     [
       "lint:plugins:no-register-http-handler",
       "pnpm",
@@ -88,7 +90,6 @@ export const BOUNDARY_CHECKS = (
       ["run", "lint:plugins:plugin-sdk-subpaths-exported"],
     ],
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
-    ["web-search-provider-boundary", "pnpm", ["run", "lint:web-search-provider-boundaries"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
       "extension-src-outside-plugin-sdk-boundary",
@@ -99,11 +100,6 @@ export const BOUNDARY_CHECKS = (
       "extension-normalization-core-bypass-boundary",
       "pnpm",
       ["run", "lint:extensions:no-normalization-core-bypass"],
-    ],
-    [
-      "extension-plugin-sdk-internal-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-plugin-sdk-internal"],
     ],
     [
       "extension-relative-outside-package-boundary",

@@ -1,11 +1,12 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
 import {
-  LEGACY_TASK_SUGGESTION_TOOL_NAME,
-  TASK_SUGGESTION_TOOL_NAME,
+  IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+  TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
 import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
@@ -125,7 +126,12 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   }
   if (issues.legacyTaskSuggestionToolName) {
     lines.push(
-      `- ${pluralize(issues.legacyTaskSuggestionToolName, "job")} still grants legacy tool \`${LEGACY_TASK_SUGGESTION_TOOL_NAME}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME}\``,
+      `- ${pluralize(issues.legacyTaskSuggestionToolName, "job")} still grants legacy tool \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.legacyName}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.canonicalName}\``,
+    );
+  }
+  if (issues.legacyImageInspectionToolName) {
+    lines.push(
+      `- ${pluralize(issues.legacyImageInspectionToolName, "job")} still relies on legacy \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.legacyName}\` coverage; doctor will preserve equivalent \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.canonicalName}\` access`,
     );
   }
   if (issues.legacyAgentTurnCommandPayload) {
@@ -231,7 +237,10 @@ export function needsSqliteProjectionBackfill(params: {
   if (!normalizedConfig) {
     return true;
   }
-  const projected = params.projectedJob as unknown as Record<string, unknown>;
+  if (!isRecord(params.projectedJob)) {
+    return true;
+  }
+  const projected = params.projectedJob;
   for (const field of [
     "agentId",
     "deleteAfterRun",

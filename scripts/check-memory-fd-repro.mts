@@ -8,10 +8,13 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { safeParseJson } from "../packages/normalization-core/src/json-coercion.ts";
 import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
 import { asNullableRecord as asRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import { readNonBlankString } from "../packages/normalization-core/src/string-coerce.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { parseStrictNonNegativeDecimal as parseNonNegativeInteger } from "./lib/numeric-options.mjs";
 
 const ISSUE_FILE_COUNTS = [
   ["memory/transcripts", 9394],
@@ -59,7 +62,7 @@ export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 /**
  * Maximum bytes read from the memory_search HTTP response.
  */
-export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
+const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
 /**
  * Probe query expected to hit the synthetic top-level memory file.
  */
@@ -99,7 +102,6 @@ Options:
 `.trim();
 }
 
-const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
 const ARGUMENT_FLAGS = new Set([
   "--allow-non-darwin",
   "--expect-leak",
@@ -124,24 +126,9 @@ function stripPackageManagerSeparatorForKnownFlags(argv: string[]) {
 }
 
 /**
- * Parses a safe non-negative integer option.
- */
-export function parseNonNegativeInteger(value: unknown, label: string) {
-  const raw = String(value).trim();
-  if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${label} must be a safe integer`);
-  }
-  return parsed;
-}
-
-/**
  * Parses a safe positive integer option.
  */
-export function readPositiveNumber(value: unknown, label: string) {
+function readPositiveNumber(value: unknown, label: string) {
   const parsed = parseNonNegativeInteger(value, label);
   if (parsed <= 0) {
     throw new Error(`${label} must be greater than 0`);
@@ -594,8 +581,6 @@ export async function stopGatewayWithRuntime({
 /**
  * Reads an HTTP response body up to a configured byte limit.
  */
-export { readBoundedResponseText };
-
 function signalChild(child: StoppableGatewayChild, signal: GatewaySignal) {
   try {
     child.kill(signal);
@@ -615,19 +600,6 @@ async function waitForChildExit(
   return hasChildExited(child);
 }
 
-function parseJsonValue(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function readStringProperty(record: Record<string, unknown> | null, key: string) {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function parseToolTextContent(result: Record<string, unknown> | null) {
   const content = Array.isArray(result?.content) ? result.content : [];
   for (const entry of content) {
@@ -636,7 +608,7 @@ function parseToolTextContent(result: Record<string, unknown> | null) {
     if (!text) {
       continue;
     }
-    const parsed = asRecord(parseJsonValue(text));
+    const parsed = asRecord(safeParseJson(text));
     if (parsed) {
       return parsed;
     }
@@ -652,7 +624,7 @@ export function classifyMemorySearchInvokeResponse({
   status,
   bodyText,
 }: InvokeResponseOptions) {
-  const parsedBody = parseJsonValue(bodyText);
+  const parsedBody = safeParseJson(bodyText);
   const body = asRecord(parsedBody);
   if (!httpOk) {
     const errorRecord = asRecord(body?.error);
@@ -662,8 +634,8 @@ export function classifyMemorySearchInvokeResponse({
       status,
       gatewayOk: body?.ok === true ? true : body?.ok === false ? false : undefined,
       error:
-        readStringProperty(errorRecord, "message") ??
-        readStringProperty(body, "error") ??
+        readNonBlankString(errorRecord?.message) ??
+        readNonBlankString(body?.error) ??
         `memory_search HTTP request failed with status ${status}`,
     };
   }
@@ -685,8 +657,8 @@ export function classifyMemorySearchInvokeResponse({
       status,
       gatewayOk,
       error:
-        readStringProperty(errorRecord, "message") ??
-        readStringProperty(body, "error") ??
+        readNonBlankString(errorRecord?.message) ??
+        readNonBlankString(body.error) ??
         "memory_search gateway invocation failed",
     };
   }
@@ -711,7 +683,7 @@ export function classifyMemorySearchInvokeResponse({
   const resultCount = Array.isArray(payload.results) ? payload.results.length : undefined;
   const toolDisabled = payload.disabled === true;
   const toolUnavailable = payload.unavailable === true;
-  const toolError = readStringProperty(payload, "error");
+  const toolError = readNonBlankString(payload.error);
   const ok = gatewayOk === true && !toolDisabled && !toolUnavailable && !toolError;
 
   return {

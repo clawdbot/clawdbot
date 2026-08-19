@@ -19,7 +19,7 @@ import {
 import { buildDashboardSessionKey } from "../session-create-service.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { interruptSessionRunIfActive } from "./sessions-messaging.js";
+import { interruptSessionRunIfActive } from "./session-run-interruption.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   requireSessionKey,
@@ -169,9 +169,7 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     );
     emitSessionsChanged(context, {
       sessionKey: canonicalKey,
-      ...(canonicalKey === "global" && requestedAgent.agentId
-        ? { agentId: requestedAgent.agentId }
-        : {}),
+      agentId: requestedAgent.agentId,
       reason: "checkpoint-branch",
     });
     emitSessionsChanged(context, {
@@ -450,9 +448,7 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
         );
         emitSessionsChanged(context, {
           sessionKey: current.canonicalKey,
-          ...(current.canonicalKey === "global" && requestedAgent.agentId
-            ? { agentId: requestedAgent.agentId }
-            : {}),
+          agentId: requestedAgent.agentId,
           reason: "checkpoint-restore",
         });
       },

@@ -5,11 +5,36 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
-import { printDaemonStatus } from "./status.print.js";
+import type { DaemonStatus } from "./status.gather.js";
+import { printDaemonStatus as printDaemonStatusRuntime } from "./status.print.js";
+
+type TestDaemonStatus = Omit<DaemonStatus, "service"> & {
+  service: Omit<DaemonStatus["service"], "loaded"> & { loaded?: boolean | null };
+};
+
+function printDaemonStatus(
+  status: TestDaemonStatus,
+  options: Parameters<typeof printDaemonStatusRuntime>[1],
+) {
+  const loaded =
+    status.service.loaded !== undefined
+      ? status.service.loaded
+      : status.service.loadState.status === "unknown"
+        ? null
+        : status.service.loadState.status === "loaded";
+  printDaemonStatusRuntime(
+    {
+      ...status,
+      service: { ...status.service, loaded },
+    },
+    options,
+  );
+}
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
   error: vi.fn<(line: string) => void>(),
+  writeJson: vi.fn<(value: unknown) => void>(),
 }));
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn((_opts?: unknown) => ({ httpUrl: "http://127.0.0.1:18789" })),
@@ -100,6 +125,7 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
+    runtime.writeJson.mockReset();
     renderGatewayServiceCleanupHintsMock.mockReset().mockReturnValue([]);
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
@@ -107,12 +133,85 @@ describe("printDaemonStatus", () => {
     isWSLEnvMock.mockClear();
   });
 
+  it("preserves Gateway server metadata while sanitizing JSON output", () => {
+    const servers = [
+      { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
+      { version: "2026.5.6", connId: "conn-1" },
+    ];
+    for (const server of servers) {
+      printDaemonStatus(
+        {
+          service: {
+            label: "LaunchAgent",
+            loadState: { status: "loaded" },
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            command: { programArguments: ["node"], environment: { OPENCLAW_STATE_DIR: "/tmp" } },
+          },
+          rpc: { ok: true, server },
+          extraServices: [],
+        },
+        { json: true, deep: true },
+      );
+    }
+
+    expect(
+      runtime.writeJson.mock.calls.map(
+        ([payload]) => (payload as { rpc?: { server?: unknown } }).rpc?.server,
+      ),
+    ).toEqual(servers);
+  });
+
+  it("prints host desktop state and auth type", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        hostDesktop: { enabled: true, state: "attached", port: 5900, security: "VncAuth" },
+        extraServices: [],
+      },
+      { json: false },
+    );
+    expectMockLineContains(
+      runtime.log,
+      "Host desktop: attached · 127.0.0.1:5900 · security VncAuth",
+    );
+  });
+
+  it("prints a managed host desktop failure without a fake listener address", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "systemd",
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        hostDesktop: {
+          enabled: true,
+          state: "managed",
+          managedState: "failed",
+          port: 46_001,
+          display: 99,
+          error: "startxfce4 not installed",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+    expectMockLineContains(runtime.log, "Host desktop: managed · failed: startxfce4 not installed");
+  });
+
   it("prints the applied Gateway heap limit and derivation", () => {
     printDaemonStatus(
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           gatewayHeap: {
@@ -150,7 +249,7 @@ describe("printDaemonStatus", () => {
             {
               service: {
                 label: "Scheduled Task",
-                loaded: true,
+                loadState: { status: "loaded" },
                 loadedText: "registered",
                 notLoadedText: "not registered",
               },
@@ -175,7 +274,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -217,7 +316,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -259,7 +358,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -298,7 +397,10 @@ describe("printDaemonStatus", () => {
         {
           service: {
             label: "systemd",
-            loaded: true,
+            loadState: {
+              status: "unknown",
+              detail: "System has not been booted with systemd as init system",
+            },
             loadedText: "loaded",
             notLoadedText: "not loaded",
             runtime: {
@@ -329,6 +431,8 @@ describe("printDaemonStatus", () => {
       kind: "generic_unavailable",
       container: false,
     });
+    expectMockLineContains(runtime.log, "Service: systemd (unknown)");
+    expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Service: systemd (not loaded)");
     expectMockLineContains(runtime.error, "wsl hint");
   });
 
@@ -337,7 +441,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -379,7 +483,7 @@ describe("printDaemonStatus", () => {
         {
           service: {
             label: "LaunchAgent",
-            loaded: true,
+            loadState: { status: "loaded" },
             loadedText: "loaded",
             notLoadedText: "not loaded",
             runtime: { status: "running", pid: 8000 },
@@ -426,7 +530,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "Scheduled Task",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "registered",
           notLoadedText: "not registered",
           runtime: { status: "running", pid: 8000 },
@@ -465,7 +569,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: false,
+          loadState: { status: "not-loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: {
@@ -490,7 +594,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -522,7 +626,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "systemd user",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "enabled",
           notLoadedText: "disabled",
           runtime: { status: "running", pid: 8000 },
@@ -570,7 +674,7 @@ describe("printDaemonStatus", () => {
         },
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -612,7 +716,7 @@ describe("printDaemonStatus", () => {
         },
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -646,7 +750,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "stopped" },
@@ -677,7 +781,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -729,7 +833,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
         },
@@ -773,7 +877,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -807,7 +911,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -856,7 +960,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -881,7 +985,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -912,7 +1016,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -943,7 +1047,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -984,7 +1088,7 @@ describe("printDaemonStatus", () => {
         {
           service: {
             label: "systemd user",
-            loaded: false,
+            loadState: { status: "not-loaded" },
             loadedText: "not loaded",
             notLoadedText: "not loaded",
             runtime: { status: "unknown", detail: "systemd user services unavailable" },
@@ -1020,7 +1124,7 @@ describe("printDaemonStatus", () => {
         {
           service: {
             label: "systemd",
-            loaded: true,
+            loadState: { status: "loaded" },
             loadedText: "loaded",
             notLoadedText: "not loaded",
             runtime: {
@@ -1051,7 +1155,7 @@ describe("printDaemonStatus", () => {
         {
           service: {
             label: "systemd",
-            loaded: true,
+            loadState: { status: "loaded" },
             loadedText: "loaded",
             notLoadedText: "not loaded",
             runtime: {
@@ -1079,7 +1183,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -1119,7 +1223,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           targetRole: "diagnostic-only",
@@ -1162,7 +1266,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -1200,7 +1304,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
@@ -1245,7 +1349,7 @@ describe("printDaemonStatus", () => {
       {
         service: {
           label: "LaunchAgent",
-          loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },

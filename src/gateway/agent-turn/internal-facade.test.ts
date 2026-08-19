@@ -82,6 +82,27 @@ describe("createInternalAgentTurnFacade", () => {
     });
   });
 
+  it("preserves post-acceptance Error identity", async () => {
+    let rejectTurn!: (error: Error) => void;
+    startTurn.mockImplementation(
+      ({ io }) =>
+        new Promise<void>((_resolve, reject) => {
+          io.emitAcceptance([true, { runId: "run-error", status: "accepted" }, undefined]);
+          rejectTurn = reject;
+        }),
+    );
+    const dispatchError = Object.assign(new Error("turn failed"), { code: "ETURN" });
+    const result = createFacade().dispatchRaw(
+      { message: "test", idempotencyKey: "run-error" },
+      { expectFinal: true },
+    );
+    await vi.waitFor(() => expect(rejectTurn).toBeTypeOf("function"));
+
+    rejectTurn(dispatchError);
+
+    await expect(result).rejects.toBe(dispatchError);
+  });
+
   it("returns a single acceptance with its metadata when no final is requested", async () => {
     startTurn.mockImplementation(async ({ io }) => {
       io.emitAcceptance([true, { runId: "run-2", status: "in_flight" }, undefined], {

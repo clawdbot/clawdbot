@@ -7,7 +7,7 @@ import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
-  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -30,6 +30,9 @@ type ExecuteDispatchReadyState = Extract<
   Awaited<ReturnType<typeof executeDispatch>>,
   { status: "ready" }
 >["state"];
+
+export const needsTtsFallback = (clean: boolean, visible: string, fallback?: string) =>
+  clean && !visible.trim() && Boolean(fallback?.trim());
 
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
@@ -120,11 +123,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-    const shouldAttachDeferredText =
-      deferFinalTtsText &&
-      reply.isReasoning !== true &&
-      reply.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(reply);
+    const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
     const finalReply = await state.sendFinalPayload(reply, {
       deliveryId: String(replyIndex),
       ...(shouldAttachDeferredText
@@ -233,6 +232,19 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           });
           queuedFinal = finalReply.queuedFinal || queuedFinal;
           routedFinalCount += finalReply.routedFinalCount;
+        } else if (
+          needsTtsFallback(
+            Boolean(state.cleanBlockTtsDirectiveText),
+            cleanDeferredFinalText(deferredTtsTextPending),
+            ttsSyntheticReply.text,
+          )
+        ) {
+          const finalReply = await state.sendFinalPayload(ttsSyntheticReply, {
+            abortSignal: getDispatchAbortSignal(),
+            skipTts: true,
+          });
+          queuedFinal = finalReply.queuedFinal || queuedFinal;
+          routedFinalCount += finalReply.routedFinalCount;
         }
       } catch (err) {
         if (isDispatchReplyOperationAbortedError(err)) {
@@ -274,8 +286,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
-    !turnLedger.hasVisibleDelivery() &&
-    !turnLedger.hasForeignQueuedAdmissions();
+    !turnLedger.hasVisibleDelivery();
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
   if (noVisibleReplyFallbackAllowed()) {
     // Only a turn that still looks empty pays for settlement: pending admissions
@@ -347,12 +358,17 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   counts.final += routedFinalCount;
   const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
-  const dispatchOutcome = queueCapRejected ? "skipped" : "completed";
+  const messageInjectionAborted = state.replyOperationRunState.messageInjectionAborted === true;
+  const dispatchOutcome = queueCapRejected || messageInjectionAborted ? "skipped" : "completed";
   const dispatchReason = queueCapRejected
     ? "queue-cap"
-    : channelTransformSuppressed
-      ? "channel_transform"
-      : state.bindingState.pluginFallbackReason;
+    : messageInjectionAborted
+      ? "reply_operation_aborted"
+      : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
+        ? "active_run_injected"
+        : channelTransformSuppressed
+          ? "channel_transform"
+          : state.bindingState.pluginFallbackReason;
   state.recordAgentDispatchCompleted(
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,
@@ -367,6 +383,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
       : {}),
     ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
+    ...(replyAdmission?.status === "accepted" ? { deferredToActiveRun: replyAdmission.mode } : {}),
     // Eligibility keys off settled visible delivery: a suppressed or cancelled
     // final (including the core fallback itself) leaves channel-level recovery
     // eligible, while any settled visible delivery clears it. An aborted or

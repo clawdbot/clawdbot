@@ -1,5 +1,5 @@
 // Commander option-source helpers for explicit flags and bounded parent inheritance.
-import type { Command } from "commander";
+import type { Command, OptionValueSource } from "commander";
 
 export function hasExplicitOptions(command: Command, names: readonly string[]): boolean {
   return names.some((name) => command.getOptionValueSource(name) === "cli");
@@ -12,6 +12,7 @@ const MAX_INHERIT_DEPTH = 2;
 export function inheritOptionFromParent<T = unknown>(
   command: Command | undefined,
   name: string,
+  requiredSource?: OptionValueSource,
 ): T | undefined {
   if (!command) {
     return undefined;
@@ -27,6 +28,9 @@ export function inheritOptionFromParent<T = unknown>(
   while (ancestor && depth < MAX_INHERIT_DEPTH) {
     const source = ancestor.getOptionValueSource(name);
     if (source && source !== "default") {
+      if (requiredSource && source !== requiredSource) {
+        return undefined;
+      }
       return ancestor.getOptionValue(name) as T | undefined;
     }
     depth += 1;

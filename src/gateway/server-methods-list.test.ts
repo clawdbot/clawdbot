@@ -18,12 +18,18 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
   });
 
-  it("advertises node presence activity updates", () => {
+  it("advertises node topology updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
+    expect(GATEWAY_EVENTS).toContain("device.pair.setup.completed");
+    expect(GATEWAY_EVENTS).toContain("node.runnerInventory.changed");
   });
 
   it("advertises skill invalidation updates", () => {
     expect(GATEWAY_EVENTS).toContain("skills.changed");
+  });
+
+  it("advertises portal replace-set updates", () => {
+    expect(GATEWAY_EVENTS).toContain("portal.changed");
   });
 
   it("advertises session observer digests", () => {
@@ -66,7 +72,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-46)).toEqual([
+    expect(listGatewayMethods().slice(-60)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -113,6 +119,20 @@ describe("listGatewayMethods", () => {
       "users.prefs.set",
       "projects.add",
       "projects.searchRemote",
+      "desktop.observe",
+      "desktop.launch",
+      "device.scopes.requestUpgrade",
+      "device.scopes.waitUpgrade",
+      "portal.list",
+      "portal.open",
+      "portal.close",
+      "sessions.move",
+      "sessions.assignOwner",
+      "progressCard.get",
+      "progressCard.put",
+      "tools.github.status",
+      "tools.github.configure",
+      "diagnostics.lanes",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -180,10 +200,24 @@ describe("listGatewayMethods", () => {
 
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
+    expect(methods).not.toContain("node.runnerInventory.update");
     expect(methods).not.toContain("config.openFile");
     expect(methods).not.toContain("chat.inject");
     expect(methods).not.toContain("nativeHook.invoke");
     expect(methods).not.toContain("sessions.usage");
+  });
+
+  it("registers the hidden node protocol feature publication method", () => {
+    const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+      (candidate) => candidate.name === "node.runnerInventory.update",
+    );
+
+    expect(coreGatewayHandlers["node.runnerInventory.update"]).toBeTypeOf("function");
+    expect(descriptor).toMatchObject({
+      name: "node.runnerInventory.update",
+      scope: "node",
+      advertise: false,
+    });
   });
 
   it("preserves the legacy advertised method order", () => {
@@ -204,7 +238,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-53)).toEqual([
+    expect(coreMethods.slice(-67)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -258,6 +292,20 @@ describe("listGatewayMethods", () => {
       "users.prefs.set",
       "projects.add",
       "projects.searchRemote",
+      "desktop.observe",
+      "desktop.launch",
+      "device.scopes.requestUpgrade",
+      "device.scopes.waitUpgrade",
+      "portal.list",
+      "portal.open",
+      "portal.close",
+      "sessions.move",
+      "sessions.assignOwner",
+      "progressCard.get",
+      "progressCard.put",
+      "tools.github.status",
+      "tools.github.configure",
+      "diagnostics.lanes",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -283,6 +331,21 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("users.prefs.set")).toBe(methods.indexOf("users.prefs.get") + 1);
     expect(methods.indexOf("projects.add")).toBe(methods.indexOf("users.prefs.set") + 1);
     expect(methods.indexOf("projects.searchRemote")).toBe(methods.indexOf("projects.add") + 1);
+    expect(methods.indexOf("desktop.observe")).toBe(methods.indexOf("projects.searchRemote") + 1);
+    expect(methods.indexOf("desktop.launch")).toBe(methods.indexOf("desktop.observe") + 1);
+    expect(methods.indexOf("device.scopes.requestUpgrade")).toBe(
+      methods.indexOf("desktop.launch") + 1,
+    );
+    expect(methods.indexOf("device.scopes.waitUpgrade")).toBe(
+      methods.indexOf("device.scopes.requestUpgrade") + 1,
+    );
+    expect(methods.indexOf("portal.list")).toBe(methods.indexOf("device.scopes.waitUpgrade") + 1);
+    expect(methods.indexOf("portal.open")).toBe(methods.indexOf("portal.list") + 1);
+    expect(methods.indexOf("portal.close")).toBe(methods.indexOf("portal.open") + 1);
+    expect(methods.indexOf("sessions.move")).toBe(methods.indexOf("portal.close") + 1);
+    expect(methods.indexOf("sessions.assignOwner")).toBe(methods.indexOf("sessions.move") + 1);
+    expect(methods.indexOf("progressCard.get")).toBe(methods.indexOf("sessions.assignOwner") + 1);
+    expect(methods.indexOf("progressCard.put")).toBe(methods.indexOf("progressCard.get") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {
@@ -313,6 +376,28 @@ describe("listGatewayMethods", () => {
       expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
         name: method,
         scope: "operator.admin",
+        startup: "unavailable-until-sidecars",
+        controlPlaneWrite: true,
+      });
+    }
+  });
+
+  it("advertises placement mutations with target-aware scopes", () => {
+    const advertisedMethods = listGatewayMethods();
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+    const scopes = new Map([
+      ["sessions.dispatch", "dynamic"],
+      ["sessions.move", "dynamic"],
+      ["sessions.reclaim", "operator.write"],
+    ]);
+
+    for (const [method, scope] of scopes) {
+      expect(advertisedMethods).toContain(method);
+      expect(coreGatewayHandlers[method]).toEqual(expect.any(Function));
+      expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain(method);
+      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
+        name: method,
+        scope,
         startup: "unavailable-until-sidecars",
         controlPlaneWrite: true,
       });

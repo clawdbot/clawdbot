@@ -93,6 +93,7 @@ export async function scanStatusJsonWithPolicy(
   policy: StatusJsonScanPolicy,
 ): Promise<StatusScanResult> {
   const overview = await collectStatusScanOverview({
+    env: process.env,
     commandName: policy.commandName,
     opts,
     showSecrets: false,

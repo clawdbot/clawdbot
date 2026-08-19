@@ -154,6 +154,45 @@ describe("agents_wait", () => {
     });
   });
 
+  it("projects an authorized collector failure without failing a mixed batch", async () => {
+    const failed = collectorRun("failed", "agent:main:main", {
+      status: "failed",
+      structured: { partial: true },
+    });
+    failed.execution = {
+      status: "terminal",
+      outcome: { status: "error", error: "provider failed after tool output" },
+    };
+    failed.completion = { required: false, resultText: null, capturedAt: 10 };
+    records.set(failed.runId, failed);
+    records.set("pending", collectorRun("pending", "agent:main:main"));
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+
+    const result = await tool.execute("call", {
+      ids: [failed.runId, "pending"],
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toEqual({
+      completed: [
+        {
+          runId: failed.runId,
+          status: "failed",
+          result: "",
+          structured: { partial: true },
+          error: "provider failed after tool output",
+          sessionKey: failed.childSessionKey,
+        },
+      ],
+      pending: ["pending"],
+    });
+    expect(isToolResultError(result)).toBe(false);
+  });
+
   it("orders completions by their durable capture time instead of input order", async () => {
     const later = collectorRun("later", "agent:main:main", { status: "done" });
     later.completion = { required: false, resultText: "later", capturedAt: 10 };
@@ -312,6 +351,30 @@ describe("agents_wait", () => {
       success: false,
     });
     expect(isToolResultError(denied)).toBe(true);
+  });
+
+  it("rejects a foreign collector with the same bare requester key", async () => {
+    const foreign = collectorRun("foreign-global", "global", { status: "done" });
+    foreign.requesterAgentId = "ops";
+    records.set(foreign.runId, foreign);
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "global",
+      agentId: "research",
+      config: {
+        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+        tools: { swarm: true },
+      },
+    });
+
+    const result = await tool.execute("wait", {
+      ids: [foreign.runId],
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      errors: [{ runId: foreign.runId, error: "not_owner" }],
+      success: false,
+    });
   });
 
   it("marks entirely missing collector batches as failures without losing per-id errors", async () => {

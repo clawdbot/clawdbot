@@ -6,12 +6,10 @@ import {
   validateSessionSuggestionsResolveParams,
   validateSessionTypingParams,
   type SessionSuggestion,
-  type SessionSuggestionEvent,
   type SessionSuggestionResolution,
   type SessionSharingIdentity,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   addSessionSuggestion,
   claimSessionSuggestionDispatch,
@@ -23,9 +21,10 @@ import {
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
+import { sessionObserverScopeKey } from "../session-observer-model.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
   authorizeIncognitoSessionTarget,
-  authorizeSessionSharingTarget,
   canManageSessionSharing,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
@@ -34,13 +33,17 @@ import {
 import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { appendSessionAudit } from "./session-audit.js";
 import {
   broadcastTypingThrottled,
   liveViewerIdentities,
   updateTypingConnections,
 } from "./session-typing-state.js";
+import {
+  publishSuggestion,
+  requireSuggestionTarget,
+  requireVisibleSuggestionRole,
+} from "./sessions-suggestions-access.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -70,69 +73,6 @@ function protocolSuggestion(
     createdAt: suggestion.createdAt,
     state: suggestion.state,
   };
-}
-
-function requireSuggestionTarget(params: {
-  context: GatewayRequestContext;
-  sessionKey: string;
-  agentId?: string;
-  respond: RespondFn;
-}) {
-  const target = resolveSessionSharingTarget({
-    cfg: params.context.getRuntimeConfig(),
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  if (!target) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
-    );
-    return null;
-  }
-  return target;
-}
-
-function requireVisibleSuggestionRole(params: {
-  client: GatewayClient | null;
-  sessionKey: string;
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
-  respond: RespondFn;
-}) {
-  const role = resolveSessionSharingRole({ client: params.client, target: params.target });
-  const incognitoError = authorizeIncognitoSessionTarget({
-    client: params.client,
-    sessionKey: params.sessionKey,
-    target: params.target,
-  });
-  if (incognitoError) {
-    params.respond(false, undefined, incognitoError);
-    return null;
-  }
-  if (resolveSessionVisibility(params.target.entry) !== "draft") {
-    return role;
-  }
-  const error = authorizeSessionSharingTarget({ client: params.client, target: params.target });
-  if (!error) {
-    return role;
-  }
-  params.respond(false, undefined, error);
-  return null;
-}
-
-function publishSuggestion(
-  context: GatewayRequestContext,
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
-  requestedSessionKey: string,
-  event: SessionSuggestionEvent,
-): void {
-  context.broadcast("session.suggestion", event, {
-    sessionKeys: [
-      ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
-    ].toSorted(),
-    agentId: event.suggestion.agentId,
-  });
 }
 
 function resolutionState(resolution: SessionSuggestionResolution): "accepted" | "dismissed" {
@@ -224,33 +164,6 @@ async function dispatchSuggestion(params: {
   suggestion: StoredSessionSuggestion;
   resolution: "send" | "queue";
 }): Promise<{ ok: true } | { ok: false; error: Parameters<RespondFn>[2] }> {
-  const activeRunState =
-    params.resolution === "send"
-      ? resolveVisibleActiveSessionRunState({
-          context: params.context,
-          requestedKey: params.target.canonicalKey,
-          canonicalKey: params.target.storeKey,
-          sessionId: params.target.entry.sessionId,
-          agentId: params.target.agentId,
-        })
-      : undefined;
-  if (activeRunState?.active && activeRunState.runIds.length !== 1) {
-    const message =
-      activeRunState.runIds.length === 0
-        ? "active session run has no exact dispatch identity; refresh and retry"
-        : "session has multiple active runs; choose the target run before sending the suggestion";
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, message, {
-        retryable: false,
-        details: {
-          code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
-          sessionKey: params.target.canonicalKey,
-        },
-      }),
-    };
-  }
-  const activeRunId = activeRunState?.active ? activeRunState.runIds[0] : undefined;
   let response: Parameters<RespondFn> | undefined;
   const chatParams = {
     sessionKey: params.target.canonicalKey,
@@ -259,9 +172,7 @@ async function dispatchSuggestion(params: {
     message: params.suggestion.text,
     ...(params.resolution === "queue"
       ? { queueMode: "followup" as const }
-      : activeRunId
-        ? { queueMode: "steer" as const, expectedRunId: activeRunId }
-        : {}),
+      : { queueMode: "steer" as const }),
     idempotencyKey: `session-suggestion:${params.suggestion.id}`,
   };
   await handleChatSend({
@@ -566,7 +477,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     const currentTarget = resolveSessionSharingTarget({
       cfg: context.getRuntimeConfig(),
       sessionKey: params.sessionKey,
-      agentId: params.agentId,
+      agentId: target.agentId,
     });
     if (!currentTarget || currentTarget.entry.sessionId !== target.entry.sessionId) {
       // Session replacement clears session_suggestions in the same entry-store
@@ -655,7 +566,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, broadcast: false });
       return;
     }
-    const sessionKeys = new Set([params.sessionKey, target.canonicalKey, target.storeKey]);
+    const sessionKeys = new Set([
+      params.sessionKey,
+      target.canonicalKey,
+      target.storeKey,
+      sessionObserverScopeKey(target.canonicalKey, target.agentId),
+    ]);
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}`;
     const effectiveTyping = updateTypingConnections({
@@ -676,7 +592,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         const current = resolveSessionSharingTarget({
           cfg: context.getRuntimeConfig(),
           sessionKey: params.sessionKey,
-          agentId: params.agentId,
+          agentId: target.agentId,
         });
         if (!current || current.entry.sessionId !== target.entry.sessionId) {
           return false;
@@ -697,7 +613,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         if (liveIdentities.size < 2 || !liveIdentities.has(actor.id)) {
           return false;
         }
-        const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
         const event: SessionTypingEvent = {
           sessionKey: target.canonicalKey,
           sessionId: current.entry.sessionId,
@@ -707,7 +622,16 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {
-          sessionKeys: subscriptionKeys(current.canonicalKey, current.agentId, defaultAgentId),
+          sessionKeys: subscriptionKeys(
+            current.canonicalKey,
+            current.agentId,
+            current.canonicalKey === "global"
+              ? tryResolveSessionCompatibilityOwnerAgentId(
+                  context.getRuntimeConfig(),
+                  current.canonicalKey,
+                )
+              : undefined,
+          ),
           agentId: target.agentId,
           dropIfSlow: true,
         });

@@ -1,6 +1,9 @@
 // Discord plugin module implements security behavior.
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import {
+  createConditionalWarningCollector,
+  createOpenProviderConfiguredRouteWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveDiscordAccountAllowFrom,
@@ -44,6 +47,12 @@ const collectDiscordSecurityWarnings =
         'Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels',
     },
   });
+const collectDiscordSecurityFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectDiscordSecurityWarnings,
+  checkId: "channels.discord.groups.open",
+  severity: "critical",
+  title: "Discord security warning",
+});
 
 const loadDiscordSecurityAuditModule = createLazyRuntimeModule(
   () => import("./security-audit.runtime.js"),
@@ -51,7 +60,7 @@ const loadDiscordSecurityAuditModule = createLazyRuntimeModule(
 
 export const discordSecurityAdapter = {
   resolveDmPolicy: resolveDiscordDmPolicy,
-  collectWarnings: collectDiscordSecurityWarnings,
+  collectWarnings: collectDiscordSecurityFindings,
   collectAuditFindings: async (params) =>
     (await loadDiscordSecurityAuditModule()).collectDiscordSecurityAuditFindings(params),
 } satisfies NonNullable<ChannelPlugin<ResolvedDiscordAccount>["security"]>;

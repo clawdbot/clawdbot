@@ -491,7 +491,7 @@ openclaw-custodian-page {
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .custodian {
     padding-inline: 12px;
   }

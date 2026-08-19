@@ -8,13 +8,15 @@ import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
   assertCdpEndpointAllowed,
   getHeadersWithAuth,
+  isLoopbackHost,
   isWebSocketUrl,
   redactCdpErrorText,
   stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
-import { getChromeWebSocketUrl } from "./chrome.js";
+import { getChromeWebSocketEndpoint } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { playwrightCore } from "./playwright-core.runtime.js";
+import { connectOverCdpPinnedTransport } from "./pw-session-cdp-transport.js";
 import {
   blockedPageRefsByCdpUrl,
   blockedTargetsByCdpUrl,
@@ -39,6 +41,7 @@ import {
 } from "./pw-session-state.js";
 
 const { chromium } = playwrightCore;
+type CdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
 
 function resolveCdpConnectRetryDelayMs(attempt: number): number {
   return 250 + attempt * 250;
@@ -393,7 +396,7 @@ export async function connectBrowser(
   }
   // Run SSRF policy check only on cache miss so transient DNS failures
   // do not break active sessions that already hold a live CDP connection.
-  await assertCdpEndpointAllowed(normalized, ssrfPolicy);
+  const configuredPin = await assertCdpEndpointAllowed(normalized, ssrfPolicy);
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
     return await connecting.promise;
@@ -408,34 +411,59 @@ export async function connectBrowser(
       }
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy).catch(
-          () => null,
-        );
+        let endpointDiscoveryError: unknown;
+        const resolvedEndpoint = await getChromeWebSocketEndpoint(
+          normalized,
+          timeout,
+          ssrfPolicy,
+        ).catch((err: unknown) => {
+          endpointDiscoveryError = err;
+          return null;
+        });
         const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
-        if (!wsUrl && hasUrlCredentials && !isWebSocketUrl(normalized)) {
+        if (!resolvedEndpoint && hasUrlCredentials && !isWebSocketUrl(normalized)) {
           // Playwright preserves explicit headers across HTTP discovery redirects.
           // Keep credentialed discovery in OpenClaw's guarded fetch path instead.
           throw new Error("Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.");
         }
-        const endpoint = wsUrl ?? normalized;
-        const connectEndpoint = async (target: string) => {
+        if (!resolvedEndpoint && ssrfPolicy && !isWebSocketUrl(normalized)) {
+          const detail = endpointDiscoveryError
+            ? ` Reason: ${redactCdpErrorText(formatErrorMessage(endpointDiscoveryError))}`
+            : "";
+          throw new Error(`Guarded CDP endpoint did not expose a usable WebSocket URL.${detail}`);
+        }
+        const normalizedCdpHostname = new URL(normalized).hostname;
+        const needsPinnedDependencyConnect =
+          Boolean(configuredPin?.lookup) && !isLoopbackHost(normalizedCdpHostname);
+        const endpointUrl = resolvedEndpoint?.url ?? normalized;
+        const endpointLookup =
+          resolvedEndpoint?.lookup ??
+          (needsPinnedDependencyConnect ? configuredPin?.lookup : undefined);
+        const connectEndpoint = async (target: string, lookup?: CdpEndpointPin["lookup"]) => {
           const headers = getHeadersWithAuth(target);
           const connectionUrl = stripCdpUrlCredentials(target);
           // Keep both loopback bypasses active until the Playwright handshake settles.
           return await withManagedProxyForCdpUrl(connectionUrl, () =>
-            withNoProxyForCdpUrl(connectionUrl, () =>
-              chromium.connectOverCDP(connectionUrl, { timeout, headers }),
-            ),
+            withNoProxyForCdpUrl(connectionUrl, async () => {
+              if (lookup) {
+                return await connectOverCdpPinnedTransport(connectionUrl, {
+                  timeout,
+                  headers,
+                  lookup,
+                });
+              }
+              return await chromium.connectOverCDP(connectionUrl, { timeout, headers });
+            }),
           );
         };
         let browser: Browser;
         try {
-          browser = await connectEndpoint(endpoint);
+          browser = await connectEndpoint(endpointUrl, endpointLookup);
         } catch (err) {
-          if (!isWebSocketUrl(normalized) || endpoint === normalized) {
+          if (!isWebSocketUrl(normalized) || endpointUrl === normalized) {
             throw err;
           }
-          browser = await connectEndpoint(normalized);
+          browser = await connectEndpoint(normalized, configuredPin?.lookup);
         }
         if (connectionAttempt.cancelled) {
           connectionAttempt.retired = { browser, cdpUrl: normalized };

@@ -1,65 +1,38 @@
 // Exercises the fake-backend TUI PTY harness and visible terminal output.
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sleep } from "../utils/sleep.js";
 import { exerciseTuiCommandSurface } from "./tui-pty-command-surfaces-test-support.js";
 import {
   approveWorkspaceSkill,
   COMPACT_TERMINAL_SIZES,
+  disposeActiveTuiFixtures,
   exerciseFragmentedUnicodePrompt,
   exerciseNarrowTerminalRendering,
   exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
-  waitForFixtureLogEntry,
-  writeTuiPtyFixtureScript,
+  startTuiFixture,
+  waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
+import { exerciseTuiReconnectOutcomes } from "./tui-pty-reconnect-test-support.js";
 import {
   exerciseStreamingRendering,
   exerciseToolCardRendering,
   streamingPrefixFrame,
   toolFrame,
 } from "./tui-pty-rendering-test-support.js";
-import { startPty, type PtyRun } from "./tui-pty-test-support.js";
-
-const activeRuns: PtyRun[] = [];
 const STARTUP_TIMEOUT_MS = 20_000;
-const OUTPUT_TIMEOUT_MS = 2_000;
-const EXIT_TIMEOUT_MS = 4_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;
 
-async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
-  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
-  const scriptPath = await writeTuiPtyFixtureScript(tempDir);
-  const logPath = path.join(tempDir, "fixture-log.jsonl");
-  const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
-    activeRuns,
-    cwd: process.cwd(),
-    env: {
-      OPENCLAW_THEME: "dark",
-      OPENCLAW_TUI_PTY_LOG_PATH: logPath,
-      NO_COLOR: undefined,
-      ...opts.env,
-    },
-    exitTimeoutMs: EXIT_TIMEOUT_MS,
-    outputTimeoutMs: OUTPUT_TIMEOUT_MS,
-  });
+const countFixtureCalls = (entries: FixtureLogEntry[], method: string) =>
+  entries.filter((entry) => entry.method === method).length;
 
-  return {
-    run,
-    logPath,
-    waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
-      await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
-    cleanup: async () => {
-      await run.dispose();
-      await rm(tempDir, { recursive: true, force: true });
-    },
-  };
-}
+const countFixtureMessages = (entries: FixtureLogEntry[], message: string) =>
+  entries.filter(
+    (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+  ).length;
 
 it("rejects rendering oracle false positives", () => {
   const tokens = Array.from({ length: 64 }, (_, i) => `T${String(i).padStart(3, "0")}`);
@@ -122,9 +95,7 @@ describe.sequential("TUI PTY harness", () => {
   }, STARTUP_TEST_TIMEOUT_MS);
 
   afterAll(async () => {
-    for (const run of activeRuns.splice(0)) {
-      await run.dispose();
-    }
+    await disposeActiveTuiFixtures();
     for (const started of [
       fixture,
       compactFooterFixture,
@@ -276,6 +247,12 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "reconciles active and terminal runs after reconnect history",
+    () => exerciseTuiReconnectOutcomes(STARTUP_TIMEOUT_MS),
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
   it.each([{ failures: 1 }, { failures: 2 }, { failures: 3 }, { failures: 4 }])(
     "recovers session subscription after $failures startup failures",
     async ({ failures }) => {
@@ -285,12 +262,8 @@ describe.sequential("TUI PTY harness", () => {
       try {
         await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
         const entries = await readFixtureLog(subscriptionFixture.logPath);
-        expect(entries.filter((entry) => entry.method === "subscribeSessionEvents")).toHaveLength(
-          failures + 1,
-        );
-        expect(entries.filter((entry) => entry.method === "subscribeSessionFailure")).toHaveLength(
-          failures,
-        );
+        expect(countFixtureCalls(entries, "subscribeSessionEvents")).toBe(failures + 1);
+        expect(countFixtureCalls(entries, "subscribeSessionFailure")).toBe(failures);
 
         await subscriptionFixture.run.write("after subscription recovery proof\r");
         await subscriptionFixture.run.waitForOutput(
@@ -305,10 +278,13 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "never reports ready after exhausting session subscription recovery",
+    "blocks submits after subscription exhaustion until reconnect succeeds",
     async () => {
       const subscriptionFixture = await startTuiFixture({
-        env: { OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: "5" },
+        env: {
+          OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: "5",
+          OPENCLAW_TUI_PTY_SUBSCRIBE_RECONNECT: "1",
+        },
       });
       try {
         await subscriptionFixture.run.waitForOutput(
@@ -316,14 +292,32 @@ describe.sequential("TUI PTY harness", () => {
           STARTUP_TIMEOUT_MS,
         );
         const entries = await readFixtureLog(subscriptionFixture.logPath);
-        expect(entries.filter((entry) => entry.method === "subscribeSessionEvents")).toHaveLength(
-          5,
-        );
-        expect(entries.filter((entry) => entry.method === "subscribeSessionFailure")).toHaveLength(
-          5,
-        );
+        expect(countFixtureCalls(entries, "subscribeSessionEvents")).toBe(5);
+        expect(countFixtureCalls(entries, "subscribeSessionFailure")).toBe(5);
         expect(entries.some((entry) => entry.method === "loadHistory")).toBe(false);
         expect(subscriptionFixture.run.visibleOutput()).not.toContain("local ready | idle");
+
+        const message = "after subscription reconnect proof";
+        await subscriptionFixture.run.write(`${message}\r`, { delay: false });
+        await subscriptionFixture.run.waitForOutput(
+          "local runtime not ready — message not sent",
+          STARTUP_TIMEOUT_MS,
+        );
+        const blockedEntries = await readFixtureLog(subscriptionFixture.logPath);
+        expect(countFixtureMessages(blockedEntries, message)).toBe(0);
+
+        await subscriptionFixture.run.write("\x03", { delay: false });
+        await subscriptionFixture.run.waitForOutput("cleared input", STARTUP_TIMEOUT_MS);
+        await subscriptionFixture.run.write("/gateway-status\r", { delay: false });
+        await subscriptionFixture.waitForLogEntry(
+          (entry) => entry.method === "subscriptionReconnect",
+          STARTUP_TIMEOUT_MS,
+        );
+        await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
+        await subscriptionFixture.run.write(`${message}\r`, { delay: false });
+        await subscriptionFixture.run.waitForOutput(`PTY_RESPONSE: ${message}`, STARTUP_TIMEOUT_MS);
+        const reconnectedEntries = await readFixtureLog(subscriptionFixture.logPath);
+        expect(countFixtureMessages(reconnectedEntries, message)).toBe(1);
       } finally {
         await subscriptionFixture.cleanup();
       }
@@ -359,6 +353,33 @@ describe.sequential("TUI PTY harness", () => {
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "hello from pty"),
       );
       await exerciseFragmentedUnicodePrompt(startTuiFixture, STARTUP_TIMEOUT_MS);
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "renders each live assistant reply once without replaying stale history",
+    async () => {
+      const liveFixture = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_COLS: "220", OPENCLAW_TUI_PTY_ROWS: "50" },
+      });
+      try {
+        await liveFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await liveFixture.run.write("live reply dedupe proof: first\r", { delay: false });
+        await liveFixture.run.waitForOutput("TUI_LIVE_FIRST");
+        await liveFixture.run.write("live reply dedupe proof: second\r", { delay: false });
+        const rows = await waitForSynchronizedFrameRows(
+          liveFixture.run,
+          (frame) => frame.some((row) => row.includes("TUI_LIVE_SECOND")),
+          STARTUP_TIMEOUT_MS,
+        );
+        const assistantRows = rows.filter(
+          (row) => row.includes("TUI_LIVE_FIRST") || row.includes("TUI_LIVE_SECOND"),
+        );
+        expect(assistantRows).toEqual(["TUI_LIVE_FIRST", "TUI_LIVE_SECOND"]);
+      } finally {
+        await liveFixture.cleanup();
+      }
     },
     STARTUP_TEST_TIMEOUT_MS,
   );

@@ -58,6 +58,7 @@ export const zaloSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use ZALO_BOT_TOKEN" },
+      envVars: ["ZALO_BOT_TOKEN"],
     },
   },
   legacyAdapter: zaloSetupAdapter,

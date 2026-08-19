@@ -153,6 +153,13 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   explicitSuppressTyping?: boolean;
   shouldSuppressTyping?: boolean;
   messageToolAvailable?: boolean;
+  /**
+   * Sender-independent availability for the session-stable mode. The stable
+   * mode feeds CLI binding facts shared by every turn kind, so a sender-scoped
+   * message-tool denial must not downgrade it while sender-less synthetic
+   * turns resolve tool-only — that hash split resets the CLI session (#121485).
+   */
+  sessionStableMessageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
   isHeartbeat?: boolean;
 }): SourceReplyVisibilityPolicy {
@@ -175,7 +182,8 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     : resolveSourceReplyDeliveryMode({
         cfg: params.cfg,
         ctx: toSessionStableDeliveryModeContext(params.ctx),
-        messageToolAvailable: params.messageToolAvailable,
+        messageToolAvailable:
+          params.sessionStableMessageToolAvailable ?? params.messageToolAvailable,
         defaultVisibleReplies: params.defaultVisibleReplies,
       });
   const sendPolicyDenied = params.sendPolicy === "deny";

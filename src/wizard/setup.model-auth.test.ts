@@ -147,6 +147,7 @@ describe("runSetupModelAuthStep", () => {
     expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
       agentId: "ops",
       agentDir: "/tmp/ops-agent",
+      pendingAuthProfiles: [],
       validateCatalog: false,
     });
   });
@@ -167,6 +168,42 @@ describe("runSetupModelAuthStep", () => {
       agentDir: "/tmp/ops-agent",
       validateCatalog: false,
     });
+  });
+
+  it("passes collected auth profiles to the model check before persistence", async () => {
+    const config = createDefaultAgentConfig();
+    const pendingAuthProfiles = [
+      {
+        profileId: "anthropic:default",
+        credential: {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "test-anthropic-key",
+        },
+      },
+    ];
+    const persistAuthProfiles = vi.fn(async () => {});
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice.mockResolvedValueOnce({
+      config,
+      authProfiles: pendingAuthProfiles,
+      persistAuthProfiles,
+    });
+
+    await runSetupModelAuthStep({
+      config,
+      opts: {},
+      prompter: createPrompter(),
+      runtime: createRuntime(),
+    });
+
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      pendingAuthProfiles,
+      validateCatalog: false,
+    });
+    expect(persistAuthProfiles).not.toHaveBeenCalled();
   });
 
   it("applies an interactive model selection to the agent override", async () => {

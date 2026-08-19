@@ -1,13 +1,12 @@
 // Security Sensitive Guard Script tests cover sensitive file guard behavior.
 import { describe, expect, it } from "vitest";
+import { sanitizeGuardDisplayValue } from "../../scripts/github/guard-shared.mjs";
 import {
-  GITHUB_RESPONSE_BODY_MAX_BYTES,
   allowSecuritySensitiveCommand,
   collectSecuritySensitiveChanges,
   findSecuritySensitiveOverrideCommand,
   findSecuritySensitiveOverrideCommandAsync,
   findTrustedSecuritySensitiveGuardActor,
-  githubApi,
   isSecuritySensitiveFile,
   isSecuritySensitiveGuardAuthorizedForHead,
   isSecuritySensitiveGuardMarkerComment,
@@ -18,8 +17,6 @@ import {
   renderClearedSecuritySensitiveGuardComment,
   renderSecuritySensitiveAwarenessComment,
   renderTrustedSecuritySensitiveComment,
-  sanitizeDisplayValue,
-  securityApproverSet,
   securitySensitiveFileDefinition,
   securitySensitiveFileDefinitions,
   securitySensitiveGuardCommentAuthors,
@@ -183,6 +180,9 @@ describe("security-sensitive guard script", () => {
     const trustedAuthors = securitySensitiveGuardCommentAuthors(
       "github-actions[bot], openclaw-security-guard[bot]",
     );
+    expect(securitySensitiveGuardCommentAuthors(undefined)).toEqual(
+      new Set(["github-actions[bot]"]),
+    );
 
     expect(
       isSecuritySensitiveGuardMarkerComment(
@@ -237,29 +237,8 @@ describe("security-sensitive guard script", () => {
   });
 
   it("sanitizes display values and markdown code", () => {
-    expect(sanitizeDisplayValue("abc\u0000def")).toBe("abc?def");
-    expect(sanitizeDisplayValue("x".repeat(300))).toHaveLength(240);
+    expect(sanitizeGuardDisplayValue("abc\u0000def")).toBe("abc?def");
+    expect(sanitizeGuardDisplayValue("x".repeat(300))).toHaveLength(240);
     expect(markdownCode("`quoted`")).toBe("`\\`quoted\\``");
-  });
-
-  it("parses explicit security approver allowlists", () => {
-    expect(securityApproverSet("vincentkoc, steipete\njoshavant")).toEqual(
-      new Set(["vincentkoc", "steipete", "joshavant"]),
-    );
-  });
-
-  it("bounds successful GitHub API response bodies", async () => {
-    const request = githubApi("token", {
-      responseMaxBodyBytes: 64,
-      fetchImpl: (() =>
-        Promise.resolve(
-          new Response("x".repeat(65), {
-            headers: { "content-length": "65" },
-          }),
-        )) as typeof fetch,
-    }).request("/repos/openclaw/openclaw");
-
-    await expect(request).rejects.toThrow("GitHub response body exceeded 64 bytes");
-    expect(GITHUB_RESPONSE_BODY_MAX_BYTES).toBeGreaterThan(64);
   });
 });

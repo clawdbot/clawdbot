@@ -107,9 +107,10 @@ choices, and install-catalog metadata without loading provider runtime. Explicit
 `requiresRuntime` keeps the legacy setup-api fallback for compatibility. If
 more than one discovered plugin claims the same normalized setup provider or
 CLI backend id, setup lookup refuses the ambiguous owner instead of relying on
-discovery order. When setup runtime does execute, registry diagnostics report
-drift between `setup.providers` / `setup.cliBackends` and the providers or CLI
-backends actually registered by setup-api, without blocking legacy plugins.
+discovery order. When setup runtime executes, registry diagnostics reject
+undeclared provider and CLI backend registrations. CLI backend descriptors also
+report missing runtime registrations; provider descriptors may stay
+metadata-only while the setup module contributes other setup hooks.
 
 ### Plugin cache boundary
 
@@ -697,7 +698,7 @@ plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
 
 Runtime and config helpers live under matching focused `*-runtime` subpaths
 (`approval-runtime`, `agent-runtime`, `lazy-runtime`, `directory-runtime`,
-`text-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
+`text-utility-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
 `channel-activity-runtime`, etc.). Prefer `config-contracts`,
 `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation`
 instead of the broad `config-runtime` compatibility barrel.

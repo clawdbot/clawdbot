@@ -1,5 +1,4 @@
 import type { Message } from "grammy/types";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -293,17 +292,18 @@ export function createTelegramMessageSessionRuntime({
 export function createTelegramMessageContextRuntime({
   cfg,
   accountId,
+  ownerAgentId,
   opts,
   telegramCfg,
   telegramDeps,
 }: Pick<
   RegisterTelegramHandlerParams,
-  "cfg" | "accountId" | "opts" | "telegramCfg" | "telegramDeps"
+  "cfg" | "accountId" | "ownerAgentId" | "opts" | "telegramCfg" | "telegramDeps"
 >) {
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(
       telegramDeps.resolveStorePath(cfg.session?.store, {
-        agentId: cfg.agents ? resolveDefaultAgentId(cfg) : "main",
+        agentId: ownerAgentId,
       }),
     ),
   });

@@ -333,6 +333,7 @@ export async function runSetupModelAuthStep(params: {
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
       agentId: validationTarget.agentId,
       agentDir: validationTarget.agentDir,
+      pendingAuthProfiles: authProfiles,
       validateCatalog: false,
     });
     break;

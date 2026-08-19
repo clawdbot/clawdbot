@@ -62,7 +62,7 @@ function buildElevatedDeniedParams(commandBody: string) {
       ...base.ctx,
       SessionKey: "agent:main:telegram:slash-session",
     } as MsgContext,
-    agentId: "main",
+    agentId: "target",
     sessionKey: "agent:target:telegram:direct:target-session",
     elevated: {
       enabled: true,
@@ -193,6 +193,8 @@ describe("handleBashChatCommand stop", () => {
       .mockReturnValue({
         agentId: "target",
         sessionKey: "agent:target:telegram:direct:target-session",
+        classificationAgentId: "target",
+        classificationSessionKey: "agent:target:telegram:direct:target-session",
         mainSessionKey: "agent:target:main",
         mode: "non-main",
         sandboxed: true,

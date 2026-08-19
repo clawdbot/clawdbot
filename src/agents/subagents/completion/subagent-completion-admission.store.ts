@@ -6,7 +6,7 @@ import {
 import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
-} from "../../../infra/session-delivery-queue.js";
+} from "../../../infra/session-delivery-queue-storage.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,

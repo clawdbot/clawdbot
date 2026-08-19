@@ -432,11 +432,7 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.classic === true) {
     return true;
   }
-  if (
-    opts.installDaemon !== undefined ||
-    opts.tailscaleResetOnExit !== undefined ||
-    opts.customImageInput !== undefined
-  ) {
+  if (opts.installDaemon !== undefined || opts.customImageInput !== undefined) {
     return true;
   }
   for (const [key, value] of Object.entries(opts)) {
@@ -482,6 +478,15 @@ export async function setupWizardCommand(
     normalizedAuthChoice === opts.authChoice && flow === opts.flow
       ? opts
       : { ...opts, authChoice: normalizedAuthChoice, flow };
+  if (normalizedOpts.agentName !== undefined) {
+    const { validateFirstOnboardingAgentName } = await import("./onboard-agent.js");
+    const error = validateFirstOnboardingAgentName(normalizedOpts.agentName);
+    if (error) {
+      runtime.error(`Invalid --agent-name: ${error}`);
+      runtime.exit(1);
+      return;
+    }
+  }
   if (!validatePreflightOptions(normalizedOpts, runtime)) {
     return;
   }

@@ -1,5 +1,5 @@
 import {
-  buildRealtimeVoiceAgentConsultChatMessage,
+  classifyRealtimeVoiceConsultToolCall,
   classifySkippableRealtimeVoiceConsultTranscript,
   controlRealtimeVoiceAgentRun,
   createRealtimeVoiceAgentTalkbackQueue,
@@ -13,10 +13,10 @@ import {
   type RealtimeVoiceForcedConsultHandle,
   type RealtimeVoiceSessionHarness,
   type RealtimeVoiceToolCallEvent,
+  type RealtimeVoiceWakeNamePolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import type { DiscordRealtimeWakeNamePolicy } from "./activation.js";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
@@ -59,7 +59,6 @@ export class DiscordRealtimeConsults {
       consultToolsAllow: () => string[] | undefined;
       debounceMs: () => number | undefined;
       entry: VoiceSessionEntry;
-      extractExactSpeech: (args: unknown) => string | undefined;
       harness: RealtimeVoiceSessionHarness<AgentProxyConsultState>;
       isAgentProxy: boolean;
       isWakeNameRequired: () => boolean;
@@ -69,7 +68,7 @@ export class DiscordRealtimeConsults {
       stopped: () => boolean;
       turns: DiscordRealtimeTurns;
       usesRealtimeAgentHandoff: () => boolean;
-      wakeNamePolicy: () => DiscordRealtimeWakeNamePolicy;
+      wakeNamePolicy: () => RealtimeVoiceWakeNamePolicy;
     },
   ) {
     this.talkback = this.createTalkbackQueue();
@@ -104,25 +103,26 @@ export class DiscordRealtimeConsults {
       await session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
       return;
     }
-    const exactSpeechText = this.params.extractExactSpeech(event.args);
-    if (exactSpeechText !== undefined) {
-      logger.info(
-        `discord voice: realtime exact speech consult bypassed call=${callId || "unknown"} answerChars=${exactSpeechText.length}`,
-      );
-      await session.submitToolResult(callId, { text: exactSpeechText });
-      return;
+    const outcome = classifyRealtimeVoiceConsultToolCall(event.args, {
+      retainedExactSpeechTexts: this.params.playback.retainedExactSpeechTexts(),
+    });
+    switch (outcome.kind) {
+      case "exact-speech-echo":
+        logger.info(
+          `discord voice: realtime exact speech consult bypassed call=${callId || "unknown"} answerChars=${outcome.text.length}`,
+        );
+        await session.submitToolResult(callId, { text: outcome.text });
+        return;
+      case "malformed":
+        logger.warn(
+          `discord voice: realtime consult rejected malformed args call=${callId || "unknown"}: ${outcome.error}`,
+        );
+        await session.submitToolResult(callId, { error: outcome.error });
+        return;
+      case "consult":
+        break;
     }
-    let consultMessage: string;
-    try {
-      consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
-    } catch (error) {
-      const message = formatErrorMessage(error);
-      logger.warn(
-        `discord voice: realtime consult rejected malformed args call=${callId || "unknown"}: ${message}`,
-      );
-      await session.submitToolResult(callId, { error: message });
-      return;
-    }
+    const consultMessage = outcome.message;
     logger.info(
       `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatVoiceLogPreview(consultMessage)}`,
     );
@@ -213,8 +213,15 @@ export class DiscordRealtimeConsults {
     forcedSpeakerContext: DiscordRealtimeSpeakerContext | undefined,
     providerEpoch: number,
   ): Promise<void> {
+    const usesRealtimeAgentHandoff = this.params.usesRealtimeAgentHandoff();
+    const usesFallbackTalkback = this.params.isAgentProxy && !usesRealtimeAgentHandoff;
+    // Claim fallback talkback context before active-run control awaits. Concurrent
+    // final transcripts can otherwise resume out of order and swap owner flags.
+    const fallbackSpeakerContext = usesFallbackTalkback
+      ? (forcedSpeakerContext ?? this.params.turns.consumePendingSpeakerContext())
+      : undefined;
     const pendingForcedConsult =
-      this.params.isAgentProxy && this.params.usesRealtimeAgentHandoff()
+      this.params.isAgentProxy && usesRealtimeAgentHandoff
         ? this.prepareForcedAgentProxyConsult(acceptedText, forcedSpeakerContext)
         : undefined;
     let control: Awaited<ReturnType<typeof maybeControlDiscordVoiceAgentRun>> | undefined;
@@ -248,16 +255,13 @@ export class DiscordRealtimeConsults {
     if (!this.params.isAgentProxy) {
       return;
     }
-    if (this.params.usesRealtimeAgentHandoff()) {
+    if (usesRealtimeAgentHandoff) {
       if (pendingForcedConsult) {
         this.schedulePreparedForcedAgentProxyConsult(pendingForcedConsult);
       }
       return;
     }
-    this.talkback.enqueue(
-      acceptedText,
-      forcedSpeakerContext ?? this.params.turns.consumePendingSpeakerContext(),
-    );
+    this.talkback.enqueue(acceptedText, fallbackSpeakerContext);
   }
 
   private createTalkbackQueue(): RealtimeVoiceAgentTalkbackQueue {

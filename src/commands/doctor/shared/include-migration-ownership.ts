@@ -6,14 +6,13 @@ import { isPathInside } from "../../../infra/path-safety.js";
 import { isRecord } from "../../../utils.js";
 
 export function containsAuthoredInclude(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
   if (Array.isArray(value)) {
     return value.some(containsAuthoredInclude);
   }
-  const record = value as Record<string, unknown>;
-  return Object.hasOwn(record, INCLUDE_KEY) || Object.values(record).some(containsAuthoredInclude);
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.hasOwn(value, INCLUDE_KEY) || Object.values(value).some(containsAuthoredInclude);
 }
 
 type ConfigPathMigrationOwnership =

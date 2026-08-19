@@ -1,7 +1,7 @@
 /**
  * Heartbeat response tool.
  *
- * Auto-reply heartbeat turns use this tool to record the agent's outcome,
+ * Auto-reply heartbeat turns use this tool to accept the agent's outcome,
  * notification decision, and next-check metadata exactly once per turn.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -45,7 +45,7 @@ function readRequiredBoolean(params: Record<string, unknown>, key: string): bool
   return raw;
 }
 
-/** Creates the one-shot heartbeat response recording tool for an auto-reply turn. */
+/** Creates the one-shot heartbeat response tool for an auto-reply turn. */
 export function createHeartbeatResponseTool(): AnyAgentTool {
   let recorded = false;
   return {
@@ -54,9 +54,9 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
     // Heartbeat prompts instruct the model to call this one-shot tool; hiding
     // it behind tool search would break the heartbeat contract.
     catalogMode: "direct-only",
-    displaySummary: "Record heartbeat outcome/notify choice.",
+    displaySummary: "Accept heartbeat outcome/notify choice.",
     description:
-      "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+      "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
       if (!isRecord(args)) {
@@ -79,12 +79,12 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
       if (recorded) {
         // One heartbeat turn should produce one decision; repeated calls can
         // otherwise overwrite the notify/no-notify choice.
-        throw new ToolInputError("heartbeat_respond already recorded for this turn");
+        throw new ToolInputError("heartbeat_respond already accepted for this turn");
       }
       recorded = true;
       const { scratch, ...publicResponse } = response;
-      const details = { status: "recorded" as const, ...publicResponse } as typeof response & {
-        status: "recorded";
+      const details = { status: "accepted" as const, ...publicResponse } as typeof response & {
+        status: "accepted";
       };
       if (scratch !== undefined) {
         // Keep future prompt content out of model-visible tool output and logs;
@@ -94,7 +94,7 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
       return textResult(
         JSON.stringify(
           {
-            status: "recorded",
+            status: "accepted",
             ...publicResponse,
             ...(scratch !== undefined
               ? {

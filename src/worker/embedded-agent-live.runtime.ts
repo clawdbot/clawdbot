@@ -33,7 +33,7 @@ function boundLiveValue(value: unknown): unknown {
       return null;
     }
     if (Buffer.byteLength(serialized, "utf8") <= MAX_LIVE_PREVIEW_BYTES) {
-      return structuredClone(value);
+      return value;
     }
     return { truncated: true, preview: truncateLiveText(serialized) };
   } catch {
@@ -48,7 +48,7 @@ function redactLiveText(value: string): string {
 
 function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
   if (liveEventBytes(event) <= MAX_LIVE_EVENT_BYTES) {
-    return structuredClone(event);
+    return event;
   }
   let bounded: WorkerLiveEvent;
   if (event.kind === "assistant") {
@@ -125,7 +125,8 @@ function readAssistantThinking(message: AgentMessage): string {
 }
 
 type WorkerLiveClient = {
-  emit: (event: WorkerLiveEvent) => Promise<void>;
+  enqueuePreview: (event: WorkerLiveEvent) => boolean;
+  emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };
 
 type WorkerLiveRuntime = {
@@ -135,18 +136,10 @@ type WorkerLiveRuntime = {
 };
 
 export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRuntime {
-  let liveDegraded = false;
+  let previewEnabled = true;
   const enqueueLive = (event: WorkerLiveEvent) => {
-    if (liveDegraded) {
-      return;
-    }
-    try {
-      void client.emit(boundLiveEvent(event)).catch(() => {
-        // Preview loss must not block inference, transcript durability, or finishing.
-        liveDegraded = true;
-      });
-    } catch {
-      liveDegraded = true;
+    if (previewEnabled) {
+      previewEnabled = client.enqueuePreview(boundLiveEvent(event));
     }
   };
   const startedAt = Date.now();
@@ -282,7 +275,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     if (!terminalLiveEvent) {
       return;
     }
-    await client.emit(boundLiveEvent(terminalLiveEvent));
+    await client.emitTerminal(boundLiveEvent(terminalLiveEvent));
   };
   return { handleSessionEvent, enqueueRunFailure, emitTerminal };
 }

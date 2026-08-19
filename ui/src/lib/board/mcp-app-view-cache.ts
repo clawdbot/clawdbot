@@ -1,4 +1,5 @@
 import type { BoardWidget, BoardWidgetAppViewResult } from "@openclaw/gateway-protocol";
+import { formatUiError } from "../format-error.ts";
 import type { BoardWidgetAppViewState } from "./view-types.ts";
 
 type AppViewRequest = () => Promise<BoardWidgetAppViewResult>;
@@ -43,7 +44,7 @@ export class BoardMcpAppViewCache {
       .then<BoardWidgetAppViewState>((result) => ({ status: "ready", ...result }))
       .catch<BoardWidgetAppViewState>((error: unknown) => ({
         status: "stale",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatUiError(error),
       }));
     this.entries.set(key, pending);
     const resolved = await pending;

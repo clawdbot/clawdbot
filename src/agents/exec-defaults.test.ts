@@ -236,6 +236,29 @@ describe("resolveExecDefaults", () => {
     });
   });
 
+  it("keeps an explicit full session at full/off despite host approval floors", () => {
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "always",
+      },
+      agents: {},
+    });
+
+    expect(
+      resolveExecDefaults({
+        cfg: withDefaultAgent({}),
+        sessionEntry: { permissionMode: "full" } as SessionEntry,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      mode: "full",
+      security: "full",
+      ask: "off",
+    });
+  });
+
   it("keeps agent mode overrides ahead of the global mode", () => {
     expect(
       resolveExecDefaults({
@@ -336,6 +359,18 @@ describe("resolveExecDefaults", () => {
         }),
       }),
     ).toEqual({ canExec: false, node: "build-mac" });
+  });
+
+  it("uses an explicitly loaded approval snapshot for read-only callers", () => {
+    const load = vi.mocked(execApprovals.loadExecApprovals);
+
+    expect(
+      resolveNodeExecEligibility({
+        cfg: withDefaultAgent({ tools: { exec: { host: "node", mode: "full" } } }),
+        execApprovals: { version: 1, defaults: { security: "deny" }, agents: {} },
+      }),
+    ).toEqual({ canExec: false });
+    expect(load).not.toHaveBeenCalled();
   });
 
   it("blocks node skill eligibility when the gateway denies system.run", () => {

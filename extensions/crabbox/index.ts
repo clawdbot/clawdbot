@@ -7,7 +7,10 @@ export default definePluginEntry({
   description: "Cloud worker provider backed by the Crabbox CLI",
   register(api) {
     api.registerWorkerProvider(
-      createCrabboxWorkerProvider({ openclawRoot: resolveOpenClawRoot(api.rootDir) }),
+      createCrabboxWorkerProvider({
+        openclawRoot: resolveOpenClawRoot(api.rootDir),
+        warn: (message) => api.logger.warn(message),
+      }),
     );
   },
 });

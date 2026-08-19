@@ -18,6 +18,7 @@ export async function resolveAnnounceTarget(params: {
   sessionKey: string;
   displayKey: string;
   callGateway: AgentToolGatewayRequestCaller;
+  agentId?: string;
 }): Promise<AnnounceTarget | null> {
   const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
   const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
@@ -49,12 +50,19 @@ export async function resolveAnnounceTarget(params: {
         includeGlobal: true,
         includeUnknown: true,
         limit: 200,
+        agentId: params.agentId,
       },
     });
     const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
     const match =
-      sessions.find((entry) => entry?.key === params.sessionKey) ??
-      sessions.find((entry) => entry?.key === params.displayKey);
+      sessions.find(
+        (entry) =>
+          entry?.key === params.sessionKey && (!params.agentId || entry.agentId === params.agentId),
+      ) ??
+      sessions.find(
+        (entry) =>
+          entry?.key === params.displayKey && (!params.agentId || entry.agentId === params.agentId),
+      );
 
     const context = match?.deliveryContext;
     const threadId = normalizeOptionalStringifiedId(context?.threadId ?? fallbackThreadId);

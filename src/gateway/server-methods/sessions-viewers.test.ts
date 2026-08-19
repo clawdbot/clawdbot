@@ -103,4 +103,35 @@ describe("sessions.viewers.set", () => {
       expect.objectContaining({ code: "UNAVAILABLE" }),
     );
   });
+
+  it("scopes bare viewer identities by explicit owner and rejects ambiguity", async () => {
+    const replace = vi.fn((_connId: string, sessionKeys: readonly string[]) => sessionKeys);
+    const context = {
+      getRuntimeConfig: () => ({
+        agents: { ownership: "explicit", list: [{ id: "main" }, { id: "work" }] },
+      }),
+      sessionViewerPresence: { replace },
+    } as unknown as GatewayRequestContext;
+
+    const selected = await declare({
+      body: { sessionKeys: ["global"], agentId: "work" },
+      connId: "conn-viewer",
+      context,
+    });
+    expect(replace).toHaveBeenCalledWith("conn-viewer", ["agent:work:global"]);
+    expect(selected).toHaveBeenCalledWith(true, { sessionKeys: ["agent:work:global"] }, undefined);
+
+    replace.mockClear();
+    const ambiguous = await declare({
+      body: { sessionKeys: ["global"] },
+      connId: "conn-viewer",
+      context,
+    });
+    expect(replace).not.toHaveBeenCalled();
+    expect(ambiguous).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
 });

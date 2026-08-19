@@ -14,7 +14,6 @@ import {
 type ToolGroupSummaryInput = {
   name: string;
   args?: unknown;
-  isError?: boolean;
 };
 
 type FileActivity = "read" | "edit" | "write" | "delete";
@@ -31,7 +30,6 @@ type GroupCounts = {
   fetches: number;
   otherNames: Set<string>;
   others: number;
-  failed: number;
 };
 
 function countFiles(counts: GroupCounts, activity: FileActivity, paths: readonly string[]): void {
@@ -78,9 +76,6 @@ function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
         counts.otherNames.add(card.name);
     }
   }
-  if (card.isError) {
-    counts.failed += 1;
-  }
 }
 
 function countLabel(count: number, oneKey: string, manyKey: string): string {
@@ -108,7 +103,6 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
     fetches: 0,
     otherNames: new Set(),
     others: 0,
-    failed: 0,
   };
   for (const card of cards) {
     countCard(counts, card);
@@ -186,14 +180,5 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
     );
   }
   const label = segments.join(", ");
-  const capitalized = label.charAt(0).toUpperCase() + label.slice(1);
-  if (counts.failed === 0) {
-    return capitalized;
-  }
-  const failureLabel = countLabel(
-    counts.failed,
-    "chat.toolCards.group.failedOne",
-    "chat.toolCards.group.failedMany",
-  );
-  return `${capitalized} · ${failureLabel}`;
+  return label.charAt(0).toUpperCase() + label.slice(1);
 }

@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import {
+  normalizeCommandDescriptorName,
+  sanitizeCommandDescriptorDescription,
+} from "../cli/program/command-descriptor-utils.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { isRecord } from "../utils.js";
@@ -9,6 +13,7 @@ import type {
   PluginManifestActivationCapability,
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
+  PluginManifestCliCommand,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
   PluginManifestDashboardDataBinding,
@@ -54,6 +59,33 @@ export function normalizeManifestActivation(value: unknown): PluginManifestActiv
   } satisfies PluginManifestActivation;
 
   return Object.keys(activation).length > 0 ? activation : undefined;
+}
+
+export function normalizeManifestCliCommands(
+  value: unknown,
+): PluginManifestCliCommand[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const commands: PluginManifestCliCommand[] = [];
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.name !== "string" ||
+      typeof entry.description !== "string"
+    ) {
+      continue;
+    }
+    const name = normalizeCommandDescriptorName(entry.name);
+    const description = sanitizeCommandDescriptorDescription(entry.description);
+    if (!name || !description || typeof entry.hasSubcommands !== "boolean" || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    commands.push({ name, description, hasSubcommands: entry.hasSubcommands });
+  }
+  return commands;
 }
 
 const MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS = new Set<PluginManifestDefaultPlatform>([

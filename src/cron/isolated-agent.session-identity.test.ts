@@ -175,10 +175,25 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
-  it("uses agentId for workspace, session key, and store paths", async () => {
+  it.each([
+    {
+      label: "uses agentId for workspace, session key, and store paths",
+      agentId: "ops",
+      sessionKey: "cron:job-ops",
+      explicitAgentId: true,
+      jobSessionKey: false,
+    },
+    {
+      label: "uses an agent-scoped job session when the cron job omits agentId",
+      agentId: "molty",
+      sessionKey: "agent:molty:cron:job-molty",
+      explicitAgentId: false,
+      jobSessionKey: true,
+    },
+  ])("$label", async ({ agentId, sessionKey, explicitAgentId, jobSessionKey }) => {
     await withTempHome(async (home) => {
       const deps = makeDeps();
-      const opsWorkspace = path.join(home, "ops-workspace");
+      const workspaceDir = path.join(home, `${agentId}-workspace`);
       mockEmbeddedOk();
 
       const cfg = makeCfg(
@@ -187,10 +202,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         {
           agents: {
             defaults: { workspace: path.join(home, "default-workspace") },
-            list: [
-              { id: "main", default: true },
-              { id: "ops", workspace: opsWorkspace },
-            ],
+            list: [{ id: "main" }, { id: agentId, workspace: workspaceDir }],
           },
         },
       );
@@ -199,28 +211,26 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         cfg,
         deps,
         job: {
-          ...makeJob({
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-          }),
-          agentId: "ops",
+          ...makeJob({ kind: "agentTurn", message: DEFAULT_MESSAGE }),
+          ...(explicitAgentId ? { agentId } : {}),
+          ...(jobSessionKey ? { sessionKey } : {}),
           delivery: { mode: "none" },
         },
         message: DEFAULT_MESSAGE,
-        sessionKey: "cron:job-ops",
-        agentId: "ops",
+        sessionKey,
+        ...(explicitAgentId ? { agentId } : {}),
         lane: "cron",
       });
 
       expect(res.status).toBe("ok");
       const call = lastEmbeddedAgentCall();
-      expect(call.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
-      expect(call.workspaceDir).toBe(opsWorkspace);
+      expect(call.sessionKey).toMatch(new RegExp(`^agent:${agentId}:`));
+      expect(call.workspaceDir).toBe(workspaceDir);
       expect(call.sessionTarget).toEqual({
-        agentId: "ops",
+        agentId,
         sessionId: call.sessionId,
         sessionKey: call.sessionKey,
-        storePath: path.join(home, ".openclaw", "agents", "ops", "sessions", "sessions.json"),
+        storePath: path.join(home, ".openclaw", "agents", agentId, "sessions", "sessions.json"),
       });
     });
   });

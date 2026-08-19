@@ -15,9 +15,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mts";
+import {
+  DEFAULT_LIVE_RETRIES,
+  DEFAULT_RESOURCE_LIMITS,
+  resolveDockerE2ePlan,
+} from "../../scripts/lib/docker-e2e-plan.mts";
 import {
   appendBoundedShellCapture,
   buildLaneRerunCommand,
@@ -28,6 +32,7 @@ import {
   githubWorkflowRerunCommand,
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
+  preparePrepublishPluginRegistry,
   resolveDockerPreflightPlatform,
   runCleanupSmokePhase,
   runShellCaptureCommand,
@@ -39,6 +44,14 @@ import {
 } from "../../scripts/test-docker-all.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+
+const { createPrepublishPluginRegistryArtifact } = vi.hoisted(() => ({
+  createPrepublishPluginRegistryArtifact: vi.fn(),
+}));
+vi.mock("../../scripts/prepublish-plugin-registry-artifact.mjs", async (importOriginal) => ({
+  ...(await importOriginal()),
+  createPrepublishPluginRegistryArtifact,
+}));
 
 const limits = {
   resourceLimits: {
@@ -265,6 +278,14 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function readCompletePidFile(pidPath: string): number | undefined {
+  if (!existsSync(pidPath)) {
+    return undefined;
+  }
+  const pid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
+  return Number.isInteger(pid) ? pid : undefined;
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -295,22 +316,34 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(parseDockerAllCliArgs([])).toEqual({
       help: false,
       planJson: false,
+      preparePluginRegistry: false,
     });
     expect(parseDockerAllCliArgs(["--plan-json"])).toEqual({
       help: false,
       planJson: true,
+      preparePluginRegistry: false,
     });
     expect(parseDockerAllCliArgs(["--help"])).toEqual({
       help: true,
       planJson: false,
+      preparePluginRegistry: false,
     });
     expect(parseDockerAllCliArgs(["--prepare-only=/tmp/candidate.json"])).toEqual({
       help: false,
       planJson: false,
       prepareOnly: "/tmp/candidate.json",
+      preparePluginRegistry: false,
+    });
+    expect(parseDockerAllCliArgs(["--prepare-plugin-registry"])).toEqual({
+      help: false,
+      planJson: false,
+      preparePluginRegistry: true,
     });
     expect(() =>
       parseDockerAllCliArgs(["--plan-json", "--prepare-only=/tmp/candidate.json"]),
+    ).toThrow("conflicting plan/prep options");
+    expect(() =>
+      parseDockerAllCliArgs(["--prepare-only=/tmp/candidate.json", "--prepare-plugin-registry"]),
     ).toThrow("conflicting plan/prep options");
   });
 
@@ -323,7 +356,49 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("--prepare-only=<manifest>");
+    expect(result.stdout).toContain("--prepare-plugin-registry");
     expect(result.stdout).toContain("OPENCLAW_DOCKER_ALL_* env vars");
+  });
+
+  it("passes the exact planner-selected survivor packages to registry preparation", () => {
+    const root = tempDirs.make("openclaw-standalone-survivor-registry-");
+    const plan = resolveDockerE2ePlan({
+      allowFrozenTargetScenarioOmissions: true,
+      includeOpenWebUI: false,
+      liveMode: "all",
+      liveRetries: DEFAULT_LIVE_RETRIES,
+      orderLanes: <T>(lanes: T[]) => lanes,
+      planReleaseAll: false,
+      profile: "all",
+      releaseChunk: "core",
+      selectedLaneNames: ["published-upgrade-survivor"],
+      timingStore: undefined,
+      upgradeSurvivorBaselines: "openclaw@2026.7.1-2",
+      upgradeSurvivorScenarios: "configured-plugin-installs",
+    }).plan;
+    createPrepublishPluginRegistryArtifact.mockReturnValue({
+      manifestSha256: "b".repeat(64),
+    });
+
+    const registry = preparePrepublishPluginRegistry(plan, root, "a".repeat(40), "2026.8.1");
+
+    expect(createPrepublishPluginRegistryArtifact).toHaveBeenCalledWith({
+      candidateVersion: "2026.8.1",
+      outputDir: path.join(root, "prepublish-plugin-registry"),
+      repoRoot: process.cwd(),
+      requiredPackages: [
+        "@openclaw/codex",
+        "@openclaw/discord",
+        "@openclaw/matrix",
+        "@openclaw/whatsapp",
+      ],
+      sourceSha: "a".repeat(40),
+    });
+    expect(registry).toEqual({
+      candidateVersion: "2026.8.1",
+      dir: path.join(root, "prepublish-plugin-registry"),
+      manifestSha256: "b".repeat(64),
+    });
   });
 
   it("rejects unknown CLI options without a stack trace", () => {
@@ -1275,9 +1350,10 @@ setInterval(() => {}, 1000);
         timeoutMs: 250,
       });
 
-      await waitFor(() => existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
-      expect(Number.isInteger(grandchildPid)).toBe(true);
+      await waitFor(() => {
+        grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
+        return grandchildPid > 0;
+      });
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
       await expect(runPromise).resolves.toMatchObject({ timedOut: true });
@@ -1494,9 +1570,10 @@ await runShellCommand({
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe"],
       });
-      await waitFor(() => existsSync(readyPath) && existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
-      expect(Number.isInteger(grandchildPid)).toBe(true);
+      await waitFor(() => {
+        grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
+        return existsSync(readyPath) && grandchildPid > 0;
+      });
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
       runner.kill("SIGTERM");

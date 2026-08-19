@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -8,12 +8,19 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+let gatewaySnapshots: typeof import("../skills/runtime/session-snapshot.js");
+let gatewayRefreshState: typeof import("../skills/runtime/refresh-state.js");
+let gatewayWorkshop: typeof import("../skills/workshop/service.js");
+let registerSkillsCli: (typeof import("./skills-cli.js"))["registerSkillsCli"];
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   config: {} as { gateway?: { mode: "local" | "remote" } },
   gatewayApply: undefined as
-    | ((request: { method: string; params?: { proposalId?: string } }) => Promise<unknown>)
+    | ((request: {
+        method: string;
+        params?: { proposalId?: string; expectedRevisionHash?: string };
+      }) => Promise<unknown>)
     | undefined,
   acquireGatewayLock: vi.fn(),
   releaseGatewayLock: vi.fn(),
@@ -50,6 +57,21 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 describe("skills workshop CLI gateway snapshot invalidation", () => {
+  beforeAll(async () => {
+    // Keep one module graph for each process role. Reusing the graphs preserves
+    // the Gateway/CLI cache boundary without rebuilding the full CLI per test.
+    vi.resetModules();
+    gatewaySnapshots = await import("../skills/runtime/session-snapshot.js");
+    gatewayRefreshState = await import("../skills/runtime/refresh-state.js");
+    gatewayWorkshop = await import("../skills/workshop/service.js");
+    vi.resetModules();
+    ({ registerSkillsCli } = await import("./skills-cli.js"));
+  });
+
+  afterAll(() => {
+    vi.resetModules();
+  });
+
   beforeEach(async () => {
     testState = await createOpenClawTestState({
       layout: "state-only",
@@ -63,28 +85,20 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.exit.mockClear();
     mocks.callGateway.mockReset().mockImplementation(async (request) => {
-      if (request.method === "health") {
-        return {};
-      }
       if (!mocks.gatewayApply) {
         throw new Error("gateway unavailable");
       }
       return await mocks.gatewayApply(request);
     });
-    vi.resetModules();
   });
 
   afterEach(async () => {
     await testState.cleanup();
     await tempDirs.cleanup();
-    vi.resetModules();
   });
 
   it("applies through the gateway process that owns the cached session skill index", async () => {
     // This first module graph stands in for the long-running Gateway process.
-    const gatewaySnapshots = await import("../skills/runtime/session-snapshot.js");
-    const gatewayRefreshState = await import("../skills/runtime/refresh-state.js");
-    const gatewayWorkshop = await import("../skills/workshop/service.js");
     const proposal = await gatewayWorkshop.proposeCreateSkill({
       workspaceDir: mocks.workspaceDir,
       name: "Gateway Visible",
@@ -103,18 +117,20 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const { resolvedSkills: _runtimeOnly, ...persistedSnapshot } = beforeApply;
     const beforeVersion = gatewayRefreshState.getSkillsSnapshotVersion(mocks.workspaceDir);
     mocks.gatewayApply = async (request) => {
+      if (request.method === "skills.proposals.inspect") {
+        return await gatewayWorkshop.inspectSkillProposal(proposal.record.id);
+      }
       expect(request.method).toBe("skills.proposals.apply");
       return await gatewayWorkshop.applySkillProposal({
         workspaceDir: mocks.workspaceDir,
         config: mocks.config,
         proposalId: request.params?.proposalId ?? "",
+        expectedRevisionHash: request.params?.expectedRevisionHash,
       });
     };
 
     // A fresh module graph models the short-lived CLI process. Direct application
     // here would bump only the CLI's refresh-state map, leaving the Gateway stale.
-    vi.resetModules();
-    const { registerSkillsCli } = await import("./skills-cli.js");
     const program = new Command();
     program.exitOverride();
     registerSkillsCli(program);
@@ -125,7 +141,11 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "skills.proposals.apply",
-        params: { agentId: "main", proposalId: proposal.record.id },
+        params: {
+          agentId: "main",
+          proposalId: proposal.record.id,
+          expectedRevisionHash: proposal.revisionHash,
+        },
         timeoutMs: 1_850_000,
       }),
     );
@@ -142,19 +162,19 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
   });
 
   it("does not replay a dispatched gateway apply failure in the CLI process", async () => {
-    const workshop = await import("../skills/workshop/service.js");
-    const proposal = await workshop.proposeCreateSkill({
+    const proposal = await gatewayWorkshop.proposeCreateSkill({
       workspaceDir: mocks.workspaceDir,
       name: "Single Dispatch",
       description: "Apply only in the process that owns snapshot state",
       content: "# Single Dispatch\n\nDo not replay this mutation.\n",
     });
-    mocks.gatewayApply = async () => {
+    mocks.gatewayApply = async (request) => {
+      if (request.method === "skills.proposals.inspect") {
+        return await gatewayWorkshop.inspectSkillProposal(proposal.record.id);
+      }
       throw new Error("gateway apply failed");
     };
 
-    vi.resetModules();
-    const { registerSkillsCli } = await import("./skills-cli.js");
     const program = new Command();
     program.exitOverride();
     registerSkillsCli(program);
@@ -163,31 +183,28 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
-      "health",
+      "skills.proposals.inspect",
       "skills.proposals.apply",
     ]);
-    await expect(workshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+    await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
       record: { status: "pending" },
     });
   });
 
   it("preserves configless offline apply when no local gateway is listening", async () => {
-    const workshop = await import("../skills/workshop/service.js");
-    const proposal = await workshop.proposeCreateSkill({
+    const proposal = await gatewayWorkshop.proposeCreateSkill({
       workspaceDir: mocks.workspaceDir,
       name: "Offline Upgrade",
       description: "Keep shipped configless Workshop apply behavior",
       content: "# Offline Upgrade\n\nApply without a running gateway.\n",
     });
-    const authError = Object.assign(new Error("gateway health requires credentials"), {
+    const authError = Object.assign(new Error("gateway proposal inspection requires credentials"), {
       name: "GatewayCredentialsRequiredError",
-      method: "health",
+      method: "skills.proposals.inspect",
       configPath: "/tmp/openclaw.json",
     });
     mocks.callGateway.mockRejectedValueOnce(authError);
 
-    vi.resetModules();
-    const { registerSkillsCli } = await import("./skills-cli.js");
     const program = new Command();
     program.exitOverride();
     registerSkillsCli(program);
@@ -203,40 +220,42 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       timeoutMs: 250,
     });
     expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(1);
-    await expect(workshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+    await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
       record: { status: "applied" },
     });
   });
 
   it("does not bypass Gateway ownership when CLI credentials are missing", async () => {
-    const workshop = await import("../skills/workshop/service.js");
-    const proposal = await workshop.proposeCreateSkill({
+    const proposal = await gatewayWorkshop.proposeCreateSkill({
       workspaceDir: mocks.workspaceDir,
       name: "Gateway Owned Upgrade",
       description: "Keep snapshot invalidation in the running gateway",
       content: "# Gateway Owned Upgrade\n\nDo not apply in the CLI process.\n",
     });
-    const authError = Object.assign(new Error("gateway health requires credentials"), {
+    const authError = Object.assign(new Error("gateway proposal inspection requires credentials"), {
       name: "GatewayCredentialsRequiredError",
-      method: "health",
+      method: "skills.proposals.inspect",
       configPath: "/tmp/openclaw.json",
     });
     mocks.callGateway.mockRejectedValueOnce(authError);
     mocks.acquireGatewayLock.mockRejectedValueOnce(new Error("gateway lock is owned"));
 
-    vi.resetModules();
-    const { registerSkillsCli } = await import("./skills-cli.js");
     const program = new Command();
     program.exitOverride();
     registerSkillsCli(program);
     await expect(
       program.parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    ).rejects.toMatchObject({
+      name: "GatewayCredentialsRequiredError",
+      message: "gateway proposal inspection requires credentials",
+      method: "skills.proposals.inspect",
+      configPath: "/tmp/openclaw.json",
+    });
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
     expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(1);
     expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
-    await expect(workshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+    await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
       record: { status: "pending" },
     });
   });
@@ -281,8 +300,6 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       };
     };
 
-    vi.resetModules();
-    const { registerSkillsCli } = await import("./skills-cli.js");
     const program = new Command();
     program.exitOverride();
     registerSkillsCli(program);

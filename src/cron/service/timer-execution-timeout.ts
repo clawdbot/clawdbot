@@ -4,15 +4,20 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/se
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
+  CronCompletionStatus,
   CronDeliveryTrace,
   CronJob,
   CronNextCheckProposal,
+  CronResolvedDeliveryState,
   CronRunOutcome,
+  CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
+import type { CronRunReceiptSettlementDisposition } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
 
 export const MAX_CRON_TIMER_DELAY_MS = 60_000;
@@ -39,6 +44,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     job: CronJob;
     taskRunId?: string;
+    completionStatus: CronCompletionStatus;
+    deliveryState: CronResolvedDeliveryState;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     deliveryError?: string;
@@ -46,6 +53,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
     activeJobMarker?: CronActiveJobMarker;
     reservationIdentity?: object;
+    runReceipt?: CronRunReceiptHandle;
+    receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
     startedAt: number;
     endedAt: number;
     triggerEval?: CronTriggerEvalOutcome;
@@ -56,6 +65,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
 
 export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
+    completionStatus?: CronCompletionStatus;
+    deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -93,6 +104,10 @@ export type StartupCatchupCandidate = {
 export type StartupDeferredJob = {
   jobId: string;
   delayMs?: number;
+  configRevision: string;
+  nextRunAtMs: number | undefined;
+  lastRunAtMs: number | undefined;
+  lastRunStatus: CronRunStatus | undefined;
 };
 
 export type StartupCatchupPlan = {
@@ -110,6 +125,8 @@ export type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  /** Revalidates the durable run fence after awaited planning and before effects. */
+  assertRunCurrent?: () => void;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.
   // The key catches edits; the identity catches disable→re-enable and A→B→A.

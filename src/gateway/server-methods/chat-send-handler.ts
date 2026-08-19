@@ -3,6 +3,8 @@ import { performance } from "node:perf_hooks";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
@@ -24,14 +26,22 @@ import {
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export async function handleChatSend(
+type ChatSendInternalOptions = {
+  trustedSystemInput?: boolean;
+  toolsAllow?: string[];
+  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+};
+
+async function handleChatSendWithOptions(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
+  options?: ChatSendInternalOptions,
 ): Promise<void> {
   const setup = await prepareAndAdmitChatSend(
     { params, respond, context, client },
     onAdmissionOwned,
+    options,
   );
   if (!setup) {
     return;
@@ -54,6 +64,7 @@ export async function handleChatSend(
     admittedSessionId,
     chatSendTraceAttributes,
     finishAbortedChatSend,
+    interruptedActiveRun,
     lifecycleGeneration,
     messageInjectionTarget,
     restartSafeAdmission,
@@ -68,6 +79,17 @@ export async function handleChatSend(
   if (!preparedAttachments.ok) {
     return;
   }
+  // Prepared inbound media has no transcript reference until the user turn
+  // persists; every pre-ACK abandonment exit funnels through
+  // cleanupAdmittedRun, which fires this armed discard. The hasPersisted gate
+  // protects the restart-safe path, which persists durably before its abort
+  // and routing exits; dispatch owns persistence after the ACK disarms this.
+  let preparedMediaRecorder: { hasPersisted: () => boolean } | undefined;
+  admitted.value.setDiscardAbandonedPreparedMedia(() => {
+    if (!preparedMediaRecorder?.hasPersisted()) {
+      void discardPreparedInboundMedia(preparedAttachments.value.offloadedRefs);
+    }
+  });
   if (activeRunAbort.controller.signal.aborted) {
     finishAbortedChatSend();
     return;
@@ -122,6 +144,7 @@ export async function handleChatSend(
       recorder: userTurnRecorder,
       replyContextFieldsPromise,
     } = userTurn;
+    preparedMediaRecorder = userTurnRecorder;
     if (restartSafeAdmission) {
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
       // A matching idempotency row and lifecycle claim commit atomically, so
@@ -197,7 +220,6 @@ export async function handleChatSend(
       attempt: messageInjectionAttempt,
       isAborted: () => activeRunAbort.controller.signal.aborted,
       sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
-      onActiveLeafChanged: admitted.value.rejectActiveLeafChanged,
       onAborted: finishAbortedChatSend,
       onSessionRoutingChanged: admitted.value.rejectSessionRoutingChanged,
     });
@@ -205,7 +227,6 @@ export async function handleChatSend(
       return;
     }
     messageInjectionAttempt = preAckInjection.attempt;
-
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
           receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
@@ -230,6 +251,7 @@ export async function handleChatSend(
     const ackPayload = {
       runId: clientRunId,
       status: "started" as const,
+      ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
       ...(serverTiming ? { serverTiming } : {}),
     };
     emitDiagnosticsTimelineEvent(
@@ -245,6 +267,10 @@ export async function handleChatSend(
       },
       { config: cfg },
     );
+    // After the ACK, dispatch owns the turn: its error lifecycle persists the
+    // user transcript (which references the media) on every path, so a
+    // post-ACK cleanupAdmittedRun must not race that persist with a discard.
+    admitted.value.setDiscardAbandonedPreparedMedia(undefined);
     respond(true, ackPayload, undefined, { runId: clientRunId });
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     startChatDispatch({
@@ -253,6 +279,8 @@ export async function handleChatSend(
       attachments: preparedAttachments.value,
       client,
       context,
+      toolsAllow: options?.toolsAllow,
+      skillWorkshopProposalRevision: options?.skillWorkshopProposalRevision,
       cronCreatorAuthority,
       externalAuthorityAdmission,
       injection: {
@@ -281,4 +309,41 @@ export async function handleChatSend(
       terminalizeRestartSafeAdmission,
     });
   }
+}
+
+export async function handleChatSend(
+  options: GatewayRequestHandlerOptions,
+  onAdmissionOwned?: () => Promise<boolean>,
+  externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
+): Promise<void> {
+  await handleChatSendWithOptions(options, onAdmissionOwned, externalAuthorityAdmission);
+}
+
+/** Dispatches an internally delegated turn within its caller-owned tool boundary. */
+export async function handleChatSendWithRuntimeTools(
+  options: GatewayRequestHandlerOptions,
+  toolsAllow: string[],
+): Promise<void> {
+  await handleChatSendWithOptions(options, undefined, undefined, { toolsAllow });
+}
+
+/** Dispatches an operator-requested proposal revision with its reviewed revision bound to the run. */
+export async function handleChatSendWithSkillWorkshopProposalRevision(
+  options: GatewayRequestHandlerOptions,
+  proposalRevision: SkillWorkshopProposalRevisionConstraint,
+): Promise<void> {
+  await handleChatSendWithOptions(options, undefined, undefined, {
+    toolsAllow: ["skill_workshop"],
+    skillWorkshopProposalRevision: { ...proposalRevision },
+  });
+}
+
+/** Dispatches Gateway-authored system input without widening the public chat-send contract. */
+export async function handleTrustedInternalChatSend(
+  options: GatewayRequestHandlerOptions,
+  onAdmissionOwned?: () => Promise<boolean>,
+): Promise<void> {
+  await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
+    trustedSystemInput: true,
+  });
 }

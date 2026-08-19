@@ -1,3 +1,5 @@
+import net from "node:net";
+import { domainToASCII } from "node:url";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { Selectable } from "kysely";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
@@ -16,6 +18,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { mintSecretSentinel } from "../sentinel.js";
 
 type SecretStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
 type SecretStoreRow = Selectable<OpenClawStateKyselyDatabase["secret_store_entries"]>;
@@ -30,7 +33,20 @@ export type SecretStoreEntryMetadata = {
   updatedAtMs: number;
   createdAtMs: number;
   updatedBy: string | null;
+  allowedHosts?: string[];
   valuePreview?: string;
+};
+
+export type SecretStoreEgressBinding = {
+  name: string;
+  sentinel: string;
+  allowedHosts: string[];
+};
+
+export type SecretStoreExecEnvironment = {
+  env?: Record<string, string>;
+  secretSentinels?: Record<string, string>;
+  secretEgressBindings?: SecretStoreEgressBinding[];
 };
 
 type SecretStoreReadError =
@@ -40,6 +56,7 @@ type SecretStoreReadError =
 
 type SecretStoreValidationCode =
   | "SECRET_STORE_INVALID_NAME"
+  | "SECRET_STORE_INVALID_ALLOWED_HOST"
   | "SECRET_STORE_VALUE_TOO_LARGE"
   | "SECRET_STORE_VALUE_EMPTY";
 
@@ -54,17 +71,29 @@ export class SecretStoreValidationError extends Error {
 }
 
 export const SECRET_STORE_VALUE_MAX_BYTES = 64 * 1024;
+export const SECRET_STORE_ALLOWED_HOSTS_MAX = 128;
 const SECRET_STORE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const GITHUB_SETUP_HANDOFF_PATTERN = /^github-setup-[a-f0-9]{32}$/u;
+const GITHUB_SETUP_HANDOFF_MAX_AGE_MS = 10 * 60_000;
 
 function normalizeScope(_scope: SecretStoreScope): { scopeKind: "team"; scopeId: "" } {
   return { scopeKind: "team", scopeId: "" };
 }
 
-function assertSecretStoreName(name: string): void {
+function assertSecretStoreEnvName(name: string): void {
   if (!ENV_SECRET_REF_ID_RE.test(name)) {
     throw new SecretStoreValidationError(
       "SECRET_STORE_INVALID_NAME",
       `Secret store name must match ${String(ENV_SECRET_REF_ID_RE)}.`,
+    );
+  }
+}
+
+function assertSecretStoreMutationName(name: string): void {
+  if (!ENV_SECRET_REF_ID_RE.test(name) && !GITHUB_SETUP_HANDOFF_PATTERN.test(name)) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_INVALID_NAME",
+      `Secret store name must match ${String(ENV_SECRET_REF_ID_RE)} or ${String(GITHUB_SETUP_HANDOFF_PATTERN)}.`,
     );
   }
 }
@@ -89,6 +118,73 @@ function assertSecretStoreValue(value: string, kind: SecretStoreKind): void {
   }
 }
 
+function normalizeSecretAllowedHost(raw: string): string {
+  const trimmed = raw.trim().toLowerCase().replace(/\.+$/u, "");
+  if (trimmed.includes("*")) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_INVALID_ALLOWED_HOST",
+      `Allowed host "${raw}" cannot contain a wildcard; use one exact hostname.`,
+    );
+  }
+  const unbracketed =
+    trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+  if (net.isIP(unbracketed)) {
+    return unbracketed;
+  }
+  if (!unbracketed || unbracketed.includes(":") || /[\s/?#@]/u.test(unbracketed)) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_INVALID_ALLOWED_HOST",
+      `Allowed host "${raw}" must be a hostname without a scheme, path, wildcard, or port.`,
+    );
+  }
+  const ascii = domainToASCII(unbracketed);
+  if (
+    !ascii ||
+    ascii.length > 253 ||
+    ascii
+      .split(".")
+      .some(
+        (label) =>
+          !label ||
+          label.length > 63 ||
+          label.startsWith("-") ||
+          label.endsWith("-") ||
+          !/^[a-z0-9-]+$/u.test(label),
+      )
+  ) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_INVALID_ALLOWED_HOST",
+      `Allowed host "${raw}" is not a valid hostname.`,
+    );
+  }
+  return ascii;
+}
+
+export function normalizeSecretAllowedHosts(hosts: readonly string[]): string[] {
+  if (hosts.length > SECRET_STORE_ALLOWED_HOSTS_MAX) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_INVALID_ALLOWED_HOST",
+      `A secret can allow at most ${SECRET_STORE_ALLOWED_HOSTS_MAX} hosts.`,
+    );
+  }
+  return [...new Set(hosts.map(normalizeSecretAllowedHost))].toSorted();
+}
+
+function parseSecretAllowedHosts(raw: string | null | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) && parsed.every((host) => typeof host === "string")
+      ? normalizeSecretAllowedHosts(parsed)
+      : [];
+  } catch {
+    // Corrupt policy is never interpreted permissively: an empty list fails closed.
+    return [];
+  }
+}
+
 function isMissingSecretStoreTableError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -109,6 +205,7 @@ function toMetadata(row: SecretStoreRow): SecretStoreEntryMetadata {
     updatedAtMs: normalizeSqliteNumber(row.updated_at_ms) ?? 0,
     createdAtMs: normalizeSqliteNumber(row.created_at_ms) ?? 0,
     updatedBy: row.updated_by,
+    ...(row.kind === "secret" ? { allowedHosts: parseSecretAllowedHosts(row.allowed_hosts) } : {}),
     ...(row.kind === "env" ? { valuePreview: row.value } : {}),
   };
 }
@@ -132,12 +229,133 @@ export function listSecretStoreEntries(params: {
         if (!params.includeDeleted) {
           query = query.where("deleted_at_ms", "is", null);
         }
-        return executeSqliteQuerySync(sqlite, query).rows.map(toMetadata);
+        return executeSqliteQuerySync(sqlite, query)
+          .rows.filter((row) => !GITHUB_SETUP_HANDOFF_PATTERN.test(row.name))
+          .map(toMetadata);
       }, params.database ?? {}) ?? []
     );
   } catch (error) {
     if (isMissingSecretStoreTableError(error)) {
       return [];
+    }
+    throw error;
+  }
+}
+
+/** Atomically returns and hard-deletes one exact fresh, non-egress GitHub setup handoff. */
+export function consumeGitHubSetupHandoff(params: {
+  name: string;
+  nowMs?: number;
+  database?: OpenClawStateDatabaseOptions;
+}): string | undefined {
+  if (!GITHUB_SETUP_HANDOFF_PATTERN.test(params.name)) {
+    return undefined;
+  }
+  const now = params.nowMs ?? Date.now();
+  try {
+    let value: string | undefined;
+    runOpenClawStateWriteTransaction(
+      ({ db: sqlite }) => {
+        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+        const row = executeSqliteQueryTakeFirstSync(
+          sqlite,
+          db
+            .selectFrom("secret_store_entries")
+            .select("value")
+            .where("scope_kind", "=", "team")
+            .where("scope_id", "=", "")
+            .where("name", "=", params.name)
+            .where("kind", "=", "secret")
+            .where("allowed_hosts", "is", null)
+            .where("created_at_ms", ">=", now - GITHUB_SETUP_HANDOFF_MAX_AGE_MS)
+            .where("created_at_ms", "<=", now)
+            .where("deleted_at_ms", "is", null),
+        );
+        if (!row) {
+          return;
+        }
+        executeSqliteQuerySync(
+          sqlite,
+          db
+            .deleteFrom("secret_store_entries")
+            .where("scope_kind", "=", "team")
+            .where("scope_id", "=", "")
+            .where("name", "=", params.name),
+        );
+        value = row.value;
+      },
+      params.database,
+      { operationLabel: "secrets.store.consume-github-setup-handoff" },
+    );
+    if (value !== undefined) {
+      registerSecretValueForRedaction(value);
+    }
+    return value;
+  } catch (error) {
+    if (isMissingSecretStoreTableError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/** Captures one coherent team-store snapshot for an agent run's exec environment. */
+export function readSecretStoreExecEnvironment(params: {
+  includeSecretSentinels: boolean;
+  excludeNames?: readonly string[];
+  database?: OpenClawStateDatabaseOptions;
+}): SecretStoreExecEnvironment {
+  try {
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
+        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+        const rows = executeSqliteQuerySync(
+          sqlite,
+          db
+            .selectFrom("secret_store_entries")
+            .selectAll()
+            .where("scope_kind", "=", "team")
+            .where("scope_id", "=", "")
+            .where("deleted_at_ms", "is", null)
+            .orderBy("name", "asc"),
+        ).rows;
+        const env: Record<string, string> = {};
+        const secretSentinels: Record<string, string> = {};
+        const secretEgressBindings: SecretStoreEgressBinding[] = [];
+        const excludedNames = new Set(params.excludeNames ?? []);
+        for (const row of rows) {
+          if (GITHUB_SETUP_HANDOFF_PATTERN.test(row.name) || excludedNames.has(row.name)) {
+            continue;
+          }
+          if (row.kind === "env") {
+            env[row.name] = row.value;
+            continue;
+          }
+          registerSecretValueForRedaction(row.value);
+          if (params.includeSecretSentinels) {
+            // Named placeholders disclose the credential name. The existing sentinel
+            // is authenticated ciphertext, so an escaped value only fails vendor auth.
+            const sentinel = mintSecretSentinel(row.value, {
+              label: `exec-store:${row.name}`,
+            });
+            secretSentinels[row.name] = sentinel;
+            secretEgressBindings.push({
+              name: row.name,
+              sentinel,
+              allowedHosts: parseSecretAllowedHosts(row.allowed_hosts),
+            });
+          }
+        }
+        return {
+          ...(Object.keys(env).length > 0 ? { env } : {}),
+          ...(Object.keys(secretSentinels).length > 0 ? { secretSentinels } : {}),
+          ...(secretEgressBindings.length > 0 ? { secretEgressBindings } : {}),
+        };
+      }, params.database ?? {}) ?? {}
+    );
+  } catch (error) {
+    if (isMissingSecretStoreTableError(error)) {
+      return {};
     }
     throw error;
   }
@@ -149,7 +367,7 @@ export function readSecretStoreValue(params: {
   database?: OpenClawStateDatabaseOptions;
 }): Result<string, SecretStoreReadError> {
   try {
-    assertSecretStoreName(params.name);
+    assertSecretStoreEnvName(params.name);
     const { scopeKind, scopeId } = normalizeScope(params.scope);
     const row = withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
@@ -197,11 +415,23 @@ export function writeSecretStoreEntry(params: {
   name: string;
   value: string;
   kind: SecretStoreKind;
+  allowedHosts?: readonly string[];
   updatedBy: string | null;
   database?: OpenClawStateDatabaseOptions;
 }): void {
-  assertSecretStoreName(params.name);
+  assertSecretStoreMutationName(params.name);
   assertSecretStoreValue(params.value, params.kind);
+  if (params.kind === "env" && params.allowedHosts !== undefined) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_INVALID_ALLOWED_HOST",
+      "Allowed hosts apply only to secret entries.",
+    );
+  }
+  const allowedHosts =
+    params.kind === "secret" && params.allowedHosts !== undefined
+      ? normalizeSecretAllowedHosts(params.allowedHosts)
+      : undefined;
+  const allowedHostsJson = allowedHosts?.length ? JSON.stringify(allowedHosts) : null;
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   const now = Date.now();
   runOpenClawStateWriteTransaction(
@@ -222,6 +452,7 @@ export function writeSecretStoreEntry(params: {
             updated_at_ms: now,
             updated_by: params.updatedBy,
             deleted_at_ms: null,
+            allowed_hosts: allowedHostsJson,
           })
           .onConflict((conflict) =>
             conflict.columns(["scope_kind", "scope_id", "name"]).doUpdateSet({
@@ -230,6 +461,11 @@ export function writeSecretStoreEntry(params: {
               updated_at_ms: now,
               updated_by: params.updatedBy,
               deleted_at_ms: null,
+              ...(params.kind === "env"
+                ? { allowed_hosts: null }
+                : allowedHosts !== undefined
+                  ? { allowed_hosts: allowedHostsJson }
+                  : {}),
             }),
           ),
       );
@@ -239,12 +475,54 @@ export function writeSecretStoreEntry(params: {
   );
 }
 
+export function updateSecretStoreAllowedHosts(params: {
+  scope: SecretStoreScope;
+  name: string;
+  allowedHosts: readonly string[];
+  updatedBy: string | null;
+  database?: OpenClawStateDatabaseOptions;
+}): void {
+  assertSecretStoreEnvName(params.name);
+  const allowedHosts = normalizeSecretAllowedHosts(params.allowedHosts);
+  const { scopeKind, scopeId } = normalizeScope(params.scope);
+  const now = Date.now();
+  runOpenClawStateWriteTransaction(
+    ({ db: sqlite }) => {
+      ensureSecretStoreSchema(sqlite);
+      const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+      const updated = executeSqliteQuerySync(
+        sqlite,
+        db
+          .updateTable("secret_store_entries")
+          .set({
+            allowed_hosts: allowedHosts.length ? JSON.stringify(allowedHosts) : null,
+            updated_at_ms: now,
+            updated_by: params.updatedBy,
+          })
+          .where("scope_kind", "=", scopeKind)
+          .where("scope_id", "=", scopeId)
+          .where("name", "=", params.name)
+          .where("kind", "=", "secret")
+          .where("deleted_at_ms", "is", null),
+      );
+      if (Number(updated.numAffectedRows ?? 0n) !== 1) {
+        throw new SecretStoreValidationError(
+          "SECRET_STORE_INVALID_ALLOWED_HOST",
+          `Secret store entry "${params.name}" is missing or is not a secret entry.`,
+        );
+      }
+    },
+    params.database,
+    { operationLabel: "secrets.store.allowed-hosts" },
+  );
+}
+
 export function deleteSecretStoreEntry(params: {
   scope: SecretStoreScope;
   name: string;
   database?: OpenClawStateDatabaseOptions;
 }): void {
-  assertSecretStoreName(params.name);
+  assertSecretStoreMutationName(params.name);
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   const state = openOpenClawStateDatabase(params.database);
   const now = Date.now();
@@ -252,16 +530,20 @@ export function deleteSecretStoreEntry(params: {
     runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        executeSqliteQuerySync(
-          sqlite,
-          db
-            .updateTable("secret_store_entries")
-            .set({ deleted_at_ms: now, updated_at_ms: now })
-            .where("scope_kind", "=", scopeKind)
-            .where("scope_id", "=", scopeId)
-            .where("name", "=", params.name)
-            .where("deleted_at_ms", "is", null),
-        );
+        const query = GITHUB_SETUP_HANDOFF_PATTERN.test(params.name)
+          ? db
+              .deleteFrom("secret_store_entries")
+              .where("scope_kind", "=", scopeKind)
+              .where("scope_id", "=", scopeId)
+              .where("name", "=", params.name)
+          : db
+              .updateTable("secret_store_entries")
+              .set({ deleted_at_ms: now, updated_at_ms: now })
+              .where("scope_kind", "=", scopeKind)
+              .where("scope_id", "=", scopeId)
+              .where("name", "=", params.name)
+              .where("deleted_at_ms", "is", null);
+        executeSqliteQuerySync(sqlite, query);
       },
       { ...params.database, database: state },
       { operationLabel: "secrets.store.delete" },
@@ -280,6 +562,7 @@ export function purgeExpiredSecretStoreEntries(
 ): number {
   const state = openOpenClawStateDatabase(params.database);
   const threshold = Date.now() - SECRET_STORE_RETENTION_MS;
+  const handoffThreshold = Date.now() - GITHUB_SETUP_HANDOFF_MAX_AGE_MS;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
@@ -291,7 +574,27 @@ export function purgeExpiredSecretStoreEntries(
             .where("deleted_at_ms", "is not", null)
             .where("deleted_at_ms", "<", threshold),
         );
-        return Number(deleted.numAffectedRows ?? 0n);
+        const handoffRows = executeSqliteQuerySync(
+          sqlite,
+          db
+            .selectFrom("secret_store_entries")
+            .select(["scope_kind", "scope_id", "name"])
+            .where("deleted_at_ms", "is", null)
+            .where("created_at_ms", "<", handoffThreshold),
+        ).rows.filter((row) => GITHUB_SETUP_HANDOFF_PATTERN.test(row.name));
+        let expiredHandoffs = 0;
+        for (const row of handoffRows) {
+          const result = executeSqliteQuerySync(
+            sqlite,
+            db
+              .deleteFrom("secret_store_entries")
+              .where("scope_kind", "=", row.scope_kind)
+              .where("scope_id", "=", row.scope_id)
+              .where("name", "=", row.name),
+          );
+          expiredHandoffs += Number(result.numAffectedRows ?? 0n);
+        }
+        return Number(deleted.numAffectedRows ?? 0n) + expiredHandoffs;
       },
       { ...params.database, database: state },
       { operationLabel: "secrets.store.purge" },

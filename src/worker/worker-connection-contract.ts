@@ -1,5 +1,6 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { WebSocket } from "ws";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ClientOptions, WebSocket } from "ws";
 import type {
   WorkerConnectParams,
   WorkerHeartbeatParams,
@@ -7,6 +8,7 @@ import type {
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
+import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
 
 const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
   "credential-replaced",
@@ -37,14 +39,15 @@ export type WorkerConnectionExit =
   | { kind: "stopped" };
 
 export type WorkerConnectionOptions = {
-  socketPath: string;
+  endpoint: WorkerConnectionEndpoint;
   connectParams: WorkerConnectParams;
   reconnectBackoff?: BackoffPolicy;
   admissionTimeoutMs?: number;
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
-  createSocket?: (url: string) => WebSocket;
+  createSocket?: (url: string, options: ClientOptions) => WebSocket;
   heartbeatStatus?: () => WorkerHeartbeatParams["status"];
+  onConnectionFailure?: (error: Error | undefined) => void;
 };
 
 export class WorkerConnectionInterruptedError extends Error {
@@ -97,4 +100,22 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
 
 export function toWorkerConnectionError(error: unknown): Error {
   return toStructuredErrorObject(error);
+}
+
+export function formatWorkerConnectionFailure(
+  endpoint: WorkerConnectionEndpoint,
+  error: unknown,
+): string {
+  const target =
+    endpoint.kind === "websocket"
+      ? truncateUtf16Safe(new URL(endpoint.url).host, 128)
+      : truncateUtf16Safe(endpoint.socketPath, 128);
+  const cause =
+    truncateUtf16Safe(toWorkerConnectionError(error).message.replace(/\s+/gu, " ").trim(), 160) ||
+    "connection failed";
+  const hint =
+    endpoint.kind === "websocket"
+      ? "check TLS pin/publicUrl configuration"
+      : "check the local gateway socket";
+  return `worker could not reach gateway ${target}: ${cause}; ${hint}`;
 }

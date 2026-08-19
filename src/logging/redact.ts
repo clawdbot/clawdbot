@@ -25,8 +25,8 @@ import {
 } from "./redact-patterns.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
 
-export type RedactSensitiveMode = "off" | "tools";
-export type RedactPattern = string | RegExp;
+type RedactSensitiveMode = "off" | "tools";
+type RedactPattern = string | RegExp;
 type LoggingConfig = OpenClawConfig["logging"];
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
@@ -127,12 +127,12 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
   "iu",
 );
 
-export type RedactOptions = {
+type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: RedactPattern[];
 };
 
-export type ResolvedRedactOptions = {
+type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
   patterns: RegExp[];
   redactFormBodies: boolean;
@@ -1108,12 +1108,16 @@ export function getDefaultRedactPatterns(): string[] {
 // line boundaries, then split back. Use this instead of mapping redactSensitiveText when
 // options are resolved once per request.
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
-  if (resolved.mode === "off" || !resolved.patterns.length || lines.length === 0) {
+  if (lines.length === 0 || resolved.mode === "off") {
     return lines;
   }
+  const exactRedactedLines = lines.map((line) => redactRegisteredSecretValues(line, maskToken));
+  if (!resolved.patterns.length) {
+    return exactRedactedLines;
+  }
   const redactedLines = resolved.redactFormBodies
-    ? lines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
-    : lines;
+    ? exactRedactedLines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
+    : exactRedactedLines;
   let redacted = redactedLines.join("\n");
   if (resolved.redactStructuredAuthHeaders) {
     redacted = redactStructuredAuthHeaders(redacted, "***");

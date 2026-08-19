@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemorySearchResult } from "../../memory-host-sdk/host/types.js";
 import {
@@ -129,6 +130,33 @@ describe("memory.search gateway method", () => {
     expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
   });
 
+  it("returns typed selection-required when an explicit fleet omits agentId", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    cfg.agents = {
+      ...cfg.agents,
+      ownership: "explicit",
+      list: [{ id: "ops" }, { id: "research" }],
+    };
+    resolveDefaultAgentId.mockImplementationOnce(() => {
+      throw new AgentSelectionRequiredError(["ops", "research"], {
+        surface: "memory search",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    });
+
+    const respond = await invokeMemorySearch({ query: "lantern" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("agent"),
+      }),
+    );
+    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
+  });
+
   it("rejects a non-string agentId without acquiring a manager", async () => {
     const cfg = createConfig(testState.workspaceDir);
 
@@ -215,7 +243,10 @@ describe("memory.search gateway method", () => {
 
     const respond = await invokeMemorySearch({ query: "lantern" }, cfg);
 
-    expect(resolveDefaultAgentId).toHaveBeenCalledWith(cfg);
+    expect(resolveDefaultAgentId).toHaveBeenCalledWith(cfg, {
+      surface: "memory search",
+      hint: "Pass agentId to select a configured agent.",
+    });
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

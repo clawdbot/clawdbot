@@ -10,6 +10,7 @@ import {
   handleDesktopObserveUpgrade,
   mintDesktopObserverToken,
 } from "./observe-bridge.js";
+import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -33,7 +34,11 @@ describe("worker desktop observer tokens", () => {
 });
 
 async function createProxyHarness(
-  params: { control?: boolean; getBufferedAmount?: () => number } = {},
+  params: {
+    control?: boolean;
+    getBufferedAmount?: () => number;
+    preauth?: RfbPreauthDescriptor;
+  } = {},
 ) {
   const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desktop-observe-"));
   const localSocketPath = path.join(root, "desktop.sock");
@@ -57,6 +62,7 @@ async function createProxyHarness(
   httpServer.on("upgrade", (req, socket, head) => {
     handleDesktopObserveUpgrade(req, socket, head, {
       registry: {
+        claimStream: () => undefined,
         attachObserver: (_environmentId, observer) => {
           closeObserver.mockImplementation((code: number, reason: string) => {
             observer.close(code, reason);
@@ -86,6 +92,7 @@ async function createProxyHarness(
     ownerEpoch: 2,
     control: params.control ?? false,
     attachment: { kind: "unix-socket", socketPath: localSocketPath },
+    ...(params.preauth ? { preauth: params.preauth } : {}),
   });
   const ws = new WebSocket(
     `ws://127.0.0.1:${address.port}${DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
@@ -129,6 +136,21 @@ async function expectUnauthorizedObserver(url: string): Promise<void> {
 }
 
 describe("worker desktop observer proxy", () => {
+  it("clears the credential-bearing token timer when the token is consumed", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    await createProxyHarness({
+      preauth: {
+        auth: "ard-account",
+        credentials: { username: "operator", password: "memory-only-password" },
+      },
+    });
+    const expiryCallIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 60_000);
+    expect(expiryCallIndex).toBeGreaterThanOrEqual(0);
+    const expiryTimer = setTimeoutSpy.mock.results[expiryCallIndex]?.value;
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(expiryTimer);
+  });
+
   it("rejects consumed, expired, and unknown tokens", async () => {
     const harness = await createProxyHarness();
     await expectUnauthorizedObserver(harness.observerUrl);

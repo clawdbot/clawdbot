@@ -12,6 +12,7 @@ export function createHooksConfig(): HooksConfigResolved {
     mappings: [],
     agentPolicy: {
       defaultAgentId: "main",
+      globalSessionStoreOwner: { kind: "none" },
       knownAgentIds: new Set(["main"]),
       allowedAgentIds: undefined,
     },

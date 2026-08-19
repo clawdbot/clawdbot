@@ -87,8 +87,6 @@ import type {
   PluginHookSubagentContext,
   PluginHookSubagentDeliveryTargetEvent,
   PluginHookSubagentDeliveryTargetResult,
-  PluginHookSubagentSpawningEvent,
-  PluginHookSubagentSpawningResult,
   PluginHookSubagentEndedEvent,
   PluginHookSubagentProgressEvent,
   PluginHookSubagentSpawnedEvent,
@@ -564,24 +562,6 @@ export function createHookRunner(
       };
     }
     return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
-  };
-
-  const mergeSubagentSpawningResult = (
-    acc: PluginHookSubagentSpawningResult | undefined,
-    next: PluginHookSubagentSpawningResult,
-  ): PluginHookSubagentSpawningResult => {
-    if (acc?.status === "error") {
-      return acc;
-    }
-    if (next.status === "error") {
-      return next;
-    }
-    const deliveryOrigin = acc?.deliveryOrigin ?? next.deliveryOrigin;
-    return {
-      status: "ok",
-      threadBindingReady: Boolean(acc?.threadBindingReady || next.threadBindingReady),
-      ...(deliveryOrigin ? { deliveryOrigin } : {}),
-    };
   };
 
   const mergeSubagentDeliveryTargetResult = (
@@ -1432,23 +1412,6 @@ export function createHookRunner(
   // =========================================================================
 
   /**
-   * @deprecated Core prepares thread-bound subagent bindings through channel
-   * session-binding adapters before subagent_spawned fires. This remains only
-   * for older plugins that call the hook runner directly.
-   */
-  async function runSubagentSpawning(
-    event: PluginHookSubagentSpawningEvent,
-    ctx: PluginHookSubagentContext,
-  ): Promise<PluginHookSubagentSpawningResult | undefined> {
-    return runModifyingHook<"subagent_spawning", PluginHookSubagentSpawningResult>(
-      "subagent_spawning",
-      event,
-      ctx,
-      { mergeResults: mergeSubagentSpawningResult },
-    );
-  }
-
-  /**
    * Run subagent_delivery_target hook.
    * Runs sequentially so channel plugins can deterministically resolve routing.
    */
@@ -1684,7 +1647,6 @@ export function createHookRunner(
       event: PluginHookSessionEndEvent,
       ctx: PluginHookSessionContext,
     ): Promise<void> => runVoidHook("session_end", event, ctx),
-    runSubagentSpawning,
     runSubagentDeliveryTarget,
     runSubagentSpawned: async (
       event: PluginHookSubagentSpawnedEvent,
@@ -1733,10 +1695,6 @@ export type HookRunner = ReturnType<typeof createHookRunner>;
 
 export type SubagentLifecycleHookRunner = Pick<
   HookRunner,
-  | "hasHooks"
-  | "runSubagentSpawning"
-  | "runSubagentSpawned"
-  | "runSubagentProgress"
-  | "runSubagentEnded"
+  "hasHooks" | "runSubagentSpawned" | "runSubagentProgress" | "runSubagentEnded"
 >;
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

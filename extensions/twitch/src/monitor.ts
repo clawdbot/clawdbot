@@ -55,6 +55,29 @@ async function processTwitchMessage(params: {
   const { message, account, accountId, config, runtime, core, turnAdoptionLifecycle, statusSink } =
     params;
   const cfg = config as OpenClawConfig;
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg,
+    channel: "twitch",
+    accountId,
+    peer: {
+      kind: "group",
+      id: message.channel,
+    },
+  });
+  const exactAccess = await checkTwitchAccessControl({
+    message,
+    account,
+    botUsername: normalizeLowercaseStringOrEmpty(account.username),
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: message.id,
+      inboundEventKind: "user_request",
+    },
+  });
+  if (!exactAccess.allowed) {
+    return;
+  }
 
   await core.channel.inbound.run({
     channel: "twitch",
@@ -71,15 +94,6 @@ async function processTwitchMessage(params: {
         raw: incoming,
       }),
       resolveTurn: async (input) => {
-        const route = core.channel.routing.resolveAgentRoute({
-          cfg,
-          channel: "twitch",
-          accountId,
-          peer: {
-            kind: "group",
-            id: message.channel,
-          },
-        });
         const senderId = message.userId ?? message.username;
         const fromLabel = message.displayName ?? message.username;
         const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
@@ -89,6 +103,7 @@ async function processTwitchMessage(params: {
           body: input.rawText,
         });
         const ctxPayload = core.channel.inbound.buildContext({
+          channelIngress: exactAccess.channelIngress,
           channel: "twitch",
           accountId,
           messageId: input.id,

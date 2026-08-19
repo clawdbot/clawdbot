@@ -20,6 +20,15 @@ describe("tool mutation helpers", () => {
     ).toBe(true);
   });
 
+  it("classifies portal list as replay-safe and portal mutations as mutating", () => {
+    expect(isMutatingToolCall("portal", { action: "list" })).toBe(false);
+    expect(isReplaySafeToolCall("portal", { action: "list" })).toBe(true);
+    for (const action of ["open", "close"]) {
+      expect(isMutatingToolCall("portal", { action }), action).toBe(true);
+      expect(isReplaySafeToolCall("portal", { action }), action).toBe(false);
+    }
+  });
+
   it("builds stable fingerprints for mutating calls and omits read-only calls", () => {
     const writeFingerprint = buildToolMutationState(
       "write",
@@ -39,6 +48,58 @@ describe("tool mutation helpers", () => {
       path: "/tmp/demo.txt",
     }).actionFingerprint;
     expect(readFingerprint).toBeUndefined();
+  });
+
+  it("keeps sessions_spawn recovery identity at tool level across adjusted retries", () => {
+    // Spawn retries adjust args (drop a rejected cwd, reword the task); a
+    // per-args identity would never let the successful retry clear the failure.
+    const failed = buildToolMutationState(
+      "sessions_spawn",
+      { task: "Investigate", label: "Investigate", cwd: "/outside" },
+      "label Investigate, task Investigate",
+    );
+    const retried = buildToolMutationState(
+      "sessions_spawn",
+      { task: "Investigate in repo scope" },
+      "Investigate in repo scope",
+    );
+    expect(failed.mutatingAction).toBe(true);
+    expect(failed.actionFingerprint).toBe("tool=sessions_spawn");
+    expect(retried.actionFingerprint).toBe(failed.actionFingerprint);
+  });
+
+  it("binds reordered exact arguments to one owner but separates changed facts and owners", () => {
+    const ownerKey = '["memory-lancedb","memory_store"]';
+    const metric = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers metric units." },
+      undefined,
+      { ownerKey },
+    );
+    const reordered = buildToolMutationState(
+      "memory_store",
+      { text: "The user prefers metric units.", category: "preference" },
+      undefined,
+      { ownerKey },
+    );
+    const imperial = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers imperial units." },
+      undefined,
+      { ownerKey },
+    );
+    const otherOwner = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers metric units." },
+      undefined,
+      { ownerKey: '["other-plugin","memory_store"]' },
+    );
+
+    expect(metric).toMatchObject({ mutatingAction: true, replaySafe: false });
+    expect(metric.actionFingerprint).toBe(reordered.actionFingerprint);
+    expect(metric.actionFingerprint).not.toBe(imperial.actionFingerprint);
+    expect(metric.actionFingerprint).not.toBe(otherOwner.actionFingerprint);
+    expect(metric.actionFingerprint).not.toContain("metric units");
   });
 
   it.each([
@@ -250,7 +311,7 @@ describe("tool mutation helpers", () => {
   it("fails closed for replay unless the structured tool contract is read-only", () => {
     for (const toolName of [
       "agents_list",
-      "image",
+      "view_image",
       "pdf",
       "read",
       "conversations_list",
@@ -263,10 +324,10 @@ describe("tool mutation helpers", () => {
       expect(isReplaySafeToolCall(toolName, {}), toolName).toBe(true);
     }
     expect(
-      isReplaySafeToolCall("update_plan", {
+      isReplaySafeToolCall("progress_card", {
         plan: [{ step: "Inspect", status: "in_progress" }],
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(isReplaySafeToolCall("memory_get", { path: "memory/notes.md" })).toBe(true);
     expect(isReplaySafeToolCall("memory_search", { query: "recall" })).toBe(false);
     expect(isReplaySafeToolCall("memory_recall", { query: "recall" })).toBe(false);

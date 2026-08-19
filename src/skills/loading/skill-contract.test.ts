@@ -2,8 +2,12 @@
 import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
-import { formatSkillsForPromptCore, type Skill } from "./skill-contract.js";
-import { formatSkillsCompactForPrompt as formatSkillsCompact } from "./skill-contract.js";
+import {
+  formatSkillsForPromptCore,
+  resolveSkillDisplayName,
+  type Skill,
+  formatSkillsCompactForPrompt as formatSkillsCompact,
+} from "./skill-contract.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
   return createCanonicalFixtureSkill({
@@ -15,11 +19,28 @@ function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/S
   });
 }
 
+describe("resolveSkillDisplayName", () => {
+  it("uses the first Markdown H1 after frontmatter", () => {
+    expect(
+      resolveSkillDisplayName(
+        `---\nname: auto-review\ndescription: Review code.\n---\n# Auto Review\n`,
+        "auto-review",
+      ),
+    ).toBe("Auto Review");
+  });
+
+  it("humanizes the identifier when the skill has no H1", () => {
+    expect(resolveSkillDisplayName("Skill body without a title.\n", "patrick-daily_brief")).toBe(
+      "Patrick Daily Brief",
+    );
+  });
+});
+
 describe("formatSkillsCompact", () => {
   it("keeps the full-format XML output aligned with the upstream formatter for visible skills", () => {
     const skills = [
-      { ...makeSkill("weather", "Get weather <data> & forecasts"), promptVersion: "sha256:abc123" },
       makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
+      { ...makeSkill("weather", "Get weather <data> & forecasts"), promptVersion: "sha256:abc123" },
     ];
     expect(formatSkillsForPromptCore(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
   });

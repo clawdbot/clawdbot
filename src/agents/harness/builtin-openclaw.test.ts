@@ -83,6 +83,7 @@ describe("createOpenClawAgentHarness", () => {
         disableTools: true,
         disableTrajectory: true,
         skipPreparedUserTurnMessage: true,
+        suppressNextUserMessagePersistence: true,
         initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
         operation: "settled-tool-finalization",
       }),

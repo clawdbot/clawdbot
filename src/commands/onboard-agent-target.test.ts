@@ -3,16 +3,74 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  applyOnboardingPrimaryModel,
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
+  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("onboarding agent target", () => {
+  it("preserves an uppercase authored entry key when applying the primary model", () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: {
+          MAIN: { model: "openai/old" },
+        },
+      },
+    };
+    const target = resolveOnboardingAgentTarget(config, "main");
+
+    expect(applyOnboardingPrimaryModel(config, target, "openai/new").agents?.entries).toEqual({
+      MAIN: {
+        model: { primary: "openai/new" },
+        models: { "openai/new": {} },
+      },
+    });
+  });
+
+  it("uses the retained compatibility owner after the marker is removed", () => {
+    const config = retainLegacyDefaultAgentId(
+      { agents: { entries: { main: {}, ops: { workspace: "/srv/ops" } } } },
+      "ops",
+    );
+
+    expect(resolveOnboardingAgentTarget(config)).toMatchObject({
+      agentId: "ops",
+      workspaceDir: "/srv/ops",
+    });
+  });
+
+  it("resolves shared system-agent setup to the configured system agent on a legacy roster", () => {
+    const config = {
+      agents: {
+        defaults: {
+          workspace: "/srv/global",
+          systemAgent: { agentId: "main" },
+        },
+        entries: {
+          main: { workspace: "/srv/main" },
+          ops: { default: true, workspace: "/srv/ops" },
+        },
+      },
+    };
+
+    expect(resolveOnboardingAgentTarget(config)).toMatchObject({
+      agentId: "ops",
+      workspaceDir: "/srv/ops",
+    });
+    expect(resolveSystemAgentOnboardingTarget(config)).toMatchObject({
+      agentId: "main",
+      workspaceDir: "/srv/main",
+    });
+  });
+
   it("provisions the configured default agent workspace and sessions", async () => {
     const stateDir = tempDirs.make("openclaw-onboard-target-");
     const globalWorkspace = path.join(stateDir, "global-workspace");

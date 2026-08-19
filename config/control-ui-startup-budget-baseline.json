@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 328285,
-  "reason": "Gateway update outcome (#121686); Testbox-measured exact-head bytes",
-  "updatedAt": "2026-08-11"
+  "startupJsGzipBytes": 344429,
+  "reason": "Channel conversation avatars (PR #125668): lead-slot render branch + row plumbing on top of the 344395 B main baseline; avatar element itself is code-split out of startup",
+  "updatedAt": "2026-08-18"
 }

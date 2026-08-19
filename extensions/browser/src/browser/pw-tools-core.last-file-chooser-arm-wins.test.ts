@@ -70,7 +70,7 @@ describe("pw-tools-core", () => {
 
       expect(fc1.setFiles).not.toHaveBeenCalled();
       await vi.waitFor(() => {
-        expect(fc2.setFiles).toHaveBeenCalledWith([secondCanonicalPath]);
+        expect(fc2.setFiles).toHaveBeenCalledWith([secondCanonicalPath], { timeout: 120_000 });
       });
     } finally {
       await Promise.all([fs.rm(firstPath, { force: true }), fs.rm(secondPath, { force: true })]);

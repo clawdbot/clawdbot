@@ -39,7 +39,14 @@ function fixturePayload(): DoctorMemoryStatusPayload {
       engine: "llama.cpp",
       state: "ready",
       backend: "metal",
-      deviceNames: ["Apple GPU"],
+      buildInfo: "b10357 (689e227db)",
+      model: { id: "embeddinggemma-300m-qat-q8_0" },
+      endpoints: {
+        health: "ready",
+        models: "ready",
+        props: "ready",
+        metrics: "ready",
+      },
     },
     dreaming: {
       enabled: true,
@@ -113,7 +120,8 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).toContain("Europe/Vienna");
     expect(container.textContent).toContain("Promoted today");
     expect(container.textContent).toContain("21");
-    expect(container.textContent).toContain("Apple GPU");
+    expect(container.textContent).toContain("b10357 (689e227db)");
+    expect(container.textContent).toContain("metrics=ready");
   });
 
   it("renders a grumpy error hero with retry and no book", () => {

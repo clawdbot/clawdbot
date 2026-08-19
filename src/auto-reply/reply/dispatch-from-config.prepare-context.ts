@@ -35,8 +35,8 @@ import {
 } from "./dispatch-from-config.context.js";
 import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import {
-  resolveHarnessSourceVisibleRepliesDefault,
   resolveTurnModelOverride,
+  resolveVisibleRepliesPolicy,
 } from "./dispatch-from-config.harness-defaults.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
@@ -46,6 +46,7 @@ import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./me
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
+import { resolveStableMessageToolAvailability } from "./session-stable-reply-mode.js";
 import {
   isExplicitSourceReplyCommand,
   isUnauthorizedTextSlashCommand,
@@ -222,22 +223,16 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         ? cfg.surfaces?.[silentReplySurface]?.silentReply
         : undefined,
     }) === "allow";
-  const configuredVisibleReplies =
-    chatType === "group" || chatType === "channel"
-      ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
-      : cfg.messages?.visibleReplies;
-  const harnessDefaultVisibleReplies =
-    configuredVisibleReplies === undefined && chatType !== "group" && chatType !== "channel"
-      ? resolveHarnessSourceVisibleRepliesDefault({
-          cfg,
-          ctx,
-          entry: sessionStoreEntry.entry,
-          sessionAgentId,
-          sessionKey: acpDispatchSessionKey,
-          sessionStore: sessionStoreEntry.store,
-          turnModelOverride: resolveTurnModelOverride(params.replyOptions),
-        })
-      : undefined;
+  const { configuredVisibleReplies, harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
+    cfg,
+    chatType,
+    ctx,
+    entry: sessionStoreEntry.entry,
+    sessionAgentId,
+    sessionKey: acpDispatchSessionKey,
+    sessionStore: sessionStoreEntry.store,
+    turnModelOverride: resolveTurnModelOverride(params.replyOptions),
+  });
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -299,6 +294,20 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     subagentPolicy,
     inheritedToolPolicy,
   ]);
+  // The stable mode's tool-only downgrade must be sender-independent, or a
+  // sender-scoped message denial hashes a different binding policy than the
+  // sender-less synthetic turns on the same session. Only tool-only candidates
+  // can downgrade, so skip the second policy pass otherwise.
+  const sessionStableMessageToolAvailable =
+    effectiveVisibleReplies === "message_tool"
+      ? resolveStableMessageToolAvailability({
+          cfg,
+          ctx,
+          sessionEntry: sessionStoreEntry.entry,
+          sessionAgentId,
+          sessionKey: acpDispatchSessionKey,
+        })
+      : undefined;
   const sourceReplyPolicyParams = {
     cfg,
     ctx,
@@ -308,6 +317,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
     shouldSuppressTyping: state.shouldSuppressTyping,
     messageToolAvailable,
+    sessionStableMessageToolAvailable,
     isHeartbeat: params.replyOptions?.isHeartbeat,
   } as const;
   let sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({

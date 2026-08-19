@@ -17,7 +17,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
 import { resolveActiveRecallForRun } from "./recall-state.js";
-import { hasRememberAcrossConversationsAgent } from "./session-policy.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
@@ -819,19 +818,6 @@ describe("active-memory plugin", () => {
     );
 
     expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
-  });
-
-  it("does not synthesize a main agent when every configured agent opts out", () => {
-    expect(
-      hasRememberAcrossConversationsAgent({
-        agents: {
-          list: [
-            { id: "personal", memory: { search: { rememberAcrossConversations: false } } },
-            { id: "support", memory: { search: { rememberAcrossConversations: false } } },
-          ],
-        },
-      }),
-    ).toBe(false);
   });
 
   it("keeps the outer hook timeout at the live-config ceiling", () => {

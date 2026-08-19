@@ -677,6 +677,10 @@ async function safeFetch(params: {
   }
 
   if (!hasDispatcher) {
+    const lookupFn: LookupFn = async (hostname) => {
+      const resolved = await resolveFn(hostname);
+      return [{ ...resolved, family: resolved.address.includes(":") ? 6 : 4 }];
+    };
     const guarded = await fetchWithSsrFGuard({
       url: currentUrl,
       fetchImpl: resolveGuardedFetchImpl({
@@ -690,7 +694,7 @@ async function safeFetch(params: {
       maxRedirects: MAX_SAFE_REDIRECTS,
       requireHttps: true,
       policy: resolveMediaSsrfPolicy(params.allowHosts),
-      lookupFn: resolveFn as LookupFn,
+      lookupFn,
       retainAuthorizationRedirectHostnameAllowlist:
         resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
       auditContext: "msteams.attachment",

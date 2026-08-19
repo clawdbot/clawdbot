@@ -327,7 +327,6 @@ export function buildEmptyInteractiveReplyPayload(params: {
   isHeartbeat?: boolean;
   silentExpected?: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
-  isMessageToolOnly: boolean;
   hasPendingContinuation: boolean;
   hasExplicitSilentReply: boolean;
   hasCommittedDelivery: boolean;
@@ -339,7 +338,6 @@ export function buildEmptyInteractiveReplyPayload(params: {
     params.isHeartbeat === true ||
     params.silentExpected === true ||
     params.allowEmptyAssistantReplyAsSilent === true ||
-    params.isMessageToolOnly ||
     params.hasPendingContinuation ||
     params.hasExplicitSilentReply ||
     params.hasCommittedDelivery

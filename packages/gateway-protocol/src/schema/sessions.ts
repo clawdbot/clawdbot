@@ -7,8 +7,11 @@ import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
+import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
+import { SessionOwnerSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
+export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
 export {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
@@ -25,9 +28,13 @@ export {
 } from "./sessions-patch.js";
 export {
   SessionCreatedActorSchema,
+  SessionPermissionModeSchema,
+  SessionOwnerSchema,
   SessionRowSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionOwner,
+  type SessionPermissionMode,
   type SessionRow,
   type SessionRunStatus,
   type SessionToolOverrides,
@@ -93,6 +100,7 @@ export const SessionCompanionExchangeSchema = closedObject({
 /** Asks the read-only companion about one session and its workspace. */
 export const SessionsCompanionAskParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
 });
 
@@ -105,6 +113,7 @@ export const SessionsCompanionAskResultSchema = closedObject({
 /** Selects the in-memory companion thread for one session. */
 export const SessionsCompanionStateParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 /** Current bounded exchanges for one session companion thread. */
@@ -115,6 +124,7 @@ export const SessionsCompanionStateResultSchema = closedObject({
 /** Selects the in-memory companion thread to clear. */
 export const SessionsCompanionResetParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 /** Acknowledges clearing one companion thread. */
@@ -382,20 +392,24 @@ export const SessionsListParamsSchema = closedObject({
   /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**
-   * Read first 8KB of each session transcript to derive title from first user message.
-   * Performs a file read per session - use `limit` to bound result set on large stores.
+   * Read a bounded transcript head projection to derive a title from the first user message.
+   * Use `limit` to bound projection work on large stores.
    */
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   /**
-   * Read last 16KB of each session transcript to extract most recent message preview.
-   * Performs a file read per session - use `limit` to bound result set on large stores.
+   * Read a bounded transcript tail projection for the latest visible user or assistant text.
+   * The returned short preview excludes tool, system, reasoning, and silent rows.
    */
   includeLastMessage: Type.Optional(Type.Boolean()),
   label: Type.Optional(SessionLabelString),
   /** Limit rows to sessions with an explicitly stored Control UI face preference. */
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
-  /** Filter rows by their permanent creator identity. */
+  /** Filter rows by their immutable creator provenance. */
   creatorId: Type.Optional(NonEmptyString),
+  /** Filter rows by their current assignable owner identity. */
+  ownerId: Type.Optional(NonEmptyString),
+  /** Limit rows to sessions owned by or previously prompted by the authenticated viewer. */
+  involvingMe: Type.Optional(Type.Boolean()),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
@@ -515,6 +529,7 @@ export const SessionsAbortParamsSchema = closedObject({
 /** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = closedObject({
   key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   pluginId: NonEmptyString,
   namespace: NonEmptyString,
   value: Type.Optional(PluginJsonValueSchema),
@@ -554,6 +569,22 @@ export const SessionsDeleteParamsSchema = closedObject({
   archivedOnly: Type.Optional(Type.Boolean()),
 });
 
+/** Reassigns mutable session responsibility without changing provenance or sharing authority. */
+export const SessionsAssignOwnerParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  owner: closedObject({
+    type: Type.Union([Type.Literal("agent"), Type.Literal("human")]),
+    id: NonEmptyString,
+  }),
+});
+
+export const SessionsAssignOwnerResultSchema = closedObject({
+  ok: Type.Literal(true),
+  key: NonEmptyString,
+  owner: SessionOwnerSchema,
+});
+
 /** Lists the gateway-owned custom session group catalog (names + order). */
 export const SessionsGroupsListParamsSchema = closedObject({});
 
@@ -563,12 +594,27 @@ export const SessionGroupSchema = closedObject({
   position: Type.Integer({ minimum: 0 }),
 });
 
+/** New Session defaults visible only to operators who can update them. */
+export const SessionGroupDefaultsSchema = closedObject({
+  name: SessionLabelString,
+  cwd: Type.Optional(NonEmptyString),
+  worktree: Type.Optional(Type.Boolean()),
+});
+
 const SidebarSectionIdString = Type.String({ minLength: 1, maxLength: 512 });
 
 /** Custom session group catalog in display order. */
 export const SessionsGroupsListResultSchema = closedObject({
   groups: Type.Array(SessionGroupSchema),
   sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
+});
+
+/** Reads the New Session defaults for the custom group catalog. */
+export const SessionsGroupsDefaultsParamsSchema = closedObject({});
+
+/** Write-scoped group defaults, kept separate from the read-scoped catalog. */
+export const SessionsGroupsDefaultsResultSchema = closedObject({
+  defaults: Type.Array(SessionGroupDefaultsSchema),
 });
 
 /** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
@@ -581,6 +627,19 @@ export const SessionsGroupsPutParamsSchema = closedObject({
 export const SessionsGroupsRenameParamsSchema = closedObject({
   name: SessionLabelString,
   to: SessionLabelString,
+});
+
+/** Updates the New Session defaults owned by one custom group. */
+export const SessionsGroupsUpdateParamsSchema = closedObject({
+  name: SessionLabelString,
+  cwd: Type.Union([NonEmptyString, Type.Null()]),
+  worktree: Type.Boolean(),
+});
+
+/** Result after updating defaults without widening the read-scoped catalog. */
+export const SessionsGroupsUpdateResultSchema = closedObject({
+  ok: Type.Literal(true),
+  defaults: Type.Array(SessionGroupDefaultsSchema),
 });
 
 /** Deletes a group and clears every member session's category. */
@@ -812,6 +871,8 @@ export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchR
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
+export type SessionsRecoverParams = Static<typeof SessionsRecoverParamsSchema>;
+export type SessionsRecoverResult = Static<typeof SessionsRecoverResultSchema>;
 export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
 export type SessionsMessagesUnsubscribeParams = Static<
@@ -822,11 +883,18 @@ export type SessionsPluginPatchParams = Static<typeof SessionsPluginPatchParamsS
 export type SessionsPluginPatchResult = Static<typeof SessionsPluginPatchResultSchema>;
 export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
 export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
+export type SessionsAssignOwnerParams = Static<typeof SessionsAssignOwnerParamsSchema>;
+export type SessionsAssignOwnerResult = Static<typeof SessionsAssignOwnerResultSchema>;
 export type SessionGroup = Static<typeof SessionGroupSchema>;
+export type SessionGroupDefaults = Static<typeof SessionGroupDefaultsSchema>;
 export type SessionsGroupsListParams = Static<typeof SessionsGroupsListParamsSchema>;
 export type SessionsGroupsListResult = Static<typeof SessionsGroupsListResultSchema>;
+export type SessionsGroupsDefaultsParams = Static<typeof SessionsGroupsDefaultsParamsSchema>;
+export type SessionsGroupsDefaultsResult = Static<typeof SessionsGroupsDefaultsResultSchema>;
 export type SessionsGroupsPutParams = Static<typeof SessionsGroupsPutParamsSchema>;
 export type SessionsGroupsRenameParams = Static<typeof SessionsGroupsRenameParamsSchema>;
+export type SessionsGroupsUpdateParams = Static<typeof SessionsGroupsUpdateParamsSchema>;
+export type SessionsGroupsUpdateResult = Static<typeof SessionsGroupsUpdateResultSchema>;
 export type SessionsGroupsDeleteParams = Static<typeof SessionsGroupsDeleteParamsSchema>;
 export type SessionsGroupsMutationResult = Static<typeof SessionsGroupsMutationResultSchema>;
 export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;

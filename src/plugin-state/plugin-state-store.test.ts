@@ -10,6 +10,7 @@ import {
 } from "../state/openclaw-quarantine-store.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
+  isOpenClawStateDatabaseOpen,
   OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
@@ -26,7 +27,6 @@ import {
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
-  isPluginStateDatabaseOpen,
   pluginStateEntriesInKeyRange,
   registerPluginStateSyncSequencedJournalEntry,
   resetPluginStateStoreForTests,
@@ -889,7 +889,7 @@ describe("plugin state keyed store", () => {
       await store.register("k", { ok: true });
       resetPluginStateStoreForTests();
 
-      expect(isPluginStateDatabaseOpen()).toBe(false);
+      expect(isOpenClawStateDatabaseOpen()).toBe(false);
       await expect(store.lookup("k")).resolves.toEqual({ ok: true });
       await expect(store.entries()).resolves.toMatchObject([{ key: "k", value: { ok: true } }]);
       expect(
@@ -902,7 +902,7 @@ describe("plugin state keyed store", () => {
         }),
       ).toMatchObject([{ key: "k", value: { ok: true } }]);
       expect(countPluginStateLiveEntries("discord")).toBe(1);
-      expect(isPluginStateDatabaseOpen()).toBe(false);
+      expect(isOpenClawStateDatabaseOpen()).toBe(false);
     });
   });
 

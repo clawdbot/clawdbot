@@ -583,12 +583,10 @@ type LoadedReferenceAsset = Awaited<ReturnType<typeof loadReferenceAssets>>[numb
 type ExecutedVideoGeneration = {
   provider: string;
   model: string;
-  savedPaths: string[];
   /** URLs of url-only assets that were not saved locally. */
   urlOnlyUrls: string[];
   /** Total generated video count, including url-only assets. */
   count: number;
-  paths: string[];
   mediaUrls: string[];
   attachments: AgentGeneratedAttachment[];
   contentText: string;
@@ -784,17 +782,21 @@ async function executeVideoGenerationJob(params: {
     },
   );
   const attachments: AgentGeneratedAttachment[] = [
-    ...savedVideos.map((video, index) => ({
-      type: "video" as const,
-      path: video.path,
-      mimeType: video.contentType,
-      name: video.id,
-      sizeBytes: video.size,
-      ...(typeof normalizedDurationSeconds === "number"
-        ? { durationMs: normalizedDurationSeconds * 1000 }
-        : {}),
-      ...savedVideoMetadata[index],
-    })),
+    ...savedVideos.map((video, index) =>
+      Object.assign(
+        {
+          type: "video" as const,
+          path: video.path,
+          mimeType: video.contentType,
+          name: video.id,
+          sizeBytes: video.size,
+          ...(typeof normalizedDurationSeconds === "number"
+            ? { durationMs: normalizedDurationSeconds * 1000 }
+            : {}),
+        },
+        savedVideoMetadata[index] ?? {},
+      ),
+    ),
     ...urlOnlyVideos.map((video) => ({
       type: "video" as const,
       url: video.url,
@@ -819,10 +821,8 @@ async function executeVideoGenerationJob(params: {
   return {
     provider: result.provider,
     model: result.model,
-    savedPaths: savedVideos.map((video) => video.path),
     urlOnlyUrls: urlOnlyVideos.map((video) => video.url),
     count: totalCount,
-    paths: savedVideos.map((video) => video.path),
     mediaUrls: allMediaUrls,
     attachments,
     contentText: lines.join("\n"),
@@ -894,6 +894,7 @@ export function createVideoGenerateTool(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -959,7 +960,10 @@ export function createVideoGenerateTool(options?: {
       }
 
       if (action === "status") {
-        return createVideoGenerateStatusActionResult(options?.agentSessionKey);
+        return createVideoGenerateStatusActionResult(
+          options?.agentSessionKey,
+          options?.requesterAgentId,
+        );
       }
 
       const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
@@ -979,7 +983,7 @@ export function createVideoGenerateTool(options?: {
 
       const activeDuplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt },
+        { prompt, agentId: options?.requesterAgentId },
       );
       if (activeDuplicateGuardResult) {
         return activeDuplicateGuardResult;
@@ -1089,7 +1093,7 @@ export function createVideoGenerateTool(options?: {
       });
       const duplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt, requestKey },
+        { prompt, requestKey, agentId: options?.requesterAgentId },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;
@@ -1144,17 +1148,20 @@ export function createVideoGenerateTool(options?: {
       signal?.throwIfAborted();
       const taskHandle = createVideoGenerationTaskRun({
         sessionKey: options?.agentSessionKey,
+        requesterAgentId: options?.requesterAgentId,
         requesterOrigin: options?.requesterOrigin,
         prompt,
         providerId: selectedProvider?.id,
       });
       const shouldDetach = Boolean(
-        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+        taskHandle &&
+        shouldDetachMediaGenerationTask(options?.agentSessionKey, options?.requesterAgentId),
       );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({
           sessionKey: options?.agentSessionKey,
+          agentId: options?.requesterAgentId,
           taskKind: "video_generation",
           sourcePrefix: "video_generate",
           taskId: taskHandle.taskId,
@@ -1263,7 +1270,6 @@ export function createVideoGenerateTool(options?: {
           provider: executed.provider,
           model: executed.model,
           count: executed.count,
-          paths: executed.savedPaths,
         });
 
         return {

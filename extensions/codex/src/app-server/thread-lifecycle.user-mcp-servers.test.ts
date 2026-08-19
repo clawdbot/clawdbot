@@ -197,6 +197,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
 
   it("projects only Codex user MCP servers scoped to the current agent", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:atlas:session-1");
     const workspaceDir = path.join(tempDir, "workspace");
     const request = vi.fn(async (method: string, _params: unknown) => {
       if (method === "thread/start") {
@@ -207,28 +208,33 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
 
     await startOrResumeThread({
       client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, {
-        mcp: {
-          servers: {
-            atlas: {
-              transport: "streamable-http",
-              url: "https://atlas.example.com/mcp",
-              codex: {
-                agents: ["atlas"],
-                defaultToolsApprovalMode: "approve",
+      params: {
+        ...createParams(sessionFile, workspaceDir, {
+          mcp: {
+            servers: {
+              atlas: {
+                transport: "streamable-http",
+                url: "https://atlas.example.com/mcp",
+                codex: {
+                  agents: ["atlas"],
+                  defaultToolsApprovalMode: "approve",
+                },
               },
-            },
-            apolo: {
-              transport: "streamable-http",
-              url: "https://apolo.example.com/mcp",
-              codex: {
-                agents: ["apolo"],
-                defaultToolsApprovalMode: "approve",
+              apolo: {
+                transport: "streamable-http",
+                url: "https://apolo.example.com/mcp",
+                codex: {
+                  agents: ["apolo"],
+                  defaultToolsApprovalMode: "approve",
+                },
               },
             },
           },
-        },
-      } as unknown as EmbeddedRunAttemptParams["config"]),
+        } as unknown as EmbeddedRunAttemptParams["config"]),
+        // Explicit multi-agent ownership (#114388): the session key owner must
+        // match the explicit agentId below.
+        sessionKey: "agent:atlas:session-1",
+      },
       agentId: "atlas",
       cwd: workspaceDir,
       dynamicTools: [],

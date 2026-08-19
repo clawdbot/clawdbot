@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import {
   createApplicationContextProvider,
@@ -21,6 +22,37 @@ type RuntimeConfigState = {
   } | null;
   lastError: string | null;
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
+function createGateway() {
+  const client = {} as GatewayBrowserClient;
+  let snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
+  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  return {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (snapshot: ApplicationGatewaySnapshot) => void) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    } as unknown as ApplicationContext["gateway"],
+    setPhase(phase: ApplicationGatewaySnapshot["phase"]) {
+      snapshot = { ...snapshot, phase };
+      listeners.forEach((listener) => listener(snapshot));
+    },
+  };
+}
 
 function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const state: RuntimeConfigState = {
@@ -46,10 +78,13 @@ async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
   page: LabsPageElement;
   provider: ApplicationContextProvider;
   runtimeConfig: ReturnType<typeof createRuntimeConfig>;
+  gateway: ReturnType<typeof createGateway>;
 }> {
   const runtimeConfig = createRuntimeConfig(sourceConfig);
+  const gateway = createGateway();
   const context = {
     basePath: "",
+    gateway: gateway.gateway,
     runtimeConfig,
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
@@ -57,7 +92,7 @@ async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
-  return { page, provider, runtimeConfig };
+  return { page, provider, runtimeConfig, gateway };
 }
 
 function labRow(page: LabsPageElement, title: string) {
@@ -112,6 +147,7 @@ describe("LabsPage", () => {
     expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     expect(page.textContent).toContain("Swarm");
+    expect(page.textContent).toContain("Host Desktop");
     expect(page.textContent).toContain("Cloud Worker Desktop");
     expect(codeModeToggle(page).checked).toBe(true);
 
@@ -148,6 +184,28 @@ describe("LabsPage", () => {
       note: "labs: update codeMode",
     });
     expect(runtimeConfig.refresh).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a retired save failure after a same-client reconnect", async () => {
+    const pendingPatch = deferred<boolean>();
+    const { gateway, page, runtimeConfig } = await mountPage({
+      tools: { codeMode: { enabled: false } },
+    });
+    runtimeConfig.patch.mockImplementationOnce(() => pendingPatch.promise);
+    const toggle = codeModeToggle(page);
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+
+    gateway.setPhase("reconnecting");
+    gateway.setPhase("connected");
+    pendingPatch.resolve(false);
+    await pendingPatch.promise;
+    await page.updateComplete;
+
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(toggle.checked).toBe(false);
   });
 
   it.each([
@@ -199,6 +257,12 @@ describe("LabsPage", () => {
       sourceConfig: { logging: { audit: { messages: "off" } } },
       expectedPatch: { logging: { audit: { messages: "direct" } } },
       note: "labs: update auditMessages",
+    },
+    {
+      label: "Host Desktop",
+      sourceConfig: { desktop: { host: { enabled: false } } },
+      expectedPatch: { desktop: { host: { enabled: true } } },
+      note: "labs: update hostDesktop",
     },
     {
       label: "Cloud Worker Desktop",
@@ -257,10 +321,11 @@ describe("LabsPage", () => {
     const rows = [...page.querySelectorAll(".settings-row")];
 
     const restartRows = rows.filter((row) => row.textContent?.includes("restart"));
-    expect(restartRows).toHaveLength(2);
+    expect(restartRows).toHaveLength(3);
     expect(restartRows.map((row) => row.textContent)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("Message audit metadata"),
+        expect.stringContaining("Host Desktop"),
         expect.stringContaining("Cloud Worker Desktop"),
       ]),
     );

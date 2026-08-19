@@ -5,7 +5,7 @@ import {
   installChannelStatusContractSuite,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect } from "vitest";
+import { afterEach, describe, expect, vi } from "vitest";
 import { slackPlugin } from "../api.js";
 import { slackSetupPlugin } from "../setup-plugin-api.js";
 
@@ -24,6 +24,10 @@ const slackDefaultActions = [
   "member-info",
   "emoji-list",
 ] as const;
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("slack actions contract", () => {
   installChannelActionsContractSuite({
@@ -86,6 +90,61 @@ describe("slack setup contract", () => {
         },
         expectedAccountId: "ops",
         expectedValidation: "Slack env tokens can only be used for the default account.",
+      },
+      {
+        name: "HTTP env setup accepts a configured signing secret without an app token",
+        cfg: {
+          channels: {
+            slack: {
+              mode: "http",
+              signingSecret: "test-signing-secret",
+            },
+          },
+        } as OpenClawConfig,
+        input: {
+          useEnv: true,
+        },
+        beforeTest: () => {
+          expect(
+            slackSetupPlugin.setupContract?.metadata.fields.find((field) => field.key === "useEnv"),
+          ).toMatchObject({ kind: "boolean", envVars: ["SLACK_BOT_TOKEN"] });
+          vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
+          vi.stubEnv("SLACK_APP_TOKEN", "");
+        },
+        assertPatchedConfig: (cfg) => {
+          expect(cfg.channels?.slack).toMatchObject({
+            enabled: true,
+            mode: "http",
+            signingSecret: "test-signing-secret",
+          });
+          expect(cfg.channels?.slack?.appToken).toBeUndefined();
+        },
+      },
+      {
+        name: "Socket Mode env setup rejects a missing app token",
+        cfg: {} as OpenClawConfig,
+        input: {
+          useEnv: true,
+        },
+        beforeTest: () => {
+          vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
+          vi.stubEnv("SLACK_APP_TOKEN", "");
+        },
+        expectedValidation: "Slack Socket Mode requires SLACK_APP_TOKEN when using --use-env.",
+      },
+      {
+        name: "Socket Mode env setup accepts bot and app tokens",
+        cfg: {} as OpenClawConfig,
+        input: {
+          useEnv: true,
+        },
+        beforeTest: () => {
+          vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
+          vi.stubEnv("SLACK_APP_TOKEN", "xapp-test");
+        },
+        assertPatchedConfig: (cfg) => {
+          expect(cfg.channels?.slack).toMatchObject({ enabled: true });
+        },
       },
       {
         name: "user identity stores the user and Socket Mode transport tokens",

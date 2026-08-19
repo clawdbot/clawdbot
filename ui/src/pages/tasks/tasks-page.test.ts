@@ -23,13 +23,16 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function createGateway(client: GatewayBrowserClient) {
+function createGateway(
+  client: GatewayBrowserClient,
+  hello: ApplicationGatewaySnapshot["hello"] = null,
+) {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello,
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -302,6 +305,16 @@ describe("TasksPage concurrent refresh events", () => {
 });
 
 describe("TasksPage active pagination", () => {
+  it("redacts secrets in displayed list failures", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+
+    await vi.waitFor(() => expect(page.error).toBe("OPENAI_API_KEY=sk-123...cdef"));
+  });
+
   it("drains active pages with the selected scope and merges each task once", async () => {
     const sharedPageOne = createTask("task-shared", "running", {
       progressSummary: "Page one progress",
@@ -420,6 +433,59 @@ describe("TasksPage active pagination", () => {
 });
 
 describe("TasksPage cancellation lifecycle", () => {
+  it("lets a read-only operator copy a retained result without mutation controls", async () => {
+    const retained = createTask("task-read-only-retained", "completed", {
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+      terminalSummary: "Synthetic retained task completed.",
+    });
+    const copiedResult = "Synthetic retained result for read-only operator proof.";
+    const request = vi.fn((method: string) =>
+      Promise.resolve(
+        method === "tasks.get"
+          ? { task: { ...retained, result: copiedResult } }
+          : { tasks: [retained] },
+      ),
+    );
+    const source = createGateway(
+      { request } as unknown as GatewayBrowserClient,
+      {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    );
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    const writeText = vi.fn(async () => undefined);
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      document.body.append(page);
+      await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+
+      const copyButton = [...page.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Copy result",
+      );
+      expect(copyButton).toBeDefined();
+      const text = page.textContent ?? "";
+      expect(text).not.toContain("Retry delivery");
+      expect(text).not.toContain("Dismiss delivery");
+      expect(text).not.toContain("Cancel");
+
+      copyButton?.click();
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(copiedResult));
+      expect(request).toHaveBeenCalledWith("tasks.get", { taskId: retained.taskId });
+    } finally {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+    }
+  });
+
   it("qualifies unscoped task session links with the selected agent", async () => {
     const request = vi.fn(async () => ({
       tasks: [

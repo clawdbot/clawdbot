@@ -25,7 +25,14 @@ describe("package git fixture", () => {
     );
     writeFileSync(
       path.join(root, "node_modules", "@openclaw", "ai", "package.json"),
-      `${JSON.stringify({ name: "@openclaw/ai", version: "2026.6.11" })}\n`,
+      `${JSON.stringify({
+        name: "@openclaw/ai",
+        version: "2026.6.11",
+        type: "module",
+        main: "./dist/index.mjs",
+        exports: { ".": "./dist/index.mjs" },
+        devDependencies: { "@openclaw/normalization-core": "0.0.0-private" },
+      })}\n`,
     );
 
     const result = spawnSync(
@@ -41,14 +48,17 @@ describe("package git fixture", () => {
     const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
     expect(packageJson.dependencies["@openclaw/ai"]).toBe("file:.openclaw-fixture/packages/ai");
     expect(packageJson.bundleDependencies).toEqual(["chalk"]);
-    expect(
-      JSON.parse(
-        readFileSync(
-          path.join(root, ".openclaw-fixture", "packages", "ai", "package.json"),
-          "utf8",
-        ),
-      ).name,
-    ).toBe("@openclaw/ai");
+    const relocatedAiPackage = JSON.parse(
+      readFileSync(path.join(root, ".openclaw-fixture", "packages", "ai", "package.json"), "utf8"),
+    );
+    expect(relocatedAiPackage).toMatchObject({
+      name: "@openclaw/ai",
+      version: "2026.6.11",
+      type: "module",
+      main: "./dist/index.mjs",
+      exports: { ".": "./dist/index.mjs" },
+    });
+    expect(relocatedAiPackage).not.toHaveProperty("devDependencies");
 
     mkdirSync(path.join(root, "node_modules", "chalk"), { recursive: true });
     writeFileSync(path.join(root, "node_modules", "chalk", "package.json"), "{}\n");

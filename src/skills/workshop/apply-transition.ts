@@ -19,6 +19,7 @@ import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-ta
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { readProposalFrontmatter, stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { isWorkshopOwnedSkillDir } from "./ownership.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
@@ -226,6 +227,16 @@ export async function applySkillProposalTransition(
 
       assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
       assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+      if (
+        record.kind === "update" &&
+        !isWorkshopOwnedSkillDir(
+          input.workspaceDir,
+          record.target.skillDir,
+          storeOptions(input.env),
+        )
+      ) {
+        throw new Error(`Skill Workshop does not own this skill path: ${record.target.skillKey}`);
+      }
       const workshopConfig = resolveSkillWorkshopConfig(input.config);
       const symlinkPolicy = {
         allowWrites: workshopConfig.allowSymlinkTargetWrites,
@@ -448,12 +459,11 @@ export async function assertSkillProposalSupportTargetUnchanged(params: {
   }
 }
 
-export async function markSkillProposalStale(params: {
+export function transitionPendingSkillProposalToStale(params: {
   record: SkillProposalRecord;
   reason: string;
-  message: string;
   input: SkillProposalTransitionInput;
-}): Promise<never> {
+}): { record: SkillProposalRecord; event: SkillProposalEvent } {
   const now = new Date().toISOString();
   const stale: SkillProposalRecord = {
     ...params.record,
@@ -478,7 +488,17 @@ export async function markSkillProposalStale(params: {
   if (commit.state !== "committed" || !commit.event) {
     throw new Error("Failed to record stale Skill Workshop proposal.");
   }
-  throw new SkillProposalLifecycleError(params.message, stale, commit.event);
+  return { record: stale, event: commit.event };
+}
+
+export async function markSkillProposalStale(params: {
+  record: SkillProposalRecord;
+  reason: string;
+  message: string;
+  input: SkillProposalTransitionInput;
+}): Promise<never> {
+  const transition = transitionPendingSkillProposalToStale(params);
+  throw new SkillProposalLifecycleError(params.message, transition.record, transition.event);
 }
 
 function createSkillProposalRollback(params: {

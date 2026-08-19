@@ -38,7 +38,12 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       previous &&
       (!next ||
         previous.identity !== next.identity ||
-        !Object.is(previous.sourceIdentity, next.sourceIdentity))
+        // Content equality, not Object.is: a drained autosave ack (or a
+        // config.changed refresh) clones the whole form, changing every
+        // identity while the bytes are unchanged — closing here would wipe
+        // the operator's in-progress add-entry draft mid-typing.
+        (!Object.is(previous.sourceIdentity, next.sourceIdentity) &&
+          !configValuesEqual(previous.sourceIdentity, next.sourceIdentity)))
     ) {
       this.closeDraft();
     }

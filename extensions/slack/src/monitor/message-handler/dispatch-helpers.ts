@@ -60,19 +60,6 @@ export function isSlackStreamingEnabled(params: {
   return false;
 }
 
-export function shouldEnableSlackPreviewStreaming(params: {
-  mode: "off" | "partial" | "block" | "progress";
-}): boolean {
-  return params.mode !== "off";
-}
-
-export function shouldInitializeSlackDraftStream(params: {
-  previewStreamingEnabled: boolean;
-  useStreaming: boolean;
-}): boolean {
-  return params.previewStreamingEnabled && !params.useStreaming;
-}
-
 export function resolveSlackDisableBlockStreaming(params: {
   useStreaming: boolean;
   shouldUseDraftStream: boolean;
@@ -97,20 +84,20 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
+// Slack's native agent card is the default progress surface; operators opt out
+// with an explicit `false`, which falls back to the Block Kit progress card.
 export function resolveSlackNativeProgressTaskCards(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): boolean {
   const streaming = entry?.streaming;
   if (!streaming || typeof streaming !== "object" || Array.isArray(streaming)) {
-    return false;
+    return true;
   }
   const progressConfig = (streaming as Record<string, unknown>).progress;
-  return (
-    Boolean(progressConfig) &&
-    typeof progressConfig === "object" &&
-    !Array.isArray(progressConfig) &&
-    (progressConfig as { nativeTaskCards?: unknown }).nativeTaskCards === true
-  );
+  if (!progressConfig || typeof progressConfig !== "object" || Array.isArray(progressConfig)) {
+    return true;
+  }
+  return (progressConfig as { nativeTaskCards?: unknown }).nativeTaskCards !== false;
 }
 
 export function resolveSlackStreamingThreadHint(params: {

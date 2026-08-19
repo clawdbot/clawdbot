@@ -69,9 +69,15 @@ export function resolveCliNoOutputTimeoutMs(params: {
   backend: CliBackendConfig;
   timeoutMs: number;
   useResume: boolean;
+  expectedQuiet?: boolean;
   trigger?: EmbeddedRunTrigger;
   runTimeoutOverrideMs?: number;
 }): number {
+  if (params.expectedQuiet) {
+    // Expected-quiet controls have no earlier liveness signal; the caller's
+    // overall operation timeout remains their authoritative execution budget.
+    return params.timeoutMs;
+  }
   const hasExplicitRunTimeout =
     typeof params.runTimeoutOverrideMs === "number" &&
     Number.isFinite(params.runTimeoutOverrideMs) &&

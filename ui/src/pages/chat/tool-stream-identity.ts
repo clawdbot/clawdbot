@@ -1,18 +1,18 @@
 import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 type ToolMessageRef = {
   id: string;
   runId?: string;
 };
 
-export type LiveToolStreamRef = ToolMessageRef & {
+type LiveToolStreamRef = ToolMessageRef & {
   identity: string;
 };
 
@@ -124,4 +124,69 @@ export function resolveMatchingLiveToolIdentity(
       liveRef.id === ref.id && (!ref.runId || !liveRef.runId || liveRef.runId === ref.runId),
   );
   return matches.length === 1 ? matches[0]?.identity : undefined;
+}
+
+export function buildLiveRenderedToolRefs(toolMessages: unknown[]): LiveToolStreamRef[] {
+  const refs: LiveToolStreamRef[] = [];
+  const seen = new Set<string>();
+  for (const [index, message] of toolMessages.entries()) {
+    for (const ref of extractToolMessageRefs(message)) {
+      const key = JSON.stringify([ref.runId ?? null, ref.id]);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      refs.push({ ...ref, identity: `live:${index}:${key}` });
+    }
+  }
+  return refs;
+}
+
+export function removeLiveToolBlocksFromHistory(
+  message: unknown,
+  liveToolRefs: LiveToolStreamRef[],
+): unknown {
+  const record = asToolRecord(message);
+  if (!record || !Array.isArray(record.content) || liveToolRefs.length === 0) {
+    return message;
+  }
+  const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
+  const topLevelRunId = normalizeOptionalString(record.runId);
+  const content = record.content.filter((block) => {
+    const entry = asToolRecord(block);
+    if (!entry || !isToolMessageContentBlock(entry)) {
+      return true;
+    }
+    const id = resolveToolUseId(entry) ?? topLevelToolId;
+    if (!id) {
+      return true;
+    }
+    const runId = normalizeOptionalString(entry.runId) ?? topLevelRunId;
+    return !resolveMatchingLiveToolIdentity({ id, ...(runId ? { runId } : {}) }, liveToolRefs);
+  });
+  return content.length === record.content.length ? message : { ...record, content };
+}
+
+export function persistedCurrentToolStreamIds(
+  messages: unknown[],
+  state: LiveToolStreamHost,
+): Set<string> {
+  const liveToolRefs = resolveLiveToolStreamRefs(state);
+  const matchedToolIds = new Set<string>();
+  if (liveToolRefs.length === 0) {
+    return matchedToolIds;
+  }
+  const lastUserIndex = messages.findLastIndex((message) => {
+    const role = asToolRecord(message)?.role;
+    return typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "user";
+  });
+  for (const message of messages.slice(lastUserIndex + 1)) {
+    for (const ref of extractToolMessageRefs(message)) {
+      const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
+      if (identity) {
+        matchedToolIds.add(identity);
+      }
+    }
+  }
+  return matchedToolIds;
 }

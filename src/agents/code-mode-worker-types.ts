@@ -13,6 +13,7 @@ type CodeModeBridgeMethod =
   | "agentWait"
   | "skillsList"
   | "skillsRead"
+  | "sleep"
   | "swarmNote";
 
 export type CodeModeConfig = {
@@ -82,6 +83,7 @@ export type CodeModeWorkerThreadResult =
       status: "waiting";
       snapshotBytes: Uint8Array;
       pendingRequests: PendingBridgeRequest[];
+      canceledRequestIds: string[];
       settlementMode: CodeModeSettlementMode;
       output: unknown[];
     }
@@ -92,7 +94,6 @@ export type CodeModeWorkerThreadResult =
         | "invalid_input"
         | "runtime_unavailable"
         | "timeout"
-        | "output_limit_exceeded"
         | "snapshot_limit_exceeded"
         | "internal_error";
       failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;

@@ -7,8 +7,11 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { CODEX_CLI_PROFILE_ID, type OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import {
+  CODEX_CLI_PROFILE_ID,
+  type OAuthCredential,
+  buildOauthProviderAuthResult,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
@@ -20,13 +23,6 @@ import {
   readStringValue,
   uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
-  OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
-  OPENAI_CHATGPT_LOGIN_HINT,
-  OPENAI_CHATGPT_LOGIN_LABEL,
-  OPENAI_CODEX_WIZARD_GROUP,
-} from "./auth-choice-copy.js";
 import {
   isOpenAIApiBaseUrl,
   isOpenAICodexBaseUrl,
@@ -60,8 +56,6 @@ import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
-const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
-const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
 const OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP = {
   off: null,
   xhigh: "xhigh",
@@ -590,38 +584,13 @@ function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
   return "Deprecated profile. Run `openclaw models auth login --provider openai` or `openclaw configure`.";
 }
 
-export function buildOpenAIChatGPTAuthMethods(): ProviderAuthMethod[] {
-  return [
-    {
-      id: "oauth",
-      label: OPENAI_CHATGPT_LOGIN_LABEL,
-      hint: OPENAI_CHATGPT_LOGIN_HINT,
-      kind: "oauth",
-      wizard: {
-        choiceId: "openai",
-        choiceLabel: OPENAI_CHATGPT_LOGIN_LABEL,
-        choiceHint: OPENAI_CHATGPT_LOGIN_HINT,
-        assistantPriority: OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY,
-        onboardingFeatured: true,
-        ...OPENAI_CODEX_WIZARD_GROUP,
-      },
-      run: async (ctx) => await runOpenAICodexOAuth(ctx),
-    },
-    {
-      id: "device-code",
-      label: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
-      hint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
-      kind: "device_code",
-      wizard: {
-        choiceId: "openai-device-code",
-        choiceLabel: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
-        choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
-        assistantPriority: OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY,
-        ...OPENAI_CODEX_WIZARD_GROUP,
-      },
-      run: async (ctx) => await runOpenAICodexDeviceCode(ctx),
-    },
-  ];
+export function buildOpenAIChatGPTAuthMethodRuns(): Readonly<
+  Record<"oauth" | "device-code", ProviderAuthMethod["run"]>
+> {
+  return {
+    oauth: async (ctx) => await runOpenAICodexOAuth(ctx),
+    "device-code": async (ctx) => await runOpenAICodexDeviceCode(ctx),
+  };
 }
 
 export function buildOpenAICodexProviderHooks(): Pick<

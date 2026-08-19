@@ -1,5 +1,42 @@
 // Public SDK data contracts for Gateway transport, runs, sessions, tools,
 // artifacts, tasks, environments, and normalized event streams.
+import type {
+  ArtifactSummary as GatewayArtifactSummaryType,
+  ArtifactsDownloadResult as GatewayArtifactsDownloadResultType,
+  ArtifactsGetResult as GatewayArtifactsGetResultType,
+  ArtifactsListParams as GatewayArtifactsListParamsType,
+  ArtifactsListResult as GatewayArtifactsListResultType,
+  EnvironmentSummary as GatewayEnvironmentSummaryType,
+  EnvironmentsCreateParams as GatewayEnvironmentsCreateParamsType,
+  EnvironmentsListResult as GatewayEnvironmentsListResultType,
+  SessionsCreateParams as GatewaySessionsCreateParamsType,
+  SessionsSendParams as GatewaySessionsSendParamsType,
+  TaskSummary as GatewayTaskSummaryType,
+  ToolsInvokeParams as GatewayToolsInvokeParamsType,
+  ToolsInvokeResult as GatewayToolsInvokeResultType,
+} from "@openclaw/gateway-protocol";
+
+export type {
+  AgentsCreateParams,
+  AgentsDeleteParams,
+  AgentsUpdateParams,
+  ArtifactsDownloadResult as GatewayArtifactsDownloadResult,
+  ArtifactsGetResult as GatewayArtifactsGetResult,
+  ArtifactsListResult as GatewayArtifactsListResult,
+  ArtifactSummary as GatewayArtifactSummary,
+  EnvironmentsListResult as GatewayEnvironmentsListResult,
+  EnvironmentSummary as GatewayEnvironmentSummary,
+  TaskSummary,
+  TasksCancelResult,
+  TasksGetResult,
+  TasksListParams,
+  TasksListResult,
+  ToolsEffectiveParams,
+  WorkerEnvironmentMetadata,
+  WorkerEnvironmentState,
+  WorkerTunnelStatus,
+} from "@openclaw/gateway-protocol";
+
 export type JsonObject = Record<string, unknown>;
 
 /** Per-request options accepted by SDK transports. */
@@ -48,55 +85,61 @@ export type EnvironmentSelection =
   | { type: "managed"; provider: string; repo?: string; ref?: string }
   | { type: "ephemeral"; provider: string; repo?: string; ref?: string };
 
-export type WorkerEnvironmentState =
-  | "requested"
-  | "provisioning"
-  | "bootstrapping"
-  | "ready"
-  | "attached"
-  | "idle"
-  | "draining"
-  | "destroying"
-  | "destroyed"
-  | "failed"
-  | "orphaned";
+/** SDK-friendly environment type suggestions over the protocol's open string. */
+export type SDKEnvironmentType =
+  | "local"
+  | "gateway"
+  | "node"
+  | "managed"
+  | "ephemeral"
+  | (string & {});
 
-export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
+/** Closed SDK projection of the protocol's runtime-validated status string. */
+export type SDKEnvironmentStatus = "available" | "unavailable" | "starting" | "stopping" | "error";
 
-export type WorkerEnvironmentMetadata = {
-  providerId: string;
-  leaseId?: string;
-  state: WorkerEnvironmentState;
-  ageMs: number;
-  idleMs?: number;
-  attachedSessionIds: string[];
-  tunnelStatus: WorkerTunnelStatus;
-  error?: string;
+/** Closed SDK projection of the protocol's runtime-validated trust string. */
+export type SDKEnvironmentTrust = "persistent" | "disposable";
+
+export type NodeWorkerBundleStatus = NonNullable<GatewayEnvironmentSummaryType["workerBundle"]>;
+
+export type SDKEnvironmentSummary = Omit<
+  GatewayEnvironmentSummaryType,
+  "type" | "status" | "trust"
+> & {
+  type: SDKEnvironmentType;
+  status: SDKEnvironmentStatus;
+  trust?: SDKEnvironmentTrust;
 };
 
-export type EnvironmentSummary = {
-  id: string;
-  type: "local" | "gateway" | "node" | "managed" | "ephemeral" | (string & {});
-  label?: string;
-  status: "available" | "unavailable" | "starting" | "stopping" | "error";
-  capabilities?: string[];
-  worker?: WorkerEnvironmentMetadata;
+/** Compatibility name retained for the SDK environment projection. */
+export type EnvironmentSummary = SDKEnvironmentSummary;
+
+export type EnvironmentCreateParams = GatewayEnvironmentsCreateParamsType;
+
+type GatewayWorkerEnvironmentProfileSummary = NonNullable<
+  GatewayEnvironmentsListResultType["profiles"]
+>[number];
+
+export type SDKWorkerEnvironmentProfileSummary = Omit<
+  GatewayWorkerEnvironmentProfileSummary,
+  "trust"
+> & {
+  trust?: SDKEnvironmentTrust;
 };
 
-export type EnvironmentCreateParams = {
-  profileId: string;
-  idempotencyKey: string;
+/** Compatibility name retained for the SDK worker profile projection. */
+export type WorkerEnvironmentProfileSummary = SDKWorkerEnvironmentProfileSummary;
+
+export type SDKEnvironmentsListResult = Omit<
+  GatewayEnvironmentsListResultType,
+  "environments" | "profiles"
+> & {
+  environments: SDKEnvironmentSummary[];
+  profiles?: SDKWorkerEnvironmentProfileSummary[];
 };
 
-export type WorkerEnvironmentProfileSummary = {
-  id: string;
-  providerId: string;
-};
-
-export type EnvironmentsListResult = {
-  environments: EnvironmentSummary[];
-  profiles?: WorkerEnvironmentProfileSummary[];
-};
+/** Compatibility name retained for the SDK environment list projection. */
+export type EnvironmentsListResult = SDKEnvironmentsListResult;
 
 export type WorkspaceSelection = {
   cwd?: string;
@@ -113,7 +156,7 @@ export type ApprovalDecisionParams = {
 /** Terminal and non-terminal status values returned by Run.wait. */
 export type RunStatus = "accepted" | "completed" | "failed" | "cancelled" | "timed_out";
 
-export type RunTimestamp = string | number;
+export type RunTimestamp = NonNullable<GatewayTaskSummaryType["createdAt"]>;
 
 export type SDKMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -122,108 +165,70 @@ export type SDKMessage = {
   toolCallId?: string;
 };
 
-/** Metadata for an artifact attached to a run, task, or session. */
-export type ArtifactSummary = {
-  id: string;
-  runId?: string;
-  taskId?: string;
+/** SDK-friendly artifact type suggestions over the protocol's open string. */
+type SDKArtifactType =
+  | "file"
+  | "patch"
+  | "diff"
+  | "log"
+  | "media"
+  | "screenshot"
+  | "trajectory"
+  | "pull_request"
+  | "workspace"
+  | (string & {});
+
+/** The SDK remains forward-compatible with future artifact delivery modes. */
+type SDKArtifactDownloadMode = GatewayArtifactSummaryType["download"]["mode"] | (string & {});
+
+/**
+ * SDK artifact projection retained for pre-protocol consumers.
+ * Wire responses satisfy this shape, while legacy sparse summaries remain assignable.
+ */
+export type SDKArtifactSummary = Omit<GatewayArtifactSummaryType, "type" | "title" | "download"> & {
+  type: SDKArtifactType;
+  title?: GatewayArtifactSummaryType["title"];
+  download?: { mode: SDKArtifactDownloadMode };
   sessionId?: string;
-  sessionKey?: string;
-  type:
-    | "file"
-    | "patch"
-    | "diff"
-    | "log"
-    | "media"
-    | "screenshot"
-    | "trajectory"
-    | "pull_request"
-    | "workspace"
-    | (string & {});
-  title?: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  messageSeq?: number;
-  source?: string;
-  download?: {
-    mode: "bytes" | "url" | "unsupported" | (string & {});
-  };
   createdAt?: string;
   expiresAt?: string;
 };
 
+/** Compatibility name retained for the SDK artifact projection. */
+export type ArtifactSummary = SDKArtifactSummary;
+
+type ArtifactScopeKey = "sessionKey" | "runId" | "taskId";
+type ScopedArtifactQuery<Key extends ArtifactScopeKey> = Omit<GatewayArtifactsListParamsType, Key> &
+  Required<Pick<GatewayArtifactsListParamsType, Key>>;
+
+/** SDK query projection requiring at least one artifact ownership scope. */
 export type ArtifactQuery =
-  | { sessionKey: string; runId?: string; taskId?: string; agentId?: string }
-  | { runId: string; sessionKey?: string; taskId?: string; agentId?: string }
-  | { taskId: string; sessionKey?: string; runId?: string; agentId?: string };
+  | ScopedArtifactQuery<"sessionKey">
+  | ScopedArtifactQuery<"runId">
+  | ScopedArtifactQuery<"taskId">;
 
-export type ArtifactsListResult = {
-  artifacts: ArtifactSummary[];
+export type SDKArtifactsListResult = Omit<GatewayArtifactsListResultType, "artifacts"> & {
+  artifacts: SDKArtifactSummary[];
 };
 
-export type ArtifactsGetResult = {
-  artifact: ArtifactSummary;
+/** Compatibility name retained for the SDK artifact list projection. */
+export type ArtifactsListResult = SDKArtifactsListResult;
+
+export type SDKArtifactsGetResult = Omit<GatewayArtifactsGetResultType, "artifact"> & {
+  artifact: SDKArtifactSummary;
 };
 
-export type ArtifactsDownloadResult = {
-  artifact: ArtifactSummary;
-  encoding?: "base64";
-  data?: string;
-  url?: string;
+/** Compatibility name retained for the SDK artifact get projection. */
+export type ArtifactsGetResult = SDKArtifactsGetResult;
+
+export type SDKArtifactsDownloadResult = Omit<GatewayArtifactsDownloadResultType, "artifact"> & {
+  artifact: SDKArtifactSummary;
 };
 
-export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
+/** Compatibility name retained for the SDK artifact download projection. */
+export type ArtifactsDownloadResult = SDKArtifactsDownloadResult;
 
-/** Gateway task summary returned by task list/get calls. */
-export type TaskSummary = {
-  id: string;
-  taskId?: string;
-  kind?: string;
-  runtime?: string;
-  status: TaskStatus;
-  title?: string;
-  agentId?: string;
-  sessionKey?: string;
-  childSessionKey?: string;
-  ownerKey?: string;
-  runId?: string;
-  flowId?: string;
-  parentTaskId?: string;
-  sourceId?: string;
-  createdAt?: RunTimestamp;
-  updatedAt?: RunTimestamp;
-  startedAt?: RunTimestamp;
-  endedAt?: RunTimestamp;
-  progressSummary?: string;
-  lastActivity?: string;
-  diffStat?: { files: number; added: number; removed: number };
-  terminalSummary?: string;
-  error?: string;
-};
-
-export type TasksListParams = {
-  status?: TaskStatus | TaskStatus[];
-  agentId?: string;
-  sessionKey?: string;
-  limit?: number;
-  cursor?: string;
-};
-
-export type TasksListResult = {
-  tasks: TaskSummary[];
-  nextCursor?: string;
-};
-
-export type TasksGetResult = {
-  task: TaskSummary;
-};
-
-export type TasksCancelResult = {
-  found: boolean;
-  cancelled: boolean;
-  reason?: string;
-  task?: TaskSummary;
-};
+export type TaskStatus = GatewayTaskSummaryType["status"];
 
 export type SDKError = {
   code?: string;
@@ -232,28 +237,17 @@ export type SDKError = {
 };
 
 /** Parameters for direct tool invocation through the SDK. */
-export type ToolsEffectiveParams = {
-  sessionKey: string;
-  agentId?: string;
-};
+type SDKToolInvokeParams = Omit<GatewayToolsInvokeParamsType, "name" | "conversationReadOrigin">;
 
-export type ToolInvokeParams = {
-  args?: JsonObject;
-  sessionKey?: string;
-  agentId?: string;
-  confirm?: boolean;
-  idempotencyKey?: string;
-};
+/** Compatibility name retained for the SDK tool invocation projection. */
+export type ToolInvokeParams = SDKToolInvokeParams;
 
-export type ToolInvokeResult = {
-  ok: boolean;
-  toolName: string;
-  output?: unknown;
-  requiresApproval?: boolean;
-  approvalId?: string;
-  source?: string;
+type SDKToolInvokeResult = Omit<GatewayToolsInvokeResultType, "error"> & {
   error?: SDKError;
 };
+
+/** Compatibility name retained for the SDK tool result projection. */
+export type ToolInvokeResult = SDKToolInvokeResult;
 
 /** Normalized result returned by Run.wait. */
 export type RunResult = {
@@ -344,32 +338,48 @@ export type AgentRunParams = {
   idempotencyKey?: string;
 };
 
-/** Parameters for creating a session. */
-export type SessionCreateParams = {
-  key?: string;
-  agentId?: string;
-  label?: string;
-  model?: string;
-  thinkingLevel?: string;
-  parentSessionKey?: string;
-  /** Emit command and lifecycle hooks for parent-linked creation. */
-  emitCommandHooks?: boolean;
-  /** Whether a distinct child terminates its parent; requires command hooks. */
-  succeedsParent?: boolean;
-  task?: string;
-  message?: string;
+type SDKSessionCreateKeys =
+  | "key"
+  | "agentId"
+  | "label"
+  | "model"
+  | "thinkingLevel"
+  | "parentSessionKey"
+  | "emitCommandHooks"
+  | "succeedsParent"
+  | "task"
+  | "message"
+  | "attachments";
+
+/** SDK session-create projection with transport-neutral attachment inputs. */
+type SDKSessionCreateParams = Omit<
+  Pick<GatewaySessionsCreateParamsType, SDKSessionCreateKeys>,
+  "attachments"
+> & {
   attachments?: unknown[];
 };
 
-/** Parameters for sending a message to an existing session. */
-export type SessionSendParams = {
-  key: string;
-  message: string;
-  thinking?: string;
+/** Compatibility name retained for the SDK session-create projection. */
+export type SessionCreateParams = SDKSessionCreateParams;
+
+type SDKSessionSendKeys =
+  | "key"
+  | "message"
+  | "thinking"
+  | "attachments"
+  | "timeoutMs"
+  | "idempotencyKey";
+
+/** SDK session-send projection with transport-neutral attachment inputs. */
+type SDKSessionSendParams = Omit<
+  Pick<GatewaySessionsSendParamsType, SDKSessionSendKeys>,
+  "attachments"
+> & {
   attachments?: unknown[];
-  timeoutMs?: number;
-  idempotencyKey?: string;
 };
+
+/** Compatibility name retained for the SDK session-send projection. */
+export type SessionSendParams = SDKSessionSendParams;
 
 export type SessionTarget = {
   key: string;
@@ -379,25 +389,3 @@ export type SessionTarget = {
 };
 
 export type RunCreateParams = AgentRunParams;
-
-export type AgentsCreateParams = {
-  name: string;
-  workspace?: string;
-  model?: string;
-  emoji?: string;
-  avatar?: string;
-};
-
-export type AgentsUpdateParams = {
-  agentId: string;
-  name?: string;
-  workspace?: string;
-  model?: string | null;
-  emoji?: string;
-  avatar?: string;
-};
-
-export type AgentsDeleteParams = {
-  agentId: string;
-  deleteFiles?: boolean;
-};

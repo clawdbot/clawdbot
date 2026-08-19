@@ -21,7 +21,6 @@ import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionMessageSubscription,
-  SessionSteerResult,
 } from "./session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -40,7 +39,6 @@ import {
   requestSessionFileSet,
   requestSessionFork,
   requestSessionRewind,
-  requestSessionSteer,
 } from "./session-requests.ts";
 
 type SessionScopedOperationsHost = {
@@ -63,22 +61,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     const result = await requestSessionCompact(scope.client, key, options);
     if (!host.connection.isCurrent(scope)) {
       throw new Error("Session compaction completed on a replaced Gateway connection");
-    }
-    return result;
-  };
-
-  const steer = async (
-    key: string,
-    message: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionSteerResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      throw new Error("Session steering requires an active Gateway connection");
-    }
-    const result = await requestSessionSteer(scope.client, key, message, options);
-    if (!host.connection.isCurrent(scope)) {
-      throw new Error("Session steering completed on a replaced Gateway connection");
     }
     return result;
   };
@@ -282,7 +264,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     restoreCheckpoint,
     rewind,
     setFile,
-    steer,
     subscribeMessages,
     switchBranch,
     unsubscribeMessages,

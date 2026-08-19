@@ -5,15 +5,18 @@ import { addGatewayClientOptions } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 const callGatewayMock = vi.fn(async () => ({ ok: true }));
+const isImplicitLocalGatewayTargetMock = vi.fn(async () => true);
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayMock,
+  isImplicitLocalGatewayTarget: isImplicitLocalGatewayTargetMock,
 }));
 
 vi.mock("./progress.js", () => ({
   withProgress: async (_options: unknown, action: () => Promise<unknown>) => await action(),
 }));
 
-const { callGatewayFromCliRuntime } = await import("./gateway-rpc.runtime.js");
+const { callGatewayFromCliRuntime, isImplicitLocalGatewayTargetFromCliRuntime } =
+  await import("./gateway-rpc.runtime.js");
 
 describe("addGatewayClientOptions", () => {
   it.each([
@@ -38,6 +41,19 @@ describe("addGatewayClientOptions", () => {
       });
     },
   );
+
+  it("registers and parses a local Gateway port", async () => {
+    const program = new Command().exitOverride();
+    const action = vi.fn((_opts: GatewayRpcOpts) => {});
+    addGatewayClientOptions(program.command("gateway-command")).action(action);
+
+    await program.parseAsync(["gateway-command", "--port", "19083"], { from: "user" });
+
+    expect(action).toHaveBeenCalledWith(
+      expect.objectContaining({ port: "19083" }),
+      expect.anything(),
+    );
+  });
 });
 
 describe("callGatewayFromCliRuntime", () => {
@@ -90,6 +106,25 @@ describe("callGatewayFromCliRuntime", () => {
         requireLocalBackendSharedAuth: true,
       }),
     );
+  });
+
+  it("projects --port to the canonical local Gateway override", async () => {
+    await callGatewayFromCliRuntime("cron.status", { port: "19083" });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ localPortOverride: 19_083 }),
+    );
+  });
+
+  it("rejects combining --url and --port before opening a Gateway connection", async () => {
+    await expect(
+      callGatewayFromCliRuntime("cron.status", {
+        url: "ws://127.0.0.1:19083",
+        port: "19083",
+      }),
+    ).rejects.toThrow("Use either --url or --port, not both.");
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -168,5 +203,23 @@ describe("callGatewayFromCliRuntime", () => {
         signal: controller.signal,
       }),
     );
+  });
+});
+
+describe("isImplicitLocalGatewayTargetFromCliRuntime", () => {
+  it("forwards CLI target options to the canonical Gateway classifier", async () => {
+    isImplicitLocalGatewayTargetMock.mockResolvedValueOnce(false);
+
+    await expect(
+      isImplicitLocalGatewayTargetFromCliRuntime({
+        url: "ws://127.0.0.1:18789",
+        token: "token",
+      }),
+    ).resolves.toBe(false);
+    expect(isImplicitLocalGatewayTargetMock).toHaveBeenCalledWith({
+      config: undefined,
+      url: "ws://127.0.0.1:18789",
+      localPortOverride: undefined,
+    });
   });
 });

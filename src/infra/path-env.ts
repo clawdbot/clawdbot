@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
+import { isPathInside } from "./path-guards.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 type EnsureOpenClawPathOpts = {
@@ -67,11 +68,6 @@ function realpathExistingPath(candidate: string): string | undefined {
   }
 }
 
-function isSameOrChildPath(candidate: string, parent: string): boolean {
-  const relative = path.relative(parent, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function isFilesystemRoot(dirPath: string): boolean {
   return path.dirname(dirPath) === dirPath;
 }
@@ -98,7 +94,7 @@ function normalizeTrustedPackageManagerRoot(params: {
   if (cwd === homeDir || isFilesystemRoot(cwd)) {
     return normalized;
   }
-  if (isSameOrChildPath(normalized, cwd)) {
+  if (isPathInside(cwd, normalized)) {
     return undefined;
   }
 
@@ -110,7 +106,7 @@ function normalizeTrustedPackageManagerRoot(params: {
     realCwd !== realHome &&
     !isFilesystemRoot(realCwd) &&
     realCandidate &&
-    isSameOrChildPath(realCandidate, realCwd)
+    isPathInside(realCwd, realCandidate)
   ) {
     return undefined;
   }

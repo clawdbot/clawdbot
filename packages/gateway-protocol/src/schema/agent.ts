@@ -355,6 +355,7 @@ export const AgentIdentityParamsSchema = closedObject({
 export const AgentIdentityResultSchema = closedObject({
   agentId: NonEmptyString,
   name: Type.Optional(NonEmptyString),
+  nameSource: Type.Optional(Type.String({ enum: ["config", "agent", "workspace", "default"] })),
   avatar: Type.Optional(NonEmptyString),
   avatarSource: Type.Optional(NonEmptyString),
   avatarStatus: Type.Optional(Type.String({ enum: ["none", "local", "remote", "data"] })),

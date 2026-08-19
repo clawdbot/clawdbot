@@ -34,11 +34,6 @@ import { setCliRunnerExecuteTestDeps } from "./execute.test-support.js";
 import { writeCliSystemPromptFile } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 
-vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
-
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -840,6 +835,91 @@ describe("Claude live registry lifecycle", () => {
       vi.useRealTimers();
     }
   });
+  it("serializes direct live turns and drops an aborted queued turn", async () => {
+    let userTurn = 0;
+    let releaseSecondTurn: (() => void) | undefined;
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      onWrite: ({ data, emit }) => {
+        const parsed = JSON.parse(data) as { type: string };
+        if (parsed.type !== "user") {
+          throw new Error(`unexpected live stdin ${parsed.type}`);
+        }
+        userTurn += 1;
+        const emitTurn = () => {
+          emit([
+            { type: "system", subtype: "init", session_id: "live-serialized-turns" },
+            {
+              type: "result",
+              session_id: "live-serialized-turns",
+              result: `turn-${userTurn}`,
+            },
+          ]);
+        };
+        if (userTurn === 2) {
+          releaseSecondTurn = emitTurn;
+          return;
+        }
+        emitTurn();
+      },
+    });
+    const backend = {
+      args: ["-p", "--output-format", "stream-json"],
+      resumeArgs: ["-p", "--output-format", "stream-json", "--resume={sessionId}"],
+      liveSession: "claude-stdio" as const,
+      systemPromptWhen: "always" as const,
+    };
+    const getSerializedProcessSupervisor = () => ({
+      spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+        supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      getRecord: vi.fn(),
+    });
+    const runTurn = (
+      prompt: string,
+      useResume: boolean,
+      abortSignal?: AbortSignal,
+      cleanup: () => Promise<void> = async () => {},
+    ) => {
+      const context = buildPreparedCliRunContext({ backend, prompt });
+      context.params.abortSignal = abortSignal;
+      return runClaudeTurn({
+        context,
+        args: context.preparedBackend.backend.args ?? [],
+        env: {},
+        prompt,
+        useResume,
+        noOutputTimeoutMs: 1_000,
+        getProcessSupervisor: getSerializedProcessSupervisor,
+        onAssistantDelta: () => {},
+        cleanup,
+      });
+    };
+
+    await expect(runTurn("first", false)).resolves.toMatchObject({ output: { text: "turn-1" } });
+
+    const second = runTurn("second", true);
+    await vi.waitFor(() => expect(releaseSecondTurn).toBeTypeOf("function"));
+    const queuedAbort = new AbortController();
+    const abortedCleanup = vi.fn(async () => {});
+    const third = runTurn("third", true, queuedAbort.signal, abortedCleanup);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(live.writes.map((entry) => JSON.parse(entry).type)).toEqual(["user", "user"]);
+    queuedAbort.abort();
+    await expect(third).rejects.toMatchObject({ name: "AbortError" });
+    expect(abortedCleanup).toHaveBeenCalledOnce();
+    expect(live.writes.map((entry) => JSON.parse(entry).type)).toEqual(["user", "user"]);
+    releaseSecondTurn?.();
+
+    await expect(second).resolves.toMatchObject({ output: { text: "turn-2" } });
+    await expect(runTurn("fourth", true)).resolves.toMatchObject({ output: { text: "turn-3" } });
+    expect(live.writes.map((entry) => JSON.parse(entry).type)).toEqual(["user", "user", "user"]);
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+  });
+
   it("serializes direct live turns before refreshing their system prompts", async () => {
     let userTurn = 0;
     let releaseCapabilityProbe: (() => void) | undefined;

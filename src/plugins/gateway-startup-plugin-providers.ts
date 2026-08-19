@@ -406,17 +406,13 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 }
 
 // Registered embedding provider ids the loaded runtime can actually serve: the live
-// registry's memory + general embedding providers plus the global/core embedding
-// registry. Shared by gateway boot (the startup "configured but unregistered" warning)
-// and the `/status plugins` drift line so both agree on what counts as "registered" and
-// never diverge. The `{ provider: entry.adapter }` wrap makes the core registry entries
-// match the registration shape so the id projection stays uniform across all three sources.
+// registry's embedding providers plus the global/core embedding registry. Shared by
+// gateway boot and `/status plugins` so both agree on what counts as registered.
 export function collectRegisteredEmbeddingProviderIds(
-  registry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>,
+  registry: Partial<Pick<PluginRegistry, "embeddingProviders">>,
 ): Set<string> {
   return new Set(
     [
-      ...(registry.memoryEmbeddingProviders ?? []),
       ...(registry.embeddingProviders ?? []),
       ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
     ].map((entry) => entry.provider.id),

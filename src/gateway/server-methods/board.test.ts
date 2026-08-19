@@ -84,6 +84,38 @@ describe("board gateway methods", () => {
     expect(store.listSessionsWithBoards()).toEqual([]);
   });
 
+  it("scopes bare boards by explicit owner and rejects ambiguous ownerless requests", async () => {
+    const { invoke, store } = createHarness(undefined, undefined, undefined, {
+      getRuntimeConfig: () => ({
+        agents: { ownership: "explicit", list: [{ id: "main" }, { id: "work" }] },
+      }),
+    });
+    const work = await invoke("board.widget.put", {
+      sessionKey: "global",
+      agentId: "work",
+      name: "owner",
+      content: { kind: "html", html: "work" },
+    });
+    expect(work).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: "agent:work:global" }),
+    );
+    expect(store.listSessionsWithBoards()).toContain("agent:work:global");
+
+    const main = await invoke("board.get", { sessionKey: "global", agentId: "main" });
+    expect(main).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: "agent:main:global", revision: 0 }),
+    );
+
+    const ambiguous = await invoke("board.get", { sessionKey: "global" });
+    expect(ambiguous).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
   it("adds fresh frame URLs only to admitted HTML widgets on board.get", async () => {
     const { invoke, store } = createHarness();
     await invoke("board.widget.put", {

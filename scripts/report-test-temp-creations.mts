@@ -5,7 +5,12 @@ import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { isChangedLaneTestPath } from "./changed-lanes.mts";
-import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import {
+  booleanFlag,
+  isOpenEndedTruthyValue,
+  parseFlagArgs,
+  stringFlag,
+} from "./lib/arg-utils.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 type AddedLine = {
@@ -98,11 +103,6 @@ function shouldInspectFile(filePath: string): boolean {
 function shouldInspectManualHelperUsage(filePath: string): boolean {
   const normalizedPath = normalizePath(filePath);
   return normalizedPath !== TEMP_DIR_HELPER_TEST_PATH && shouldInspectFile(normalizedPath);
-}
-
-function isTruthyEnvFlag(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase() ?? "";
-  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
 function escapeGithubCommandValue(value: unknown): string {
@@ -516,7 +516,7 @@ async function main(argv?: string[], io?: ScriptIo): Promise<0 | 1> {
     stdout.write(`${JSON.stringify(findings, null, 2)}\n`);
   } else if (findings.length === 0) {
     stderr.write("No new test temp-directory migration warnings found.\n");
-  } else if (isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
+  } else if (isOpenEndedTruthyValue(env.GITHUB_ACTIONS)) {
     for (const finding of findings) {
       stderr.write(`${formatGithubWarning(finding)}\n`);
     }

@@ -15,6 +15,7 @@ import {
   analyzeControlUiCatalogs,
   flattenControlUiCatalog,
   formatControlUiCatalogFallbackDriftError,
+  verifyControlUiReferencedKeys,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
   appendBoundedProcessOutput,
@@ -26,6 +27,7 @@ import {
   shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
+import { waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 describe("control-ui-i18n generated ownership", () => {
@@ -251,6 +253,29 @@ describe("control-ui-i18n process runner", () => {
     );
   });
 
+  it("rejects literal keys and template prefixes missing from the English catalog", () => {
+    const source = flattenControlUiCatalog(
+      { common: { ok: "OK" }, workboard: { status: { ready: "Ready" } } },
+      "en",
+    );
+    const content = [
+      't("common.ok");',
+      't("common.missing");',
+      "t(`workboard.status.${status}`);",
+      "t(`workboard.missing.${status}`);",
+    ].join("\n");
+
+    expect(() =>
+      verifyControlUiReferencedKeys(source, [{ content, relativeFile: "ui/src/pages/example.ts" }]),
+    ).toThrowError(
+      [
+        "control-ui referenced translation key verification failed.",
+        'ui/src/pages/example.ts:2: missing English catalog key "common.missing"',
+        'ui/src/pages/example.ts:4: missing English catalog subtree "workboard.missing."',
+      ].join("\n"),
+    );
+  });
+
   it("finds raw text and attributes split by template interpolation", () => {
     const source =
       'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`; const image = html`<img alt="Preview" />`; menu.setAttribute("aria-label", "Selection actions"); reply.setAttribute("aria-label", `Reply to ${name}`); file.setAttribute("title", "Open " + fileName);';
@@ -467,7 +492,7 @@ describe("control-ui-i18n process runner", () => {
           }),
         ).rejects.toThrow(`timed out after 500ms`);
 
-        const grandchildPid = Number(readFileSync(markerPath, "utf8"));
+        const grandchildPid = await waitForPidFile(markerPath, 1_000);
         await waitForProcessExit(grandchildPid);
       } finally {
         tempDirs.cleanup();
@@ -541,13 +566,11 @@ describe("control-ui-i18n process runner", () => {
 
         try {
           const deadline = Date.now() + 30_000;
+          grandchildPid = await waitForPidFile(grandchildPidPath, 30_000);
           let fastReady = false;
           while (Date.now() < deadline) {
             try {
               fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
-            } catch {}
-            try {
-              grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
             } catch {}
             if (fastReady && grandchildPid > 0 && processIsAlive(grandchildPid)) {
               break;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveClaudeLiveExecPermission } from "./claude-live-process.js";
 import { acceptsClaudeLive, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -39,5 +40,46 @@ describe("acceptsClaudeLive", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("uses the configured fixed-store owner for an unscoped session key", () => {
+    const context = {
+      params: {
+        sessionKey: "global",
+        config: {
+          session: { store: "/stores/shared.sqlite" },
+          tools: { exec: { security: "full", ask: "off" } },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "research" } },
+            entries: {
+              ops: {},
+              research: { tools: { exec: { security: "deny", ask: "always" } } },
+            },
+          },
+        },
+      },
+    } as unknown as PreparedCliRunContext;
+
+    expect(resolveClaudeLiveExecPermission(context)).toEqual({
+      security: "deny",
+      ask: "always",
+      permissionMode: "default",
+    });
+  });
+
+  it("uses bypass permissions for an explicit full session despite restrictive config", () => {
+    const context = {
+      params: {
+        config: { tools: { exec: { mode: "ask" } } },
+        sessionEntry: { permissionMode: "full" },
+      },
+    } as unknown as PreparedCliRunContext;
+
+    expect(resolveClaudeLiveExecPermission(context)).toEqual({
+      security: "full",
+      ask: "off",
+      permissionMode: "bypassPermissions",
+    });
   });
 });

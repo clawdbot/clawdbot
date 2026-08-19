@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
+import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
+import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -1656,6 +1659,56 @@ describe("/acp command", () => {
       text: "tighten logging",
     });
     expect(result?.reply?.text).toContain("Applied steering.");
+  });
+
+  it("admits ACP steer with the original channel participant", async () => {
+    const captured: unknown[] = [];
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const clearSink = configureExecutionIdentityAdmissionSink((work) => {
+      captured.push(work);
+      return true;
+    });
+    try {
+      hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+        if (request.method === "sessions.resolve") {
+          return { key: defaultAcpSessionKey };
+        }
+        return { ok: true };
+      });
+      hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+      hoisted.runTurnMock.mockImplementation(async function* () {
+        yield { type: "done" };
+      });
+      const cfg = {
+        ...baseCfg,
+        logging: { audit: { executionIdentity: true } },
+      } satisfies OpenClawConfig;
+      const params = createDiscordParams(
+        `/acp steer --session ${defaultAcpSessionKey} tighten logging`,
+        cfg,
+      );
+      bindTestChannelParticipantAdmissionEvidence({
+        context: params.ctx,
+        channelId: "discord",
+        accountId: "default",
+        participantId: "user-1",
+      });
+
+      await handleAcpCommand(params, true);
+
+      expect(captured).toMatchObject([
+        {
+          kind: "capture",
+          envelope: {
+            ingress: { kind: "acp", state: "present" },
+            invoker: { state: "present", kind: "person" },
+          },
+        },
+      ]);
+    } finally {
+      clearSink();
+      clearCollection();
+    }
   });
 
   it("keeps bounded ACP steer output UTF-16 safe", async () => {

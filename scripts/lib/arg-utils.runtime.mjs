@@ -6,7 +6,7 @@
 /**
  * @template {Record<string, unknown>} T
  * @typedef {{
- *   flag?: string,
+ *   flag: string,
  *   nextIndex: number,
  *   repeatable?: boolean,
  *   apply: ApplyFlag<T>,
@@ -224,6 +224,23 @@ export function parsePermissiveBooleanToken(value) {
   }
   return PERMISSIVE_BOOLEAN_FALSE_TOKENS.has(normalized) ? false : undefined;
 }
+const OPEN_ENDED_FALSE_TOKENS = new Set(["", "0", "false", "no"]);
+/**
+ * Treat every non-empty token except the explicit false language as enabled.
+ * @param {string | undefined} value
+ */
+export function isOpenEndedTruthyValue(value) {
+  return !OPEN_ENDED_FALSE_TOKENS.has((value ?? "").trim().toLowerCase());
+}
+
+const STRICT_AFFIRMATIVE_TOKENS = new Set(["1", "true", "yes"]);
+/**
+ * Accept only the narrow affirmative token language used by script environment flags.
+ * @param {string | undefined} value
+ */
+export function isStrictAffirmativeValue(value) {
+  return STRICT_AFFIRMATIVE_TOKENS.has(value?.trim().toLowerCase() ?? "");
+}
 /**
  * @param {string} raw
  * @param {string} flag
@@ -384,9 +401,6 @@ export function parseFlagArgs(argv, args, specs, options = {}) {
       const option = spec.consume(argv, i, args);
       if (!option) {
         continue;
-      }
-      if (typeof option.flag !== "string" || !option.flag) {
-        failFlagParse("parseFlagArgs specs must declare a flag for consumed options");
       }
       if (option.repeatable !== true) {
         if (seenFlags.has(option.flag)) {

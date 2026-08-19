@@ -309,6 +309,7 @@ export function resolveSpawnAdmission(params: {
   }
   const callerDepth = getSubagentDepthFromSessionStore(params.requesterSessionKey, {
     cfg: params.cfg,
+    agentId: params.requesterAgentId,
   });
   const maxSpawnDepth =
     params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
@@ -330,8 +331,10 @@ export function resolveSpawnAdmission(params: {
         maxSpawnDepth,
         collect: false,
         activeChildren:
-          countActiveRunsForSession(params.requesterSessionKey, { collect: false }) +
-          (params.additionalActiveChildren ?? 0),
+          countActiveRunsForSession(params.requesterSessionKey, {
+            collect: false,
+            requesterAgentId: params.requesterAgentId,
+          }) + (params.additionalActiveChildren ?? 0),
         maxActiveChildren:
           params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ??
           DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,

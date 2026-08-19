@@ -191,9 +191,6 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.deps.status === "missing") {
       parts.push("deps missing");
     }
-    if (update.deps.status === "stale") {
-      parts.push("deps stale");
-    }
   }
   return `Update: ${parts.join(" · ")}`;
 }
