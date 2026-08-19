@@ -116,11 +116,6 @@ export type SessionCompactResult = {
   result?: { tokensBefore?: number; tokensAfter?: number };
 };
 
-export type SessionSteerResult = {
-  runId?: string;
-  status?: unknown;
-};
-
 export type SessionResetOptions = {
   agentId?: string | null;
 };
@@ -212,11 +207,6 @@ export type SessionCapability = {
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
   reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
   compact: (key: string, options?: { agentId?: string | null }) => Promise<SessionCompactResult>;
-  steer: (
-    key: string,
-    message: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionSteerResult>;
   listFiles: (
     key: string,
     options?: { agentId?: string | null; path?: string; search?: string },

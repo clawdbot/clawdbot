@@ -494,6 +494,9 @@ describe("inferBasePathFromPathname", () => {
     // Real mount directories that merely contain a route-suffix keep working.
     expect(inferBasePathFromPathname("/ui/config")).toBe("/ui");
     expect(inferBasePathFromPathname("/ui/settings/appearance")).toBe("/ui");
+    expect(inferBasePathFromPathname("/focus/terminal")).toBe("");
+    expect(inferBasePathFromPathname("/openclaw/focus/dashboard/main")).toBe("/openclaw");
+    expect(inferBasePathFromPathname("/company/focus/focus/terminal")).toBe("/company/focus");
   });
 });
 

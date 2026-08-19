@@ -28,6 +28,13 @@ export function buildGatewaySessionEventRow(
   return session;
 }
 
+/** Incremental events clear cached exact IDs when the current owner exposes only liveness. */
+export function projectSessionEventActiveRunIds(
+  state: { runIds?: string[] } | null | undefined,
+): string[] | null | undefined {
+  return state ? (state.runIds ?? null) : undefined;
+}
+
 export function buildGatewaySessionEventFields(params: {
   sessionRow: GatewaySessionRow;
   agentId?: string;
@@ -36,7 +43,7 @@ export function buildGatewaySessionEventFields(params: {
   parentSessionKey?: string;
   status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
-  activeRunIds?: string[];
+  activeRunIds?: string[] | null;
 }): Record<string, unknown> {
   const { sessionRow } = params;
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;

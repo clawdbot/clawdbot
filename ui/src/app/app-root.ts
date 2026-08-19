@@ -1,4 +1,6 @@
 import { ContextProvider } from "@lit/context";
+import { buildControlUiFocusPath, type ControlUiFocusTarget } from "@openclaw/session-url-contract";
+import type { RouteLocation, RouteNotFound } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -9,16 +11,15 @@ import "../components/login-gate.ts";
 import "../components/openclaw-mascot.ts";
 import { installNativeTitleGuard } from "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import type { ChatRouteData } from "../pages/chat/route-loader.ts";
 import { isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import { resolveControlUiBasePath } from "./browser.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
-import { dashboardDocumentSession, isDashboardOnlyView } from "./dashboard-document-mode.ts";
-import { desktopDocumentOptions, isDesktopOnlyView } from "./desktop-document-mode.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
   DASHBOARD_DOCUMENT_ELEMENT,
@@ -29,7 +30,21 @@ import {
 } from "./lazy-custom-element.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
-import { isTerminalOnlyView } from "./terminal-document-mode.ts";
+
+type FocusDashboardRouteState =
+  | { kind: "loading" }
+  | { kind: "not-found" }
+  | { kind: "error"; message: string }
+  | { kind: "ambiguous"; data: Extract<ChatRouteData, { kind: "ambiguous" }> }
+  | { kind: "session"; data: Extract<ChatRouteData, { kind: "session" }> };
+
+function routeLocationHref(location: RouteLocation): string {
+  return `${location.pathname}${location.search}${location.hash}`;
+}
+
+function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is RouteNotFound {
+  return "type" in result && result.type === "notFound";
+}
 
 export function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
@@ -59,7 +74,7 @@ function renderApprovalDocument(runtime: ApplicationRuntime) {
       <main class="approval-page approval-page--booting" role="status" aria-live="polite">
         <img
           class="connect-splash__logo"
-          src=${controlUiPublicAssetPath("favicon.svg", runtime.context.basePath)}
+          src=${controlUiPublicAssetPath("favicon.svg", runtime.context.resourceBasePath)}
           alt=""
         />
         <span>${t("common.loading")}</span>
@@ -79,18 +94,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private loginShowGatewayPassword = false;
   @state() private pendingGatewayUrl: string | null = null;
   @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
+  @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
 
-  private readonly terminalOnly = isTerminalOnlyView(
-    globalThis.location,
-    resolveControlUiBasePath(globalThis.location?.pathname ?? "/"),
-  );
-  private readonly desktopOnly = isDesktopOnlyView(
-    globalThis.location,
-    resolveControlUiBasePath(globalThis.location?.pathname ?? "/"),
-  );
-  private readonly dashboardOnly = isDashboardOnlyView(globalThis.location);
-  private readonly dashboardSession = dashboardDocumentSession(globalThis.location);
-  private readonly desktopOptions = desktopDocumentOptions(globalThis.location);
   private runtime: ApplicationRuntime | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
@@ -98,9 +103,19 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this);
   private loginGatewaySource: ApplicationContext["gateway"] | null = null;
   private loginConnectionClient: GatewayBrowserClient | null = null;
+  private focusDashboardAbort: AbortController | null = null;
 
   private get context(): ApplicationContext<RouteId> | undefined {
     return this.runtime?.context;
+  }
+
+  private get focusTarget(): ControlUiFocusTarget | null {
+    const focus = this.runtime?.focusLocation;
+    return focus?.status === "valid" ? focus.target : null;
+  }
+
+  private get terminalOnly(): boolean {
+    return this.focusTarget?.kind === "terminal";
   }
 
   constructor() {
@@ -128,13 +143,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
     void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
-    if (this.terminalOnly) {
+    const focusTarget = this.focusTarget;
+    if (focusTarget?.kind === "terminal") {
       preloadOptionalElement(this, TERMINAL_PANEL_ELEMENT);
     }
-    if (this.desktopOnly) {
+    if (focusTarget?.kind === "desktop") {
       preloadOptionalElement(this, DESKTOP_PANEL_ELEMENT);
     }
-    if (this.dashboardOnly) {
+    if (focusTarget?.kind === "dashboard") {
       preloadOptionalElement(this, DASHBOARD_DOCUMENT_ELEMENT);
     }
     if (this.runtime.documentMode?.kind === "approval") {
@@ -149,14 +165,19 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // The runtime is created after controller hostConnected hooks run. Ensure
     // their lazy source getters bind on both the initial mount and reconnect.
     this.requestUpdate();
-    void this.runtime.start().catch((error: unknown) => {
-      console.error("[openclaw] application start failed", error);
-    });
+    void this.runtime
+      .start()
+      .then(() => this.resolveFocusDashboard())
+      .catch((error: unknown) => {
+        console.error("[openclaw] application start failed", error);
+      });
   }
 
   override disconnectedCallback() {
     // Stop reactive subscriptions before disposing their application sources.
     this.subscriptions.clear();
+    this.focusDashboardAbort?.abort();
+    this.focusDashboardAbort = null;
     this.runtime?.stop();
     this.runtime = undefined;
     this.loginGatewaySource = null;
@@ -216,6 +237,159 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
   }
 
+  private renderFocusEscape(label: string) {
+    return html`<button
+      class="btn btn--ghost"
+      type="button"
+      @click=${() => this.closeDocument(this.context?.basePath ?? "")}
+    >
+      ${label}
+    </button>`;
+  }
+
+  private replaceFocusDashboardLocation(location: RouteLocation, source: RouteLocation): void {
+    const basePath = this.context?.basePath ?? "";
+    const expected = buildControlUiFocusPath(
+      { kind: "dashboard", path: routeLocationHref(source) },
+      basePath,
+    );
+    const replacement = buildControlUiFocusPath(
+      { kind: "dashboard", path: routeLocationHref(location) },
+      basePath,
+    );
+    const current = `${globalThis.location.pathname}${globalThis.location.search}${globalThis.location.hash}`;
+    if (!expected || !replacement || current !== expected || replacement === current) {
+      return;
+    }
+    globalThis.history.replaceState(globalThis.history.state, "", replacement);
+  }
+
+  private async resolveFocusDashboard(): Promise<void> {
+    const target = this.focusTarget;
+    const context = this.context;
+    if (target?.kind !== "dashboard" || !context) {
+      return;
+    }
+    this.focusDashboardAbort?.abort();
+    const controller = new AbortController();
+    this.focusDashboardAbort = controller;
+    this.focusDashboardRoute = { kind: "loading" };
+    const location = target.route;
+    try {
+      const { loadChatRoute } = await import("../pages/chat/route-loader.ts");
+      const result = await loadChatRoute(context, location, "dashboard", controller.signal);
+      if (controller.signal.aborted || this.focusDashboardAbort !== controller) {
+        return;
+      }
+      if (isRouteNotFound(result)) {
+        this.focusDashboardRoute = { kind: "not-found" };
+        return;
+      }
+      if (result.kind === "ambiguous") {
+        this.focusDashboardRoute = {
+          kind: "ambiguous",
+          data: {
+            ...result,
+            candidates: result.candidates.map((candidate) => ({
+              ...candidate,
+              href:
+                buildControlUiFocusPath(
+                  { kind: "dashboard", path: candidate.href },
+                  context.basePath,
+                ) ?? candidate.href,
+            })),
+          },
+        };
+        return;
+      }
+      this.focusDashboardRoute = { kind: "session", data: result };
+      if (result.canonicalLocation && result.canonicalLocationSource) {
+        this.replaceFocusDashboardLocation(
+          result.canonicalLocation,
+          result.canonicalLocationSource,
+        );
+      }
+      const canonicalLocationSource = result.canonicalLocationSource;
+      if (result.canonicalLocationReady && canonicalLocationSource) {
+        void result.canonicalLocationReady.then((canonicalLocation) => {
+          if (
+            canonicalLocation &&
+            !controller.signal.aborted &&
+            this.focusDashboardAbort === controller
+          ) {
+            this.replaceFocusDashboardLocation(canonicalLocation, canonicalLocationSource);
+          }
+        });
+      }
+    } catch (error) {
+      if (!controller.signal.aborted && this.focusDashboardAbort === controller) {
+        this.focusDashboardRoute = { kind: "error", message: formatUiError(error) };
+      }
+    }
+  }
+
+  private renderFocusDashboard(
+    gatewaySnapshot: ApplicationContext["gateway"]["snapshot"],
+    gatewayConnected: boolean,
+    gatewayStartupStatus: string | undefined,
+  ) {
+    const route = this.focusDashboardRoute;
+    if (route.kind === "loading") {
+      return renderConnectingSplash(gatewayStartupStatus);
+    }
+    if (route.kind === "not-found") {
+      return html`<main class="board-document">
+        <section class="board-document__state stack" role="status">
+          <span>${t("dashboardDocument.notFound")}</span>
+          ${this.renderFocusEscape(t("dashboardDocument.close"))}
+        </section>
+      </main>`;
+    }
+    if (route.kind === "error") {
+      return html`<main class="board-document">
+        <section class="board-document__state board-document__state--error stack" role="alert">
+          <span>${t("dashboardDocument.loadFailed", { error: route.message })}</span>
+          ${this.renderFocusEscape(t("dashboardDocument.close"))}
+        </section>
+      </main>`;
+    }
+    if (route.kind === "ambiguous") {
+      return html`<main class="board-document">
+        <section class="card board-document__state">
+          <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
+          <p>
+            ${route.data.candidates.length > 1
+              ? t("chat.sessionRoute.multipleMatches", { shortId: route.data.shortId })
+              : t("chat.sessionRoute.additionalMatches")}
+          </p>
+          ${route.data.candidates.map(
+            (candidate) => html`<p>
+              <a href=${candidate.href}>${candidate.displayName}</a><br />
+              <small>${candidate.agentId} · ${candidate.idPrefix}</small>
+            </p>`,
+          )}
+          ${route.data.truncated
+            ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
+            : nothing}
+          ${this.renderFocusEscape(t("dashboardDocument.close"))}
+        </section>
+      </main>`;
+    }
+    return html`
+      <openclaw-board-document
+        .gatewaySnapshot=${gatewaySnapshot}
+        .sessionKey=${route.data.sessionKey}
+        .onDocumentClose=${() => this.closeDocument(this.context?.basePath ?? "")}
+      ></openclaw-board-document>
+      ${!gatewayConnected && gatewaySnapshot.lastError === null
+        ? renderConnectingSplash(gatewayStartupStatus)
+        : nothing}
+      ${!isOptionalElementDefined(DASHBOARD_DOCUMENT_ELEMENT) && gatewayConnected
+        ? renderConnectingSplash(gatewayStartupStatus)
+        : nothing}
+    `;
+  }
+
   override render() {
     const context = this.context;
     const runtime = this.runtime;
@@ -243,9 +417,18 @@ export class OpenClawApp extends OpenClawLightDomElement {
           ></openclaw-gateway-url-confirmation>
         `
       : nothing;
-    // Full-screen terminals own the whole document. Keep the generic login gate
+    if (runtime.focusLocation?.status === "unsupported") {
+      return html`<main class="connect-splash" role="alert">
+        <div class="stack">
+          <span class="connect-splash__status">${t("focus.unsupported")}</span>
+          ${this.renderFocusEscape(t("common.back"))}
+        </div>
+      </main>`;
+    }
+    const focusTarget = this.focusTarget;
+    // Focused terminals own the whole document. Keep the generic login gate
     // out of this path or a connecting native session exposes Web UI chrome.
-    if (this.terminalOnly) {
+    if (focusTarget?.kind === "terminal") {
       const terminalAvailable = isTerminalAvailable(
         gatewaySnapshot,
         context.config.current.terminalEnabled ?? false,
@@ -269,23 +452,30 @@ export class OpenClawApp extends OpenClawLightDomElement {
           ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
         ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
-          ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
+          ? html`<div class="terminal-view-unavailable">
+              <div class="stack">
+                <span>${t("terminal.unavailable")}</span>
+                ${this.renderFocusEscape(t("common.back"))}
+              </div>
+            </div>`
           : nothing}
       `;
     }
     // Desktop documents share the panel's connection owner but none of its
     // dock or shell chrome. Native clients can therefore load this route as a
     // standalone, mobile-shaped surface without changing the observe contract.
-    if (this.desktopOnly) {
+    if (focusTarget?.kind === "desktop") {
       const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+      const source = focusTarget.selector?.kind === "source" ? focusTarget.selector.value : null;
+      const session = focusTarget.selector?.kind === "session" ? focusTarget.selector.value : null;
       return html`
         <openclaw-desktop-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${desktopAvailable}
           .documentMode=${true}
-          .documentSource=${this.desktopOptions.source}
-          .documentSession=${this.desktopOptions.session}
-          .documentControl=${this.desktopOptions.control}
+          .documentSource=${source}
+          .documentSession=${session}
+          .documentControl=${focusTarget.control}
           .onDocumentClose=${() => this.closeDocument(context.basePath)}
         ></openclaw-desktop-panel>
         ${!gatewayConnected && gatewaySnapshot.lastError === null
@@ -295,26 +485,17 @@ export class OpenClawApp extends OpenClawLightDomElement {
           ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
         ${!desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
-          ? html`<div class="desktop-view-unavailable">${t("desktop.unavailable")}</div>`
+          ? html`<div class="desktop-view-unavailable">
+              <div class="stack">
+                <span>${t("desktop.unavailable")}</span>
+                ${this.renderFocusEscape(t("common.back"))}
+              </div>
+            </div>`
           : nothing}
       `;
     }
-    // Dashboard documents reuse the live board provider and widget bridge while
-    // keeping the application shell, transcript, and navigation chrome unmounted.
-    if (this.dashboardOnly) {
-      return html`
-        <openclaw-board-document
-          .gatewaySnapshot=${gatewaySnapshot}
-          .sessionKey=${this.dashboardSession}
-          .onDocumentClose=${() => this.closeDocument(context.basePath)}
-        ></openclaw-board-document>
-        ${!gatewayConnected && gatewaySnapshot.lastError === null
-          ? renderConnectingSplash(gatewayStartupStatus)
-          : nothing}
-        ${!isOptionalElementDefined(DASHBOARD_DOCUMENT_ELEMENT) && gatewayConnected
-          ? renderConnectingSplash(gatewayStartupStatus)
-          : nothing}
-      `;
+    if (focusTarget?.kind === "dashboard") {
+      return this.renderFocusDashboard(gatewaySnapshot, gatewayConnected, gatewayStartupStatus);
     }
     // In the normal Control UI document, the Gateway lifecycle owns unresolved
     // first-connect state across every auth mode. Failures publish lastError
@@ -340,7 +521,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
         <openclaw-tooltip-provider>
           <openclaw-login-gate
             .props=${{
-              basePath: context.basePath,
+              resourceBasePath: context.resourceBasePath,
               connected: gatewayConnected,
               lastError: gatewaySnapshot.lastError,
               lastErrorCode: gatewaySnapshot.lastErrorCode,

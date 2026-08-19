@@ -7,8 +7,8 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 
 /** Same-origin Gateway route serving the project icon of a session's workspace. */
-export function workspaceIconRouteUrl(basePath: string, sessionKey: string): string {
-  return `${normalizeRouteBasePath(basePath)}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/${encodeURIComponent(sessionKey)}`;
+export function workspaceIconRouteUrl(resourceBasePath: string, sessionKey: string): string {
+  return `${normalizeRouteBasePath(resourceBasePath)}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/${encodeURIComponent(sessionKey)}`;
 }
 
 /**

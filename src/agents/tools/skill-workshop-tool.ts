@@ -29,6 +29,7 @@ import type {
   SkillProposalReadResult,
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopProposalReviewCompletion,
+  SkillWorkshopProposalRevisionConstraint,
 } from "../../skills/workshop/types.js";
 import { readWritableWorkspaceSkill } from "../../skills/workshop/workspace-skill-read.js";
 import {
@@ -92,6 +93,45 @@ function readSkillPatchText(params: Record<string, unknown>) {
   };
 }
 
+function bindProposalRevisionConstraint(
+  params: Record<string, unknown>,
+  action: string,
+  constraint: SkillWorkshopProposalRevisionConstraint | undefined,
+): Record<string, unknown> {
+  if (!constraint) {
+    return params;
+  }
+  if (!constraint.proposalId.trim()) {
+    throw new ToolInputError("operator-reviewed proposal_id required");
+  }
+  if (!constraint.expectedRevisionHash.trim()) {
+    throw new ToolInputError("operator-reviewed expected_revision_hash required");
+  }
+  if (action !== "inspect" && action !== "revise") {
+    throw new ToolInputError(
+      "this operator-requested Skill Workshop turn can only inspect or revise its reviewed proposal",
+    );
+  }
+  const proposalId = readToolStringParam(params, "proposal_id", { label: "proposal_id" });
+  if (proposalId && proposalId !== constraint.proposalId) {
+    throw new ToolInputError("proposal_id conflicts with the operator-reviewed proposal");
+  }
+  if (readToolStringParam(params, "name")) {
+    throw new ToolInputError("name cannot replace the operator-reviewed proposal_id");
+  }
+  const expectedRevisionHash = readToolStringParam(params, "expected_revision_hash");
+  if (expectedRevisionHash && expectedRevisionHash !== constraint.expectedRevisionHash) {
+    throw new ToolInputError(
+      "expected_revision_hash conflicts with the operator-reviewed proposal revision",
+    );
+  }
+  return {
+    ...params,
+    proposal_id: constraint.proposalId,
+    expected_revision_hash: constraint.expectedRevisionHash,
+  };
+}
+
 type SkillWorkshopToolOptions = {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -112,6 +152,8 @@ type SkillWorkshopToolOptions = {
   collectionReconcile?: SkillCollectionReconcileContext;
   /** Effective selected-model context used for every model-visible Workshop projection. */
   modelContextWindowTokens?: number;
+  /** Exact proposal revision reviewed before this operator-requested revision turn. */
+  proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
@@ -139,16 +181,19 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       updateProposals: options.updateProposals === true,
       autonomousMode: workshopConfig.autonomous.mode,
       collectionOnly: options.collectionReconcile !== undefined,
+      proposalRevision: options.proposalRevision !== undefined,
     }),
     parameters: buildSkillWorkshopToolSchema(
       options.proposalOnly === true,
       options.proposalReviewCompletion !== undefined,
       options.updateProposals === true,
       options.collectionReconcile !== undefined,
+      options.proposalRevision !== undefined,
     ),
     execute: async (_toolCallId, args) => {
-      const params = asToolParamsRecord(args);
-      const action = readToolStringParam(params, "action", { required: true });
+      const rawParams = asToolParamsRecord(args);
+      const action = readToolStringParam(rawParams, "action", { required: true });
+      const params = bindProposalRevisionConstraint(rawParams, action, options.proposalRevision);
       const proposalActions = resolveProposalOnlyActions(
         options.updateProposals === true,
         options.proposalReviewCompletion !== undefined,
@@ -551,24 +596,30 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               : proposalMutationText("Created skill patch proposal", proposal.record)
             : proposalMutationText("Created skill patch proposal", proposal.record);
         } else if (action === "revise") {
-          const pendingProposal = await resolvePendingSkillProposal({
-            proposalId: readToolStringParam(params, "proposal_id", {
-              label: "proposal_id",
-            }),
-            name: readToolStringParam(params, "name"),
-            workspaceDir: options.workspaceDir,
-            agentId: options.agentId,
-            env: options.env,
-          });
+          let proposalId = options.proposalRevision?.proposalId;
+          let expectedRevisionHash = options.proposalRevision?.expectedRevisionHash;
+          if (!proposalId) {
+            const pendingProposal = await resolvePendingSkillProposal({
+              proposalId: readToolStringParam(params, "proposal_id", {
+                label: "proposal_id",
+              }),
+              name: readToolStringParam(params, "name"),
+              workspaceDir: options.workspaceDir,
+              agentId: options.agentId,
+              env: options.env,
+            });
+            proposalId = pendingProposal.record.id;
+            expectedRevisionHash =
+              readToolStringParam(params, "expected_revision_hash") ?? pendingProposal.revisionHash;
+          }
           proposal = await reviseSkillProposal({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
             eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
-            proposalId: pendingProposal.record.id,
-            expectedRevisionHash:
-              readToolStringParam(params, "expected_revision_hash") ?? pendingProposal.revisionHash,
+            proposalId,
+            expectedRevisionHash,
             correlationId: readToolStringParam(params, "correlation_id"),
             content: proposalContent,
             supportFiles,

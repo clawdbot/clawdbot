@@ -2,7 +2,7 @@ import OpenClawKit
 import SwiftUI
 
 /// Control-hub Terminal destination: embeds the gateway-served terminal page
-/// (`/?view=terminal`, the ghostty-web surface shared with the Control UI) in a
+/// (`/focus/terminal`, the ghostty-web surface shared with the Control UI) in a
 /// WKWebView, authenticated with the stored gateway credentials.
 struct TerminalHubScreen: View {
     @Environment(NodeAppModel.self) private var appModel
@@ -87,14 +87,14 @@ struct TerminalHubScreen: View {
     }
 
     /// Derives the terminal page URL from the active gateway connection: the
-    /// WS endpoint flips to HTTP(S) and only `view=terminal` rides in the URL.
+    /// WS endpoint flips to HTTP(S) and the configured Control UI base path is preserved.
     /// Credentials never enter the URL — they are injected as a document-start
     /// user script (see `terminalAuthUserScript`), matching the macOS Dashboard.
     static func terminalURL(config: GatewayConnectConfig?) -> URL? {
         AuthenticatedControlUI.pageURL(
             config: config,
-            path: "/",
-            queryItems: [URLQueryItem(name: "view", value: "terminal")])
+            path: "/focus/terminal",
+            queryItems: [])
     }
 
     /// Origin-gated document-start script that hands the gateway credentials to

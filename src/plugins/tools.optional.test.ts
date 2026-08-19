@@ -1986,40 +1986,6 @@ describe("resolvePluginTools optional tools", () => {
     expect(registry.diagnostics).toHaveLength(0);
   });
 
-  it("keeps the Discord-owned show_widget contextual to Discord sessions", () => {
-    const registry = setRegistry([
-      {
-        pluginId: "discord",
-        optional: false,
-        source: "/tmp/discord.js",
-        names: ["show_widget"],
-        factory: (context) =>
-          (context as { messageChannel?: string }).messageChannel === "discord"
-            ? { ...makeTool("show_widget"), description: "discord implementation" }
-            : null,
-      },
-    ]);
-
-    const discordTools = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...createContext(), messageChannel: "discord" },
-        clientCaps: ["inline-widgets"],
-      }),
-    );
-    expect(discordTools.map((tool) => [tool.name, tool.description])).toEqual([
-      ["show_widget", "discord implementation"],
-    ]);
-
-    const webTools = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...createContext(), messageChannel: "webchat" },
-        clientCaps: ["inline-widgets"],
-      }),
-    );
-    expect(webTools).toHaveLength(0);
-    expect(registry.diagnostics).toHaveLength(0);
-  });
-
   it("isolates tools with malformed required client capabilities", () => {
     const registry = setRegistry([
       {

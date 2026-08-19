@@ -757,7 +757,6 @@ describe("followup queue collect routing", () => {
 
     const queue = getExistingFollowupQueue(key);
     expect(accepted).toEqual([true, true, true, true, true, true, true]);
-    expect(queue?.summaryElisions).toHaveLength(2);
     expect(queue?.summaryElisions.map((entry) => entry.sources.at(-1)?.originatingTo)).toEqual([
       "channel:B",
       "channel:A",
@@ -1811,6 +1810,27 @@ describe("followup queue collect routing", () => {
         expect(call.prompt).not.toContain("normal two");
       }
     }
+  });
+
+  it("drains a bound Skill Workshop revision individually", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-skill-workshop-revision-${Date.now()}`,
+      {},
+      2,
+    );
+    const revisionRun = createRun({ prompt: "revise proposal" });
+    revisionRun.run.skillWorkshopProposalRevision = {
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "1".repeat(64),
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "normal" }), settings);
+    enqueueFollowupRun(key, revisionRun, settings);
+    await drainRecordedQueue(key, runFollowup, done);
+
+    expect(calls.map((call) => call.prompt)).toEqual(["normal", "revise proposal"]);
   });
 
   it("can prepend priority followups before already queued items", () => {

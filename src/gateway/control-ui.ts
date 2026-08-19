@@ -57,7 +57,11 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
-import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
+import {
+  classifyControlUiRequest,
+  isControlUiApprovalDocumentPath,
+  isControlUiFocusDocumentPath,
+} from "./control-ui-routing.js";
 import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
@@ -122,10 +126,12 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
-/** Anchors bundled public assets before deep-linked documents begin preloading. */
-function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
+/** Anchors bundled assets before deep-linked documents begin preloading. */
+function rewriteControlUiIndexHtmlAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
-  let next = html;
+  let next = html
+    .replaceAll('src="./assets/', `src="${normalized}/assets/`)
+    .replaceAll('href="./assets/', `href="${normalized}/assets/`);
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
     const assetHref = `href="${normalized}/${asset}"`;
     // Vite's portable ./ base emits relative hrefs, which the browser starts
@@ -666,10 +672,10 @@ async function serveResolvedIndexHtml(
   allowWasm?: boolean,
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
-  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, normalizedBasePath);
-  const basePathAttribute = normalizedBasePath
-    ? ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`
-    : "";
+  const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath);
+  // An empty base path is authoritative for Gateway resources even when the
+  // router infers a namespace. Always emit it so resources stay root-mounted.
+  const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`;
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
   const prepared = withBasePath.replace(
@@ -956,7 +962,9 @@ export async function handleControlUiHttpRequest(
 
   const uiPath =
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
-  const approvalDocument = isControlUiApprovalDocumentPath({ basePath, pathname });
+  const standaloneDocument =
+    isControlUiApprovalDocumentPath({ basePath, pathname }) ||
+    isControlUiFocusDocumentPath({ basePath, pathname });
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) {
       return "";
@@ -973,7 +981,7 @@ export async function handleControlUiHttpRequest(
     }
     return uiPath.slice(1);
   })();
-  const requested = approvalDocument
+  const requested = standaloneDocument
     ? "index.html"
     : rel && !rel.endsWith("/")
       ? rel

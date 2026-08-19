@@ -430,6 +430,8 @@ export async function getReplyFromConfig(
       "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
+          cfg,
+          agentId,
           raw: heartbeatRaw,
           defaultProvider,
           aliasIndex,
@@ -780,6 +782,8 @@ export async function getReplyFromConfig(
   const resolvedChannelModelOverride =
     channelModelOverride && !hasResolvedHeartbeatModelOverride && !sessionModelSelectionLocked
       ? resolveModelRefFromString({
+          cfg,
+          agentId,
           raw: channelModelOverride.model,
           defaultProvider,
           aliasIndex,

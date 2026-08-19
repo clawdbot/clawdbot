@@ -164,9 +164,11 @@ or fully dynamic tool registration.
 | `api.registerTool(tool, opts?)`          | Agent tool (required or `{ optional: true }`)                                                                                            |
 | `api.registerCommand(def)`               | Custom command (bypasses the LLM)                                                                                                        |
 | `api.registerNodeHostCommand(command)`   | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
-| `api.registerWidgetPresenter(presenter)` | Destination that can present a hosted `show_widget` document                                                                             |
+| `api.registerWidgetPresenter(presenter)` | Explicit or current-channel destination behind the core `show_widget` tool                                                               |
 
-Widget presenters declare a model-visible target, a short description, current availability, and a `present(...)` callback. Return the closed presentation result codes (`no_eligible_node` or `node_error`) instead of throwing for expected device failures; core then keeps the widget available inline and gives the agent a recovery step.
+Explicit widget presenters declare a unique model-visible target such as `node_panel`. Current-channel presenters use `target: "current_channel"`, provide a synchronous `match(context)` predicate over trusted delivery facts, and declare supported source kinds and delivery limits. Multiple transport presenters may coexist, but core selects an implicit route only when exactly one matches.
+
+Core validates the canonical `show_widget` schema, composes the bounded HTML document, and passes immutable HTML plus an optional hosted URL to `present(...)`. Presenters return either a generic message receipt or a node receipt. Expected availability and presentation failures use the closed error result instead of throwing; core falls back inline only for an actual `inline-widgets` client and otherwise surfaces the failure.
 
 Computer Use providers use `registerComputerUseProvider(api, provider)` from
 `openclaw/plugin-sdk/computer-use`. It registers the shared

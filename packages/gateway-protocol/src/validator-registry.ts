@@ -372,6 +372,7 @@ export const validateSkillsProposalReviseParams = compile(S.SkillsProposalRevise
 export const validateSkillsProposalRequestRevisionParams = compile(
   S.SkillsProposalRequestRevisionParamsSchema,
 );
+export const validateSkillsProposalDecisionParams = compile(S.SkillsProposalDecisionParamsSchema);
 export const validateSkillsProposalActionParams = compile(S.SkillsProposalActionParamsSchema);
 export const validateSkillsProposalEvaluateParams = compile(S.SkillsProposalEvaluateParamsSchema);
 export const validateSkillsProposalEventsListParams = compile(

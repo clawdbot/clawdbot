@@ -249,6 +249,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onRevealWorkspaceFile?: (path: string) => void;
     onChatScroll?: (event: Event) => void;
     basePath?: string;
+    resourceBasePath?: string;
     composerControls?: TemplateResult | typeof nothing;
     permissionPicker?: ChatPermissionPickerProps;
     replyTarget?: ChatReplyTarget | null;
@@ -332,6 +333,7 @@ export function renderChat(props: ChatProps) {
       userName: props.userName,
       userAvatar: props.userAvatar,
       basePath: props.basePath,
+      resourceBasePath: props.resourceBasePath,
       fullMessageAgentId: props.fullMessageAgentId,
       loadFullAssistantMessage: props.loadFullAssistantMessage,
       localMediaPreviewRoots: props.localMediaPreviewRoots,

@@ -3343,6 +3343,7 @@ describe("grouped chat rendering", () => {
   it("checks local assistant audio against server metadata while preview roots load", async () => {
     const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(new URL(url, "http://control.test").pathname).toBe("/__openclaw__/assistant-media");
       expect(url).toContain("meta=1");
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
       return {
@@ -3362,7 +3363,7 @@ describe("grouped chat rendering", () => {
         }),
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "",
           assistantAttachmentAuthToken: "session-token",
           localMediaPreviewRoots: [],
           onRequestUpdate: renderMessage,
@@ -3377,7 +3378,7 @@ describe("grouped chat rendering", () => {
     const audioPlayer = await requireAudioPlayer(container);
     const audio = expectElement(audioPlayer, "audio", HTMLAudioElement);
     expect(audio.getAttribute("src")).toBe(
-      `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
+      `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
     );
     expect((audioPlayer as unknown as { serverDurationMs?: number }).serverDurationMs).toBe(2_345);
   });
@@ -3761,7 +3762,7 @@ describe("grouped chat rendering", () => {
         ),
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
           localMediaPreviewRoots: [],
           onRequestUpdate: renderMessage,
@@ -3808,7 +3809,7 @@ describe("grouped chat rendering", () => {
           }),
           {
             showToolCalls: false,
-            basePath: "/openclaw",
+            resourceBasePath: "/openclaw",
             assistantAttachmentAuthToken: "session-token",
             localMediaPreviewRoots: [],
             onRequestUpdate: renderMessage,
@@ -4136,7 +4137,7 @@ describe("grouped chat rendering", () => {
         }),
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: renderMessage,
@@ -4186,7 +4187,7 @@ describe("grouped chat rendering", () => {
         }),
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
@@ -4238,7 +4239,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
@@ -4292,7 +4293,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
@@ -4354,7 +4355,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: token,
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: () => renderWithToken(token),
@@ -4398,7 +4399,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
@@ -4439,7 +4440,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
@@ -4478,7 +4479,7 @@ describe("grouped chat rendering", () => {
       ),
       {
         showToolCalls: false,
-        basePath: "/openclaw",
+        resourceBasePath: "/openclaw",
         localMediaPreviewRoots: ["/tmp/openclaw"],
       },
     );
@@ -4503,7 +4504,7 @@ describe("grouped chat rendering", () => {
       }),
       {
         showToolCalls: false,
-        basePath: "/openclaw",
+        resourceBasePath: "/openclaw",
         localMediaPreviewRoots: ["/tmp/openclaw"],
       },
     );
@@ -4555,7 +4556,7 @@ describe("grouped chat rendering", () => {
       const rerender = () =>
         renderGroupedMessage(container, message, "user", {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
@@ -4627,7 +4628,7 @@ describe("grouped chat rendering", () => {
         "user",
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           localMediaPreviewRoots: [],
           onRequestUpdate: rerender,
@@ -4750,7 +4751,7 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "test-auth-token",
-        basePath: "/rosita",
+        resourceBasePath: "/rosita",
         onOpenImage,
       },
     );
@@ -4797,7 +4798,7 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "must-not-be-forwarded",
-        basePath: "/rosita",
+        resourceBasePath: "/rosita",
         resolveArtifactDownload,
       },
     );

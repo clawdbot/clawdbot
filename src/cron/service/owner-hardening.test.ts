@@ -176,23 +176,41 @@ function spawnRunner(params: {
 }
 
 async function waitForLine(child: ChildProcess, expected: string): Promise<void> {
-  let stdout = "";
-  let stderr = "";
-  child.stdout?.on("data", (chunk) => {
-    stdout += String(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    stderr += String(chunk);
-  });
-  await vi.waitFor(
-    () => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(`cron child exited before ${expected}: ${stderr || stdout}`);
+  await new Promise<void>((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const cleanup = () => {
+      child.stdout?.off("data", onStdout);
+      child.stderr?.off("data", onStderr);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const onStdout = (chunk: unknown) => {
+      stdout += String(chunk);
+      if (stdout.split("\n").includes(expected)) {
+        cleanup();
+        resolve();
       }
-      expect(stdout.split("\n")).toContain(expected);
-    },
-    { timeout: 10_000, interval: 20 },
-  );
+    };
+    const onStderr = (chunk: unknown) => {
+      stderr += String(chunk);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = () => {
+      cleanup();
+      reject(new Error(`cron child exited before ${expected}: ${stderr || stdout}`));
+    };
+    child.stdout?.on("data", onStdout);
+    child.stderr?.on("data", onStderr);
+    child.once("error", onError);
+    child.once("exit", onExit);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      onExit();
+    }
+  });
 }
 
 async function waitForExit(child: ChildProcess): Promise<void> {

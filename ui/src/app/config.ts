@@ -176,7 +176,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
 }
 
 async function loadApplicationConfig(params: {
-  basePath: string;
+  resourceBasePath: string;
   auth?: ApplicationConfigAuthSource;
   skipWithoutAuthCandidate?: boolean;
   signal?: AbortSignal;
@@ -185,9 +185,9 @@ async function loadApplicationConfig(params: {
     return null;
   }
 
-  const basePath = normalizeRouteBasePath(params.basePath);
-  const url = basePath
-    ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
+  const resourceBasePath = normalizeRouteBasePath(params.resourceBasePath);
+  const url = resourceBasePath
+    ? `${resourceBasePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
 
   try {
@@ -229,7 +229,7 @@ async function loadApplicationConfig(params: {
 }
 
 export function createApplicationConfigCapability(params: {
-  basePath: string;
+  resourceBasePath: string;
   auth?: ApplicationConfigAuthSource;
 }): ApplicationConfigCapability {
   let current = DEFAULT_APPLICATION_CONFIG;
@@ -252,7 +252,7 @@ export function createApplicationConfigCapability(params: {
       currentAuth = options?.auth ?? currentAuth;
       const version = ++refreshVersion;
       const next = await loadApplicationConfig({
-        basePath: params.basePath,
+        resourceBasePath: params.resourceBasePath,
         auth: currentAuth,
         skipWithoutAuthCandidate: options?.skipWithoutAuthCandidate,
         signal: options?.signal,

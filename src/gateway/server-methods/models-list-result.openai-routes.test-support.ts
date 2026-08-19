@@ -41,6 +41,7 @@ export function registerTestCatalogAccess(
 }
 
 export async function listModels(params: {
+  agentId?: string;
   catalog: ModelCatalogEntry[];
   staticEntries?: ModelCatalogEntry[];
   cfg?: OpenClawConfig;
@@ -48,10 +49,11 @@ export async function listModels(params: {
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   view?: "all" | "configured" | "provider-config" | "default";
 }) {
+  const agentId = params.agentId ?? "main";
   const config = params.cfg ?? ({} as OpenClawConfig);
   const loadGatewayModelCatalogSnapshot = async () =>
     ({
-      agentId: "main",
+      agentId,
       agentDir: "/tmp/models-list-openai-agent",
       catalogComplete: false,
       workspaceDir: "/tmp/models-list-openai-workspace",
@@ -77,6 +79,7 @@ export async function listModels(params: {
   } as unknown as GatewayRequestContext;
   return await buildModelsListResult({
     context,
+    agentId,
     params: { view: params.view ?? "all" },
     ...(params.discoveryModes
       ? {

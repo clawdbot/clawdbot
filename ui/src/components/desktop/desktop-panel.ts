@@ -19,6 +19,7 @@ import {
 import { DesktopClient, type DesktopConnectionHandle } from "./desktop-client.ts";
 import { resolveDesktopDocumentInventoryTarget } from "./desktop-document-inventory.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
+import { openDesktopFocus } from "./desktop-focus-window.ts";
 import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import type {
   DesktopAppId,
@@ -49,6 +50,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) documentSource: string | null = null;
   @property({ attribute: false }) documentSession: string | null = null;
   @property({ type: Boolean }) documentControl = false;
+  @property({ attribute: false }) basePath = "";
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
   /** This embedded instance is the active pane's visible Desktop presenter. */
@@ -685,6 +687,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
               dock,
               fullscreenControl: this.fullscreenMode.renderButton(),
               onDock: (nextDock) => this.dockLayout.setDock(nextDock),
+              onOpenWindow: () =>
+                openDesktopFocus(this.basePath, this.environmentId, this.controlling),
               onClose: () => this.closePanel(),
             })}
         <div class="desktop-content">

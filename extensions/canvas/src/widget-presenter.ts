@@ -53,7 +53,16 @@ export function createCanvasWidgetPresenter(nodesRuntime: PluginRuntime["nodes"]
         };
       }
     },
-    async present({ documentUrlPath, sessionContext }) {
+    async present({ document, context }) {
+      if (!document.hostedUrl) {
+        return {
+          ok: false,
+          error: {
+            code: "node_error",
+            message: "The widget document is not hosted for device presentation.",
+          },
+        };
+      }
       let node: CanvasRuntimeNode | null;
       try {
         node = await selectCanvasNode(nodesRuntime);
@@ -76,14 +85,15 @@ export function createCanvasWidgetPresenter(nodesRuntime: PluginRuntime["nodes"]
         await nodesRuntime.invoke({
           nodeId: node.nodeId,
           command: "canvas.present",
-          params: { url: documentUrlPath },
+          params: { url: document.hostedUrl },
           timeoutMs: DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
           idempotencyKey: randomUUID(),
-          ...(sessionContext.sessionKey ? { sessionKey: sessionContext.sessionKey } : {}),
+          ...(context.sessionKey ? { sessionKey: context.sessionKey } : {}),
         });
         return {
           ok: true,
           value: {
+            kind: "node",
             nodeId: node.nodeId,
             ...(node.displayName ? { nodeName: node.displayName } : {}),
           },

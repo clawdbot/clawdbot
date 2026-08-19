@@ -165,6 +165,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveDefaultAgentId: () => "default",
   tryResolveSoleAgentId: () => "default",
   resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentModelFallbacksOverride: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
     defaultAgentId: "default",

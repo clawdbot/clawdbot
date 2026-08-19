@@ -825,6 +825,7 @@ function resolveCommandMessage(
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+type SteerChatSendAck = { runId?: unknown; status?: unknown };
 
 function normalizeSteerChatSendAckStatus(payload: unknown): SteerChatSendAckStatus {
   if (!payload || typeof payload !== "object") {
@@ -900,7 +901,7 @@ async function executeSteer(
 
 /** Hard redirect — aborts the active run and restarts with a new message. */
 async function executeRedirect(
-  _client: GatewayBrowserClient,
+  client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
@@ -914,11 +915,13 @@ async function executeRedirect(
       };
     }
     assertCurrentSlashCommand(context);
-    const resp = await context.sessions.steer(
-      resolved.key,
-      resolved.message,
-      selectedGlobalScope(resolved.key, context),
-    );
+    const resp = await client.request<SteerChatSendAck>("chat.send", {
+      sessionKey: resolved.key,
+      ...selectedGlobalScope(resolved.key, context),
+      message: resolved.message,
+      queueMode: "interrupt",
+      idempotencyKey: generateUUID(),
+    });
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {

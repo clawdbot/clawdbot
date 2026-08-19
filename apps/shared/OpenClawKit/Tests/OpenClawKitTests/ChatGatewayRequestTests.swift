@@ -4,6 +4,15 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test func `models list scopes worker catalogs and preserves default scope`() {
+        let worker = OpenClawChatGatewayRequests.modelsList(agentID: " worker ")
+        let defaultAgent = OpenClawChatGatewayRequests.modelsList(agentID: nil)
+
+        #expect(worker.method == "models.list")
+        #expect(worker.params["agentId"]?.value as? String == "worker")
+        #expect(defaultAgent.params.isEmpty)
+    }
+
     @Test func `session observation requests encode global subscription and actual visibility`() {
         let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
         let visible = OpenClawChatGatewayRequests.setSessionObserverVisibility(true)
