@@ -517,19 +517,17 @@ function resolveConfiguredModels(
     }
     const defaultMetadata = asOptionalRecord(defaultModels?.[modelId]);
     const agentMetadata = asOptionalRecord(agentModels?.[modelId]);
-    const aliasOwner =
-      agentMetadata && Object.hasOwn(agentMetadata, "alias") ? agentMetadata : defaultMetadata;
-    const alias =
-      aliasOwner && Object.hasOwn(aliasOwner, "alias")
-        ? (normalizeOptionalString(aliasOwner.alias) ?? "")
-        : undefined;
+    const hasAgentAlias = agentMetadata && Object.hasOwn(agentMetadata, "alias");
+    const alias = hasAgentAlias
+      ? (normalizeOptionalString(agentMetadata.alias) ?? "")
+      : normalizeOptionalString(defaultMetadata?.alias);
     const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
     const separator = trimmed.indexOf("/");
     options.push({
       value: trimmed,
       label,
-      ...(separator > 0 ? { provider: trimmed.slice(0, separator) } : {}),
-      ...(alias !== undefined ? { alias } : {}),
+      provider: separator > 0 ? trimmed.slice(0, separator) : undefined,
+      alias,
     });
   }
   return options;
@@ -551,7 +549,7 @@ export function buildModelOptions(
       return;
     }
     seen.add(key);
-    options.push({ value, label, ...(provider ? { provider } : {}), ...(tags ? { tags } : {}) });
+    options.push({ value, label, provider, tags });
   };
 
   if (catalog) {
@@ -565,10 +563,10 @@ export function buildModelOptions(
     const displayCatalog = catalog.map((entry) => {
       const value = `${entry.provider}/${entry.id}`;
       const key = normalizeLowercaseStringOrEmpty(value);
-      if (!configuredAliases.has(key)) {
+      const alias = configuredAliases.get(key);
+      if (alias === undefined) {
         return entry;
       }
-      const alias = configuredAliases.get(key) ?? "";
       return { ...entry, alias: alias || undefined };
     });
     const displayLookup = buildCatalogDisplayLookup(displayCatalog);
@@ -577,7 +575,7 @@ export function buildModelOptions(
       catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), {
         ...option,
         provider: entry.provider,
-        ...(entry.tags ? { tags: entry.tags } : {}),
+        tags: entry.tags,
       });
     }
   }
