@@ -13,7 +13,10 @@ import type {
   PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import {
+  PreparedModelCatalogGenerationInvalidError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
@@ -237,7 +240,9 @@ export function createPreparedModelCatalogWorker(params: {
         request.reject(error);
         stop(error);
       } else if (message.status === "generation-invalid") {
-        const error = superseded();
+        const error = new PreparedModelCatalogGenerationInvalidError(
+          `prepared model catalog generation was invalid for ${params.input.input.agentDir}`,
+        );
         request.reject(error);
         stop(error);
       } else if (message.status === "failed") {

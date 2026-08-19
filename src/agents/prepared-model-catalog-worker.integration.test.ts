@@ -35,6 +35,11 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+import {
+  publishPreparedModelRuntimeSnapshot,
+  type PreparedModelRuntimeInput,
+} from "./prepared-model-runtime.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 const PROVIDER_ID = "worker-catalog-fixture";
@@ -54,6 +59,7 @@ const EXTERNAL_AUTH_PROFILE_ID = `${PROVIDER_ID}:external`;
 const EXTERNAL_AUTH_PATH_ENV = "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
+    resetPreparedModelRuntimeSnapshotsForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawAgentDatabasesForTest();
     cleanup();
@@ -767,8 +773,74 @@ describe("prepared model catalog worker boundary", () => {
     const fixture = await createStaticSnapshot(0);
     writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
 
-    await expect(fixture.snapshot.loadFullModelCatalog?.()).rejects.toThrow("superseded");
-    await expect(fixture.snapshot.loadFullModelCatalog?.()).rejects.toThrow("superseded");
+    await expect(fixture.snapshot.loadFullModelCatalog?.()).rejects.toThrow(
+      "generation was invalid",
+    );
+    await expect(fixture.snapshot.loadFullModelCatalog?.()).rejects.toThrow(
+      "generation was invalid",
+    );
+  });
+
+  it("rebuilds the published owner before models.list retries a generation mismatch", async () => {
+    const fixture = await createStaticSnapshot(0);
+    vi.stubEnv("OPENCLAW_WORKER_CATALOG_MARKER", fixture.marker);
+    const config = {
+      ...fixture.config,
+      agents: {
+        ...fixture.config.agents,
+        list: [
+          {
+            id: "main",
+            default: true,
+            agentDir: fixture.agentDir,
+            workspace: fixture.workspaceDir,
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const input = {
+      agentId: "main",
+      agentDir: fixture.agentDir,
+      inheritedAuthDir: fixture.agentDir,
+      workspaceDir: fixture.workspaceDir,
+      config,
+      env: fixture.env,
+    } satisfies PreparedModelRuntimeInput;
+    await publishPreparedModelRuntimeSnapshot(input, {
+      provenance: "configured",
+      catalogMode: "static",
+    });
+    writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
+
+    const loadRecoveredCatalog = async () =>
+      await loadGatewayModelCatalogSnapshot({
+        agentId: "main",
+        agentDir: fixture.agentDir,
+        workspaceDir: fixture.workspaceDir,
+        getConfig: () => config,
+        readOnly: false,
+      });
+    registerGatewayModelCatalogPrivateAccess(loadRecoveredCatalog, {
+      loadDeferred: async () =>
+        await loadPreparedGatewayModelCatalogSnapshot({
+          agentId: "main",
+          agentDir: fixture.agentDir,
+          workspaceDir: fixture.workspaceDir,
+          getConfig: () => config,
+          readOnly: false,
+        }),
+      readPrepared: async () => undefined,
+    });
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot: loadRecoveredCatalog,
+      logGateway: { debug: () => undefined },
+    } as unknown as GatewayRequestContext;
+    const recovered = await buildModelsListResult({ context, params: { view: "all" } });
+
+    expect(recovered.models).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v2" }),
+    );
   });
 
   it("preserves ref-only api-key and token profiles through the real worker", async () => {
