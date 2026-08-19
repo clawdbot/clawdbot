@@ -208,20 +208,26 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([overflow]);
   });
 
-  it("keeps a correlation past the request cap instead of evicting it", async () => {
+  it("resumes ordering once the saturated correlations drain", async () => {
     const ordering = new AcpSessionNewOrdering();
     const steps: Step[] = [];
     for (let id = 1; id <= 65; id += 1) {
       steps.push({ inbound: newSessionRequest(id) });
     }
-    const update = sessionUpdate("session-1");
-    const result = newSessionResponse(1, "session-1");
-    steps.push({ outbound: update }, { outbound: result });
+    const settled: AnyMessage[] = [];
+    for (let id = 1; id <= 64; id += 1) {
+      const response = newSessionResponse(id, `s${id}`);
+      settled.push(response);
+      steps.push({ outbound: response });
+    }
+    // Correlations are never evicted to make room, so every tracked request still
+    // resolves; once they all have, the boundary is provably able to correlate
+    // again and buffering resumes.
+    const update = sessionUpdate("s100");
+    const created = newSessionResponse(100, "s100");
+    steps.push({ inbound: newSessionRequest(100) }, { outbound: update }, { outbound: created });
 
-    // Evicting the oldest correlation to make room for the 65th left this session's
-    // result unable to reach the drain branch, so its initial update never shipped —
-    // the same silent stall this boundary exists to fix.
-    await expect(runSteps(ordering, steps)).resolves.toEqual([result, update]);
+    await expect(runSteps(ordering, steps)).resolves.toEqual([...settled, created, update]);
   });
 
   it("releases an established session ID when the session closes", async () => {
@@ -252,39 +258,41 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([created, other, afterClose]);
   });
 
-  it("retires an overflow slot on a failed creation instead of letting it claim a later response", async () => {
+  it("fails open instead of buffering once correlation saturates", async () => {
     const ordering = new AcpSessionNewOrdering();
     const steps: Step[] = [];
     for (let id = 1; id <= 65; id += 1) {
       steps.push({ inbound: newSessionRequest(id) });
     }
-    const failed = { jsonrpc: "2.0", id: 65, error: { code: -32603, message: "no" } } as AnyMessage;
-    const victim = sessionUpdate("victim-session");
-    const unrelated = newSessionResponse(900, "victim-session");
-    steps.push({ outbound: failed }, { outbound: victim }, { outbound: unrelated });
+    const update = sessionUpdate("overflow-session");
+    steps.push({ outbound: update });
 
     const output = await runSteps(ordering, steps);
 
-    // Request 65 overflowed the correlation cap and then failed. Its fallback slot
-    // has to be retired by that error, otherwise the next result carrying a session
-    // ID is mistaken for it and flushes a session the protocol never introduced.
-    expect(output).toEqual([failed, unrelated]);
+    // Request 65 could not be correlated, so a response this boundary will not
+    // recognize is in flight. Holding an update it cannot prove is releasable is
+    // what strands it, so ordering degrades to pre-fix behaviour instead.
+    expect(output).toEqual([update]);
   });
 
-  it("still establishes an overflow session that succeeds after an earlier one failed", async () => {
+  it("does not let an unrelated response stand in for an uncorrelated creation", async () => {
     const ordering = new AcpSessionNewOrdering();
     const steps: Step[] = [];
-    for (let id = 1; id <= 66; id += 1) {
+    for (let id = 1; id <= 65; id += 1) {
       steps.push({ inbound: newSessionRequest(id) });
     }
-    const failed = { jsonrpc: "2.0", id: 65, error: { code: -32603, message: "no" } } as AnyMessage;
+    // An ordinary RPC response arrives while request 65 is still outstanding. Any
+    // fallback that matches a response by count rather than by its own request ID
+    // consumes the overflow here, and request 65's own result then no longer
+    // establishes its session — the ordering failure, from the other side.
+    const unrelated = { jsonrpc: "2.0", id: 900, result: { ok: true } } as AnyMessage;
+    const created = newSessionResponse(65, "overflow-session");
     const update = sessionUpdate("overflow-session");
-    const created = newSessionResponse(66, "overflow-session");
-    steps.push({ outbound: failed }, { outbound: update }, { outbound: created });
+    steps.push({ outbound: unrelated }, { outbound: update }, { outbound: created });
 
-    // Two requests overflowed, so retiring the first slot on the error must leave
-    // the second able to establish its session.
-    await expect(runSteps(ordering, steps)).resolves.toEqual([failed, created, update]);
+    const output = await runSteps(ordering, steps);
+
+    expect(output).toEqual([unrelated, update, created]);
   });
 
   it("stops buffering once established tracking is saturated", async () => {

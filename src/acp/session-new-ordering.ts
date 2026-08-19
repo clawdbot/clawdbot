@@ -32,8 +32,13 @@ export class AcpSessionNewOrdering {
   private readonly bufferedSessionUpdates = new Map<string, AnyMessage[]>();
   /** JSON-RPC IDs of in-flight `session/new` requests, used to correlate the establishing response. */
   private readonly pendingNewSessionRequestIds = new Set<string>();
-  /** In-flight `session/new` requests beyond the correlation cap; see `observeInbound`. */
-  private untrackedNewSessionRequests = 0;
+  /**
+   * Set when a `session/new` arrived that could not be correlated. Some response we
+   * will not recognize is then in flight, so buffering stops until the tracked
+   * correlations drain: holding an update we cannot prove is releasable is what
+   * strands it. Cleared when the pending set empties.
+   */
+  private correlationSaturated = false;
   /**
    * Updates released by an inbound message, which has no transform controller to
    * write to. The next outbound message drains them, so they are never dropped.
@@ -54,11 +59,13 @@ export class AcpSessionNewOrdering {
       }
       if (this.pendingNewSessionRequestIds.size >= MAX_PENDING_NEW_SESSION_REQUESTS) {
         // A correlation is never evicted: its response is the only thing that can
-        // release the updates already buffered for that session, so discarding it
-        // would recreate the stall this boundary exists to prevent. Past the cap we
-        // stop correlating and fall back to trusting the session ID carried by the
-        // response itself, which is our own outbound payload rather than peer input.
-        this.untrackedNewSessionRequests += 1;
+        // release the updates already buffered for that session, so discarding one
+        // would recreate the stall this boundary exists to prevent. Past the cap the
+        // request is simply not correlated, and the boundary fails open until the
+        // tracked correlations drain. Matching such a response by anything other
+        // than its own request ID — a count, a shape — lets unrelated RPC traffic
+        // claim it, which reintroduces the ordering failure from the other side.
+        this.correlationSaturated = true;
         return;
       }
       this.pendingNewSessionRequestIds.add(requestId);
@@ -102,33 +109,18 @@ export class AcpSessionNewOrdering {
 
     const responseId = readRequestId(messageObject?.id);
     if (responseId !== undefined) {
-      const correlated = this.pendingNewSessionRequestIds.delete(responseId);
-      const sessionIdFromResult = readSessionId(messageObject?.result);
-      // Past the correlation cap the request was never recorded, so its response
-      // cannot be recognized by ID and is matched by count instead. The slot is
-      // retired by the first uncorrelated response either way: a creation that
-      // failed carries no session ID to establish, and leaving its slot behind
-      // would let some unrelated later response be mistaken for it.
-      let retiredUntrackedSlot = false;
-      if (!correlated && this.untrackedNewSessionRequests > 0) {
-        this.untrackedNewSessionRequests -= 1;
-        retiredUntrackedSlot = true;
-      }
-      if (correlated || (retiredUntrackedSlot && sessionIdFromResult !== undefined)) {
+      if (this.pendingNewSessionRequestIds.delete(responseId)) {
         // The response to `session/new` always goes out first; it is what introduces
         // the session ID to the client. A failed creation carries no ID to establish.
         controller.enqueue(message);
+        const sessionIdFromResult = readSessionId(messageObject?.result);
         if (sessionIdFromResult) {
           this.establish(sessionIdFromResult);
           this.drainBufferedUpdates(sessionIdFromResult, controller);
         }
-        this.releaseUnreachableUpdates(controller);
-        return;
-      }
-      if (retiredUntrackedSlot) {
-        // Retiring the slot may have removed the last thing that could release a
-        // buffered update, so the reachability check has to run here too.
-        controller.enqueue(message);
+        if (this.pendingNewSessionRequestIds.size === 0) {
+          this.correlationSaturated = false;
+        }
         this.releaseUnreachableUpdates(controller);
         return;
       }
@@ -153,10 +145,14 @@ export class AcpSessionNewOrdering {
    * that window would strand the update for the life of the process.
    */
   private shouldBuffer(sessionId: string): boolean {
-    if (this.establishedTrackingSaturated || this.establishedSessionIds.has(sessionId)) {
+    if (
+      this.correlationSaturated ||
+      this.establishedTrackingSaturated ||
+      this.establishedSessionIds.has(sessionId)
+    ) {
       return false;
     }
-    return this.pendingNewSessionRequestIds.size > 0 || this.untrackedNewSessionRequests > 0;
+    return this.pendingNewSessionRequestIds.size > 0;
   }
 
   private establish(sessionId: string): void {
@@ -209,7 +205,7 @@ export class AcpSessionNewOrdering {
   private releaseUnreachableUpdates(
     controller: TransformStreamDefaultController<AnyMessage>,
   ): void {
-    if (this.pendingNewSessionRequestIds.size > 0 || this.untrackedNewSessionRequests > 0) {
+    if (this.pendingNewSessionRequestIds.size > 0) {
       return;
     }
     for (const buffered of this.bufferedSessionUpdates.values()) {

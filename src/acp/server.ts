@@ -266,7 +266,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   // idempotent shutdown owner as EOF and SIGTERM.
   void orderedOutbound.readable.pipeTo(stream.writable).catch(async (err: unknown) => {
     if (opts.verbose) {
-      process.stderr.write(`openclaw acp: outbound stream failed: ${String(err)}\n`);
+      process.stderr.write(`openclaw acp: outbound stream failed: ${formatErrorMessage(err)}\n`);
     }
     await shutdown();
   });
