@@ -265,7 +265,6 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
   const observe = async (request: {
     record: WorkerEnvironmentRecord;
     control: boolean;
-    nowMs: number;
   }): Promise<WorkerDesktopObserveResult> => {
     const binding = snapshotNodeDesktopBinding(request.record);
     const active: ActiveNodeDesktopStream = {
@@ -348,6 +347,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         throw new Error("Worker environment node desktop owner changed before publication");
       }
       active.reservationTransferred = true;
+      const issuedAtMs = Date.now();
       const minted = mintDesktopObserverToken({
         sourceKey: binding.environmentId,
         ownerEpoch: binding.ownerEpoch,
@@ -357,7 +357,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
           auth: "vnc-password",
           credentials: { password: attached.vncPassword },
         },
-        nowMs: request.nowMs,
+        nowMs: issuedAtMs,
       });
       active.unclaimedTimer = setTimeout(
         () => {
@@ -365,7 +365,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
             void stopStream(active);
           }
         },
-        Math.max(0, minted.expiresAtMs - request.nowMs),
+        Math.max(0, minted.expiresAtMs - Date.now()),
       );
       active.unclaimedTimer.unref?.();
       void active.invocation.finally(() => retireStream(active)).catch(() => undefined);

@@ -503,7 +503,6 @@ describe("worker environment service", () => {
         desktop: support.DESKTOP,
       }),
       control: true,
-      nowMs: support.testState.nowMs,
     });
 
     await expect(

@@ -260,7 +260,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         nodeStartup = nodeDesktop.observe({
           record,
           control: request.control,
-          nowMs: now(),
         });
         return;
       }

@@ -1,9 +1,14 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import type { TLSSocket } from "node:tls";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, type ClientOptions, type RawData } from "ws";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
+import {
+  buildCloudflareAccessHeaders,
+  type CloudflareAccessCredentials,
+} from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { classifyRfbSecurity, probeRfbServer } from "../gateway/desktop/rfb-probe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -16,6 +21,7 @@ const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
 const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
+const MAX_VNC_PASSWORD_BYTES = 4 * 1024;
 
 type NodeDesktopStreamCommandParams = {
   ticket: string;
@@ -103,12 +109,20 @@ function createPinnedRequestFinisher(
   };
 }
 
-function websocketOptions(url: string, tlsFingerprint?: string): ClientOptions {
+function websocketOptions(
+  url: string,
+  tlsFingerprint?: string,
+  cloudflareAccess?: CloudflareAccessCredentials,
+): ClientOptions {
+  const edgeHeaders = cloudflareAccess
+    ? { headers: buildCloudflareAccessHeaders(cloudflareAccess) }
+    : {};
   if (!url.startsWith("wss:") || !tlsFingerprint?.trim()) {
-    return { maxPayload: MAX_PAYLOAD_BYTES };
+    return { maxPayload: MAX_PAYLOAD_BYTES, ...edgeHeaders };
   }
   return {
     maxPayload: MAX_PAYLOAD_BYTES,
+    ...edgeHeaders,
     rejectUnauthorized: false,
     finishRequest: createPinnedRequestFinisher(tlsFingerprint),
   };
@@ -130,16 +144,43 @@ function assertGatewayTlsFingerprint(ws: WebSocket, expectedRaw?: string): void 
   }
 }
 
-async function readVncPassword(passwordFile?: string): Promise<string | undefined> {
+async function readVncPassword(
+  passwordFile: string | undefined,
+  signal: AbortSignal,
+): Promise<string | undefined> {
   if (!passwordFile) {
     return undefined;
   }
-  const password = (await fs.readFile(passwordFile, "utf8")).replace(/[\r\n]+$/u, "");
-  if (!password) {
-    throw new Error("desktop.host.passwordFile is empty");
+  signal.throwIfAborted();
+  const handle = await fs.open(passwordFile, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  const buffer = Buffer.alloc(MAX_VNC_PASSWORD_BYTES + 1);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("desktop password file must be a regular file");
+    }
+    if (stat.size > MAX_VNC_PASSWORD_BYTES) {
+      throw new Error("desktop password file is too large");
+    }
+    signal.throwIfAborted();
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    signal.throwIfAborted();
+    if (bytesRead > MAX_VNC_PASSWORD_BYTES) {
+      throw new Error("desktop password file is too large");
+    }
+    const password = buffer
+      .subarray(0, bytesRead)
+      .toString("utf8")
+      .replace(/[\r\n]+$/u, "");
+    if (!password) {
+      throw new Error("desktop password file is empty");
+    }
+    registerSecretValueForRedaction(password);
+    return password;
+  } finally {
+    buffer.fill(0);
+    await handle.close();
   }
-  registerSecretValueForRedaction(password);
-  return password;
 }
 
 async function waitForSocketConnect(socket: net.Socket): Promise<void> {
@@ -239,6 +280,7 @@ async function runNodeDesktopStreamCommand(params: {
   command: NodeDesktopStreamCommandParams;
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   target: NodeDesktopStreamTarget;
   passwordFile?: string;
   signal: AbortSignal;
@@ -275,7 +317,7 @@ async function runNodeDesktopStreamCommand(params: {
     throw new Error("loopback RFB server security is unsupported");
   }
   const vncPassword =
-    auth === "vnc-password" ? await readVncPassword(params.passwordFile) : undefined;
+    auth === "vnc-password" ? await readVncPassword(params.passwordFile, params.signal) : undefined;
   if (params.signal.aborted) {
     return;
   }
@@ -285,7 +327,10 @@ async function runNodeDesktopStreamCommand(params: {
   // attach metadata is accepted so no stateful handshake bytes are lost.
   rfbSocket.pause();
   const wsUrl = attachWebSocketUrl(params.gatewayUrl, params.command.attachPath);
-  const ws = new WebSocket(wsUrl, websocketOptions(wsUrl, params.gatewayTlsFingerprint));
+  const ws = new WebSocket(
+    wsUrl,
+    websocketOptions(wsUrl, params.gatewayTlsFingerprint, params.gatewayCloudflareAccess),
+  );
   let aborted: boolean = params.signal.aborted;
   let resolveAbort!: () => void;
   const abort = new Promise<void>((resolve) => {
@@ -334,6 +379,7 @@ export async function invokeNodeDesktopStream(params: {
   paramsJSON?: string | null;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   config?: DesktopHostConfig;
   signal?: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
@@ -351,6 +397,9 @@ export async function invokeNodeDesktopStream(params: {
     ...(params.gatewayTlsFingerprint
       ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
       : {}),
+    ...(params.gatewayCloudflareAccess
+      ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
+      : {}),
     target: {
       host: "127.0.0.1",
       port: params.config.port ?? DEFAULT_DESKTOP_PORT,
@@ -366,6 +415,7 @@ export async function invokeNodeWorkerDesktopStream(params: {
   paramsJSON?: string | null;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   signal?: AbortSignal;
 }): Promise<void> {
   if (!params.gatewayUrl || !params.signal) {
@@ -377,6 +427,9 @@ export async function invokeNodeWorkerDesktopStream(params: {
     gatewayUrl: params.gatewayUrl,
     ...(params.gatewayTlsFingerprint
       ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
+      : {}),
+    ...(params.gatewayCloudflareAccess
+      ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
       : {}),
     target: { host: "127.0.0.1", port: command.port },
     ...(command.passwordFilePath ? { passwordFile: command.passwordFilePath } : {}),

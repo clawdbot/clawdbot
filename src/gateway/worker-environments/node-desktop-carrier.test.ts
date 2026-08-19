@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeDesktopStreamBroker } from "../desktop/node-stream-broker.js";
@@ -101,9 +101,12 @@ function pendingTransport(params: {
 
 describe("worker node desktop carrier", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  afterEach(() => vi.restoreAllMocks());
 
   it("observes an exact durable node desktop without SSH and preauthenticates it", async () => {
     const record = support.seedReadyNodeDesktop("worker-node-desktop-observe");
+    let nowMs = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     let current: WorkerEnvironmentRecord | undefined = record;
     let proofCurrent = true;
     const proof = nodeProof(record.nodeDeviceId!);
@@ -116,13 +119,15 @@ describe("worker node desktop carrier", () => {
     });
     carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
 
-    const observing = carrier.observe({ record, control: false, nowMs: support.testState.nowMs });
+    const observing = carrier.observe({ record, control: false });
     await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
+    nowMs = 50_000;
     streamed.attachNext();
 
     await expect(observing).resolves.toMatchObject({
       transport: "rfb",
       wsPath: expect.stringMatching(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u),
+      expiresAtMs: 110_000,
       control: false,
     });
     expect(await observing).not.toHaveProperty("vncPassword");
@@ -178,11 +183,7 @@ describe("worker node desktop carrier", () => {
     });
     carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
 
-    const observing = carrier.observe({
-      record,
-      control: true,
-      nowMs: support.testState.nowMs,
-    });
+    const observing = carrier.observe({ record, control: true });
     await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
     current = mutate(record) as WorkerEnvironmentRecord;
     const stream = streamed.attachNext();
@@ -205,11 +206,7 @@ describe("worker node desktop carrier", () => {
     });
     carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
 
-    const observing = carrier.observe({
-      record,
-      control: true,
-      nowMs: support.testState.nowMs,
-    });
+    const observing = carrier.observe({ record, control: true });
     await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
     proofCurrent = false;
     const stream = streamed.attachNext();
@@ -287,4 +284,41 @@ describe("worker node desktop carrier", () => {
     }
     expect(invoke).toHaveBeenCalledOnce();
   });
+
+  it.each(["durable owner", "pairing proof"] as const)(
+    "rejects a successful launch receipt after the %s becomes stale",
+    async (staleBoundary) => {
+      const record = support.seedReadyNodeDesktop(`worker-node-launch-stale-${staleBoundary}`);
+      let current: WorkerEnvironmentRecord | undefined = record;
+      let proofCurrent = true;
+      const proof = nodeProof(record.nodeDeviceId!);
+      const invocation = deferred<{ ok: boolean; payloadJSON: string }>();
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(
+        async () => await invocation.promise,
+      );
+      const carrier = createWorkerNodeDesktopCarrier({
+        store: { get: () => current },
+        desktopRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+      });
+      carrier.bindRuntime({
+        transport: {
+          listCurrentNodes: async () => [proof],
+          isCurrent: () => proofCurrent,
+          invoke,
+        },
+        streamBroker: fakeBroker().broker,
+      });
+
+      const launched = carrier.launchApp({ record, app: support.DESKTOP.apps![0]! });
+      await support.waitForFast(() => expect(invoke).toHaveBeenCalledOnce());
+      if (staleBoundary === "durable owner") {
+        current = { ...record, ownerEpoch: record.ownerEpoch + 1 };
+      } else {
+        proofCurrent = false;
+      }
+      invocation.resolve({ ok: true, payloadJSON: '{"status":"ready"}' });
+
+      await expect(launched).rejects.toThrow("launch owner changed");
+    },
+  );
 });

@@ -507,9 +507,9 @@ setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
 
 When a known session host disconnects, its paired-device record preserves only
-the last accepted current-v5 hosting consent. The offline row remains visible
-and disabled with status unavailable. A current disabled or empty v5
-publication records false; older v1-v4 and update-required dialects do not
+the last accepted current-v6 hosting consent. The offline row remains visible
+and disabled with status unavailable. A current disabled or empty v6
+publication records false; older v1-v5 and update-required dialects do not
 overwrite the last current fact. Connected inventory always wins over stored
 history, a missing stored value means false, and exact worker slots are never
 persisted or shown as offline capacity.

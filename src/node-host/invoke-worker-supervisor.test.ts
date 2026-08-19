@@ -291,6 +291,42 @@ describe("node-host worker supervisor commands", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "kills an in-flight desktop launcher when its invoke owner closes",
+    async () => {
+      const root = tempDirs.make("node-worker-desktop-launch-abort-");
+      const executablePath = path.join(root, "launcher");
+      const pidPath = `${executablePath}.pid`;
+      fs.writeFileSync(
+        executablePath,
+        '#!/bin/sh\nprintf \'%s\\n\' "$$" > "$0.pid"\nexec sleep 300\n',
+        { mode: 0o755 },
+      );
+      const controller = new AbortController();
+
+      const running = invokePrivate({
+        command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+        paramsJSON: JSON.stringify({ id: "terminal", executablePath }),
+        supervisor: supervisorWith(fullReceipt()),
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(fs.existsSync(pidPath)).toBe(true));
+      const pid = Number(fs.readFileSync(pidPath, "utf8").trim());
+      try {
+        controller.abort(new Error("desktop owner closed"));
+
+        await expect(running).resolves.toMatchObject({ result: undefined });
+        await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+      } finally {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // The expected path already reaped the launcher.
+        }
+      }
+    },
+  );
+
   it("dispatches bundle installation before a colliding plugin command", async () => {
     const build = {
       bundleHash: "a".repeat(64),

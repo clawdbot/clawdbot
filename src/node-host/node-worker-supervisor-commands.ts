@@ -240,6 +240,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         paramsJSON: params.paramsJSON,
         gatewayUrl: params.gatewayUrl,
         gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+        gatewayCloudflareAccess: params.gatewayCloudflareAccess,
         signal: params.signal,
       });
       return { handled: true, ok: true, payload: null };
