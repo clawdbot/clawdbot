@@ -70,7 +70,7 @@ async function runCommand(
 ) {
   return await runCommandBuffered(argv, {
     ...(options.cwd ? { cwd: options.cwd } : {}),
-    ...(options.env ? { env: options.env } : {}),
+    env: { ...(options.env ?? process.env), GIT_NO_REPLACE_OBJECTS: "1" },
     ...(options.input !== undefined ? { input: options.input } : {}),
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_OUTPUT_LIMIT,
@@ -542,11 +542,14 @@ export async function executeGitHubPublication(params: {
       };
       const commit = await step(
         async () =>
-          await requireCommand(["git", "commit-tree", workspaceTree, "-p", headCommit], {
-            cwd: worktree.path,
-            env: authorEnv,
-            input: `${message}\n`,
-          }),
+          await requireCommand(
+            ["git", "commit-tree", "--no-gpg-sign", workspaceTree, "-p", headCommit],
+            {
+              cwd: worktree.path,
+              env: authorEnv,
+              input: `${message}\n`,
+            },
+          ),
       );
       await assertGitHubPublicationBranchRef(branch, async (argv) => {
         return (await step(async () => await runCommand(argv, { cwd: worktree.path }))).code ?? -1;

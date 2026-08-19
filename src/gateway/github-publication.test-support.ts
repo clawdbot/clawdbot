@@ -280,6 +280,9 @@ export function installGitHubPublicationTestHarness(): void {
         if (command === "git rev-parse --git-path info/attributes") {
           return commandResult(path.join(root, "missing-info-attributes"));
         }
+        if (command === "git rev-parse --git-path info/grafts") {
+          return commandResult(path.join(root, "missing-grafts"));
+        }
         if (command === "git var GIT_ATTR_GLOBAL" || command === "git var GIT_ATTR_SYSTEM") {
           return commandResult(path.join(root, "missing-global-attributes"));
         }

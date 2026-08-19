@@ -21,6 +21,19 @@ export async function assertSafeGitPublicationWorkspace(
   if (unsafe.some((result) => result.code !== 1 || result.stdout.length > 0)) {
     throw new Error("GitHub publication workspace has unsupported Git transport configuration.");
   }
+  const [replacements, graftPath] = await Promise.all([
+    run(["git", "for-each-ref", "--count=1", "--format=%(refname)", "refs/replace"], { cwd }),
+    run(["git", "rev-parse", "--git-path", "info/grafts"], { cwd }),
+  ]);
+  if (replacements.code !== 0 || replacements.stdout.length > 0 || graftPath.code !== 0) {
+    throw new Error("GitHub publication workspace has unsupported Git replacement metadata.");
+  }
+  const grafts = await readOptionalAttributeFile(
+    path.resolve(cwd, graftPath.stdout.toString("utf8").trim()),
+  );
+  if (grafts && grafts.length > 0) {
+    throw new Error("GitHub publication workspace has unsupported Git replacement metadata.");
+  }
 }
 
 function assertNoGitFilterAttributes(contents: Buffer): void {
