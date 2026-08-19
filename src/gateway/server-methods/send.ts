@@ -948,7 +948,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const canonicalPoll =
           request.action === "poll" &&
-          Boolean(plugin?.outbound?.sendPoll || plugin?.message?.send?.poll) &&
+          Boolean(plugin?.outbound?.sendPoll) &&
           (!plugin?.actions?.handleAction ||
             plugin.actions.supportsAction?.({ action: "poll" }) === false);
         if (!plugin || (!plugin.actions?.handleAction && !canonicalPoll)) {

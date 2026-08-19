@@ -4218,6 +4218,49 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("rejects adapter-only polls before entering canonical outbound work", async () => {
+    const adapterPoll = vi.fn(async () => ({
+      messageId: "adapter-poll-1",
+      receipt: {
+        primaryPlatformMessageId: "adapter-poll-1",
+        platformMessageIds: ["adapter-poll-1"],
+        parts: [{ platformMessageId: "adapter-poll-1", kind: "poll" as const, index: 0 }],
+        sentAt: Date.now(),
+      },
+    }));
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        config: { resolveAccount: () => ({ enabled: true }), isConfigured: () => true },
+      }),
+      message: { send: { poll: adapterPoll } },
+    };
+    mocks.getChannelPlugin.mockReturnValue(plugin);
+
+    const { respond } = await runMessageActionRequest({
+      channel: "discord",
+      action: "poll",
+      params: {
+        to: "channel:123",
+        pollQuestion: "Ship it?",
+        pollOption: ["Yes", "No"],
+      },
+      accountId: "default",
+      idempotencyKey: "idem-message-action-adapter-only-poll",
+    });
+
+    const response = firstRespondCall(respond);
+    expect(response[0]).toBe(false);
+    expect(response[2]).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Channel discord does not support action poll.",
+    });
+    expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendPoll).not.toHaveBeenCalled();
+    expect(adapterPoll).not.toHaveBeenCalled();
+  });
+
   it("uses signed sender group policy without granting gateway send host reads", async () => {
     const plugin = registerMessageActionPlugin({
       chatType: "group",

@@ -72,17 +72,17 @@ type ChannelActionsContractCase = {
 };
 
 function hasCanonicalOutboundAction(
-  plugin: Pick<ChannelPlugin, "message" | "outbound">,
+  plugin: Pick<ChannelPlugin, "outbound">,
   action: ChannelMessageActionName,
 ) {
   if (action !== "poll") {
     return false;
   }
-  return Boolean(plugin.outbound?.sendPoll || plugin.message?.send?.poll);
+  return Boolean(plugin.outbound?.sendPoll);
 }
 
 export function installChannelActionsContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "actions" | "message" | "outbound">;
+  plugin: Pick<ChannelPlugin, "id" | "actions" | "outbound">;
   cases: readonly ChannelActionsContractCase[];
   unsupportedAction?: ChannelMessageActionName;
 }) {
