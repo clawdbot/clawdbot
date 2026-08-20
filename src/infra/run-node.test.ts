@@ -33,6 +33,14 @@ const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
 const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
+const RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS = [
+  "scripts/check-built-plugin-control-plane-modules.mts",
+  "scripts/copy-bundled-plugin-metadata.mts",
+  "scripts/copy-hook-metadata.ts",
+  "scripts/runtime-postbuild.mts",
+  "scripts/stage-bundled-plugin-runtime.mts",
+  "scripts/write-official-channel-catalog.mts",
+] as const;
 const DEPLOYMENT_MANIFEST = "deployment.json";
 const GENERATED_PLUGIN_ASSET_BUNDLE = "extensions/demo/src/host/assets/view.bundle.js";
 const GENERATED_PLUGIN_ASSET_BUNDLE_HASH = "extensions/demo/src/host/assets/.bundle.hash";
@@ -2117,6 +2125,49 @@ describe("run-node script", () => {
     expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
       shouldSync: true,
       reason: "dirty_runtime_postbuild_inputs",
+    });
+  });
+
+  it.each(RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS)(
+    "reports dirty runtime postbuild implementation %s",
+    async (implementationPath) => {
+      await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        await setupStampedProject(tmp, {
+          files: {
+            [implementationPath]: "export {};\n",
+            [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+          },
+          trackConfig: true,
+        });
+
+        const requirement = resolveRuntimePostBuildRequirement(
+          createBuildRequirementDeps(tmp, { gitStatus: ` M ${implementationPath}\n` }),
+        );
+
+        expect(requirement).toEqual({
+          shouldSync: true,
+          reason: "dirty_runtime_postbuild_inputs",
+        });
+      });
+    },
+  );
+
+  it("reports a newer hook metadata copier without git status", async ({ tmp }) => {
+    const implementationPath = "scripts/copy-hook-metadata.ts";
+    await setupStampedProject(tmp, {
+      files: {
+        [implementationPath]: "export {};\n",
+        [RUNTIME_POSTBUILD_STAMP]: "{}\n",
+      },
+      newPaths: [implementationPath],
+      trackConfig: true,
+    });
+    const deps = createBuildRequirementDeps(tmp);
+    deps.spawnSync = () => ({ status: 1, stdout: "" });
+
+    expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
+      shouldSync: true,
+      reason: "runtime_postbuild_input_mtime_newer",
     });
   });
 
