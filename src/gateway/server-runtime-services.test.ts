@@ -16,6 +16,7 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
+type StartHeartbeatRunner = typeof import("../infra/heartbeat-runner.js").startHeartbeatRunner;
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
 type DrainPendingDeliveries =
@@ -32,7 +33,7 @@ const hoisted = vi.hoisted(() => {
   const stopSessionDeliveryRuntime = vi.fn();
   return {
     heartbeatRunner,
-    startHeartbeatRunner: vi.fn(() => heartbeatRunner),
+    startHeartbeatRunner: vi.fn<StartHeartbeatRunner>(() => heartbeatRunner),
     startChannelHealthMonitor: vi.fn(() => ({
       stop: vi.fn(),
       shutdown: vi.fn(),
@@ -387,6 +388,36 @@ describe("server-runtime-services", () => {
       "recovered",
     );
     expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  // A heartbeat wake is a timer callback, so the runner this activation starts is
+  // the only carrier of the owning gateway's instance binding. Drop it here and
+  // the scheduler's own tests still pass while every subagent spawned by a
+  // heartbeat-admitted run fails its completion announce with "In-process
+  // gateway dispatch requires a gateway request scope or instance binding".
+  it("hands its gateway context resolver to the heartbeat runner", () => {
+    vi.useFakeTimers();
+    const resolveGatewayContext = () => undefined;
+
+    activateScheduledServicesForTest({ resolveGatewayContext });
+
+    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+    // Identity, not just presence: a resolver rebuilt here would fence against
+    // the wrong instance lifecycle.
+    expect(hoisted.startHeartbeatRunner.mock.calls[0]?.[0].resolveGatewayContext).toBe(
+      resolveGatewayContext,
+    );
+  });
+
+  it("starts the heartbeat runner unbound when no gateway context resolver was given", () => {
+    vi.useFakeTimers();
+
+    activateScheduledServicesForTest();
+
+    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+    expect(hoisted.startHeartbeatRunner.mock.calls[0]?.[0]).not.toHaveProperty(
+      "resolveGatewayContext",
+    );
   });
 
   it("waits for active startup recovery before its stop handle settles", async () => {
