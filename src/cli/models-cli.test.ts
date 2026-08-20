@@ -37,6 +37,7 @@ const {
   modelsSetCommand,
   modelsSetImageCommand,
   modelsStatusCommand,
+  noopAsync,
 } = mocks;
 
 vi.mock("../commands/models/list.list-command.js", () => ({
@@ -441,10 +442,51 @@ describe("models cli", () => {
       args: ["models", "--agent", "poe", "set-image", "openai/gpt-image-1"],
       command: modelsSetImageCommand,
     },
+    // `aliases` and `scan` only ever touch `agents.defaults`, so --agent was
+    // accepted and ignored here -- including an id that does not exist -- while
+    // every other --agent-aware models subcommand validated it (#126597).
+    {
+      label: "aliases list",
+      args: ["models", "--agent", "poe", "aliases", "list"],
+      command: noopAsync,
+    },
+    {
+      label: "aliases add",
+      args: ["models", "--agent", "poe", "aliases", "add", "zzz", "soraka/grok-4.6"],
+      command: noopAsync,
+    },
+    {
+      label: "aliases remove",
+      args: ["models", "--agent", "poe", "aliases", "remove", "zzz"],
+      command: noopAsync,
+    },
+    {
+      label: "scan",
+      args: ["models", "--agent", "poe", "scan", "--no-probe", "--no-input"],
+      command: noopAsync,
+    },
   ])("rejects parent --agent for models $label", async ({ args, command }) => {
     await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
 
     expect(command).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "aliases list", args: ["models", "--agent", "poe", "aliases", "list"] },
+    { label: "scan", args: ["models", "--agent", "poe", "scan", "--no-probe", "--no-input"] },
+  ])("names the subcommand it rejected for models $label", async ({ label, args }) => {
+    await expect(runModelsCommand(args)).rejects.toThrow(`openclaw models ${label}`);
+  });
+
+  it.each([
+    { label: "aliases list", args: ["models", "aliases", "list"] },
+    { label: "aliases add", args: ["models", "aliases", "add", "zzz", "soraka/grok-4.6"] },
+    { label: "aliases remove", args: ["models", "aliases", "remove", "zzz"] },
+    { label: "scan", args: ["models", "scan", "--no-probe", "--no-input"] },
+  ])("still runs models $label without --agent", async ({ args }) => {
+    await runModelsCommand(args);
+
+    expect(noopAsync).toHaveBeenCalled();
   });
 
   it("shows help for models auth without error exit", async () => {
