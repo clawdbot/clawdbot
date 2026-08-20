@@ -225,6 +225,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
       await sidebarDialog.waitFor({ state: "visible" });
       await waitForLightboxAnimations(page);
       const mobileBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
+      const mobileImage = page.locator("openclaw-image-lightbox .image");
       const mobileImageLayout = await page
         .locator("openclaw-image-lightbox .stage")
         .evaluate((stage) => {
@@ -254,12 +255,42 @@ describeControlUiE2e("Control UI image lightbox", () => {
         height: window.innerHeight,
         width: window.innerWidth,
       }));
-      expect((mobileBox?.width ?? 0) / mobileViewport.width).toBeGreaterThanOrEqual(0.75);
-      expect((mobileBox?.height ?? 0) / mobileViewport.height).toBeGreaterThanOrEqual(0.65);
-      expect(mobileImageLayout.image.left).toBeCloseTo(mobileImageLayout.stage.left, 0);
-      expect(mobileImageLayout.image.right).toBeCloseTo(mobileImageLayout.stage.right, 0);
-      expect(mobileImageLayout.image.top).toBeCloseTo(mobileImageLayout.stage.top, 0);
-      expect(mobileImageLayout.image.bottom).toBeCloseTo(mobileImageLayout.stage.bottom, 0);
+      expect(mobileBox?.width).toBeCloseTo(mobileViewport.width, 0);
+      expect(mobileBox?.height).toBeCloseTo(mobileViewport.height, 0);
+      expect(mobileImageLayout.image.left).toBeGreaterThanOrEqual(mobileImageLayout.stage.left);
+      expect(mobileImageLayout.image.right).toBeLessThanOrEqual(mobileImageLayout.stage.right);
+      expect(mobileImageLayout.image.top).toBeGreaterThanOrEqual(mobileImageLayout.stage.top);
+      expect(mobileImageLayout.image.bottom).toBeLessThanOrEqual(mobileImageLayout.stage.bottom);
+      await mobileImage.dblclick();
+      await expect
+        .poll(() =>
+          mobileImage.evaluate((image) =>
+            Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
+          ),
+        )
+        .toBeGreaterThan(1);
+      await page.getByRole("button", { name: "Reset zoom" }).click();
+      await expect
+        .poll(() =>
+          mobileImage.evaluate((image) =>
+            Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
+          ),
+        )
+        .toBe(1);
+      const zoomIn = page.getByRole("button", { name: "Zoom in" });
+      await zoomIn.click();
+      await expect
+        .poll(() =>
+          mobileImage.evaluate((image) =>
+            Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
+          ),
+        )
+        .toBeGreaterThan(1);
+      const zoomedImageBox = await mobileImage.boundingBox();
+      expect((zoomedImageBox?.x ?? 0) + (zoomedImageBox?.width ?? 0)).toBeGreaterThan(0);
+      expect((zoomedImageBox?.y ?? 0) + (zoomedImageBox?.height ?? 0)).toBeGreaterThan(0);
+      expect(zoomedImageBox?.x ?? mobileViewport.width).toBeLessThan(mobileViewport.width);
+      expect(zoomedImageBox?.y ?? mobileViewport.height).toBeLessThan(mobileViewport.height);
       if (captureUiProofEnabled) {
         await page.screenshot({
           fullPage: true,

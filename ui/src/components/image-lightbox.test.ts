@@ -185,16 +185,16 @@ describe("openclaw-image-lightbox", () => {
       expect(root?.querySelector<HTMLAnchorElement>(".open-original")).toBeTruthy(),
     );
     const openOriginal = root?.querySelector<HTMLAnchorElement>(".open-original");
-    const closeButton = root?.querySelector<HTMLButtonElement>(".close");
-    closeButton?.focus();
+    const zoomIn = root?.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]');
+    zoomIn?.focus();
 
-    closeButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    zoomIn?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
     expect(root?.activeElement).toBe(openOriginal);
 
     openOriginal?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
     );
-    expect(root?.activeElement).toBe(closeButton);
+    expect(root?.activeElement).toBe(zoomIn);
   });
 
   it("emits one close event for the close button and modal cancellation", async () => {

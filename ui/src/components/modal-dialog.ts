@@ -113,6 +113,26 @@ export class OpenClawModalDialog extends OpenClawLitElement {
         max-height: 90dvh;
       }
     }
+
+    @media (max-width: 768px),
+      (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+      :host(.mobile-edge-to-edge) wa-dialog {
+        --width: 100vw;
+      }
+
+      :host(.mobile-edge-to-edge) wa-dialog::part(dialog) {
+        width: 100vw;
+        height: 100dvh;
+        max-width: none;
+        max-height: none;
+        margin: 0;
+        border-radius: 0;
+      }
+
+      :host(.mobile-edge-to-edge) wa-dialog::part(body) {
+        height: 100%;
+      }
+    }
   `;
 
   override connectedCallback() {

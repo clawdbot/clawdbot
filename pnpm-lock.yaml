@@ -2385,6 +2385,9 @@ importers:
       '@openclaw/workboard-contract':
         specifier: workspace:*
         version: link:../packages/workboard-contract
+      '@panzoom/panzoom':
+        specifier: 4.6.2
+        version: 4.6.2
       '@tanstack/lit-virtual':
         specifier: 3.13.36
         version: 3.13.36(lit@3.3.3)
@@ -4470,6 +4473,9 @@ packages:
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [x64]
     os: [win32]
+
+  '@panzoom/panzoom@4.6.2':
+    resolution: {integrity: sha512-Zn3B5/hwa6eYIPRSKX0xf2clv8nviTX8AnAU5kU/EugiTDhG41ya2wlBqYrZJYCWQROr/5XkWObZhIkepi89qw==}
 
   '@parse5/tools@0.3.0':
     resolution: {integrity: sha512-zxRyTHkqb7WQMV8kTNBKWb1BeOFUKXBXTBWuxg9H9hfvQB3IwP6Iw2U75Ia5eyRxPNltmY7E8YAlz6zWwUnjKg==}
@@ -11329,6 +11335,8 @@ snapshots:
 
   '@oxlint/binding-win32-x64-msvc@1.75.0':
     optional: true
+
+  '@panzoom/panzoom@4.6.2': {}
 
   '@parse5/tools@0.3.0':
     dependencies:
