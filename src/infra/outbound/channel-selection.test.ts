@@ -38,6 +38,9 @@ vi.mock("./channel-resolution.js", () => ({
     return normalized && deliverableChannelIds.includes(normalized) ? normalized : undefined;
   },
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+}));
+
+vi.mock("./runtime-visible-channels.js", () => ({
   // Defaults to the process-root list; scoped-registry tests override it.
   listRuntimeVisibleChannelPlugins: (...args: unknown[]) =>
     mocks.listRuntimeVisibleChannelPlugins(...args) ?? mocks.listChannelPlugins(...args),

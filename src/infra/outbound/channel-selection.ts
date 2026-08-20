@@ -18,10 +18,10 @@ import {
 import { createDedupeCache } from "../dedupe.js";
 import { formatErrorMessage } from "../errors.js";
 import {
-  listRuntimeVisibleChannelPlugins,
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
 } from "./channel-resolution.js";
+import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
 
 /** Source that explains how message channel selection chose its result. */
 type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";

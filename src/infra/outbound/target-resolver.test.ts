@@ -32,8 +32,7 @@ vi.mock("../../channels/plugins/registry-loaded.js", () => ({
   getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getLoadedChannelPlugin(...args),
 }));
 
-vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/runtime.js")>()),
+vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginChannelRegistry: () => null,
   getActivePluginRegistry: () => null,
   getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),

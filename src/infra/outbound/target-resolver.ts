@@ -1,7 +1,6 @@
 // Target resolver combines plugin id heuristics, cached directory searches,
 // live fallback lookups, and normalized fallback targets.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelDirectoryEntry,
@@ -10,8 +9,8 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
+import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
 import {
   ambiguousTargetError,
   missingTargetError,
@@ -104,8 +103,8 @@ function normalizeQuery(value: string): string {
 
 // Message CLI actions run against a scoped registry handle without process-root
 // activation, so bare getChannelPlugin cannot see installed channel plugins there.
-function resolveTargetChannelPlugin(channel: ChannelId, cfg?: OpenClawConfig) {
-  return resolveOutboundChannelPlugin({ channel, cfg }) ?? getChannelPlugin(channel);
+function resolveTargetChannelPlugin(channel: ChannelId) {
+  return getRuntimeVisibleChannelPlugin(channel);
 }
 
 function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
@@ -299,7 +298,7 @@ async function listDirectoryEntries(params: {
   source: "cache" | "live";
   plugin?: ChannelPlugin;
 }): Promise<ChannelDirectoryEntry[]> {
-  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel, params.cfg);
+  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
   const directory = plugin?.directory;
   if (!directory) {
     return [];
@@ -435,7 +434,7 @@ async function resolveMessagingTarget(params: {
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
-    const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel, params.cfg);
+    const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
     return {
       ok: false,
       error: missingTargetError(
@@ -444,7 +443,7 @@ async function resolveMessagingTarget(params: {
       ),
     };
   }
-  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel, params.cfg);
+  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);

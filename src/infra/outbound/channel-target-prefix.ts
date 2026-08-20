@@ -2,7 +2,7 @@
 // kind prefixes and validate selected-channel mismatches.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
-import { listRuntimeVisibleChannelPlugins } from "./channel-resolution.js";
+import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
 
 const TARGET_KIND_PREFIXES = new Set([
   "channel",
