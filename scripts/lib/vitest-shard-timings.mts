@@ -23,12 +23,8 @@ function sanitizeTimingLabel(value: unknown): string {
 }
 
 function hashIncludePatterns(includePatterns: string[]): string {
-  return createHash("sha1")
-    .update(
-      JSON.stringify([...includePatterns].toSorted((left, right) => left.localeCompare(right))),
-    )
-    .digest("hex")
-    .slice(0, 12);
+  const serialized = JSON.stringify(includePatterns.toSorted());
+  return createHash("sha1").update(serialized).digest("hex").slice(0, 12);
 }
 
 function shouldUseShardTimings(env: NodeJS.ProcessEnv = process.env): boolean {

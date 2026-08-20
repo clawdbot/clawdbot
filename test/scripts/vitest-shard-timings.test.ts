@@ -76,6 +76,19 @@ describe("scripts/lib/vitest-shard-timings.mts", () => {
     expect(second).toBe(first);
   });
 
+  it("uses code-unit ordering for Unicode include patterns without mutating the caller", () => {
+    const includePatterns = ["src/ä.test.ts", "src/z.test.ts"];
+
+    expect(
+      resolveShardTimingKey({
+        config: "unicode",
+        env: {},
+        includePatterns,
+      }),
+    ).toBe("unicode#include-2-88f79eaa7742");
+    expect(includePatterns).toEqual(["src/ä.test.ts", "src/z.test.ts"]);
+  });
+
   it("persists include-pattern timing metadata", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shard-timings-"));
     tempDirs.push(tempDir);
