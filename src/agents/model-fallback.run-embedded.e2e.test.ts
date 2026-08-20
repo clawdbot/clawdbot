@@ -46,6 +46,7 @@ const installRunEmbeddedMocks = () => {
   // exercises fallback orchestration without live model/provider calls.
   vi.doMock("../plugins/runtime.js", () => ({
     getActivePluginRegistry: () => null,
+    getActivePluginRegistryWorkspaceDir: () => undefined,
     requireActivePluginRegistry: () => ({}),
   }));
   vi.doMock("./harness/runtime-plugin.js", () => ({
@@ -484,6 +485,19 @@ function countProviderAttempts(provider: string) {
 function expectProviderAttemptCounts(expected: { openai: number; groq: number }) {
   expect(countProviderAttempts("openai")).toBe(expected.openai);
   expect(countProviderAttempts("groq")).toBe(expected.groq);
+}
+
+function expectOrderedProfileFallbackAttempts() {
+  const attempts = runEmbeddedAttemptMock.mock.calls.map(([params]) => {
+    const attempt = params as EmbeddedAttemptParams;
+    return `${attempt.provider}:${attempt.authProfileId}`;
+  });
+  expect(attempts).toStrictEqual([
+    "openai:openai:p1",
+    "openai:openai:p2",
+    "openai:openai:p3",
+    "groq:groq:p1",
+  ]);
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
@@ -964,6 +978,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
 
       expectProviderAttemptCounts({ openai: 3, groq: 1 });
+      expectOrderedProfileFallbackAttempts();
     });
   });
 
@@ -1008,6 +1023,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.model).toBe("mock-2");
 
       expectProviderAttemptCounts({ openai: 3, groq: 1 });
+      expectOrderedProfileFallbackAttempts();
     });
   });
 
