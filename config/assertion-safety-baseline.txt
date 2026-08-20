@@ -965,7 +965,7 @@ extensions/openrouter/stream.ts	8
 extensions/openrouter/usage.ts	2
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
-extensions/openshell/src/backend.ts	3
+extensions/openshell/src/backend.ts	2
 extensions/openshell/src/config.ts	1
 extensions/openshell/src/fs-bridge.ts	2
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
