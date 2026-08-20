@@ -226,6 +226,7 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
   includeRegistration?: (registration: PluginHookRegistration<K>) => boolean;
+  assertHandlerBoundaryActive?: () => void;
 };
 
 type PluginTargetedInboundClaimOutcome =
@@ -728,6 +729,8 @@ export function createHookRunner(
     let result: TResult | undefined;
 
     for (const hook of selectedHooks) {
+      policy.assertHandlerBoundaryActive?.();
+      let shouldStop = false;
       try {
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
         const handlerEvent = policy.isolateEventPerHandler
@@ -752,7 +755,7 @@ export function createHookRunner(
               `[hooks] ${hookName}${terminalLabel} decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
             );
             policy.onTerminal?.({ hookName, pluginId: hook.pluginId, result });
-            break;
+            shouldStop = true;
           }
         }
       } catch (err) {
@@ -760,6 +763,10 @@ export function createHookRunner(
           throw err;
         }
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+      policy.assertHandlerBoundaryActive?.();
+      if (shouldStop) {
+        break;
       }
     }
 
@@ -989,7 +996,6 @@ export function createHookRunner(
       assertActive,
     });
     try {
-      assertActive();
       const result = await runModifyingHook<
         "before_prompt_build",
         PluginHookBeforePromptBuildResult
@@ -1000,9 +1006,9 @@ export function createHookRunner(
         {
           mergeResults: mergeBeforePromptBuild,
           includeRegistration: (registration) => registration.requiresToolAuthority === true,
+          assertHandlerBoundaryActive: assertActive,
         },
       );
-      assertActive();
       if (!result) {
         return undefined;
       }

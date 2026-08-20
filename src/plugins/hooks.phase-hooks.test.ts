@@ -329,4 +329,48 @@ describe("phase hooks merger", () => {
 
     await expect(run).rejects.toThrow("host turn authority is no longer active");
   });
+
+  it("does not start a later authorized handler after host authority closes", async () => {
+    let hostActive = true;
+    const firstEnrichment = vi.fn(async () => {
+      hostActive = false;
+      return { prependContext: "first context" };
+    });
+    const laterEnrichment = vi.fn(() => ({ prependContext: "stale later context" }));
+    registry.typedHooks.push(
+      {
+        pluginId: "first-enricher",
+        hookName: "before_prompt_build",
+        handler: firstEnrichment,
+        requiresToolAuthority: true,
+        source: "test",
+      },
+      {
+        pluginId: "later-enricher",
+        hookName: "before_prompt_build",
+        handler: laterEnrichment,
+        requiresToolAuthority: true,
+        source: "test",
+      },
+    );
+    const runner = createHookRunner(registry);
+
+    await expect(
+      runner.runAuthorizedPromptBuild(
+        { prompt: "test", messages: [] },
+        {},
+        {
+          toolAuthorityFingerprint: "turn-authority",
+          activeToolNames: ["memory_search"],
+          assertHostActive: () => {
+            if (!hostActive) {
+              throw new Error("host turn authority is no longer active");
+            }
+          },
+        },
+      ),
+    ).rejects.toThrow("host turn authority is no longer active");
+    expect(firstEnrichment).toHaveBeenCalledOnce();
+    expect(laterEnrichment).not.toHaveBeenCalled();
+  });
 });
