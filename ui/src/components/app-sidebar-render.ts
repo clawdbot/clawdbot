@@ -180,6 +180,13 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const hasComposerDraft = host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active && !running;
+  const hiddenUnread = mainRow?.unread === true && !active && running;
+  const homeLabel =
+    attentionLabel || hiddenUnread
+      ? [t("nav.home"), attentionLabel, hiddenUnread ? t("sessionsView.unread") : ""]
+          .filter(Boolean)
+          .join(" · ")
+      : undefined;
   // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
   const homeGlyph = renderSessionGlyph({
     content:
@@ -201,7 +208,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         preferenceDerivedFace: true,
       }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
-      aria-label=${attentionLabel ? `${t("nav.home")} · ${attentionLabel}` : nothing}
+      aria-label=${homeLabel ?? nothing}
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {

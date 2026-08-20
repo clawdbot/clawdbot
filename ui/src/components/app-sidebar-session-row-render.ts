@@ -222,9 +222,14 @@ export function renderRecentSession(params: {
   const trailingDescription = session.isChild
     ? ""
     : describeSessionTrailingState(session, pullRequestState);
+  const childUnreadDescription =
+    session.isChild && running && session.unread ? t("sessionsView.unread") : "";
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
-  const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
+  const stateId =
+    trailingIndicator === nothing && !childUnreadDescription
+      ? undefined
+      : sidebarSessionStateId(session.key);
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,
@@ -385,6 +390,9 @@ export function renderRecentSession(params: {
             </span>
           </span>
         </span>
+        ${childUnreadDescription
+          ? html`<span class="sr-only" id=${stateId}>${childUnreadDescription}</span>`
+          : nothing}
       </a>
       ${session.childSessionKeys.length > 0
         ? html`<button

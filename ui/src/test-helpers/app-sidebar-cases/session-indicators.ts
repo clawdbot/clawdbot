@@ -246,13 +246,16 @@ describe("AppSidebar session indicators", () => {
     for (const row of result.sessions) {
       row.hasActiveRun = true;
       row.status = "running";
+      if (row.key === mainKey) {
+        row.unread = true;
+      }
     }
     const { sidebar } = await mountSidebar(
       createGatewayHarness({} as GatewayBrowserClient).gateway,
       sessions.sessions,
     );
     sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = mainKey;
+    sidebar.sessionKey = workingKey;
     sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
     sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
     sidebar.requestUpdate();
@@ -271,6 +274,8 @@ describe("AppSidebar session indicators", () => {
     expect(homeSpinner?.getAttribute("aria-label")).toBe(
       sessionSpinner?.getAttribute("aria-label"),
     );
+    expect(home?.querySelector(".session-unread-dot")).toBeNull();
+    expect(home?.getAttribute("aria-label")).toBe("Home · Unread");
     expect(
       home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
     ).toContain("2");
@@ -435,6 +440,14 @@ describe("AppSidebar session indicators", () => {
     expect(attentionLead?.querySelector(".session-glyph__ring")).not.toBeNull();
     expect(attentionLead?.querySelector(".session-glyph__badge--unread")).toBeNull();
     expect(attentionLead?.querySelector('[data-session-pr-state="open"]')).not.toBeNull();
+    const attentionLink = sidebar.querySelector(
+      `[data-session-key="${openPullRequestKey}"] .sidebar-recent-session__link`,
+    );
+    const attentionDescriptionId = attentionLink?.getAttribute("aria-describedby");
+    expect(attentionDescriptionId).toBe(
+      `sidebar-session-state-${encodeURIComponent(openPullRequestKey)}`,
+    );
+    expect(sidebar.querySelector(`[id="${attentionDescriptionId}"]`)?.textContent).toBe("Unread");
   });
 
   it("prioritizes an active run over unread activity", async () => {
