@@ -46,6 +46,8 @@ import {
   hasAnnounceSendEvidence,
   isIncompleteAnnounceAgentResultError,
   isPermanentAnnounceDeliveryError,
+  resolveSubagentAnnounceAdmissionTimeoutMs,
+  resolveSubagentAnnounceRunTimeoutMs,
   resolveSubagentAnnounceTimeoutMs,
   runAnnounceDeliveryWithRetry,
   SourceOwnerChangedError,
@@ -66,6 +68,7 @@ import {
   resolveCompletionDeliveryOrigins,
   type DeliveryContext,
 } from "./subagent-announce-origin.js";
+import { runWithAnnounceSplitDeadlines } from "./subagent-announce-split-deadline.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 async function runAnnounceAgentCall(params: {
@@ -117,6 +120,8 @@ export async function sendSubagentAnnounceDirectly(params: {
   }
   const cfg = getSubagentAnnounceRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
+  const announceAdmissionTimeoutMs = resolveSubagentAnnounceAdmissionTimeoutMs(cfg);
+  const announceRunTimeoutMs = resolveSubagentAnnounceRunTimeoutMs(cfg);
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
@@ -352,27 +357,37 @@ export async function sendSubagentAnnounceDirectly(params: {
           if (!isCompletionDeliveryAllowed()) {
             throw new SourceOwnerChangedError();
           }
-          return await runAnnounceAgentCall({
-            agentParams: directAgentParams,
-            delegatedToolPolicyHandoff:
-              isSubagentCompletion &&
-              trustedCompletionEvent &&
-              params.sourceSessionKey &&
-              requesterActivity.sessionId &&
-              params.isSourceSessionEffectsAllowed?.() !== false
-                ? {
-                    sourceSessionKey: params.sourceSessionKey,
-                    ...(trustedCompletionEvent.childSessionId
-                      ? { sourceSessionId: trustedCompletionEvent.childSessionId }
-                      : {}),
-                    targetSessionKey: canonicalRequesterSessionKey,
-                    targetSessionId: requesterActivity.sessionId,
-                    idempotencyKey: params.directIdempotencyKey,
-                  }
-                : undefined,
-            expectFinal: true,
-            timeoutMs: announceTimeoutMs,
-            resolveGatewayContext: params.resolveGatewayContext,
+          const delegatedToolPolicyHandoff =
+            isSubagentCompletion &&
+            trustedCompletionEvent &&
+            params.sourceSessionKey &&
+            requesterActivity.sessionId &&
+            params.isSourceSessionEffectsAllowed?.() !== false
+              ? {
+                  sourceSessionKey: params.sourceSessionKey,
+                  ...(trustedCompletionEvent.childSessionId
+                    ? { sourceSessionId: trustedCompletionEvent.childSessionId }
+                    : {}),
+                  targetSessionKey: canonicalRequesterSessionKey,
+                  targetSessionId: requesterActivity.sessionId,
+                  idempotencyKey: params.directIdempotencyKey,
+                }
+              : undefined;
+          // The two waits this dispatch performs — requester lane admission and
+          // the announce turn itself — own separate budgets and separate errors.
+          // A single timeout here reported both as `gateway request timeout`.
+          return await runWithAnnounceSplitDeadlines({
+            runId: params.directIdempotencyKey,
+            admissionTimeoutMs: announceAdmissionTimeoutMs,
+            runTimeoutMs: announceRunTimeoutMs,
+            run: async (dispatchTimeoutMs) =>
+              await runAnnounceAgentCall({
+                agentParams: directAgentParams,
+                delegatedToolPolicyHandoff,
+                expectFinal: true,
+                timeoutMs: dispatchTimeoutMs,
+                resolveGatewayContext: params.resolveGatewayContext,
+              }),
           });
         },
       });

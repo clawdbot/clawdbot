@@ -1938,7 +1938,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         targetSessionId: "requester-session-local",
         idempotencyKey: "announce-local-dispatch",
       },
-      timeoutMs: 120_000,
+      // The dispatch carries the announce run budget plus its release grace, not
+      // the announce deadline itself: admission and run budgets are enforced by
+      // runWithAnnounceSplitDeadlines so their failures stay distinguishable.
+      timeoutMs: 930_000,
       resolveGatewayContext,
     });
   });

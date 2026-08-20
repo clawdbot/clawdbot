@@ -430,7 +430,13 @@ See [Configuration reference](/gateway/configuration-reference) and
   Block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Per-agent override: `agents.entries.*.subagents.requireAgentId`.
 </ParamField>
 <ParamField path="agents.defaults.subagents.announceTimeoutMs" type="number" default="120000">
-  Per-call timeout for gateway `agent` announce delivery attempts. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Transient retries can make the total announce wait longer than one configured timeout.
+  Per-call timeout for gateway `agent` announce delivery attempts. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Transient retries can make the total announce wait longer than one configured timeout. When set explicitly it also becomes the default for both announce phases below.
+</ParamField>
+<ParamField path="agents.defaults.subagents.announceAdmissionTimeoutMs" type="number" default="30000">
+  How long a completion announce waits for the requester's session lane to admit its turn. A requester that is mid-turn holds that lane until its turn ends, so exceeding this budget fails with `announce not admitted (lane busy)` instead of stalling the caller.
+</ParamField>
+<ParamField path="agents.defaults.subagents.announceRunTimeoutMs" type="number" default="900000">
+  Budget for an announce turn that was already admitted. Exceeding it fails with `announce run exceeded budget`, which is a different outcome from never being admitted.
 </ParamField>
 
 If the requester session is sandboxed, `sessions_spawn` rejects targets

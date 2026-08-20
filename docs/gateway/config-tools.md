@@ -505,7 +505,9 @@ Older configs used `tools.experimental.planTool`. Run `openclaw doctor --fix` to
 - `allowAgents`: default allowlist of configured target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any configured target; default: same agent only). Stale entries whose agent config was deleted are rejected by `sessions_spawn` and omitted from `agents_list`; run `openclaw doctor --fix` to clean them up.
 - `maxConcurrent`: max concurrent sub-agent runs. Default: `8`.
 - `runTimeoutSeconds`: timeout (seconds) for `sessions_spawn` when the caller does not pass its own override. Default: `0` (no timeout); the `900` shown above is a common opt-in value, not the built-in default.
-- `announceTimeoutMs`: per-call timeout (milliseconds) for gateway `agent` announce delivery attempts. Default: `120000`. Transient retries can make the total announce wait longer than one configured timeout.
+- `announceTimeoutMs`: per-call timeout (milliseconds) for gateway `agent` announce delivery attempts. Default: `120000`. Transient retries can make the total announce wait longer than one configured timeout. Setting it explicitly also makes it the default for both announce phases below.
+- `announceAdmissionTimeoutMs`: how long (milliseconds) the completion announce waits for the requester's session lane to admit its turn before reporting `announce not admitted (lane busy)`. Default: `30000`. A requester that is mid-turn holds that lane until its turn ends, so waiting longer only stalls the announce.
+- `announceRunTimeoutMs`: budget (milliseconds) for an announce turn that was admitted, after which it reports `announce run exceeded budget`. Default: `900000`. A real announce turn can take minutes, which is why it is bounded separately from lane admission.
 - `archiveAfterMinutes`: minutes after a sub-agent session completes before it is auto-archived. Default: `60`; `0` disables auto-archive.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 

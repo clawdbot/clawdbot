@@ -247,6 +247,20 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        announceAdmissionTimeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Wait in ms for the requester session lane to admit an announce turn (default: 30000).",
+          ),
+        announceRunTimeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Budget in ms for an admitted announce turn to finish (default: 900000)."),
         requireAgentId: z.boolean().optional(),
       })
       .strict()
