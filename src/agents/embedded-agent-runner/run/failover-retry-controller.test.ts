@@ -87,8 +87,8 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     expect(mocks.sleepWithAbort).toHaveBeenCalledWith(10_000, undefined);
   });
 
-  it("escalates after one successful rate-limit rotation without advancing again", async () => {
-    const advanceAuthProfile = vi.fn(async () => true);
+  it("escalates after exhausting the ordered auth profiles", async () => {
+    const advanceAuthProfile = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const controller = createController(advanceAuthProfile, true);
 
     await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
@@ -101,10 +101,30 @@ describe("createEmbeddedRunFailoverRetryController", () => {
       FailoverError,
     );
 
-    expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    expect(advanceAuthProfile).toHaveBeenCalledTimes(3);
     expect(rateLimitContext.logFallbackDecision).toHaveBeenCalledTimes(2);
     expect(rateLimitContext.logFallbackDecision).toHaveBeenNthCalledWith(1, "fallback_model", {
       status: 429,
     });
+  });
+
+  it("tries every ordered profile before escalating to model fallback", async () => {
+    const advanceAuthProfile = vi
+      .fn<ControllerInput["advanceAuthProfile"]>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const controller = createController(advanceAuthProfile, true);
+
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "rate_limit",
+      status: 429,
+    } satisfies Partial<FailoverError>);
+
+    expect(advanceAuthProfile).toHaveBeenCalledTimes(3);
+    expect(rateLimitContext.logFallbackDecision).toHaveBeenCalledOnce();
   });
 });

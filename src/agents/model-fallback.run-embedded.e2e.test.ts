@@ -946,7 +946,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("caps rate-limit profile rotations and escalates to cross-provider fallback (#58572)", async () => {
+  it("exhausts ordered rate-limit profiles before cross-provider fallback", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeMultiProfileAuthStore(agentDir);
 
@@ -963,7 +963,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.model).toBe("mock-2");
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
 
-      expectProviderAttemptCounts({ openai: 2, groq: 1 });
+      expectProviderAttemptCounts({ openai: 3, groq: 1 });
     });
   });
 
@@ -991,7 +991,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("caps prompt-side rate-limit profile rotations before cross-provider fallback", async () => {
+  it("exhausts ordered prompt-side rate-limit profiles before cross-provider fallback", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeMultiProfileAuthStore(agentDir);
 
@@ -1007,7 +1007,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.provider).toBe("groq");
       expect(result.model).toBe("mock-2");
 
-      expectProviderAttemptCounts({ openai: 2, groq: 1 });
+      expectProviderAttemptCounts({ openai: 3, groq: 1 });
     });
   });
 

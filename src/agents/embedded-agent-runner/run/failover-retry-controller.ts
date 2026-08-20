@@ -22,7 +22,6 @@ import {
   resolveNextSameModelRateLimitRetryCount,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
-  resolveRateLimitProfileRotationLimit,
   resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
@@ -62,7 +61,6 @@ export function createEmbeddedRunFailoverRetryController(input: {
   } = input;
   const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs();
   const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit();
-  const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit();
   let rateLimitProfileRotations = 0;
   let consecutiveSameModelRateLimitRetries = 0;
 
@@ -157,10 +155,15 @@ export function createEmbeddedRunFailoverRetryController(input: {
     },
     advanceAuthProfile: input.advanceAuthProfile,
     advanceRateLimitAuthProfile: async (context: RateLimitAuthProfileContext): Promise<boolean> => {
-      if (rateLimitProfileRotations >= rateLimitProfileRotationLimit && fallbackConfigured) {
+      const rotated = await input.advanceAuthProfile();
+      if (rotated) {
+        rateLimitProfileRotations += 1;
+        return true;
+      }
+      if (fallbackConfigured) {
         const status = resolveFailoverStatus("rate_limit");
         log.warn(
-          `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
+          `rate-limit auth profiles exhausted for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
         );
         context.logFallbackDecision("fallback_model", { status });
         throw new FailoverError(
@@ -176,11 +179,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
           },
         );
       }
-      const rotated = await input.advanceAuthProfile();
-      if (rotated) {
-        rateLimitProfileRotations += 1;
-      }
-      return rotated;
+      return false;
     },
     maybeMarkAuthProfileFailure,
     resolveAuthProfileFailureReason: resolveProfileFailureReason,
@@ -231,7 +230,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       retryAfterSeconds?: number;
     }): Promise<boolean> => {
       if (
-        rateLimitProfileRotations >= rateLimitProfileRotationLimit ||
+        rateLimitProfileRotations > 0 ||
         consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES
       ) {
         return false;
