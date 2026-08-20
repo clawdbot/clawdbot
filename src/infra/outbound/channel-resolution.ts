@@ -128,11 +128,11 @@ function resolveRuntimeOutboundPluginCandidate(params: {
   const hasRuntimeSurface = params.requireActivatedRuntime
     ? channelPluginHasActivatedOutboundSurface
     : channelPluginHasRuntimeOutboundSurface;
-  if (hasRuntimeSurface(params.runtime)) {
-    return params.runtime;
-  }
   if (hasRuntimeSurface(params.loaded)) {
     return params.loaded;
+  }
+  if (hasRuntimeSurface(params.runtime)) {
+    return params.runtime;
   }
   if (hasRuntimeSurface(params.bundled)) {
     return params.bundled;
@@ -244,12 +244,12 @@ export function resolveOutboundChannelMessageAdapter(params: {
     return undefined;
   }
   const current =
+    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
     resolveValueFromRuntimeRegistry(
       normalized,
       resolveSendCapableMessageAdapter,
       bootstrapRegistry,
     ) ??
-    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
     resolveSendCapableMessageAdapter(getChannelPlugin(normalized));
   if (current || params.allowBootstrap !== true || didBootstrap) {
     return current;
@@ -260,8 +260,8 @@ export function resolveOutboundChannelMessageAdapter(params: {
     agentId: params.agentId,
   });
   return (
-    resolveValueFromRuntimeRegistry(normalized, resolveSendCapableMessageAdapter, registry) ??
     resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
+    resolveValueFromRuntimeRegistry(normalized, resolveSendCapableMessageAdapter, registry) ??
     resolveSendCapableMessageAdapter(getChannelPlugin(normalized))
   );
 }
