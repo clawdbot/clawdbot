@@ -1,7 +1,4 @@
-import {
-  addTimerTimeoutGraceMs,
-  MAX_TIMER_TIMEOUT_MS,
-} from "@openclaw/normalization-core/number-coercion";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { CommandLaneSnapshot } from "../../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
 import { isMainSessionRestartRecoveryInputProvenance } from "../../../sessions/input-provenance.js";
@@ -36,9 +33,11 @@ export async function withEmbeddedRunLaneProgressHeartbeat<T>(
 
 export function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
   const defaultLaneTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
-  // "No timeout" resolves to the timer-safe MAX_TIMER sentinel upstream.
-  // Lane ownership still caps at the default agent deadline in that case.
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs >= MAX_TIMER_TIMEOUT_MS) {
+  // Only unusable input falls back to the default agent deadline. "No timeout"
+  // arrives as the timer-safe MAX_TIMER sentinel, which the grace helper clamps
+  // back to that same maximum, so an unlimited run keeps an unlimited-in-practice
+  // no-progress budget instead of silently collapsing to the 48h default.
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return defaultLaneTimeoutMs;
   }
   return (
