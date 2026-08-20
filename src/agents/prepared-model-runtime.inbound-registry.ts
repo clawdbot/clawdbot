@@ -113,6 +113,11 @@ export function prepareWorkspacePluginRegistries(
   const inboundPluginRegistry = input.readOnly
     ? undefined
     : loadInboundRegistry?.(input, metadataSnapshot);
+  // Extending the reused Gateway generation inherits its artifact preference: the
+  // Gateway loader realizes built artifacts, so the delta load must not re-import
+  // the same plugins through source transforms. Isolated loads keep source truth.
+  const extendsActiveGatewayGeneration =
+    inboundPluginRegistry !== undefined && inboundPluginRegistry === getActivePluginRegistry();
   const runtimePluginRegistry =
     input.runtimePluginSelections || !inboundPluginRegistry
       ? loadAgentRuntimePluginRegistryHandle({
@@ -125,6 +130,7 @@ export function prepareWorkspacePluginRegistries(
           env: input.env ?? process.env,
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+          ...(extendsActiveGatewayGeneration ? { preferBuiltPluginArtifacts: true } : {}),
           metadataSnapshot,
           ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
           selections: input.runtimePluginSelections,
