@@ -181,7 +181,7 @@ with tempfile.TemporaryDirectory() as root:
 
 describe("Telegram user observer", () => {
   it("records streaming, actions, and wipes without exposing bystanders", () => {
-    const result = spawnSync("uv", ["run", "--python", "python3", "-"], {
+    const result = spawnSync("python3", ["-"], {
       cwd: process.cwd(),
       encoding: "utf8",
       input: pythonTest,
