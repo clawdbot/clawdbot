@@ -1019,6 +1019,7 @@ describe("show_widget", () => {
     expect(html).toContain("prompt:freeze({send:sendPrompt})");
     expect(html).toContain('state:freeze({emit:payload=>request("state.emit"');
     expect(html).toContain('data:freeze({read:(bindingId,params)=>request("data.read"');
+    expect(html).toContain('action:freeze({run:(action,params)=>request("action.run"');
     expect(html).toContain('cron:freeze({trigger:jobId=>request("cron.trigger"');
     expect(html).toContain("navigator.userActivation");
     expect(html).toContain("c.port1.postMessage.bind(c.port1)");
