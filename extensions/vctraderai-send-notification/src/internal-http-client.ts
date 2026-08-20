@@ -1,28 +1,25 @@
-// VC Trader AI BFF HTTP client (propose / staging variant).
+// VC Trader AI BFF HTTP client for the send_notification direct-control tool.
 //
 // Wraps `globalThis.fetch` with an in-plugin allowlist guard that complements
-// the Docker sandbox egress policy. The regex enforces the BFF surfaces this
-// plugin is allowed to call: workspace-scoped paths (ADR 0078) AND the
-// workspace-agnostic `/api/v1/openclaw/<segment>[/<rest>]` tool endpoints. For
-// the cluster-C "propose" tools this includes the single-segment staging
-// endpoint `/api/v1/openclaw/stage`, which the second branch now permits by
-// making the trailing `/<rest>` optional (the read-only templates required two
-// segments such as `catalogue/instruments`). Any non-allowlisted path is
-// rejected before a socket is opened, so a buggy or malicious tool body cannot
-// reach admin/system surfaces by accident.
+// the Docker sandbox egress policy. Uses the server-to-server
+// OPENCLAW_GATEWAY_TOKEN and restricts egress to the ONE internal BFF route
+// family this plugin needs. Any non-allowlisted path is rejected before a
+// socket is opened, so a buggy or malicious tool body cannot reach
+// admin/system surfaces by accident.
 //
-// PROPOSE tools STAGE, they never execute: this client POSTs the proposal to
-// the staging endpoint and the human reviews + applies it in the chat. The
-// staging endpoint is the only mutating surface this client can reach, and it
-// only enqueues a reviewable descriptor - it does not touch live trading state.
+// send_notification is DIRECT_CONTROL (propfirm_manager #1328): it posts the
+// notification straight through to `/api/v1/openclaw/notifications/send`. It no
+// longer reaches the generic `/api/v1/openclaw/stage` chokepoint, and the
+// allowlist was narrowed to match the other Agent Alpha control clients rather
+// than keeping the wide propose-era pattern that let this plugin reach every
+// `/api/v1/openclaw/<segment>` and workspace-scoped surface.
 //
 // We deliberately ship this helper per-plugin rather than via a shared package:
 // the openclaw extensions boundary forbids cross-extension `src/` imports
 // (`extensions/AGENTS.md`) and a single shared helper is also worth de-duping
 // later, not pre-duping now.
 
-const ALLOWLIST_PATH_PATTERN =
-  /^(\/api\/v1\/workspaces\/[0-9a-f-]+\/.+|\/api\/v1\/openclaw\/[a-z]+(\/[a-z0-9-/]+)?)(\?.*)?$/;
+const ALLOWLIST_PATH_PATTERN = /^\/api\/v1\/openclaw\/notifications(\/[a-z0-9-/]+)?(\?.*)?$/;
 const DEFAULT_BFF_BASE_URL = "http://web_api.local";
 
 export type BffFetchOptions = {

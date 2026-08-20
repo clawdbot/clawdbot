@@ -7,6 +7,12 @@ import { createBffFetch, type BffFetchFn } from "./src/internal-http-client.js";
 // Calls the propfirm_manager internal OpenClaw BFF route with the shared
 // OPENCLAW_GATEWAY_TOKEN plus X-OpenClaw-Tool so the server-side allowlist gates
 // the exact tool before running it.
+//
+// Accounts are 0..N via a join table (propfirm_manager #1347, 2026-08-19). The
+// BFF route reads `account_ids` (a list, defaulting to empty) and has NEVER read
+// the singular `account_id` this schema used to advertise as REQUIRED -- so the
+// account the model was forced to name was silently dropped on every call, and
+// a multi-account heartbeat was unexpressible.
 
 export const ENABLE_HEARTBEAT_TOOL_NAME = "enable_heartbeat";
 
@@ -51,17 +57,26 @@ export default defineToolPlugin({
   id: "vctraderai-enable-heartbeat",
   name: "VC Trader AI Enable Heartbeat",
   description:
-    "Enable or update an Agent Alpha heartbeat policy through the guarded internal BFF route.",
+    "Enable or update an Agent Alpha heartbeat policy through the guarded internal BFF " +
+    "route. Accounts are optional (0..N).",
   tools: (tool) => [
     tool({
       name: ENABLE_HEARTBEAT_TOOL_NAME,
       label: "Enable Heartbeat",
       description:
-        "Enable or update an Agent Alpha heartbeat policy through the guarded internal BFF route.",
+        "Enable or update an Agent Alpha heartbeat policy. Accounts are OPTIONAL: omit " +
+        "account_ids for an account-independent heartbeat, or link one or more accounts to " +
+        "check each cycle.",
       parameters: Type.Object(
         {
           thread_id: Type.Optional(Type.String({ description: "Thread id to heartbeat." })),
-          account_id: Type.String({ description: "Account id to monitor.", minLength: 1 }),
+          account_ids: Type.Optional(
+            Type.Array(Type.String({ minLength: 1 }), {
+              description:
+                "Accounts to check each cycle. OMIT ENTIRELY for an account-independent " +
+                "heartbeat, or pass one or more account ids.",
+            }),
+          ),
           cadence_seconds: Type.Integer({
             description: "Heartbeat cadence in seconds.",
             minimum: 1,

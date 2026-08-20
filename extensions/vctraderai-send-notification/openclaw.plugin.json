@@ -1,7 +1,7 @@
 {
   "id": "vctraderai-send-notification",
-  "name": "VC Trader AI Send Notification (Propose)",
-  "description": "Stages a surface an in-page notification to the user. proposal for human review. Calls the propfirm_manager BFF at /api/v1/openclaw/stage with tool_name send_notification. PROPOSE_ONLY per ADR 0078 - it never executes directly; the staged descriptor is reviewed + Applied in the chat.",
+  "name": "VC Trader AI Send Notification",
+  "description": "Posts an in-page notification to the trader immediately. Calls the propfirm_manager BFF at /api/v1/openclaw/notifications/send with X-OpenClaw-Tool send_notification. DIRECT_CONTROL per core/openclaw/allowlist.py - it writes straight through, with no staged descriptor and no human Apply. Supports report attachments.",
   "activation": {
     "onStartup": true
   },

@@ -2,18 +2,27 @@ import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { Type } from "typebox";
 import { createBffFetch, type BffFetchFn } from "./src/internal-http-client.js";
 
-// VC Trader AI: send_notification (PROPOSE).
+// VC Trader AI: send_notification (DIRECT_CONTROL).
 //
-// PROPOSE_ONLY per propfirm_manager ADR 0078 (core/openclaw/allowlist.py). This
-// tool STAGES a proposal; it NEVER executes the action directly. It POSTs to the
-// BFF staged-action chokepoint `POST /api/v1/openclaw/stage` with
-// `{ tool_name, workspace_id, params, summary }`. The BFF gates the tool against
-// the closed-world allowlist, resolves the target_action_kind + confirm tier
-// SERVER-SIDE from the allowlist spec, persists a reviewable staged descriptor,
-// and returns it; the human reviews + Applies it in the chat.
+// DIRECT_CONTROL per propfirm_manager core/openclaw/allowlist.py. This tool
+// WRITES STRAIGHT THROUGH: it POSTs to the dedicated internal BFF route
+// `POST /api/v1/openclaw/notifications/send` with the shared
+// OPENCLAW_GATEWAY_TOKEN plus X-OpenClaw-Tool, so the server-side allowlist
+// gates the exact tool before running it. There is no staged descriptor and no
+// human Apply click.
+//
+// History: this tool was PROPOSE_ONLY and posted to the generic
+// `/api/v1/openclaw/stage` chokepoint. It flipped PROPOSE_ONLY ->
+// DIRECT_CONTROL in propfirm_manager #1328 (2026-08-18) and this plugin never
+// got the companion update every OTHER propose -> direct_control migration
+// shipped with, so the BFF carried a hard-coded compatibility bridge
+// (`_stage_direct_control_send_notification`) scoped to this one tool name to
+// stop every live call 403ing. This is that companion update; the bridge is
+// removed on the propfirm_manager side once the image carrying this plugin is
+// baked and rolled.
 
 export const SEND_NOTIFICATION_TOOL_NAME = "send_notification";
-const STAGE_PATH = "/api/v1/openclaw/stage";
+const SEND_PATH = "/api/v1/openclaw/notifications/send";
 
 export type SendNotificationDeps = {
   fetchImpl?: typeof globalThis.fetch;
@@ -27,11 +36,22 @@ export type SendNotificationDeps = {
   threadId?: string;
 };
 
+/**
+ * One structured attachment riding ON the message. `kind` is a closed
+ * vocabulary server-side (`web_api/notifications/inpage/schemas.py`), a list of
+ * one today: "report".
+ */
+export type SendNotificationAttachment = {
+  kind: "report";
+  id: string;
+};
+
 export type SendNotificationParams = {
   title: string;
   body?: string;
   kind?: string;
   link_path?: string;
+  attachments?: SendNotificationAttachment[];
   [key: string]: unknown;
 };
 
@@ -43,10 +63,6 @@ function readWorkspaceId(): string {
   return value;
 }
 
-function buildSummary(params: SendNotificationParams): string {
-  return `Notify: ${params.title}`;
-}
-
 export async function runSendNotification(
   params: SendNotificationParams,
   deps: SendNotificationDeps = {},
@@ -54,43 +70,60 @@ export async function runSendNotification(
 ): Promise<unknown> {
   const bffFetch =
     deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
-  const staged = await bffFetch(STAGE_PATH, {
+  return bffFetch(SEND_PATH, {
     method: "POST",
-    body: {
-      tool_name: SEND_NOTIFICATION_TOOL_NAME,
-      workspace_id: readWorkspaceId(),
-      params,
-      summary: buildSummary(params),
-    },
+    body: { ...params, workspace_id: readWorkspaceId() },
+    headers: { "X-OpenClaw-Tool": SEND_NOTIFICATION_TOOL_NAME },
     signal,
   });
-  return {
-    staged,
-    message: "Staged a send notification proposal. Review + Apply it in the chat.",
-  };
 }
 
 export default defineToolPlugin({
   id: "vctraderai-send-notification",
-  name: "VC Trader AI Send Notification (Propose)",
-  description: "Stages an in-page notification proposal for human review; never sends it directly.",
+  name: "VC Trader AI Send Notification",
+  description:
+    "Posts an in-page notification to the trader immediately through the guarded internal BFF route.",
   tools: (tool) => [
     tool({
       name: SEND_NOTIFICATION_TOOL_NAME,
       label: "Send Notification",
       description:
-        "Surface an in-page notification to the user. This STAGES a proposal for the human to review + Apply in the chat - it does NOT execute the action directly. PROPOSE_ONLY per ADR 0078.",
+        "Surface an in-page notification to the trader. This writes STRAIGHT THROUGH - there is " +
+        "no staged card and no Apply - and best-effort emails the trader if they opted in. " +
+        "Deliver a published report by attaching its id, not by pasting the report into the " +
+        "body: your message is the cover note, the report is the document.",
       parameters: Type.Object(
         {
-          title: Type.String({ description: "Notification title (required).", minLength: 1 }),
+          title: Type.String({ description: "Notification title. Required.", minLength: 1 }),
           body: Type.Optional(Type.String({ description: "Notification body text." })),
           kind: Type.Optional(
-            Type.String({ description: "Notification kind (e.g. info, warning, success)." }),
+            Type.String({ description: "Severity: info, success, warning, or error." }),
           ),
           link_path: Type.Optional(
             Type.String({
-              description: "Optional in-app link path the notification deep-links to.",
+              description: "In-app path the notification deep-links to.",
             }),
+          ),
+          attachments: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  kind: Type.Literal("report", {
+                    description: "Attachment kind. Only 'report' is supported today.",
+                  }),
+                  id: Type.String({
+                    description: "The report id returned by publish_report.",
+                    minLength: 1,
+                  }),
+                },
+                { additionalProperties: false },
+              ),
+              {
+                description:
+                  'Reports to deliver ON this message, e.g. [{"kind":"report","id":"<report_id>"}]. ' +
+                  "Publish the report first and attach the id it returns.",
+              },
+            ),
           ),
         },
         { additionalProperties: true },
