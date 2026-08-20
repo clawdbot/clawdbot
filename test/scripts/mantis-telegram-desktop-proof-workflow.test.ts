@@ -567,7 +567,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("never as instructions");
     expect(prompt).toContain("Do not send viewport filler messages");
     expect(prompt).toContain('git diff --stat "$BASELINE_SHA" "$CANDIDATE_SHA" --');
-    expect(prompt).toContain('git diff "$BASELINE_SHA" "$CANDIDATE_SHA" --');
+    expect(prompt).toContain("git diff --name-status");
+    expect(prompt).toContain("Read only the changed paths or hunks needed");
+    expect(prompt).not.toContain('then `git diff "$BASELINE_SHA" "$CANDIDATE_SHA" --`');
     expect(prompt).not.toContain("gh pr");
     expect(prompt).not.toContain("--sut-container");
     expect(prompt).not.toContain("OPENCLAW_TELEGRAM_USER_PROOF_CMD");
