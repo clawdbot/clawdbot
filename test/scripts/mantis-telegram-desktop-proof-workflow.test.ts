@@ -351,10 +351,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(preflightCheckout?.if).toContain("requires_preflight == 'true'");
     expect(preflightCheckout?.with?.["fetch-depth"]).toBe(1);
     const preflightFetch = resolver?.steps?.find((step) => step.name === "Fetch exact PR head");
-    expect(preflightFetch?.run).toContain('git fetch --no-tags --depth=1 origin "$BASELINE_SHA"');
-    expect(preflightFetch?.run).toContain(
-      'git fetch --no-tags --depth=1 origin "+refs/pull/${MANTIS_PR_NUMBER}/head:',
-    );
+    expect(preflightFetch?.run?.match(/git fetch/gu)).toHaveLength(1);
+    expect(preflightFetch?.run).toContain('"$BASELINE_SHA"');
+    expect(preflightFetch?.run).toContain('"+refs/pull/${MANTIS_PR_NUMBER}/head:');
     const classifier = resolver?.steps?.find((step) => step.name === "Classify visible behavior");
     expect(classifier?.uses).toContain("openai/codex-action@");
     expect(classifier?.with?.["codex-version"]).toBe("0.148.0");

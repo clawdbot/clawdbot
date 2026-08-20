@@ -201,8 +201,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "$BASELINE_SHA"
-          git fetch --no-tags --depth=1 origin "+refs/pull/${MANTIS_PR_NUMBER}/head:refs/remotes/origin/mantis-preflight"
+          git fetch --no-tags --depth=1 origin \
+            "$BASELINE_SHA" \
+            "+refs/pull/${MANTIS_PR_NUMBER}/head:refs/remotes/origin/mantis-preflight"
           git cat-file -e "${BASELINE_SHA}^{commit}"
           test "$(git rev-parse refs/remotes/origin/mantis-preflight)" = "$CANDIDATE_SHA"
 
