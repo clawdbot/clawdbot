@@ -130,8 +130,33 @@ describe("getShellConfig", () => {
     process.env.PATH = "";
     const { shell, args } = getShellConfig();
     expect(shell).toBe("/bin/zsh");
-    expect(args).toEqual(["-f", "-c"]);
+    expect(args).toEqual(["-f", "+o", "equals", "+o", "nomatch", "-c"]);
   });
+
+  it.runIf(fs.existsSync("/bin/zsh"))(
+    "keeps POSIX-style equals words and unmatched globs literal in zsh",
+    () => {
+      const config = getShellConfig("/bin/zsh");
+      const cases = [
+        { command: "printf '%s\\n' ===", expected: "===\n" },
+        {
+          command: "printf '%s\\n' *.definitely-no-openclaw-match",
+          expected: "*.definitely-no-openclaw-match\n",
+        },
+      ];
+
+      for (const testCase of cases) {
+        const invocation = buildShellCommandInvocation(testCase.command, config);
+        const result = spawnSync(invocation.argv[0], invocation.argv.slice(1), {
+          encoding: "utf8",
+          input: invocation.input,
+        });
+
+        expect(result.status).toBe(0);
+        expect(result.stdout).toBe(testCase.expected);
+      }
+    },
+  );
 
   it("uses startup-suppressed args for bash env shells", () => {
     process.env.SHELL = "/bin/bash";
@@ -155,7 +180,7 @@ describe("getShellConfig", () => {
 
     expect(getShellConfig(shellPath)).toEqual({
       shell: shellPath,
-      args: ["-f", "-c"],
+      args: ["-f", "+o", "equals", "+o", "nomatch", "-c"],
       commandTransport: "argv",
     });
   });

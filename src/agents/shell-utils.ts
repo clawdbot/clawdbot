@@ -83,7 +83,8 @@ function getPosixShellArgs(shellPath: string): string[] {
     case "bash":
       return ["--noprofile", "--norc", "-c"];
     case "zsh":
-      return ["-f", "-c"];
+      // Exec commands assume bash-like literal handling for equals words and unmatched globs.
+      return ["-f", "+o", "equals", "+o", "nomatch", "-c"];
     case "fish":
       return ["--no-config", "-c"];
     default:
