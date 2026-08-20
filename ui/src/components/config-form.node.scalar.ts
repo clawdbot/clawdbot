@@ -25,6 +25,15 @@ import {
   coerceConfigFormNumberString,
   isConfigFormDecimalNumberString,
 } from "./config-form.numeric.ts";
+import {
+  beginScalarEdit,
+  finishScalarEdit,
+  finishScalarEditFromEvent,
+  scalarEditHintForInput,
+  scalarValueBranch,
+  syncScalarEditIdentity,
+  type ScalarEditHint,
+} from "./config-form.scalar-edit.ts";
 import { resolveConfigFieldMeta as resolveFieldMeta } from "./config-form.search.ts";
 import {
   configFieldId,
@@ -32,12 +41,6 @@ import {
   redactedPlaceholder,
   schemaType,
 } from "./config-form.shared.ts";
-
-type ScalarValueBranch = "string" | "number" | "boolean";
-
-type ScalarEditHint = {
-  branch?: ScalarValueBranch;
-};
 
 const scalarInputState = new WeakMap<
   HTMLInputElement,
@@ -48,7 +51,6 @@ const scalarInputState = new WeakMap<
     pathKey: string;
     presentationIdentity: string;
     renderedValue: string;
-    edit?: ScalarEditHint;
   }
 >();
 
@@ -72,11 +74,6 @@ function syncScalarInputIdentity(
     return;
   }
   const previous = scalarInputState.get(element);
-  const preserveEdit =
-    previous?.edit !== undefined &&
-    element.matches(":focus") &&
-    previous.pathKey === pathKey &&
-    previous.presentationIdentity === presentationIdentity;
   if (previous) {
     if (
       !Object.is(previous.sourceIdentity, sourceIdentity) ||
@@ -107,50 +104,7 @@ function syncScalarInputIdentity(
     pathKey,
     presentationIdentity,
     renderedValue,
-    edit: preserveEdit ? previous?.edit : undefined,
   });
-}
-
-function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
-  if (typeof value === "string") {
-    return "string";
-  }
-  if (typeof value === "number") {
-    return "number";
-  }
-  if (typeof value === "boolean") {
-    return "boolean";
-  }
-  return undefined;
-}
-
-function beginScalarEdit(
-  target: HTMLInputElement,
-  initialBranch: ScalarValueBranch | undefined,
-): ScalarEditHint {
-  const state = scalarInputState.get(target);
-  if (!state) {
-    return { branch: initialBranch };
-  }
-  if (state.edit === undefined) {
-    state.edit = { branch: initialBranch };
-  }
-  return state.edit;
-}
-
-function scalarEditHintForInput(
-  target: HTMLInputElement,
-  initialBranch: ScalarValueBranch | undefined,
-): ScalarEditHint {
-  const state = scalarInputState.get(target);
-  return state?.edit ?? { branch: initialBranch };
-}
-
-function finishScalarEdit(target: HTMLInputElement): void {
-  const state = scalarInputState.get(target);
-  if (state) {
-    state.edit = undefined;
-  }
 }
 
 function coerceTextInputValue(
@@ -399,7 +353,8 @@ export function renderTextInput(
 
   const inputControl = html`
     <input
-      ${ref((element) =>
+      ${ref((element) => {
+        syncScalarEditIdentity(element, params.rowIdentity, controlPathKey, presentationIdentity);
         syncScalarInputIdentity(
           element,
           controlIdentity,
@@ -409,8 +364,8 @@ export function renderTextInput(
           presentationIdentity,
           renderedValue,
           revalidate,
-        ),
-      )}
+        );
+      })}
       type=${effectiveInputType}
       class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
       aria-label=${label}
@@ -507,7 +462,7 @@ export function renderTextInput(
         );
         finishScalarEdit(target);
       }}
-      @blur=${(event: Event) => finishScalarEdit(event.target as HTMLInputElement)}
+      @blur=${finishScalarEditFromEvent}
     />
   `;
   const revealToggle = isStructuredSecretRef
