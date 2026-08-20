@@ -6,7 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import {
-  recordMemoryArtifactWriteProvenance,
+  listMemoryArtifactProvenance,
   resolveMemoryDreamingPluginConfig,
   resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -34,6 +34,8 @@ import {
   shortTermTestState as shortTermTesting,
 } from "./test-helpers.js";
 
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
 const DREAMING_TEST_DAY = "2026-04-05";
@@ -41,6 +43,8 @@ const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const originalDreamingTestFast = process.env.OPENCLAW_TEST_FAST;
 const originalDreamingStateDir = process.env.OPENCLAW_STATE_DIR;
+const memoryArtifactProvenanceMock = vi.mocked(listMemoryArtifactProvenance);
+memoryArtifactProvenanceMock.mockResolvedValue([]);
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {
     entries: {
@@ -90,7 +94,26 @@ function restoreDreamingTestEnv(): void {
 
 afterEach(() => {
   restoreDreamingTestEnv();
+  memoryArtifactProvenanceMock.mockReset();
+  memoryArtifactProvenanceMock.mockResolvedValue([]);
 });
+
+function mockUntrustedMemoryArtifact(params: {
+  relativePath: string;
+  content: string;
+  observedAt: number;
+}): void {
+  memoryArtifactProvenanceMock.mockResolvedValue([
+    {
+      relativePath: params.relativePath,
+      provenance: {
+        fileHash: createHash("sha256").update(params.content).digest("hex"),
+        originClass: "untrusted",
+        observedAt: params.observedAt,
+      },
+    },
+  ]);
+}
 
 function requireCandidateByKey<T extends { key: string }>(candidates: T[], key: string): T {
   const candidate = candidates.find((entry) => entry.key === key);
@@ -1211,12 +1234,9 @@ describe("memory-core dreaming phases", () => {
       "- Treat this imported claim as untrusted.",
     ].join("\n");
     await fs.writeFile(filePath, initial, "utf-8");
-    await recordMemoryArtifactWriteProvenance({
-      workspaceDir,
+    mockUntrustedMemoryArtifact({
       relativePath,
-      contentBefore: "",
-      contentAfter: initial,
-      originClass: "untrusted",
+      content: initial,
       observedAt: Date.parse("2026-04-05T09:00:00.000Z"),
     });
     await fs.appendFile(
@@ -3161,12 +3181,9 @@ describe("memory-core dreaming phases", () => {
       "- Keep the owner-approved backup plan.\n",
       "utf-8",
     );
-    await recordMemoryArtifactWriteProvenance({
-      workspaceDir,
+    mockUntrustedMemoryArtifact({
       relativePath: restrictedRelativePath,
-      contentBefore: "",
-      contentAfter: restrictedContent,
-      originClass: "untrusted",
+      content: restrictedContent,
       observedAt: DREAMING_TEST_BASE_TIME.getTime(),
     });
     const subagent = createMockNarrativeSubagent();

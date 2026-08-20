@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { recordMemoryArtifactWriteProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 import {
   configureMemoryCoreDreamingState,
@@ -2139,14 +2140,16 @@ describe("short-term promotion", () => {
       });
       expect(ranked[0]?.provenance?.originClass).toBe("agent");
 
-      await recordMemoryArtifactWriteProvenance({
-        workspaceDir,
-        relativePath,
-        contentBefore: "",
-        contentAfter: `${snippet}\n`,
-        originClass: "untrusted",
-        observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
-      });
+      vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
+        {
+          relativePath,
+          provenance: {
+            fileHash: "0".repeat(64),
+            originClass: "untrusted",
+            observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+          },
+        },
+      ]);
 
       const applied = await applyShortTermPromotions({
         workspaceDir,

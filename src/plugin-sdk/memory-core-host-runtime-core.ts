@@ -36,7 +36,6 @@ export type {
 export {
   listMemoryArtifactProvenance,
   readMemoryArtifactProvenance,
-  recordMemoryArtifactWriteProvenance,
 } from "../memory/memory-artifact-provenance.js";
 export type {
   MemoryArtifactOriginClass,

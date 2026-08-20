@@ -2,12 +2,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { recordMemoryArtifactWriteProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { describe, expect, it } from "vitest";
+import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCoreTestHarness } from "../test-helpers.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+
 createMemoryCoreTestHarness();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("memory path provenance", () => {
   it("trusts canonical workspace memory while excluding system and lookalike paths", async () => {
@@ -76,11 +82,8 @@ describe("memory path provenance", () => {
     try {
       const absolutePath = path.join(workspaceDir, "MEMORY.md");
       await fs.writeFile(absolutePath, "network-authored memory", "utf8");
-      await recordMemoryArtifactWriteProvenance({
-        workspaceDir,
-        relativePath: "MEMORY.md",
-        contentBefore: "",
-        contentAfter: "network-authored memory",
+      vi.mocked(readMemoryArtifactProvenance).mockResolvedValueOnce({
+        fileHash: "0".repeat(64),
         originClass: "untrusted",
         observedAt: 1,
       });
