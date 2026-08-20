@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
 
 describe("cleanupCodexAttempt", () => {
-  it("releases attempt-owned dynamic tools after a successful run", async () => {
+  it("preserves completion after a recovered turn-watch timeout", async () => {
     const cleanup = vi.fn(async (_reason: string) => undefined);
     const runCleanups = [cleanup];
     const runAbortController = new AbortController();
@@ -50,7 +50,7 @@ describe("cleanupCodexAttempt", () => {
     const turnRuntime = {
       state: {
         clientClosedAbort: false,
-        timedOut: false,
+        timedOut: true,
         shouldDelayNativeHookRelayUnregister: false,
       },
       steeringQueueRef: {},

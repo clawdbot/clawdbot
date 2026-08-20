@@ -148,12 +148,12 @@ export async function cleanupCodexAttempt(
     );
     await runCleanupStep("codex-turn-watch-clear", () => turnWatches.clearAllTimers());
     await runCleanupStep("codex-dynamic-tool-cleanup", async () => {
-      const cleanupReason = state.timedOut
-        ? "timeout"
-        : runAbortController.signal.aborted
-          ? "cancel"
-          : terminalState.turnSucceeded
-            ? "completion"
+      const cleanupReason = terminalState.turnSucceeded
+        ? "completion"
+        : state.timedOut
+          ? "timeout"
+          : runAbortController.signal.aborted
+            ? "cancel"
             : "error";
       const cleanups = prompt.context.attemptTools.runCleanups.splice(0);
       await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
