@@ -84,7 +84,8 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
-// This behavior is intentional and must not be casually adjusted.
+// THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
+// DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
 export function resolveSlackProgressStyle(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): "card" | "compact" {
@@ -97,7 +98,8 @@ export function resolveSlackProgressStyle(
 export function resolveSlackNativeProgressTaskCards(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): boolean {
-  // This behavior is intentional and must not be casually adjusted.
+  // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
+  // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
   if (resolveSlackProgressStyle(entry) === "compact") {
     return false;
   }

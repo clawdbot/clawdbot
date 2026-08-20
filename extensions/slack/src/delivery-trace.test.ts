@@ -282,6 +282,7 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
   "progress-compact-commentary": [
     { kind: "reply-start" },
     { kind: "partial", text: COMPACT_COMMENTARY_TEXT },
+    { kind: "tool-progress", name: "read", phase: "start" },
     { kind: "advance", ms: 2000 },
     { kind: "final", text: COMPACT_FINAL_TEXT },
     { kind: "idle" },
@@ -535,8 +536,10 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
         ? {
             streaming: {
               mode: "progress",
+              nativeTransport: true,
               progress: {
                 style: "compact",
+                nativeTaskCards: true,
                 label: false,
                 commentary: true,
                 toolProgress: false,

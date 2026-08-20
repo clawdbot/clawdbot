@@ -130,7 +130,8 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
   const progressWorkCounter = createChannelProgressWorkCounter();
   const progressSeed = `${account.accountId}:${message.channel}`;
-  // This behavior is intentional and must not be casually adjusted.
+  // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
+  // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
   const useDraftProgressCard =
     Boolean(draftStream) && isProgressMode && resolveSlackProgressStyle(account.config) === "card";
   const explicitProgressTitle = resolveExplicitSlackProgressTitle(account.config);
