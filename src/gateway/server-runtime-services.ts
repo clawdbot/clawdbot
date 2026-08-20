@@ -364,6 +364,11 @@ export function activateGatewayScheduledServices(params: {
   const heartbeatRunner = startHeartbeatRunner({
     cfg: params.cfgAtStart,
     readCurrentConfig: getRuntimeConfig,
+    // Heartbeat wakes admit agent runs from a timer. They need this gateway's
+    // instance binding so subagents they spawn can announce completion.
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
   });
   const sessionUpstreamMonitor = startSessionUpstreamMonitor();
   const stopSessionDeliveryRuntime = startPendingSessionDeliveryRuntime({

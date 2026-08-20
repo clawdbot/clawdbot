@@ -1,6 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatErrorMessage } from "./errors.js";
@@ -69,9 +71,25 @@ export function startHeartbeatRunner(opts: {
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
   stableSchedulerSeed?: string;
+  resolveGatewayContext?: GatewayContextResolver;
 }): HeartbeatRunner {
   const runtime = opts.runtime ?? defaultRuntime;
-  const runOnce = opts.runOnce ?? runHeartbeatOnce;
+  const baseRunOnce = opts.runOnce ?? runHeartbeatOnce;
+  // A wake is a timer callback, not an inbound gateway request, so no ambient
+  // request scope exists. Without one, every run admitted by this wake carries
+  // no Gateway instance binding: a subagent it spawns registers unbound, and
+  // the detached completion announce later throws "In-process gateway dispatch
+  // requires a gateway request scope or instance binding (method: agent)" — the
+  // child ran and finished, but the requester never learns it. Bind the owning
+  // instance for the whole wake so the resolver reaches the registry entry.
+  const resolveGatewayContext = opts.resolveGatewayContext;
+  const runOnce: typeof runHeartbeatOnce = resolveGatewayContext
+    ? async (runParams) =>
+        await withPluginRuntimeGatewayContextResolver(
+          resolveGatewayContext,
+          async () => await baseRunOnce(runParams),
+        )
+    : baseRunOnce;
   // Interval cadence is owned by the system cron monitor jobs (one per
   // heartbeat agent, converged by the gateway); this runner only executes
   // wakes. `nextDueMs` survives as the cooldown gate for event-driven wakes.
