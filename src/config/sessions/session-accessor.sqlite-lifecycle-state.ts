@@ -405,6 +405,7 @@ export async function projectSessionEntryLifecycleMutation(
       expectedEntry,
       sessionKey,
       entry: cloned,
+      ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
       ...(resetBoundaryPlan ? { resetBoundaryPlan } : {}),
     });
   }

@@ -226,4 +226,21 @@ describe("createChatChannelPlugin", () => {
       }),
     ).toBe(false);
   });
+
+  it("exports the conversation route-owner result contract", () => {
+    const messaging = {
+      resolveConversationRouteOwner: ({ conversation }) =>
+        conversation.peerId === "retry"
+          ? ({ kind: "unavailable" } as const)
+          : ({ kind: "agent", agentId: "main" } as const),
+    } satisfies NonNullable<ChannelPlugin["messaging"]>;
+
+    expect(
+      messaging.resolveConversationRouteOwner({
+        cfg: {},
+        accountId: "default",
+        conversation: { kind: "direct", peerId: "retry" },
+      }),
+    ).toEqual({ kind: "unavailable" });
+  });
 });

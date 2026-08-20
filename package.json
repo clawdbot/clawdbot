@@ -703,6 +703,10 @@
     "./plugin-sdk/media-generation-runtime": {
       "default": "./dist/plugin-sdk/media-generation-runtime.js"
     },
+    "./plugin-sdk/conversation-binding-inspection-runtime": {
+      "types": "./dist/plugin-sdk/conversation-binding-inspection-runtime.d.ts",
+      "default": "./dist/plugin-sdk/conversation-binding-inspection-runtime.js"
+    },
     "./plugin-sdk/conversation-binding-runtime": {
       "default": "./dist/plugin-sdk/conversation-binding-runtime.js"
     },

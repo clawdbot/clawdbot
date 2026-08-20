@@ -321,15 +321,12 @@ export function deleteCurrentConversationBindingRecordsBySession(
   });
 }
 
-function resolveChannelSupportsCurrentConversationBinding(params: {
-  channel: string;
-  accountId: string;
-}): boolean {
+function resolveChannelConversationBindingSupport(params: { channel: string; accountId: string }) {
   const normalized =
     normalizeAnyChannelId(params.channel) ??
     normalizeOptionalLowercaseString(normalizeConversationText(params.channel));
   if (!normalized) {
-    return false;
+    return undefined;
   }
   const matchesPluginId = (plugin: {
     id?: string | null;
@@ -345,13 +342,33 @@ function resolveChannelSupportsCurrentConversationBinding(params: {
   const plugin = (getActivePluginChannelRegistryFromState()?.channels ?? []).find((entry) =>
     matchesPluginId(entry.plugin),
   )?.plugin;
-  const bindingSupport = plugin?.conversationBindings;
-  if (bindingSupport?.supportsCurrentConversationBinding !== true) {
+  return plugin?.conversationBindings;
+}
+
+function resolveChannelSupportsCurrentConversationBinding(params: {
+  channel: string;
+  accountId: string;
+}): boolean {
+  const bindingSupport = resolveChannelConversationBindingSupport(params);
+  if (
+    bindingSupport?.supportsCurrentConversationBinding !== true ||
+    bindingSupport.bindingStore === "adapter" ||
+    typeof bindingSupport.createManager === "function"
+  ) {
     return false;
   }
   return (
     bindingSupport.isCurrentConversationBindingSupported?.({ accountId: params.accountId }) ?? true
   );
+}
+
+/** True when an active channel lifecycle owns bindings through a registered adapter. */
+export function requiresRegisteredSessionBindingAdapter(params: {
+  channel: string;
+  accountId: string;
+}): boolean {
+  const support = resolveChannelConversationBindingSupport(params);
+  return support?.bindingStore === "adapter" || typeof support?.createManager === "function";
 }
 
 function supportsGenericCurrentConversationBinding(ref: {
