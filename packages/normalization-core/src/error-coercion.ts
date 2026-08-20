@@ -117,7 +117,10 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
         appendCauseMessage(cause);
         break;
       } else {
-        appendCauseMessage(formatStatusAndCode(cause));
+        // Mirror the top-level branch: an object cause with keys beyond
+        // status/code makes formatStatusAndCode return undefined, so fall
+        // back to stringifyUnknown rather than dropping the cause entirely.
+        appendCauseMessage(formatStatusAndCode(cause) ?? stringifyUnknown(cause));
         break;
       }
     }
