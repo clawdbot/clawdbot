@@ -153,20 +153,74 @@ with tempfile.TemporaryDirectory() as root:
         "action": {"@type": "chatActionTyping"},
     })
     observer.close()
-    child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(60)", "telegram-user-driver", "serve", str(Path(root) / "observer.sock")],
-        start_new_session=True,
-    )
+    socket_path = str(Path(root) / "observer.sock")
     pid_file = Path(root) / "observer.pid.json"
-    pid_file.write_text(json.dumps({"pid": child.pid, "pgid": os.getpgid(child.pid), "socket": str(Path(root) / "observer.sock")}))
+    terminate_args = type("Args", (), {"pid_file": str(pid_file), "socket": socket_path})()
+
+    terminal = subprocess.Popen(
+        [sys.executable, "-c", "pass", "telegram-user-driver", "serve", socket_path],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    pid_file.write_text(json.dumps({"pid": terminal.pid, "pgid": terminal.pid, "socket": socket_path}))
     pid_file.chmod(0o600)
-    module.command_terminate_observer(type("Args", (), {"pid_file": str(pid_file), "socket": str(Path(root) / "observer.sock")})())
-    child.wait(timeout=10)
+    os.waitid(os.P_PID, terminal.pid, os.WEXITED | os.WNOWAIT)
+    try:
+        module.command_terminate_observer(terminate_args)
+        terminal_marker_removed = not pid_file.exists()
+        module.command_terminate_observer(terminate_args)
+    finally:
+        terminal.wait(timeout=10)
+        pid_file.unlink(missing_ok=True)
+
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import json, os, sys, time; "
+            "marker = os.fdopen(os.open(sys.argv[1], os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'w'); "
+            "json.dump({'pid': os.getpid(), 'pgid': os.getpgrp(), 'socket': sys.argv[2]}, marker); "
+            "marker.close(); print('ready', flush=True); time.sleep(60)",
+            str(pid_file),
+            socket_path,
+            "telegram-user-driver",
+            "serve",
+        ],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    try:
+        if child.stdout.readline() != "ready\n":
+            raise AssertionError("The observer did not publish its owned marker.")
+        owned_marker = json.loads(pid_file.read_text())
+        pid_file.write_text(json.dumps({**owned_marker, "pid": os.getpid()}))
+        try:
+            module.command_terminate_observer(terminate_args)
+            raise AssertionError("Cleanup signaled a process with a mismatched identity.")
+        except module.DriverError as error:
+            foreign_error = str(error)
+        foreign_alive = child.poll() is None
+        foreign_marker_retained = pid_file.exists()
+        pid_file.write_text(json.dumps(owned_marker))
+        module.command_terminate_observer(terminate_args)
+        child.wait(timeout=10)
+        module.command_terminate_observer(terminate_args)
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            child.wait(timeout=10)
+        child.stdout.close()
     print(json.dumps({
         "bystanderError": bystander_error,
         "deleted": deleted,
         "documentContent": module.UserDriver.document_content(None, "/tmp/proof.txt", "proof"),
         "events": observer.events,
+        "foreignAlive": foreign_alive,
+        "foreignError": foreign_error,
+        "foreignMarkerRetained": foreign_marker_retained,
         "mediaError": media_error,
         "pressed": pressed,
         "requests": driver.client.requests,
@@ -175,6 +229,7 @@ with tempfile.TemporaryDirectory() as root:
         "stagedMediaPrivate": staged_media_private,
         "stagedMediaName": staged_media_name,
         "truncated": observer.truncated,
+        "terminalMarkerRemoved": terminal_marker_removed,
         "terminated": child.returncode is not None,
     }))
 `;
@@ -210,7 +265,11 @@ describe("Telegram user observer", () => {
     expect(result.stdout).not.toContain("private bystander text");
     expect(result.stdout).not.toContain("pending duplicate");
     expect(value.truncated).toBe(true);
+    expect(value.terminalMarkerRemoved).toBe(true);
     expect(value.terminated).toBe(true);
+    expect(value.foreignAlive).toBe(true);
+    expect(value.foreignMarkerRetained).toBe(true);
+    expect(value.foreignError).toBe("Telegram observer process identity changed before cleanup.");
     expect(value.bystanderError).toBe("Message 125 was not observed in this session.");
     expect(value.mediaError).toBe(
       "Media must be a regular file inside the Mantis output directory.",
