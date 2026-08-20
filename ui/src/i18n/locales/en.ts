@@ -5494,7 +5494,6 @@ export const en: TranslationMap = {
       otherSessions: "Other",
       groups: "Groups",
       coding: "Coding",
-      noSessionsForAgent: "No sessions found for this agent",
       catalogViewOptions: "View options",
       hideFromSidebar: "Hide from sidebar",
       sectionHidden: "{section} hidden.",
