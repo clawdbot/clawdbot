@@ -93,15 +93,11 @@ jobs:
               JSON.stringify({ title: pr.title.slice(0, 500), body: (pr.body ?? "").slice(0, 12000) }),
             );
             const publishArtifactName = inputs.publish_artifact_name || "";
-            const baselineRevision = pr.base.sha;
+            let baselineRevision = pr.base.sha;
             const candidateRevision = pr.head.sha;
 
             if (!publishArtifactName) {
               const immutableSha = /^[0-9a-f]{40}$/u;
-              if (!immutableSha.test(baselineRevision)) {
-                core.setFailed(`Baseline ref '${baselineRevision}' is not an immutable commit SHA.`);
-                return;
-              }
               if (!immutableSha.test(candidateRevision)) {
                 core.setFailed(`Candidate ref '${candidateRevision}' is not an immutable commit SHA.`);
                 return;
@@ -115,14 +111,27 @@ jobs:
                 return;
               }
 
-              const comparison = await github.request(
+              const prComparison = await github.request(
+                "GET /repos/{owner}/{repo}/compare/{basehead}",
+                { owner, repo, basehead: `${pr.base.sha}...${candidateRevision}` },
+              );
+              baselineRevision = prComparison.data.merge_base_commit?.sha || "";
+              if (!immutableSha.test(baselineRevision)) {
+                core.setFailed("The PR comparison did not return an immutable merge base.");
+                return;
+              }
+
+              const baselineOnMain = await github.request(
                 "GET /repos/{owner}/{repo}/compare/{basehead}",
                 { owner, repo, basehead: `${baselineRevision}...main` },
               );
-              if (comparison.data.status !== "ahead" && comparison.data.status !== "identical") {
+              if (
+                baselineOnMain.data.status !== "ahead" &&
+                baselineOnMain.data.status !== "identical"
+              ) {
                 core.setFailed(
                   `Baseline ref '${baselineRevision}' is not an ancestor of main ` +
-                    `(comparison status: ${comparison.data.status}).`,
+                    `(comparison status: ${baselineOnMain.data.status}).`,
                 );
                 return;
               }

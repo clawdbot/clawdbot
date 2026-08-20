@@ -95,6 +95,8 @@ const activeSessionSchema = z.object({
 type ActiveSession = z.infer<typeof activeSessionSchema>;
 type StartupSession = z.infer<typeof startupSessionSchema>;
 type Lane = z.infer<typeof laneSchema>;
+type Roots = { credentialFile: string; outputRoot: string; sessionRoot: string };
+type SutAttestation = z.infer<typeof sutRuntimeSchema>["sutAttestation"];
 type ObserverResponse = {
   cursor?: number;
   error?: string;
@@ -499,6 +501,89 @@ function writeAttemptFacts(roots: Roots, lane: Lane, attempt: number, facts: unk
   writeJsonAtomic(path.join(roots.outputRoot, lane, filename), facts, 0o644);
 }
 
+export function publishTerminalLaneFacts(params: {
+  artifacts: Record<string, ReturnType<typeof artifact>>;
+  attempt: number;
+  facts: unknown;
+  lane: Lane;
+  roots: Roots;
+  status: "fail" | "pass";
+  sutAttestation?: SutAttestation;
+}): void {
+  const privatePublished = path.join(params.roots.sessionRoot, "published", params.lane);
+  const publicOutput = path.join(params.roots.outputRoot, params.lane);
+  writeAttemptFacts(params.roots, params.lane, params.attempt, params.facts);
+  writeJsonAtomic(path.join(privatePublished, "mantis-lane-facts.json"), params.facts, 0o644);
+  writeJsonAtomic(path.join(publicOutput, "mantis-lane-facts.json"), params.facts, 0o644);
+  writeJsonAtomic(path.join(params.roots.sessionRoot, `${params.lane}.json`), params.facts);
+  writeJsonAtomic(
+    path.join(publicOutput, "telegram-user-crabbox-session-summary.json"),
+    {
+      artifacts: Object.fromEntries(
+        Object.entries(params.artifacts).map(([name, record]) => [
+          name,
+          path.join(publicOutput, record.file),
+        ]),
+      ),
+      status: params.status,
+      ...(params.sutAttestation ? { sutAttestation: params.sutAttestation } : {}),
+    },
+    0o644,
+  );
+}
+
+export function publishStartupFailure(params: {
+  cleanupErrors: string[];
+  configRelative: string;
+  error: unknown;
+  roots: Roots;
+  secret: string;
+  startup: StartupSession;
+  sutAttestation?: SutAttestation;
+}): void {
+  const facts = redact(
+    {
+      artifacts: {},
+      attempt: params.startup.attempt,
+      cleanupErrors: params.cleanupErrors,
+      completedAt: new Date().toISOString(),
+      error: coerceErrorMessage(params.error),
+      invocations: [
+        {
+          args: { config: params.configRelative, repoRoot: params.startup.repoRoot },
+          at: params.startup.startedAt,
+          command: "start",
+          cursor: 0,
+        },
+      ],
+      lane: params.startup.lane,
+      observation: {
+        cursor: 0,
+        events: [],
+        observedSeconds: 0,
+        truncated: false,
+        uptimeMs: Date.now() - Date.parse(params.startup.startedAt),
+      },
+      providerRequests: [],
+      schemaVersion: 2,
+      sendCount: 0,
+      startedAt: params.startup.startedAt,
+      status: "infra-error",
+      ...(params.sutAttestation ? { sutAttestation: params.sutAttestation } : {}),
+    },
+    params.secret,
+  );
+  publishTerminalLaneFacts({
+    artifacts: {},
+    attempt: params.startup.attempt,
+    facts,
+    lane: params.startup.lane,
+    roots: params.roots,
+    status: "fail",
+    sutAttestation: params.sutAttestation,
+  });
+}
+
 function teardownSut(sut: MantisSutRecovery, outputDir: string): string[] {
   const errors: string[] = [];
   for (const action of [
@@ -730,20 +815,16 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
     });
   } catch (error) {
     const cleanupErrors = await recoverStartupResources(startup, sut ?? startup.sut);
-    const facts = redact(
-      {
-        attempt,
-        cleanupErrors,
-        completedAt: new Date().toISOString(),
-        error: coerceErrorMessage(error),
-        lane,
-        schemaVersion: 2,
-        status: "infra-error",
-        ...(sut ? { sutAttestation: sut.sutAttestation } : {}),
-      },
-      credential.sutToken,
-    );
-    writeAttemptFacts(roots, lane, attempt, facts);
+    const sutAttestation = sut?.sutAttestation;
+    publishStartupFailure({
+      cleanupErrors,
+      configRelative: configFile.relative,
+      error,
+      roots,
+      secret: credential.sutToken,
+      startup,
+      sutAttestation,
+    });
     if (cleanupErrors.length === 0) {
       fs.rmSync(startupFile(roots.sessionRoot, lane), { force: true });
     }
@@ -765,8 +846,6 @@ async function abortStartup(startup: StartupSession, roots: Roots): Promise<void
   fs.rmSync(startupFile(roots.sessionRoot, startup.lane), { force: true });
   outputJson({ attempt: startup.attempt, lane: startup.lane, status: "aborted-startup" });
 }
-
-type Roots = { credentialFile: string; outputRoot: string; sessionRoot: string };
 
 function readMessage(
   values: Map<string, string>,
@@ -1224,25 +1303,15 @@ async function finalize(
     sutAttestation: state.sut.sutAttestation,
   };
   const facts = redact(factsRaw, secret) as typeof factsRaw;
-  writeAttemptFacts(roots, state.lane, state.attempt, facts);
-  writeJsonAtomic(path.join(privatePublished, "mantis-lane-facts.json"), facts, 0o644);
-  writeJsonAtomic(path.join(publicOutput, "mantis-lane-facts.json"), facts, 0o644);
-  const summaryArtifacts = Object.fromEntries(
-    Object.entries(artifactRecords).map(([name, record]) => [
-      name,
-      path.join(publicOutput, record.file),
-    ]),
-  );
-  writeJsonAtomic(
-    path.join(publicOutput, "telegram-user-crabbox-session-summary.json"),
-    {
-      artifacts: summaryArtifacts,
-      status: status === "complete" ? "pass" : "fail",
-      sutAttestation: state.sut.sutAttestation,
-    },
-    0o644,
-  );
-  writeJsonAtomic(path.join(roots.sessionRoot, `${state.lane}.json`), facts);
+  publishTerminalLaneFacts({
+    artifacts: artifactRecords,
+    attempt: state.attempt,
+    facts,
+    lane: state.lane,
+    roots,
+    status: status === "complete" ? "pass" : "fail",
+    sutAttestation: state.sut.sutAttestation,
+  });
   fs.rmSync(activeFile(roots.sessionRoot, state.lane), { force: true });
   fs.rmSync(startupFile(roots.sessionRoot, state.lane), { force: true });
   outputJson({ attempt: state.attempt, lane: state.lane, status });
@@ -1324,24 +1393,15 @@ async function abort(state: ActiveSession, roots: Roots): Promise<void> {
     },
     secret,
   );
-  writeAttemptFacts(roots, state.lane, state.attempt, facts);
-  writeJsonAtomic(path.join(privatePublished, "mantis-lane-facts.json"), facts, 0o644);
-  writeJsonAtomic(path.join(publicOutput, "mantis-lane-facts.json"), facts, 0o644);
-  writeJsonAtomic(path.join(roots.sessionRoot, `${state.lane}.json`), facts);
-  writeJsonAtomic(
-    path.join(publicOutput, "telegram-user-crabbox-session-summary.json"),
-    {
-      artifacts: Object.fromEntries(
-        Object.entries(artifactRecords).map(([name, record]) => [
-          name,
-          path.join(publicOutput, record.file),
-        ]),
-      ),
-      status: "fail",
-      sutAttestation: state.sut.sutAttestation,
-    },
-    0o644,
-  );
+  publishTerminalLaneFacts({
+    artifacts: artifactRecords,
+    attempt: state.attempt,
+    facts,
+    lane: state.lane,
+    roots,
+    status: "fail",
+    sutAttestation: state.sut.sutAttestation,
+  });
   fs.rmSync(activeFile(roots.sessionRoot, state.lane), { force: true });
   fs.rmSync(startupFile(roots.sessionRoot, state.lane), { force: true });
   outputJson({ errors, lane: state.lane, status });

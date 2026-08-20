@@ -90,6 +90,8 @@ const confirmedQrSchema = z.object({
   }),
 });
 
+class FreshDesktopRequiredError extends Error {}
+
 const recorderStartupSchema = z.object({
   desktopSessionId: z.string().min(1).optional(),
   leaseId: z.string().min(1).optional(),
@@ -394,11 +396,14 @@ async function authorizeDesktop(params: {
   } catch (error) {
     evidence = ` Login screen could not be fetched: ${coerceErrorMessage(error)}`;
   }
-  const failure =
+  const message =
     acceptedWithoutTransition >= 2
-      ? `Telegram server accepted ${acceptedWithoutTransition} login tokens, but Telegram Desktop stayed on the QR screen`
-      : "Telegram Desktop did not leave the login screen after 6 attempts";
-  throw new Error(`${failure}${detail}.${evidence}`, { cause: lastFailure });
+      ? `Telegram server accepted ${acceptedWithoutTransition} login tokens, but Telegram Desktop stayed on the QR screen${detail}.${evidence}`
+      : `Telegram Desktop did not leave the login screen after 6 attempts${detail}.${evidence}`;
+  if (acceptedWithoutTransition >= 2) {
+    throw new FreshDesktopRequiredError(message, { cause: lastFailure });
+  }
+  throw new Error(message, { cause: lastFailure });
 }
 
 // The recorder runs as a different user than the agent that drives it, so an output dir
@@ -496,10 +501,11 @@ async function assertLocalTelegramImage(params: { cwd: string; run: RunCommand }
   }
 }
 
-export async function startRecorder(
+async function startRecorderAttempt(
   cwd: string,
   opts: StartOptions,
-  operations: RecorderOperations = defaultOperations,
+  operations: RecorderOperations,
+  freshContainerAttempt: number,
 ): Promise<{ session: RecorderSession; sessionPath: string }> {
   const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
   const outputDir = resolveOutputDir(cwd, opts.outputDir);
@@ -520,7 +526,7 @@ export async function startRecorder(
   };
   // Provisioning crosses process and provider boundaries. Persist each acquired
   // handle so a later workflow step can reclaim it after cancellation or SIGKILL.
-  writeRecorderStartup(startupPath, startup, true);
+  writeRecorderStartup(startupPath, startup, freshContainerAttempt === 1);
   try {
     if (!leaseId) {
       if (opts.provider === "docker") {
@@ -676,12 +682,29 @@ export async function startRecorder(
         cleanupErrors.push(coerceErrorMessage(cleanupError));
       }
     }
+    if (
+      error instanceof FreshDesktopRequiredError &&
+      cleanupErrors.length === 0 &&
+      leaseOwned &&
+      opts.provider === "docker" &&
+      freshContainerAttempt === 1
+    ) {
+      return await startRecorderAttempt(cwd, opts, operations, freshContainerAttempt + 1);
+    }
     if (cleanupErrors.length === 0) {
       fs.rmSync(startupPath, { force: true });
     }
     const suffix = cleanupErrors.length ? ` Cleanup also failed: ${cleanupErrors.join("; ")}` : "";
     throw new Error(`${coerceErrorMessage(error)}${suffix}`, { cause: error });
   }
+}
+
+export async function startRecorder(
+  cwd: string,
+  opts: StartOptions,
+  operations: RecorderOperations = defaultOperations,
+): Promise<{ session: RecorderSession; sessionPath: string }> {
+  return await startRecorderAttempt(cwd, opts, operations, 1);
 }
 
 export async function recoverRecorderStartup(

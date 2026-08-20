@@ -692,8 +692,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
   it("derives refs from the PR instead of parsing comment prose", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const workflowText = readFileSync(WORKFLOW, "utf8");
-    expect(workflowText).toContain("const baselineRevision = pr.base.sha");
+    expect(workflowText).toContain("let baselineRevision = pr.base.sha");
     expect(workflowText).toContain("const candidateRevision = pr.head.sha");
+    expect(workflowText).toContain("prComparison.data.merge_base_commit?.sha");
+    expect(workflowText).toContain("basehead: `${pr.base.sha}...${candidateRevision}`");
+    expect(workflowText).toContain("The PR comparison did not return an immutable merge base.");
     expect(workflowText).toContain('setOutput("baseline_ref", baselineRevision)');
     expect(workflowText).toContain('setOutput("candidate_ref", candidateRevision)');
     expect(workflowText).toContain('"pr_context"');
@@ -718,8 +721,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
     expect(workflow.jobs?.run_telegram_desktop_proof?.needs).toBe("resolve_request");
     expect(workflowText).toContain('"GET /repos/{owner}/{repo}/compare/{basehead}"');
-    expect(workflowText).toContain('comparison.data.status !== "ahead"');
-    expect(workflowText).toContain('comparison.data.status !== "identical"');
+    expect(workflowText).toContain('baselineOnMain.data.status !== "ahead"');
+    expect(workflowText).toContain('baselineOnMain.data.status !== "identical"');
     expect(workflowText).toContain('pr.state !== "open"');
     expect(workflowText).toContain("Candidate PR source repository is unavailable.");
     expect(workflowText).toContain("pr.head.repo.full_name !== `${owner}/${repo}`");

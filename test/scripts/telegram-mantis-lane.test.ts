@@ -4,7 +4,10 @@ import net from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { publishableRecorderArtifacts } from "../../scripts/e2e/telegram-mantis-lane.ts";
+import {
+  publishableRecorderArtifacts,
+  publishStartupFailure,
+} from "../../scripts/e2e/telegram-mantis-lane.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
@@ -163,6 +166,87 @@ describe("Telegram Mantis free-form lane", () => {
       previewGifCropped: "/private/cropped.gif",
       screenshot: "/private/cropped.png",
       trimmedVideoCropped: "/private/cropped.mp4",
+    });
+  });
+
+  it("promotes startup failures to the canonical trusted lane result", () => {
+    const root = tempDirs.make("telegram-mantis-startup-failure-");
+    const outputRoot = path.join(root, "public");
+    const sessionRoot = path.join(root, "private");
+    fs.mkdirSync(outputRoot);
+    fs.mkdirSync(sessionRoot);
+    const startedAt = new Date().toISOString();
+    publishStartupFailure({
+      cleanupErrors: [],
+      configRelative: "lane-config.json",
+      error: new Error("desktop failed with 123456:secret-sut-token"),
+      roots: {
+        credentialFile: path.join(root, "credential.json"),
+        outputRoot,
+        sessionRoot,
+      },
+      secret: "123456:secret-sut-token",
+      startup: {
+        attempt: 1,
+        lane: "candidate",
+        observerPidFile: path.join(sessionRoot, "observer.pid.json"),
+        observerRequested: false,
+        observerSocket: path.join(sessionRoot, "observer.sock"),
+        privateDir: path.join(sessionRoot, "attempts", "candidate", "1"),
+        recorderRequested: true,
+        recorderSession: path.join(sessionRoot, "attempts", "candidate", "1", "recorder.json"),
+        repoRoot: "/prepared/candidate",
+        startedAt,
+      },
+      sutAttestation: { lane: "candidate", sha: "a".repeat(40) },
+    });
+
+    const facts = JSON.parse(fs.readFileSync(path.join(sessionRoot, "candidate.json"), "utf8"));
+    expect(facts).toMatchObject({
+      artifacts: {},
+      attempt: 1,
+      cleanupErrors: [],
+      error: "desktop failed with [redacted]",
+      invocations: [
+        {
+          args: { config: "lane-config.json", repoRoot: "/prepared/candidate" },
+          command: "start",
+          cursor: 0,
+        },
+      ],
+      lane: "candidate",
+      observation: { cursor: 0, events: [], observedSeconds: 0, truncated: false },
+      providerRequests: [],
+      schemaVersion: 2,
+      sendCount: 0,
+      startedAt,
+      status: "infra-error",
+      sutAttestation: { lane: "candidate", sha: "a".repeat(40) },
+    });
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(sessionRoot, "published", "candidate", "mantis-lane-facts.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual(facts);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(outputRoot, "candidate", "mantis-lane-facts.json"), "utf8"),
+      ),
+    ).toEqual(facts);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(outputRoot, "candidate", "telegram-user-crabbox-session-summary.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({
+      artifacts: {},
+      status: "fail",
+      sutAttestation: { lane: "candidate", sha: "a".repeat(40) },
     });
   });
 

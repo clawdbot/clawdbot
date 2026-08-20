@@ -412,6 +412,91 @@ describe("Telegram Desktop recorder remote contract", () => {
     ).toHaveLength(2);
   });
 
+  it("reprovisions one fresh local desktop after an accepted-token wedge", async () => {
+    const root = makeTempDir();
+    let container = 0;
+    let qrAttempt = 0;
+    const runCommand = vi.fn<RunCommand>(async (call) => {
+      if (call.command === "docker") {
+        return { stderr: "", stdout: "[]" };
+      }
+      if (call.args[0] === "warmup") {
+        container += 1;
+        return {
+          stderr: "",
+          stdout: `leased ${container === 1 ? "cbx_0a1b2c" : "cbx_0a1b2d"} slug=quiet-crab`,
+        };
+      }
+      if (call.args.includes("confirm-qr")) {
+        return {
+          stderr: "",
+          stdout: JSON.stringify({
+            ok: true,
+            session: { id: `${container}${qrAttempt}`, isPasswordPending: false },
+          }),
+        };
+      }
+      if (
+        call.args.includes("terminate-session") ||
+        call.args.includes("terminate-desktop-sessions")
+      ) {
+        return { stderr: "", stdout: JSON.stringify({ ok: true }) };
+      }
+      return { stderr: "", stdout: "" };
+    });
+    const inspectCrabbox = vi.fn(async () => ({
+      sshHost: "host",
+      sshKey: "/tmp/key",
+      sshPort: "22",
+      sshUser: "user",
+    }));
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox,
+      runCommand,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async ({ command }: { command: string }) => {
+        if (command.includes("telegram-login-qr.png")) {
+          qrAttempt += 1;
+          return { stderr: "", stdout: `tg://login?token=attempt-${qrAttempt}` };
+        }
+        if (command.includes("Telegram Desktop did not reach the main window") && container === 1) {
+          throw new Error("first desktop stayed on QR");
+        }
+        if (command.includes("getwindowgeometry")) {
+          return { stderr: "", stdout: "635 40 650 1000" };
+        }
+        return { stderr: "", stdout: "" };
+      }),
+    } satisfies RecorderOperations;
+
+    const result = await startRecorder(
+      root,
+      {
+        command: "start",
+        chat: "-1001234567890",
+        crabboxClass: "standard",
+        idleTimeout: "1h",
+        json: false,
+        outputDir: "out",
+        provider: "docker",
+        recordFps: 24,
+        ttl: "2h",
+        userDriver: ["python3", "driver.py"],
+      },
+      operations,
+    );
+
+    expect(inspectCrabbox).toHaveBeenCalledTimes(2);
+    expect(runCommand.mock.calls.filter(([call]) => call.args[0] === "warmup")).toHaveLength(2);
+    expect(runCommand.mock.calls).toContainEqual([
+      expect.objectContaining({ args: ["stop", "--provider", "docker", "cbx_0a1b2c"] }),
+    ]);
+    expect(result.session).toMatchObject({ leaseId: "cbx_0a1b2d", leaseOwned: true });
+    expect(readRecorderSession(result.sessionPath)).toMatchObject({ leaseId: "cbx_0a1b2d" });
+  });
+
   it("hides the prepared chat before recording starts", async () => {
     const root = makeTempDir();
     const sshRun = vi.fn(async ({ command }: { command: string }) => {
