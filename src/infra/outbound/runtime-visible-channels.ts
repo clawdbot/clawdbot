@@ -43,8 +43,8 @@ export function findChannelPluginInRegistry(
 /** Resolves a channel plugin visible to this process, including registry handles in scope. */
 export function getRuntimeVisibleChannelPlugin(channel: ChannelId): ChannelPlugin | undefined {
   return (
-    getLoadedChannelPlugin(channel) ??
     findChannelPluginInRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry, channel) ??
+    getLoadedChannelPlugin(channel) ??
     getChannelPlugin(channel)
   );
 }
@@ -56,14 +56,17 @@ export function listRuntimeVisibleChannelPlugins(): ChannelPlugin[] {
   if (!scopedRegistry) {
     return plugins;
   }
-  const seen = new Set(plugins.map((plugin) => plugin.id));
-  const merged = [...plugins];
+  // The request handle is the active operation-local view. Replace same-id
+  // process-root entries while retaining unrelated root channels.
+  const scopedPluginIds = new Set<string>();
+  const scopedPlugins: ChannelPlugin[] = [];
   for (const entry of scopedRegistry.channels) {
     const plugin = entry?.plugin;
-    if (plugin?.id && !seen.has(plugin.id)) {
-      seen.add(plugin.id);
-      merged.push(plugin);
+    if (!plugin?.id || scopedPluginIds.has(plugin.id)) {
+      continue;
     }
+    scopedPluginIds.add(plugin.id);
+    scopedPlugins.push(plugin);
   }
-  return merged;
+  return [...plugins.filter((plugin) => !scopedPluginIds.has(plugin.id)), ...scopedPlugins];
 }

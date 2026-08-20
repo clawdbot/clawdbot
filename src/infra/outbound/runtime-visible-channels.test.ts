@@ -1,5 +1,5 @@
 // Covers runtime-visible channel plugin reads: process-root passthrough,
-// registry-in-scope additions, and root-wins dedupe on id collisions.
+// registry-in-scope additions, and scoped replacement on id collisions.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -52,7 +52,7 @@ describe("listRuntimeVisibleChannelPlugins", () => {
     expect(visible).toEqual([rootPlugin, scopedPlugin]);
   });
 
-  it("keeps the process-root implementation when a scoped plugin collides on id", () => {
+  it("lets the scoped implementation replace a process-root plugin with the same id", () => {
     const rootPlugin = { id: "alpha", meta: { label: "Root Alpha" } };
     const scopedPlugin = { id: "alpha", meta: { label: "Scoped Alpha" } };
     mocks.listChannelPlugins.mockReturnValue([rootPlugin]);
@@ -60,7 +60,20 @@ describe("listRuntimeVisibleChannelPlugins", () => {
     const visible = withPluginRuntimeRegistryScope(scopedRegistryWith([scopedPlugin]), () =>
       listRuntimeVisibleChannelPlugins(),
     );
-    expect(visible).toEqual([rootPlugin]);
+    expect(visible).toEqual([scopedPlugin]);
+  });
+
+  it("keeps the first scoped implementation when the scoped registry repeats an id", () => {
+    const rootPlugin = { id: "beta" };
+    const firstScopedPlugin = { id: "alpha", meta: { label: "First Alpha" } };
+    const secondScopedPlugin = { id: "alpha", meta: { label: "Second Alpha" } };
+    mocks.listChannelPlugins.mockReturnValue([rootPlugin]);
+
+    const visible = withPluginRuntimeRegistryScope(
+      scopedRegistryWith([firstScopedPlugin, secondScopedPlugin]),
+      () => listRuntimeVisibleChannelPlugins(),
+    );
+    expect(visible).toEqual([rootPlugin, firstScopedPlugin]);
   });
 });
 
@@ -75,7 +88,7 @@ describe("getRuntimeVisibleChannelPlugin", () => {
     expect(getRuntimeVisibleChannelPlugin("zephyrchat")).toBeUndefined();
   });
 
-  it("prefers the loaded plugin and keeps the bundled fallback last", () => {
+  it("prefers the scoped plugin and keeps the bundled fallback last", () => {
     const loadedPlugin = { id: "alpha", meta: { label: "Loaded" } };
     const scopedPlugin = { id: "alpha", meta: { label: "Scoped" } };
     const bundledPlugin = { id: "beta", meta: { label: "Bundled" } };
@@ -90,7 +103,7 @@ describe("getRuntimeVisibleChannelPlugin", () => {
       alpha: getRuntimeVisibleChannelPlugin("alpha"),
       beta: getRuntimeVisibleChannelPlugin("beta"),
     }));
-    expect(resolved.alpha).toBe(loadedPlugin);
+    expect(resolved.alpha).toBe(scopedPlugin);
     expect(resolved.beta).toBe(bundledPlugin);
   });
 });

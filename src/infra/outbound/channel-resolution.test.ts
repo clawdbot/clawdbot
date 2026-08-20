@@ -198,6 +198,23 @@ describe("outbound channel resolution", () => {
     ).toBe(message);
   });
 
+  it("prefers the scoped runtime plugin over a process-root plugin with the same id", async () => {
+    const rootPlugin = { id: "alpha", outbound: { sendText: vi.fn() } };
+    const scopedPlugin = { id: "alpha", outbound: { sendText: vi.fn() } };
+    getLoadedChannelPluginMock.mockReturnValue(rootPlugin);
+    getChannelPluginMock.mockReturnValue(rootPlugin);
+    getActivePluginRegistryMock.mockReturnValue({ channels: [{ plugin: rootPlugin }] });
+    const channelResolution = await importChannelResolution("scoped-plugin-precedence");
+    const { withPluginRuntimeRegistryScope } =
+      await import("../../plugins/runtime/gateway-request-scope.js");
+
+    expect(
+      withPluginRuntimeRegistryScope({ channels: [{ plugin: scopedPlugin }] } as never, () =>
+        channelResolution.resolveOutboundChannelPlugin({ channel: "alpha" }),
+      ),
+    ).toBe(scopedPlugin);
+  });
+
   it("bootstraps configured channel plugins when the active registry is missing the target", async () => {
     const plugin = { id: "alpha", outbound: { sendText: vi.fn() } };
     getLoadedChannelPluginMock.mockReturnValueOnce(undefined).mockReturnValueOnce(plugin);
