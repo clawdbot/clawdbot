@@ -143,6 +143,7 @@ type WorkerWsMessageHandlerParams = {
   socket: WebSocket;
   connId: string;
   service?: WorkerConnectionService;
+  isStartupPending?: () => boolean;
   send(frame: unknown): void;
   close(code?: number, reason?: string): void;
   isClosed(): boolean;
@@ -426,9 +427,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     id: string,
     admissionOpen: boolean,
   ) => {
-    // Startup reconciliation can await this one-use worker admission. Restart/suspend
-    // still fail closed through admissionOpen and post-connect revalidation below.
-    if (!admissionOpen) {
+    if (!admissionOpen || params.isStartupPending?.()) {
       rejectAdmission({
         id,
         reason: "gateway-unavailable",
