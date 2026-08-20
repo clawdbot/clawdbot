@@ -6,7 +6,7 @@ import {
 } from "../../test/helpers/vitest-config-paths.js";
 import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "../../test/vitest/vitest.bundled-plugin-paths.ts";
 import e2eConfig, { createE2EVitestConfig } from "../../test/vitest/vitest.e2e.config.ts";
-import tuiPtyConfig from "../../test/vitest/vitest.tui-pty.config.ts";
+import { createTuiPtyVitestConfig } from "../../test/vitest/vitest.tui-pty.config.ts";
 
 describe("e2e vitest config", () => {
   it("runs as a standalone config instead of inheriting unit projects", () => {
@@ -33,6 +33,7 @@ describe("e2e vitest config", () => {
   });
 
   it("keeps every terminal integration test exclusively in the serial PTY lane", () => {
+    const tuiPtyConfig = createTuiPtyVitestConfig({});
     const tuiPtyTests = [
       "src/tui/tui-auth-child-pty.e2e.test.ts",
       "src/tui/tui-pty-harness.e2e.test.ts",
