@@ -1918,6 +1918,7 @@ describe("Codex app-server dynamic tool build", () => {
       async () => undefined,
     );
     registerMemoryCapability("memory-core", {
+      writeProvenance: { recordWriteProvenance },
       flushPlanResolver: () => ({
         softThresholdTokens: 1,
         forceFlushTranscriptBytes: 1,

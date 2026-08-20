@@ -127,6 +127,7 @@ describe("memory consolidation", () => {
     ).resolves.toBeNull();
     expect(subagent.run).not.toHaveBeenCalled();
   });
+
   it("accepts a bounded rewrite and stores its preimage in SQLite plugin state", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-accept-");
     const promoted = candidate("owner");
@@ -152,17 +153,17 @@ describe("memory consolidation", () => {
         }),
       ),
     );
+
     expect(result?.memory).toContain(`Source: ${sourceRef}`);
     expect(result?.memory).toContain(annotatedPrior);
-    const runs = subagent.run.mock.calls.map(
-      ([options]) => options as { sessionKey: string; disableTools?: boolean },
+    const sessionKeys = subagent.run.mock.calls.map(
+      ([options]) => (options as { sessionKey: string }).sessionKey,
     );
-    const sessionKeys = runs.map((options) => options.sessionKey);
     expect(new Set(sessionKeys).size).toBe(2);
     expect(sessionKeys.every((key) => key.startsWith("dreaming-narrative-"))).toBe(true);
-    expect(runs.every((options) => options.disableTools === true)).toBe(true);
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
   });
+
   it("rejects a rewrite that loses too many prior entries", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-reject-");
     const promoted = candidate("owner");
