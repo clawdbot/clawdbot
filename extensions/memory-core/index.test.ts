@@ -337,6 +337,13 @@ describe("memory-core plugin runtime registration", () => {
 
     expect(intentFactory({ config: {}, senderIsOwner: false })).toBeNull();
     expect(intentFactory({ config: {} })).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+
+    expect(intentFactory({ senderIsOwner: true })).toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "memory-core: intent tool unavailable: runtime config is unavailable for this turn",
+    );
+
     const ownerTool = intentFactory({ config: {}, senderIsOwner: true }) as {
       name?: string;
       parameters?: {
@@ -346,8 +353,7 @@ describe("memory-core plugin runtime registration", () => {
     expect(ownerTool).toMatchObject({ name: "intent" });
     expect(ownerTool.parameters?.properties?.scope?.default).toBe("channel");
     expect(ownerTool.parameters?.properties?.senderScope?.default).toBe("sender");
-    expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("owner authorization"));
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("keeps memory manager initialization demand-driven", () => {
