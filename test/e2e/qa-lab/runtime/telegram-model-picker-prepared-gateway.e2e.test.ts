@@ -106,7 +106,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     | "done" = "initial";
   let discoveryFrozen = false;
   let discoveryRequests = 0;
-  let postStartupDiscoveryAttempts = 0;
+  let postWarmDiscoveryAttempts = 0;
 
   const queueCallback = (data: string) => {
     const callbackNumber = nextUpdateId - 1;
@@ -120,8 +120,8 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     if (pathname === "/ollama/api/tags") {
       discoveryRequests += 1;
       if (discoveryFrozen) {
-        postStartupDiscoveryAttempts += 1;
-        writeJson(res, 503, { ok: false, error: "provider discovery frozen after startup" });
+        postWarmDiscoveryAttempts += 1;
+        writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
         return;
       }
       succeed(res, {
@@ -140,8 +140,8 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     if (pathname === "/ollama/api/show") {
       discoveryRequests += 1;
       if (discoveryFrozen) {
-        postStartupDiscoveryAttempts += 1;
-        writeJson(res, 503, { ok: false, error: "provider discovery frozen after startup" });
+        postWarmDiscoveryAttempts += 1;
+        writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
         return;
       }
       succeed(res, {
@@ -182,7 +182,6 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     if (method === "sendMessage" && pickerStage === "initial") {
       expect(typeof body.text).toBe("string");
       pickerStage = "providers";
-      queueCallback("mdl_prov");
     } else if (
       method === "editMessageText" &&
       pickerStage === "providers" &&
@@ -306,8 +305,17 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
 
           const startupDiscoveryRequests = discoveryRequests;
           expect(startupDiscoveryRequests).toBe(0);
-          discoveryFrozen = true;
           pendingUpdates.push(initialModelsUpdate());
+
+          await expect
+            .poll(() => ({ stage: pickerStage, discoveryRequests }), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .toEqual({ stage: "providers", discoveryRequests: 2 });
+          const warmDiscoveryRequests = discoveryRequests;
+          discoveryFrozen = true;
+          queueCallback("mdl_prov");
 
           await expect
             .poll(
@@ -339,8 +347,8 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
           expect(
             telegramCalls.filter((call) => call.method === "answerCallbackQuery"),
           ).toHaveLength(4);
-          expect(discoveryRequests).toBe(startupDiscoveryRequests);
-          expect(postStartupDiscoveryAttempts).toBe(0);
+          expect(discoveryRequests).toBe(warmDiscoveryRequests);
+          expect(postWarmDiscoveryAttempts).toBe(0);
         } finally {
           await settleCleanup(async () => await gateway?.stop());
         }
