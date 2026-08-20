@@ -70,6 +70,8 @@ import {
   rejectSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
+import { PROPOSAL_DRAFT_FILE } from "../../skills/workshop/store-record.js";
+import type { SkillProposalReadResult, SkillProposalRecord } from "../../skills/workshop/types.js";
 import { skillProposalHistoryHandlers } from "./skills-proposal-history.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
 import {
@@ -85,6 +87,27 @@ type ClawHubInstallResult = Awaited<ReturnType<typeof installSkillFromClawHub>>;
 type ClawHubInstallParams = Parameters<typeof installSkillFromClawHub>[0];
 
 const clawHubInstallsInFlight = new Map<string, Promise<ClawHubInstallResult>>();
+
+function projectGatewaySkillProposalRecord(record: SkillProposalRecord): SkillProposalRecord {
+  return record.draftFile === PROPOSAL_DRAFT_FILE
+    ? record
+    : { ...record, draftFile: PROPOSAL_DRAFT_FILE };
+}
+
+function projectGatewaySkillProposalResult<T extends { record: SkillProposalRecord }>(result: T) {
+  return { ...result, record: projectGatewaySkillProposalRecord(result.record) };
+}
+
+function projectGatewaySkillProposalReadResult(proposal: SkillProposalReadResult) {
+  return {
+    ...projectGatewaySkillProposalResult(proposal),
+    ...(proposal.supportFiles
+      ? {
+          supportFiles: proposal.supportFiles.map(({ path, content }) => ({ path, content })),
+        }
+      : {}),
+  };
+}
 
 function installClawHubSkillDeduped(params: ClawHubInstallParams): Promise<ClawHubInstallResult> {
   // A WebSocket can disappear after the request reached the Gateway. Keep one
@@ -440,14 +463,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           );
           return SKILL_PROPOSAL_RESPONSE_HANDLED;
         }
-        return {
-          ...proposal,
-          ...(proposal.supportFiles
-            ? {
-                supportFiles: proposal.supportFiles.map(({ path, content }) => ({ path, content })),
-              }
-            : {}),
-        };
+        return projectGatewaySkillProposalReadResult(proposal);
       },
     });
   },
@@ -467,7 +483,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
           trigger: "manual",
-        }),
+        }).then(projectGatewaySkillProposalResult),
     });
   },
   "skills.proposals.create": async ({ params, respond, context }) => {
@@ -490,7 +506,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           createdBy: "gateway",
           goal: parsedParams.goal,
           evidence: parsedParams.evidence,
-        }),
+        }).then(projectGatewaySkillProposalReadResult),
     });
   },
   "skills.proposals.update": async ({ params, respond, context }) => {
@@ -513,7 +529,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           createdBy: "gateway",
           goal: parsedParams.goal,
           evidence: parsedParams.evidence,
-        }),
+        }).then(projectGatewaySkillProposalReadResult),
     });
   },
   "skills.proposals.revise": async ({ params, respond, context }) => {
@@ -537,7 +553,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           description: parsedParams.description,
           goal: parsedParams.goal,
           evidence: parsedParams.evidence,
-        }),
+        }).then(projectGatewaySkillProposalReadResult),
     });
   },
   "skills.proposals.requestRevision": async (opts) => {
@@ -611,7 +627,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
           reason: parsedParams.reason,
-        }),
+        }).then(projectGatewaySkillProposalResult),
     });
   },
   "skills.proposals.reject": async ({ params, respond, context }) => {
@@ -630,7 +646,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
           reason: parsedParams.reason,
-        }),
+        }).then(projectGatewaySkillProposalRecord),
     });
   },
   "skills.proposals.quarantine": async ({ params, respond, context }) => {
@@ -649,7 +665,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           expectedRevisionHash: parsedParams.expectedRevisionHash,
           correlationId: parsedParams.correlationId,
           reason: parsedParams.reason,
-        }),
+        }).then(projectGatewaySkillProposalRecord),
     });
   },
   "skills.install": async ({ params, respond, context }) => {
