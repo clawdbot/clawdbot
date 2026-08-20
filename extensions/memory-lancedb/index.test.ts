@@ -3772,7 +3772,6 @@ describe("memory plugin e2e", () => {
           });
           expect(payloads).toEqual([
             expect.objectContaining({ text: "Done — I forgot that memory." }),
-            expect.objectContaining({ isError: true }),
           ]);
           expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
         }
