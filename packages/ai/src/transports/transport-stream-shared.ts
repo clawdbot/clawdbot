@@ -178,9 +178,12 @@ function readProviderAcceptanceObserver(options: unknown): ProviderAcceptanceObs
     return undefined;
   }
   const descriptor = Object.getOwnPropertyDescriptor(options, providerAcceptanceObserver);
-  return descriptor && "value" in descriptor && typeof descriptor.value === "function"
-    ? (descriptor.value as ProviderAcceptanceObserver)
-    : undefined;
+  const value: unknown = descriptor && "value" in descriptor ? descriptor.value : undefined;
+  return isProviderAcceptanceObserver(value) ? value : undefined;
+}
+
+function isProviderAcceptanceObserver(value: unknown): value is ProviderAcceptanceObserver {
+  return typeof value === "function";
 }
 
 function writeProviderAcceptanceObserver<T extends object>(
