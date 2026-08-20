@@ -265,6 +265,7 @@ export type MemoryPluginRuntime = {
     cfg: OpenClawConfig;
     agentId: string;
     purpose?: "default" | "status" | "cli";
+    inspectSources?: boolean;
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
     debug?: {
