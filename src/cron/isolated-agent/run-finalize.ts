@@ -415,13 +415,15 @@ export async function finalizeCronRun(params: {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
+  let removeSourceSessionMessageToolAwareness: (() => void) | undefined;
   if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
     const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
-    await queueCronMessageToolDeliveryAwareness({
+    removeSourceSessionMessageToolAwareness = await queueCronMessageToolDeliveryAwareness({
       cfg: prepared.cfgWithAgentDefaults,
       job: prepared.input.job,
       agentId: prepared.agentId,
       agentSessionKey: prepared.agentSessionKey,
+      sourceSessionKey: prepared.sourceSessionKey,
       runStartedAt: execution.runStartedAt,
       resolvedDelivery: prepared.resolvedDelivery,
       sourceDeliveryOutcome,
@@ -500,6 +502,7 @@ export async function finalizeCronRun(params: {
     skipHeartbeatDelivery,
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
+    removeSourceSessionMessageToolAwareness,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,

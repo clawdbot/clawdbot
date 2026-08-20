@@ -532,7 +532,11 @@ export async function dispatchCronDelivery(
   const finalizeTextDelivery = async (
     delivery?: SuccessfulCronDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
-    if (!synthesizedText && !params.spawnOnlyHandoff) {
+    if (
+      !synthesizedText &&
+      !params.spawnOnlyHandoff &&
+      !(requiresCurrentSessionCompletion && params.deliveryPayloadHasStructuredContent)
+    ) {
       return null;
     }
     const initialSynthesizedText = synthesizedText?.trim() ?? "";
@@ -646,14 +650,19 @@ export async function dispatchCronDelivery(
       });
     }
     const normalizedSynthesizedText = normalizeSilentReplyText(synthesizedText);
+    const hasStructuredCurrentSessionCompletion =
+      requiresCurrentSessionCompletion && params.deliveryPayloadHasStructuredContent;
     if (
-      normalizedSynthesizedText.text === undefined ||
-      normalizedSynthesizedText.strippedTrailingSilentToken
+      (normalizedSynthesizedText.text === undefined ||
+        normalizedSynthesizedText.strippedTrailingSilentToken) &&
+      !hasStructuredCurrentSessionCompletion
     ) {
       return await finishSilentReplyDelivery();
     }
     synthesizedText = normalizedSynthesizedText.text;
-    outputText = synthesizedText;
+    if (synthesizedText) {
+      outputText = synthesizedText;
+    }
     if (params.isAborted()) {
       return params.withRunSession({
         status: "error",
@@ -668,6 +677,7 @@ export async function dispatchCronDelivery(
       if (!completion.ok) {
         return await failCurrentSessionCompletion(completion.reason);
       }
+      params.removeSourceSessionMessageToolAwareness?.();
       if (!completion.requiresExternalDelivery) {
         delivered = true;
         await cleanupDirectCronSessionIfNeeded();

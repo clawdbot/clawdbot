@@ -26,6 +26,7 @@ const directCronCompletionRetention = {
 
 const {
   appendAssistantMessageToSessionTranscriptMock,
+  cancelSourceAwarenessMock,
   commitBackgroundResultToSessionMock,
   countActiveDescendantRunsMock,
   deliverOutboundPayloadsMock,
@@ -40,6 +41,7 @@ const {
     sessionFile: "session.jsonl",
     messageId: "mirror-message",
   }),
+  cancelSourceAwarenessMock: vi.fn(),
   commitBackgroundResultToSessionMock: vi.fn().mockResolvedValue({
     ok: true,
     messageId: "current-completion-message",
@@ -159,6 +161,7 @@ vi.mock("../../logger.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventWithReceipt: vi.fn(() => cancelSourceAwarenessMock),
 }));
 
 vi.mock("../../tts/tts.runtime.js", () => ({
@@ -187,7 +190,7 @@ import {
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEvent, enqueueSystemEventWithReceipt } from "../../infra/system-events.js";
 import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
@@ -353,6 +356,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(resolveOutboundSessionRoute).mockResolvedValue(null);
     vi.mocked(ensureOutboundSessionEntry).mockResolvedValue(undefined);
     vi.mocked(enqueueSystemEvent).mockReset();
+    vi.mocked(enqueueSystemEventWithReceipt).mockReset().mockReturnValue(cancelSourceAwarenessMock);
+    cancelSourceAwarenessMock.mockReset();
     vi.mocked(appendAssistantMessageToSessionTranscript).mockResolvedValue({
       ok: true,
       target: {
@@ -907,6 +912,42 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42",
       },
     );
+  });
+
+  it("returns removal ownership for same-source message-tool awareness", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:webchat:direct:owner",
+      baseSessionKey: "agent:main:webchat:direct:owner",
+      to: "webchat:owner",
+    });
+    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 1_000 });
+
+    const removeSourceAwareness = await queueCronMessageToolDeliveryAwareness({
+      ...params,
+      resolvedDelivery: makeResolvedDelivery({ channel: "webchat", to: "owner" }),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "webchat",
+              to: "owner",
+              text: "Current-session completion.",
+            },
+            verifiedTarget: true,
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(enqueueSystemEventWithReceipt).toHaveBeenCalledOnce();
+    removeSourceAwareness?.();
+    expect(cancelSourceAwarenessMock).toHaveBeenCalledOnce();
   });
 
   it("queues message-tool awareness when the target route resolves to the main session", async () => {
@@ -3132,6 +3173,26 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
+  it("commits a safe media projection and still sends the current-target payload once", async () => {
+    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 2_500 });
+    params.synthesizedText = undefined;
+    params.summary = undefined;
+    params.outputText = undefined;
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ mediaUrl: "https://example.com/report.png?token=redacted" }];
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "report.png" }),
+    );
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [{ mediaUrl: "https://example.com/report.png?token=redacted" }],
+    });
+  });
+
   it("does not mark or send a current-target delivery when its session commit fails", async () => {
     commitBackgroundResultToSessionMock.mockResolvedValueOnce({
       ok: false,
@@ -3141,6 +3202,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       synthesizedText: "must not escape before commit",
       sessionTarget: "current",
     });
+    params.removeSourceSessionMessageToolAwareness = cancelSourceAwarenessMock;
 
     const state = await dispatchCronDelivery(params);
 
@@ -3149,25 +3211,39 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryAttempted: true,
       deliveryError: "source session was archived",
     });
+    expect(cancelSourceAwarenessMock).not.toHaveBeenCalled();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("commits current-target output after a verified message-tool send without resending", async () => {
+  it("commits current-target output after a verified message-tool send without next-turn awareness", async () => {
     const params = makeBaseParams({
       synthesizedText: "message-tool completion",
       sessionTarget: "current",
     });
     params.sourceDeliveryOutcome = {
-      visibleDeliveries: [],
+      visibleDeliveries: [
+        {
+          via: "message_tool",
+          target: {
+            tool: "message",
+            provider: "webchat",
+            to: "owner",
+            text: "message-tool completion",
+          },
+          verifiedTarget: true,
+        },
+      ],
       verifiedMessageToolDelivery: true,
       satisfiesSourceDelivery: true,
       unverifiedMessageToolDelivery: false,
     };
+    params.removeSourceSessionMessageToolAwareness = cancelSourceAwarenessMock;
 
     const state = await dispatchCronDelivery(params);
 
     expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
     expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+    expect(cancelSourceAwarenessMock).toHaveBeenCalledOnce();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 

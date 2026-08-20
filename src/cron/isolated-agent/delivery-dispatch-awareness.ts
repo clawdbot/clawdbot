@@ -170,9 +170,11 @@ export async function queueCronAwarenessSystemEvent(params: {
   targetSessionKey?: string;
   text: string;
   targetText?: string;
-}): Promise<void> {
+  receiptTargetSessionKey?: string;
+}): Promise<(() => boolean) | undefined> {
   try {
-    const { enqueueSystemEvent } = await deliveryOutboundRuntimeLoader.load();
+    const { enqueueSystemEvent, enqueueSystemEventWithReceipt } =
+      await deliveryOutboundRuntimeLoader.load();
     const mainSessionKey = resolveCronAwarenessMainSessionKey({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -191,19 +193,22 @@ export async function queueCronAwarenessSystemEvent(params: {
       targetSessionKey &&
       (!isSameSessionKey(targetSessionKey, mainSessionKey) || !params.queueMainSession);
     if (shouldQueueTargetSession) {
-      enqueueSystemEvent(
-        params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text),
-        withSystemEventOwner(
-          { sessionKey: targetSessionKey, contextKey: params.deliveryIdempotencyKey },
-          params.agentId,
-        ),
+      const text = params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text);
+      const options = withSystemEventOwner(
+        { sessionKey: targetSessionKey, contextKey: params.deliveryIdempotencyKey },
+        params.agentId,
       );
+      if (isSameSessionKey(targetSessionKey, params.receiptTargetSessionKey)) {
+        return enqueueSystemEventWithReceipt(text, options) ?? undefined;
+      }
+      enqueueSystemEvent(text, options);
     }
   } catch (err) {
     await logCronDeliveryWarn(
       `[cron:${params.jobId}] failed to queue isolated cron awareness: ${formatErrorMessage(err)}`,
     );
   }
+  return undefined;
 }
 
 function isCustomCronSessionTarget(sessionTarget: CronJob["sessionTarget"]): boolean {
@@ -464,11 +469,13 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
+  sourceSessionKey?: string;
   runStartedAt: number;
   resolvedDelivery: DeliveryTargetResolution;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
-}): Promise<void> {
+}): Promise<(() => void) | undefined> {
   const seen = new Set<string>();
+  const sourceAwarenessReceipts: Array<() => boolean> = [];
   for (const delivery of params.sourceDeliveryOutcome.visibleDeliveries) {
     const target = resolveCronMessageToolAwarenessTarget({
       delivery,
@@ -501,7 +508,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       runStartedAt: params.runStartedAt,
       delivery: target,
     });
-    await queueCronAwarenessSystemEvent({
+    const sourceAwarenessReceipt = await queueCronAwarenessSystemEvent({
       cfg: params.cfg,
       jobId: params.job.id,
       agentId: params.agentId,
@@ -509,8 +516,22 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       queueMainSession: false,
       targetSessionKey,
       text: target.text,
+      receiptTargetSessionKey: params.sourceSessionKey,
     });
+    if (sourceAwarenessReceipt) {
+      sourceAwarenessReceipts.push(sourceAwarenessReceipt);
+    }
   }
+  if (sourceAwarenessReceipts.length === 0) {
+    return undefined;
+  }
+  return () => {
+    // The durable source-session commit replaces only this ephemeral copy.
+    // Off-target awareness retains its independent queue ownership.
+    for (const remove of sourceAwarenessReceipts) {
+      remove();
+    }
+  };
 }
 
 async function appendDirectCronDeliveryTranscriptMirror(params: {
