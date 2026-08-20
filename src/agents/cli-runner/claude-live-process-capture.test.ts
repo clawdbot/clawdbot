@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { markMcpLoopbackRequestStarted } from "../../gateway/mcp-http.loopback-runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import {
@@ -16,6 +17,23 @@ import { runClaudeTurn } from "./claude-live-session.js";
 import { resetClaudeLiveSessionsForTest } from "./claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
 import { cliBackendLog } from "./log.js";
+
+// Gateway coverage owns quiet-admission timing; these cases preserve real capture draining.
+vi.mock("../../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../gateway/mcp-http.loopback-runtime.js")>();
+  return {
+    ...actual,
+    waitForMcpLoopbackToolCallCaptureIdle: (
+      captureKey: string,
+      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
+    ) =>
+      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+        ...options,
+        admissionGraceMs: 0,
+      }),
+  };
+});
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
@@ -328,7 +346,9 @@ describe("Claude live MCP capture lifetime", () => {
   });
 
   it("closes a captured Claude live process when MCP delivery capture cannot drain", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
+    const requestStarted = createDeferred();
     const live = mockClaudeLiveRun(supervisorSpawnMock, {
       cancelable: true,
       onWrite: ({ data, emit }) => {
@@ -336,6 +356,7 @@ describe("Claude live MCP capture lifetime", () => {
           return;
         }
         markMcpLoopbackRequestStarted(live.spawnInput.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
+        requestStarted.resolve();
         emit([
           { type: "system", subtype: "init", session_id: "captured-drain" },
           { type: "result", session_id: "captured-drain", result: "ok" },
@@ -349,9 +370,14 @@ describe("Claude live MCP capture lifetime", () => {
       mcpDeliveryCapture: true,
     });
 
-    await expect(executePreparedCliRun(context)).rejects.toThrow(
+    const pending = executePreparedCliRun(context);
+    await requestStarted.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    const rejection = expect(pending).rejects.toThrow(
       "CLI message tool call remained in flight after exit",
     );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await rejection;
     expect(live.lifecycle.cancel).toHaveBeenCalledWith("manual-cancel");
     expect(
       logInfoSpy.mock.calls

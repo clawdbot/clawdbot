@@ -31,7 +31,6 @@ extension OnboardingView {
         }
         guard Self.shouldAutoInstallCLI(
             onCLIPage: pageIndex == cliPageIndex,
-            isLocal: state.connectionMode == .local,
             visible: onboardingVisible,
             statusKnown: cliStatusKnown,
             executableReady: cliExecutableReady,
@@ -43,14 +42,13 @@ extension OnboardingView {
 
     static func shouldAutoInstallCLI(
         onCLIPage: Bool,
-        isLocal: Bool,
         visible: Bool,
         statusKnown: Bool,
         executableReady: Bool,
         installed: Bool,
         installing: Bool) -> Bool
     {
-        onCLIPage && isLocal && visible && statusKnown && !executableReady && !installed && !installing
+        onCLIPage && visible && statusKnown && !executableReady && !installed && !installing
     }
 
     func startExistingCLIActivationIfNeeded() {

@@ -142,6 +142,20 @@ describe("config draft model", () => {
               fractionalInteger: { type: "integer" },
               unionRadix: { anyOf: [{ type: "integer" }, { type: "string" }] },
               unionScientific: { anyOf: [{ type: "integer" }, { type: "string" }] },
+              unionDigits: {
+                oneOf: [{ type: "integer" }, { type: "string", pattern: "^[0-9]+$" }],
+              },
+              unionEnum: {
+                anyOf: [
+                  { type: "number", const: 60 },
+                  { type: "string", enum: ["60"] },
+                ],
+              },
+              unionConstOnly: { anyOf: [{ const: "60" }, { type: "number" }] },
+              unionEnumOnly: { oneOf: [{ enum: ["60"] }, { type: "number" }] },
+              unionBooleanConstOnly: {
+                anyOf: [{ const: "true" }, { type: "boolean" }],
+              },
             },
           },
           uiHints: {},
@@ -165,6 +179,11 @@ describe("config draft model", () => {
     runtimeConfig.patchForm(["fractionalInteger"], "42.5");
     runtimeConfig.patchForm(["unionRadix"], "0o17");
     runtimeConfig.patchForm(["unionScientific"], "1e5");
+    runtimeConfig.patchForm(["unionDigits"], "00123");
+    runtimeConfig.patchForm(["unionEnum"], "60");
+    runtimeConfig.patchForm(["unionConstOnly"], "60");
+    runtimeConfig.patchForm(["unionEnumOnly"], "60");
+    runtimeConfig.patchForm(["unionBooleanConstOnly"], "true");
 
     await expect(runtimeConfig.save()).resolves.toBe(true);
     const submission = submitted.find((entry) => entry.method === "config.set");
@@ -180,7 +199,82 @@ describe("config draft model", () => {
       decimal: 0.5,
       fractionalInteger: "42.5",
       unionRadix: "0o17",
-      unionScientific: 100_000,
+      // String-capable unions keep the text input; the Gateway owns constraints.
+      unionScientific: "1e5",
+      unionDigits: "00123",
+      unionEnum: "60",
+      unionConstOnly: "60",
+      unionEnumOnly: "60",
+      unionBooleanConstOnly: "true",
+    });
+    runtimeConfig.dispose();
+  });
+
+  it("preserves 64-bit id strings through the form submit roundtrip", async () => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config: {
+            allowFrom: { discord: ["1048113311314608148", 42] },
+            label: "before",
+          },
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              allowFrom: {
+                type: "object",
+                additionalProperties: {
+                  type: "array",
+                  items: {
+                    oneOf: [
+                      {
+                        type: "string",
+                        allOf: [{ pattern: "^[0-9]+$" }],
+                        not: { const: "never" },
+                      },
+                      { type: "number" },
+                    ],
+                  },
+                },
+              },
+              bigInteger: { type: "integer" },
+              label: { type: "string" },
+            },
+          },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    // Only the unrelated label is edited; the untouched allowFrom entry must
+    // come back byte-identical instead of collapsing to Number precision.
+    runtimeConfig.patchForm(["label"], "after");
+    runtimeConfig.patchForm(["bigInteger"], "10481133113146081487");
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    expect(JSON.parse(raw as string)).toEqual({
+      allowFrom: { discord: ["1048113311314608148", 42] },
+      // Beyond 2^53 an unsafe integer parse must not happen even for pure
+      // integer fields; the string is kept for the gateway to reject loudly.
+      bigInteger: "10481133113146081487",
+      label: "after",
     });
     runtimeConfig.dispose();
   });

@@ -163,7 +163,15 @@ class TasksPage extends OpenClawLightDomElement {
       const agentId = scopeId ?? undefined;
       const [active, recentPayload] = await Promise.all([
         loadActiveTaskPages({ client, agentId, signal }),
-        client.request("tasks.list", { limit: 200, ...(agentId ? { agentId } : {}) }, { signal }),
+        client.request(
+          "tasks.list",
+          {
+            status: ["completed", "failed", "timed_out", "cancelled"],
+            limit: 200,
+            ...(agentId ? { agentId } : {}),
+          },
+          { signal },
+        ),
       ]);
       const recent = normalizeTasksListResult(recentPayload);
       if (!recent) {

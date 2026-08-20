@@ -1728,12 +1728,15 @@ function renderAdvanced(
 }
 
 function renderTriggerRows(props: CronProps) {
-  if (!props.triggersEnabled) {
+  const scriptPayload = props.form.payloadKind === "script";
+  if (!props.triggersEnabled || scriptPayload) {
     return renderSettingsRow({
       title: t("cron.form.conditionTrigger"),
-      description: props.form.triggerEnabled
-        ? t("cron.form.triggerDisabledConfigured")
-        : t("cron.form.triggerDisabled"),
+      description: scriptPayload
+        ? t("cron.errors.triggerScriptPayloadUnsupported")
+        : props.form.triggerEnabled
+          ? t("cron.form.triggerDisabledConfigured")
+          : t("cron.form.triggerDisabled"),
       control: props.form.triggerEnabled
         ? html`<button
             type="button"
