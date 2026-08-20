@@ -453,7 +453,12 @@ for (const entry of input.processes) {
   if (processIdentity(entry.pid) !== entry.start) continue;
   try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
 }
-if (input.watchdog !== null && processIdentity(input.watchdog.pid) === input.watchdog.start) {
+let watchdogStart = null;
+try { if (input.watchdog !== null) watchdogStart = processIdentity(input.watchdog.pid); } catch (error) {
+  // An empty shared-host lease has nothing to strand, so ps cannot block its release.
+  if (input.processes.length > 0) throw error;
+}
+if (input.watchdog !== null && watchdogStart === input.watchdog.start) {
   try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
 }
 // The watchdog stays alive across the whole resume loop now, so it can win the unlink race.

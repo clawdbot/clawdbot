@@ -325,17 +325,15 @@ esac
     });
   });
 
-  it("bounds identity lookups so a stalled host ps cannot strand frozen processes", async () => {
+  it("releases an empty shared-host lease without depending on ps", async () => {
     const input = await fixture();
     const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
-    const nonce = await quiesce(input);
-    const lease = JSON.parse(
-      await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
-    ) as { watchdog: { pid: number } };
+    const nonce = await quiesce(input, true, "1000");
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as { watchdog: { pid: number } };
 
-    // Every SIGCONT is gated on processIdentity, so an unbounded lookup leaves the whole
-    // lease frozen with no remaining resumer. The stub ignores SIGTERM because that is the
-    // shape execFileSync's timeout alone cannot escape.
+    // Shared hosts intentionally freeze nothing. A ps outage must not block a no-op release or
+    // turn a successfully reconciled worker result into an error.
     await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
     await fs.chmod(path.join(input.bin, "ps"), 0o755);
 
@@ -346,14 +344,22 @@ esac
       );
 
       expect(result.termination).toBe("exit");
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(0);
+      await expect(fs.access(leaseFile)).rejects.toThrow();
+      await vi.waitFor(
+        () => {
+          expect(() => process.kill(lease.watchdog.pid, 0)).toThrow();
+        },
+        { timeout: 5_000 },
+      );
     } finally {
       await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
       await fs.chmod(path.join(input.bin, "ps"), 0o755);
-      await resume(input, nonce);
-      await vi.waitFor(() => {
-        expect(() => process.kill(lease.watchdog.pid, 0)).toThrow();
-      });
+      try {
+        process.kill(lease.watchdog.pid, "SIGTERM");
+      } catch {
+        // Expected once the missing lease has retired it.
+      }
     }
   });
 
