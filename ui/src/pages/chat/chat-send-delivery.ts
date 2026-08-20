@@ -267,7 +267,10 @@ async function sendQueuedChatMessage(
   if (isVisible()) {
     host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
     host.chatSending = true;
-    resetToolStream(host);
+    // Steers continue the current run, so its transient commentary and tools keep that ownership.
+    if (prepared.queueMode !== "steer" || !host.chatRunId) {
+      resetToolStream(host);
+    }
     resetChatScroll(host);
     setChatError(host, null);
     reconcileChatRunLifecycle(host, {
