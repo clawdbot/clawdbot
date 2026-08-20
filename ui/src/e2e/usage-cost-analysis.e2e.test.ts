@@ -11,6 +11,9 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}`,
 });
 
+const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+const providerUsageArtifactDir = path.resolve(".artifacts/control-ui-e2e/provider-usage-outcomes");
+
 const totals = {
   input: 1_200_000,
   output: 300_000,
@@ -120,6 +123,13 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".usage-page").textContent())
           .toContain("Provider usage is unavailable; the last request failed. Refresh to retry.");
+        if (recordVisuals) {
+          await mkdir(providerUsageArtifactDir, { recursive: true });
+          await page.locator(".usage-page").screenshot({
+            animations: "disabled",
+            path: path.join(providerUsageArtifactDir, "usage-status-request-failed.png"),
+          });
+        }
       },
     );
   });
@@ -149,6 +159,13 @@ suite.define(() => {
           .not.toContain(
             "Provider usage is unavailable; the last request failed. Refresh to retry.",
           );
+        if (recordVisuals) {
+          await mkdir(providerUsageArtifactDir, { recursive: true });
+          await page.locator(".usage-page").screenshot({
+            animations: "disabled",
+            path: path.join(providerUsageArtifactDir, "usage-status-empty.png"),
+          });
+        }
       },
     );
   });

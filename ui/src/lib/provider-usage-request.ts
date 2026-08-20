@@ -5,7 +5,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { UsageSummary } from "../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 
-export type ProviderUsageRequestFailure = { kind: "request-failed" };
+type ProviderUsageRequestFailure = { kind: "request-failed" };
 
 export type ProviderUsageRequestResult = Result<UsageSummary, ProviderUsageRequestFailure>;
 

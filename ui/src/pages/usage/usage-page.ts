@@ -196,7 +196,9 @@ class UsagePage extends OpenClawLightDomElement {
     },
     onError: (error) => {
       this.usageTaskActiveClient = null;
-      this.providerUsage = null;
+      if (this.providerUsage?.ok === false) {
+        this.providerUsage = null;
+      }
       if (isMissingOperatorReadScopeError(error)) {
         this.usageResult = null;
         this.usageCostSummary = null;

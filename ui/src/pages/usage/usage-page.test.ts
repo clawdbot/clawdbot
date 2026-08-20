@@ -81,8 +81,62 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("UsagePage provider usage flag", () => {
-  it("clears a stale provider failure flag when a later aggregate load fails", async () => {
+describe("UsagePage provider usage outcome", () => {
+  it("keeps the last successful provider usage data when a later aggregate load fails", async () => {
+    let phase = 1;
+    const summary = { updatedAt: 1, providers: [{ provider: "openai", windows: [] }] };
+    const request = vi.fn(async (method: string): Promise<unknown> => {
+      if (method === "usage.status") {
+        return summary;
+      }
+      if (method === "usage.cost") {
+        if (phase === 2) {
+          throw new Error("cost unavailable");
+        }
+        return { daily: [] };
+      }
+      return { sessions: [], totals: null };
+    });
+    const page = document.createElement("openclaw-usage-page") as TestUsagePage;
+    page.context = contextWithClient({ request } as unknown as GatewayBrowserClient);
+    page.render = () => nothing;
+    document.body.append(page);
+    await page.updateComplete;
+    page.routeData = {
+      gateway: page.context.gateway,
+      gatewaySnapshot: page.context.gateway.snapshot,
+      query: {
+        startDate: "2026-08-07",
+        endDate: "2026-08-07",
+        scope: "family",
+        timeZone: "local",
+        agentId: null,
+      },
+      result: null,
+      costSummary: null,
+      providerUsage: null,
+      loadedAtMs: null,
+      error: null,
+    };
+    await page.updateComplete;
+
+    const refresh = () => {
+      (page as unknown as { refreshPolicy: { reload: () => void } }).refreshPolicy.reload();
+    };
+    refresh();
+    await vi.waitFor(() => {
+      expect(page.providerUsage).toEqual({ ok: true, value: summary });
+    });
+
+    phase = 2;
+    refresh();
+    await vi.waitFor(() => {
+      expect(page.usageError).not.toBeNull();
+    });
+    expect(page.providerUsage).toEqual({ ok: true, value: summary });
+  });
+
+  it("clears a stale provider request failure when a later aggregate load fails", async () => {
     let phase = 1;
     const request = vi.fn(async (method: string): Promise<unknown> => {
       if (method === "usage.status") {
