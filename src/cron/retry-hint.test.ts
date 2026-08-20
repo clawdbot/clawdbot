@@ -67,6 +67,9 @@ describe("resolveCronExecutionRetryHint", () => {
 
   it("does not classify incidental 529 numbers as provider overload", () => {
     for (const message of [
+      "529 lines of output",
+      "529 files missing",
+      "529 workers failed",
       "context limit 529 exceeded",
       "process exited with 529 lines of output",
       "assertion failed: expected 529 got 0",
