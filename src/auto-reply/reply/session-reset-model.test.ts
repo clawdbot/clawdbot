@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
@@ -92,23 +92,15 @@ describe("applyResetModelOverride", () => {
     });
   });
 
-  it("selects a model hint and clears stale thinking selection provenance", async () => {
+  it("selects a model hint while preserving the stored thinking level for validation", async () => {
     const { sessionEntry, sessionCtx } = await applyResetFixture({
       resetTriggered: true,
-      sessionEntry: {
-        thinkingLevel: "ultra",
-        thinkingLevelSelection: {
-          provider: "openai",
-          model: "gpt-5.6-sol",
-          agentRuntime: "codex",
-          level: "ultra",
-        },
-      } as Partial<InternalSessionEntry>,
+      sessionEntry: { thinkingLevel: "ultra" },
     });
 
     expect(sessionEntry.providerOverride).toBe("minimax");
     expect(sessionEntry.modelOverride).toBe("m2.7");
-    expect((sessionEntry as InternalSessionEntry).thinkingLevelSelection).toBeUndefined();
+    expect(sessionEntry.thinkingLevel).toBe("ultra");
     expect(sessionCtx.BodyStripped).toBe("summarize");
   });
 

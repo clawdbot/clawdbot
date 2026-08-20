@@ -1132,18 +1132,10 @@ describe("gateway session utils", () => {
     );
   });
 
-  test("preserves recorded harness thinking selections and clamps unproven state", () => {
+  test("keeps stored thinking text without a catalog and clamps it when one is present", () => {
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
-      resolveThinkingProfile: ({ compat }) => ({
-        levels: [
-          { id: "off" },
-          { id: "high" },
-          { id: "xhigh" },
-          { id: "max" },
-          ...(compat?.supportedReasoningEfforts?.includes("ultra")
-            ? [{ id: "ultra" as const }]
-            : []),
-        ],
+      resolveThinkingProfile: () => ({
+        levels: [{ id: "off" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
       }),
     });
     const cfg = {
@@ -1156,69 +1148,45 @@ describe("gateway session utils", () => {
         },
       },
     } as OpenClawConfig;
-    const modelCatalog = [
-      {
-        provider: "openai",
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol (API route)",
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-      },
-    ];
-    const row = (entry: SessionEntry) =>
+    const row = (entry: SessionEntry, withCatalog: boolean) =>
       buildGatewaySessionRow({
         cfg,
         storePath: "",
         store: {},
         key: "agent:main:main",
         entry,
-        modelCatalog,
+        ...(withCatalog
+          ? {
+              modelCatalog: [
+                {
+                  provider: "openai",
+                  id: "gpt-5.6-sol",
+                  name: "GPT-5.6 Sol (API route)",
+                },
+              ],
+            }
+          : {}),
       });
 
-    const recorded = row({
-      sessionId: "recorded",
-      thinkingLevel: "ultra",
-      thinkingLevelSelection: {
-        provider: "openai",
-        model: "gpt-5.6-sol",
-        agentRuntime: "codex",
-        level: "ultra",
-      },
-    } as InternalSessionEntry);
-    const unproven = row({ sessionId: "unproven", thinkingLevel: "ultra" } as SessionEntry);
-    const staleRuntime = row({
-      sessionId: "stale-runtime",
-      thinkingLevel: "ultra",
-      thinkingLevelSelection: {
-        provider: "openai",
-        model: "gpt-5.6-sol",
-        agentRuntime: "openclaw",
-        level: "ultra",
-      },
-    } as InternalSessionEntry);
+    const stored = { sessionId: "stored", thinkingLevel: "ultra" } as SessionEntry;
 
-    expect(recorded.thinkingLevel).toBe("ultra");
-    expect(recorded.thinkingLevels?.map((level) => level.id)).toContain("ultra");
-    expect(unproven.thinkingLevel).toBe("max");
-    expect(staleRuntime.thinkingLevel).toBe("max");
+    expect(row(stored, false).thinkingLevel).toBe("ultra");
+    expect(row(stored, true).thinkingLevel).toBe("high");
   });
 
-  test("strips nested thinking provenance from Gateway patch results", async () => {
-    const entry: InternalSessionEntry = {
+  test("strips retired thinking provenance from Gateway patch results", async () => {
+    const entry = {
       sessionId: "private-fallback",
       updatedAt: 1,
+      thinkingLevelSelection: { retired: true },
       modelFallback: {
         prevModel: "gpt-5.6-sol",
         prevProvider: "openai",
-        prevThinkingLevelSelection: {
-          provider: "openai",
-          model: "gpt-5.6-sol",
-          agentRuntime: "codex",
-          level: "ultra",
-        },
+        prevThinkingLevelSelection: { retired: true },
         source: "agent-patch",
         ts: 1,
       },
-    };
+    } as unknown as InternalSessionEntry;
     const result = await projectSessionPatchResult({
       canonicalKey: "agent:main:main",
       cfg: {
@@ -1248,7 +1216,7 @@ describe("gateway session utils", () => {
       source: "agent-patch",
       ts: 1,
     });
-    expect(JSON.stringify(result.entry)).not.toContain("prevThinkingLevelSelection");
+    expect(JSON.stringify(result.entry)).not.toContain("thinkingLevelSelection");
   });
 
   test("reports observed locked runtime from agentHarnessId instead of configured intent", () => {

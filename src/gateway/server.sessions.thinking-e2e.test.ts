@@ -8,8 +8,13 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, test, vi } from "vitest";
+import { beforeAll, beforeEach, expect, test, vi } from "vitest";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
+import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -20,6 +25,32 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+
+let openAiPolicy: ProviderPolicySurface;
+const openAiPolicyModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "openai",
+  artifactBasename: "provider-policy-api.js",
+});
+
+beforeAll(async () => {
+  openAiPolicy = await vi.importActual<ProviderPolicySurface>(openAiPolicyModuleId);
+});
+
+beforeEach(() => {
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "openai",
+    source: "test",
+    provider: {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      resolveThinkingProfile: openAiPolicy.resolveThinkingProfile,
+    } as never,
+  });
+  setActivePluginRegistry(registry);
+});
 
 /**
  * Simulates the consumer-side resolution from session-controls.ts and
@@ -79,6 +110,7 @@ type ThinkingSession = {
   modelProvider?: string;
   model?: string;
   agentRuntime?: { id?: string };
+  thinkingLevel?: string;
   thinkingLevels?: Array<{ label: string }>;
   thinkingOptions?: string[];
 };
@@ -95,15 +127,8 @@ async function listMainSessionWithThinking(params: {
   sessionModel: string;
   agentRuntime?: "codex" | "openclaw";
   selectedByOverride?: boolean;
-  readPreparedGatewayModelCatalog?: () => Promise<
-    Array<{
-      provider: string;
-      id: string;
-      name: string;
-      reasoning: boolean;
-      compat?: { supportedReasoningEfforts?: string[] };
-    }>
-  >;
+  thinkingLevel?: string;
+  readPreparedGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
 }) {
   await createSessionStoreDir();
   testState.agentConfig = {
@@ -121,6 +146,7 @@ async function listMainSessionWithThinking(params: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: params.sessionModelProvider,
         model: params.sessionModel,
+        ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
         ...(params.selectedByOverride === false
           ? {}
           : {
@@ -273,4 +299,97 @@ test("session rows keep the selected Codex Sol model when runtime metadata conta
       thinkingLevel: "max",
     },
   });
+});
+
+const directOpenAICatalog = (modelId: string): ModelCatalogEntry[] => [
+  {
+    provider: "openai",
+    id: modelId,
+    name: modelId,
+    api: "openai-responses",
+    reasoning: true,
+    compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+  },
+];
+
+test.each(["gpt-5.6-sol", "gpt-5.6-terra"])(
+  "provider policy preserves Codex Ultra for exact %s through a narrower direct route",
+  async (modelId) => {
+    const { session } = await listMainSessionWithThinking({
+      reqId: `req-e2e-${modelId}-ultra`,
+      primaryModel: `openai/${modelId}`,
+      sessionModelProvider: "openai",
+      sessionModel: modelId,
+      agentRuntime: "codex",
+      thinkingLevel: "ultra",
+      readPreparedGatewayModelCatalog: async () => directOpenAICatalog(modelId),
+    });
+
+    expect(session?.thinkingOptions).toContain("ultra");
+    expect(session).toMatchObject({ model: modelId, thinkingLevel: "ultra" });
+  },
+);
+
+test("provider policy keeps Codex Luna Max-only", async () => {
+  const modelId = "gpt-5.6-luna";
+  const { session } = await listMainSessionWithThinking({
+    reqId: "req-e2e-luna-ultra",
+    primaryModel: `openai/${modelId}`,
+    sessionModelProvider: "openai",
+    sessionModel: modelId,
+    agentRuntime: "codex",
+    thinkingLevel: "ultra",
+    readPreparedGatewayModelCatalog: async () => directOpenAICatalog(modelId),
+  });
+
+  expect(session?.thinkingOptions).not.toContain("ultra");
+  expect(session?.thinkingLevel).toBe("max");
+});
+
+test("an explicit empty Codex observation remains authoritative", async () => {
+  const modelId = "gpt-5.6-sol";
+  const { session } = await listMainSessionWithThinking({
+    reqId: "req-e2e-sol-empty",
+    primaryModel: `openai/${modelId}`,
+    sessionModelProvider: "openai",
+    sessionModel: modelId,
+    agentRuntime: "codex",
+    thinkingLevel: "ultra",
+    readPreparedGatewayModelCatalog: async () => [
+      {
+        provider: "openai",
+        id: modelId,
+        name: modelId,
+        api: "openai-chatgpt-responses",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: [] },
+      },
+    ],
+  });
+
+  expect(session?.thinkingOptions).toEqual(["off"]);
+  expect(session?.thinkingLevel).toBe("off");
+});
+
+test("unsupported generic stored levels clamp through the current profile", async () => {
+  const { session } = await listMainSessionWithThinking({
+    reqId: "req-e2e-generic-ultra",
+    primaryModel: "test-generic/reasoner",
+    sessionModelProvider: "test-generic",
+    sessionModel: "reasoner",
+    agentRuntime: "codex",
+    thinkingLevel: "ultra",
+    readPreparedGatewayModelCatalog: async () => [
+      {
+        provider: "test-generic",
+        id: "reasoner",
+        name: "Generic Reasoner",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["max"] },
+      },
+    ],
+  });
+
+  expect(session?.thinkingOptions).not.toContain("ultra");
+  expect(session?.thinkingLevel).toBe("max");
 });
