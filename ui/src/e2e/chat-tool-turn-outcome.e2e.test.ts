@@ -245,7 +245,15 @@ suite.define(() => {
             role: "toolResult",
             toolCallId: "layout-edit",
             toolName: "edit",
-            content: [{ type: "text", text: "Updated ui/src/styles/chat/tool-cards.css" }],
+            content: [
+              {
+                type: "text",
+                text: Array.from(
+                  { length: 18 },
+                  (_, index) => `Updated tool-card layout section ${index + 1}.`,
+                ).join("\n"),
+              },
+            ],
             timestamp: baseTime + 3_000,
           },
           {
