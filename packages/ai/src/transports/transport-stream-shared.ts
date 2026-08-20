@@ -167,7 +167,7 @@ export type ProviderAcceptance =
     }
   | { kind: "provider_stream_opened" };
 
-type ProviderAcceptanceObserver = (acceptance: ProviderAcceptance) => void | Promise<void>;
+type ProviderAcceptanceObserver = (acceptance: ProviderAcceptance) => void;
 type ProviderAcceptanceOptions = Pick<StreamOptions, "onResponse" | "signal">;
 type ProviderStreamCancel = (reason: Error) => void | Promise<void>;
 
@@ -205,9 +205,9 @@ export function withProviderAcceptanceObserver<T extends object>(
   return writeProviderAcceptanceObserver(
     options,
     existing
-      ? async (acceptance) => {
-          await observer(acceptance);
-          await existing(acceptance);
+      ? (acceptance) => {
+          observer(acceptance);
+          existing(acceptance);
         }
       : observer,
   );

@@ -181,7 +181,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     }
 
     const order: string[] = [];
-    const acceptanceObserver = vi.fn(async () => {
+    const acceptanceObserver = vi.fn(() => {
       order.push("accepted");
     });
     const fetchMock = vi.fn();

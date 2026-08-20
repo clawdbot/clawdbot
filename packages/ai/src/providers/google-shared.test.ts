@@ -615,9 +615,9 @@ describe("runGoogleGenerateContentLifecycle", () => {
       },
     } as unknown as AsyncGenerator<GenerateContentResponse>;
 
-    const options = withProviderAcceptanceObserver({}, () =>
-      Promise.reject(new Error("acceptance observer failed")),
-    );
+    const options = withProviderAcceptanceObserver({}, () => {
+      throw new Error("acceptance observer failed");
+    });
     const { result } = await runGoogleFixture([], {
       options,
       generateContentStream: async () => googleStream,

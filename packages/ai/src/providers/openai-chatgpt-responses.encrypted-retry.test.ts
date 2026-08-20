@@ -562,7 +562,7 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       },
       observations,
     );
-    const options = withProviderAcceptanceObserver(baseOptions, async () => {
+    const options = withProviderAcceptanceObserver(baseOptions, () => {
       if (scripted.requests.length >= 2) {
         throw new Error("acceptance observer failed");
       }

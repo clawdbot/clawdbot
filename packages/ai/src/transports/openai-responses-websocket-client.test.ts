@@ -272,7 +272,7 @@ async function run(
     headers?: Record<string, string>;
     observations?: ResponsesPromptObservation[];
     onCompactionRejected?: () => void;
-    acceptanceObserver?: (acceptance: ProviderAcceptance) => void | Promise<void>;
+    acceptanceObserver?: (acceptance: ProviderAcceptance) => void;
   } = {},
 ): Promise<AssistantMessage> {
   const options = {
@@ -368,7 +368,11 @@ describe("native OpenAI Responses WebSocket client integration", () => {
 
     const result = await run(
       { messages: [userMessage("hello", 1)], tools: [] },
-      { acceptanceObserver: () => Promise.reject(hookError) },
+      {
+        acceptanceObserver: () => {
+          throw hookError;
+        },
+      },
     );
 
     expect(result).toMatchObject({

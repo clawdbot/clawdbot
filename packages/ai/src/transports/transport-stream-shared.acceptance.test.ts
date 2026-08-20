@@ -12,7 +12,7 @@ import {
 const model = { id: "acceptance-test", provider: "test" } as Model;
 
 function observeAcceptance(
-  observer: (acceptance: ProviderAcceptance) => void | Promise<void>,
+  observer: (acceptance: ProviderAcceptance) => void,
   options: StreamOptions = {},
 ): StreamOptions {
   return withProviderAcceptanceObserver(options, observer);
@@ -67,7 +67,9 @@ describe("private provider acceptance", () => {
       const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 });
       const options =
         failureSource === "observer"
-          ? observeAcceptance(() => Promise.reject(hookError))
+          ? observeAcceptance(() => {
+              throw hookError;
+            })
           : ({ onResponse: () => Promise.reject(hookError) } satisfies StreamOptions);
 
       await expect(notifyProviderHttpResponse({ options, response, model })).rejects.toBe(
@@ -93,37 +95,13 @@ describe("private provider acceptance", () => {
       }),
       { status: 200 },
     );
-    const options = observeAcceptance(() => Promise.reject(hookError));
+    const options = observeAcceptance(() => {
+      throw hookError;
+    });
     const notification = notifyProviderHttpResponse({ options, response, model });
 
     await cancelStarted;
     await expect(notification).rejects.toBe(hookError);
-  });
-
-  it("cancels an SDK stream when a pending observer is aborted", async () => {
-    const controller = new AbortController();
-    const abortReason = Object.assign(new Error("operator canceled"), {
-      code: "OPERATOR_CANCELLED",
-    });
-    const cancelStream = vi.fn();
-    let markObserverStarted!: () => void;
-    const observerStarted = new Promise<void>((resolve) => {
-      markObserverStarted = resolve;
-    });
-    const options = observeAcceptance(
-      () => {
-        markObserverStarted();
-        return new Promise<void>(() => {});
-      },
-      { signal: controller.signal },
-    );
-
-    const notification = notifyProviderStreamOpened({ options, cancelStream });
-    await observerStarted;
-    controller.abort(abortReason);
-
-    await expect(notification).rejects.toBe(abortReason);
-    expect(cancelStream).toHaveBeenCalledWith(abortReason);
   });
 
   it("reports an opaque stream without canceling it", async () => {

@@ -3964,7 +3964,9 @@ describe("anthropic transport stream", () => {
     );
     const options = withProviderAcceptanceObserver(
       { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
-      () => Promise.reject(new Error("acceptance observer failed")),
+      () => {
+        throw new Error("acceptance observer failed");
+      },
     );
 
     const result = await runTransportStream(

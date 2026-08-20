@@ -314,7 +314,9 @@ describe("Mistral provider", () => {
       buildModelFetch: () => async () => new Response("stream", { status: 200 }),
     });
     const hookError = new Error("acceptance observer failed");
-    const options = withProviderAcceptanceObserver({}, () => Promise.reject(hookError));
+    const options = withProviderAcceptanceObserver({}, () => {
+      throw hookError;
+    });
 
     const result = await runSimpleMistralFixture(context, options);
 

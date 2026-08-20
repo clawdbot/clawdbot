@@ -191,7 +191,9 @@ describe("Bedrock stream client lifecycle", () => {
     } as never);
     const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
     const hookError = new Error("acceptance observer failed");
-    const options = withProviderAcceptanceObserver({}, () => Promise.reject(hookError));
+    const options = withProviderAcceptanceObserver({}, () => {
+      throw hookError;
+    });
 
     const result = await streamBedrockForTest(options).result();
 

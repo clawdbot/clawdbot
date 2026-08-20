@@ -205,7 +205,9 @@ describe.each([
   it("preserves an acceptance observer failure and closes the unread request", async () => {
     const lifecycle = installResponse();
     const hookError = new Error("provider acceptance observer failed");
-    const acceptanceObserver = vi.fn(() => Promise.reject(hookError));
+    const acceptanceObserver = vi.fn(() => {
+      throw hookError;
+    });
     const onResponse = vi.fn();
     const options = withProviderAcceptanceObserver(
       { apiKey: "fixture-token", onResponse },

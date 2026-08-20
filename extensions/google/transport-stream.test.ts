@@ -1467,7 +1467,7 @@ describe("google transport stream", () => {
     },
   );
 
-  it("does not retry when a slow provider acceptance observer rejects", async () => {
+  it("does not retry when provider acceptance observation fails", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     let cancelCalled = false;
     guardedFetchMock.mockResolvedValueOnce(
@@ -1479,10 +1479,7 @@ describe("google transport stream", () => {
       }),
     );
 
-    const options = withProviderAcceptanceObserver({ reasoning: "high" }, async () => {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 25);
-      });
+    const options = withProviderAcceptanceObserver({ reasoning: "high" }, () => {
       throw new Error("acceptance observer failed");
     });
     const result = await runGeminiStreamResult({
@@ -1498,73 +1495,48 @@ describe("google transport stream", () => {
     expect(cancelCalled).toBe(true);
   });
 
-  it.each(["observer", "onResponse"] as const)(
-    "aborts a pending %s callback without retrying",
-    async (hookName) => {
-      vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
-      const controller = new AbortController();
-      const cancel = vi.fn();
-      guardedFetchMock.mockResolvedValueOnce(
-        buildOpenRawSseResponse({
-          sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
-          onCancel: cancel,
-        }),
-      );
-      let markHookStarted!: () => void;
-      const hookStarted = new Promise<void>((resolve) => {
-        markHookStarted = resolve;
-      });
-      const hook = vi.fn(() => {
-        markHookStarted();
-        return new Promise<void>(() => {});
-      });
-
-      const baseOptions = {
-        reasoning: "high",
-        signal: controller.signal,
-      };
-      const options =
-        hookName === "observer"
-          ? withProviderAcceptanceObserver(baseOptions, hook)
-          : { ...baseOptions, onResponse: hook };
-      const resultPromise = runGeminiStreamResult({
-        model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
-        options,
-      });
-      await hookStarted;
-      controller.abort(
-        Object.assign(new Error("operator canceled the request"), {
-          code: "OPERATOR_CANCELLED",
-        }),
-      );
-
-      await expect(resultPromise).resolves.toMatchObject({
-        stopReason: "aborted",
-        errorCode: "OPERATOR_CANCELLED",
-        errorMessage: "operator canceled the request",
-      });
-      expect(hook).toHaveBeenCalledOnce();
-      expect(guardedFetchMock).toHaveBeenCalledOnce();
-      expect(cancel).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("does not count provider acceptance observation against the retry deadline", async () => {
-    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
-    mockGoogleTextResponse("accepted");
-
-    const options = withProviderAcceptanceObserver({ reasoning: "high" }, async () => {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 25);
-      });
+  it("aborts a pending response callback without retrying", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+        onCancel: cancel,
+      }),
+    );
+    let markHookStarted!: () => void;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
     });
-    const result = await runGeminiStreamResult({
+    const onResponse = vi.fn(() => {
+      markHookStarted();
+      return new Promise<void>(() => {});
+    });
+    const options = {
+      reasoning: "high",
+      signal: controller.signal,
+      onResponse,
+    };
+    const resultPromise = runGeminiStreamResult({
       model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
       options,
     });
+    await hookStarted;
+    controller.abort(
+      Object.assign(new Error("operator canceled the request"), {
+        code: "OPERATOR_CANCELLED",
+      }),
+    );
 
-    expect(result.content).toEqual([{ type: "text", text: "accepted" }]);
+    await expect(resultPromise).resolves.toMatchObject({
+      stopReason: "aborted",
+      errorCode: "OPERATOR_CANCELLED",
+      errorMessage: "operator canceled the request",
+    });
+    expect(onResponse).toHaveBeenCalledOnce();
     expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("keeps oversized-video shedding in the Gemini 3 retry payload", async () => {
