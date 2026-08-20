@@ -375,6 +375,22 @@ function ensureSchema(
   env: NodeJS.ProcessEnv,
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
 ): void {
+  try {
+    assertSupportedSchemaVersion(db, pathname);
+    if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+      assertSqliteIntegrity(db, pathname);
+      assertCurrentStateRuntimeSchema(db, pathname);
+      const metadata = db
+        .prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
+        .get() as { app_version?: unknown } | undefined;
+      if (metadata?.app_version === VERSION) {
+        return;
+      }
+    }
+  } catch {
+    // Preserve the existing transactional repair and its diagnostics for drift or corruption.
+  }
+
   const now = Date.now();
   const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
   // Rebuilding referenced tables requires disabling FK enforcement before BEGIN.
