@@ -20,6 +20,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
@@ -655,17 +656,19 @@ export async function startGatewaySidecars(params: {
   // Agent RPC remains available when transports are disabled. Publish configured/static facts before
   // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
   await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
-    publishStartupModelRuntime(
-      {
-        cfg: params.cfg,
-        ...(params.pluginMetadataSnapshot
-          ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-          : {}),
-        workspaceDir: params.defaultWorkspaceDir,
-        log: params.log,
-        startupTrace: params.startupTrace,
-      },
-      params.prewarmPrimaryModel,
+    withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
+      publishStartupModelRuntime(
+        {
+          cfg: params.cfg,
+          ...(params.pluginMetadataSnapshot
+            ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+            : {}),
+          workspaceDir: params.defaultWorkspaceDir,
+          log: params.log,
+          startupTrace: params.startupTrace,
+        },
+        params.prewarmPrimaryModel,
+      ),
     ),
   );
   // Gateway readiness owns process-stable reply module activation so the first operator turn

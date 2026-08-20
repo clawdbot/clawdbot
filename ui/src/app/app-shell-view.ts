@@ -437,6 +437,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         onExit: () => host.exitSettings(),
         onRetryConnect: () => context.gateway.connect(),
         onNavigate: (routeId, options) => host.navigate(routeId, options),
+        onOpenApprovals: () => host.openApprovals(),
         onPreload: (routeId) => context.preload(routeId),
         onSearchQueryChange: (nextQuery) => {
           void host.handleSettingsSearchQueryChange(nextQuery);

@@ -56,7 +56,11 @@ export function applyNonInteractiveGatewayConfig(params: {
     opts.gatewayToken !== undefined || opts.gatewayTokenRefEnv !== undefined;
   let authMode =
     explicitAuthMode ??
-    (hasExplicitTokenAuthInput ? "token" : existingGateway?.auth?.mode) ??
+    (hasExplicitTokenAuthInput
+      ? "token"
+      : opts.gatewayPassword !== undefined
+        ? "password"
+        : existingGateway?.auth?.mode) ??
     "token";
   const tailscaleMode = opts.tailscale ?? existingGateway?.tailscale?.mode ?? "off";
 

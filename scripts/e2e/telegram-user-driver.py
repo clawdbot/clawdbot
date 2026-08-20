@@ -990,9 +990,20 @@ def command_terminate_observer(args):
     pgid = int(value.get("pgid") or 0)
     if value.get("socket") != args.socket or pid <= 0 or pgid <= 0 or pgid == os.getpgrp():
         raise DriverError("Telegram observer pid file is invalid.")
+    process_stat = Path(f"/proc/{pid}/stat")
+
+    def running():
+        try:
+            return process_stat.read_text().rsplit(")", 1)[1].split()[0] not in {"X", "Z"}
+        except FileNotFoundError:
+            return False
+
     try:
         command_line = Path(f"/proc/{pid}/cmdline").read_bytes()
     except FileNotFoundError:
+        command_line = b""
+    # Zombies retain their proc entry with an empty command line; they are not reused PIDs.
+    if not running():
         pid_path.unlink(missing_ok=True)
         return
     if b"telegram-user-driver" not in command_line or args.socket.encode() not in command_line or b"serve" not in command_line:
@@ -1001,14 +1012,6 @@ def command_terminate_observer(args):
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    process_stat = Path(f"/proc/{pid}/stat")
-
-    def running():
-        try:
-            return process_stat.read_text().rsplit(")", 1)[1].split()[0] != "Z"
-        except FileNotFoundError:
-            return False
-
     deadline = time.monotonic() + 2
     while running() and time.monotonic() < deadline:
         time.sleep(0.05)

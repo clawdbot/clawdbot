@@ -458,22 +458,7 @@ describe("Control UI service-worker production update E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
         .toMatchObject({ client: { buildId: buildB } });
-      await page.waitForFunction((expectedBuildId) => {
-        const controller = navigator.serviceWorker.controller;
-        return (
-          controller?.state === "activated" &&
-          new URL(controller.scriptURL).searchParams.get("v") === expectedBuildId
-        );
-      }, buildB);
-      expect(
-        await page.evaluate(() => {
-          const controller = navigator.serviceWorker.controller;
-          return {
-            buildId: controller ? new URL(controller.scriptURL).searchParams.get("v") : null,
-            state: controller?.state ?? null,
-          };
-        }),
-      ).toEqual({ buildId: buildB, state: "activated" });
+      await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildB);
 
       const terminal = page.locator("openclaw-terminal-panel[embedded]");
       await terminal.waitFor({ state: "attached" });

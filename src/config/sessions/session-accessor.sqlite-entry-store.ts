@@ -233,7 +233,7 @@ export function readExactSessionEntryRow(
   return entry ? { entry, legacyKeys: [], row } : undefined;
 }
 
-export function readExactSessionEntryJsonForCanonicalRepair(
+export function readExactSessionEntryJson(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionKey: string,
 ): string | undefined {

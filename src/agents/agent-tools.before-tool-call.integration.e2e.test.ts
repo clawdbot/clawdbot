@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
@@ -64,6 +65,7 @@ import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { hashToolCall, recordToolCall } from "./tool-loop-detection.js";
+import { createToolSearchCatalogRef, registerHeadlessToolSearchCatalog } from "./tool-search.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
@@ -1352,6 +1354,142 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       undefined,
     );
   });
+
+  it.each([
+    { stage: "trusted policy", alias: "code", replacement: "" },
+    { stage: "trusted policy", alias: "command", replacement: "" },
+    { stage: "trusted policy", alias: "code", replacement: null },
+    { stage: "trusted policy", alias: "command", replacement: null },
+    { stage: "hook", alias: "code", replacement: null },
+    { stage: "hook", alias: "command", replacement: null },
+    { stage: "hook after a trusted rewrite", alias: "code", replacement: "" },
+    { stage: "hook after a trusted rewrite", alias: "command", replacement: "" },
+    { stage: "hook after a trusted rewrite", alias: "code", replacement: null },
+    { stage: "hook after a trusted rewrite", alias: "command", replacement: null },
+    { stage: "trusted policy", alias: "code", replacement: null, otherReplacement: "return 4;" },
+    {
+      stage: "trusted policy",
+      alias: "command",
+      replacement: null,
+      otherReplacement: "return 4;",
+    },
+    { stage: "hook", alias: "code", replacement: null, otherReplacement: "return 4;" },
+    { stage: "hook", alias: "command", replacement: null, otherReplacement: "return 4;" },
+    { stage: "hook after a trusted rewrite", alias: "code", replacement: "return 3;" },
+    { stage: "hook after a trusted rewrite", alias: "command", replacement: "return 3;" },
+  ])(
+    "handles a $stage changing the $alias code-mode exec alias to $replacement",
+    async ({ stage, alias, replacement, otherReplacement }) => {
+      resetGlobalHookRunner();
+      const pairedReplacement =
+        otherReplacement === undefined
+          ? {}
+          : { [alias === "code" ? "command" : "code"]: otherReplacement };
+      const registry = createEmptyPluginRegistry();
+      registry.trustedToolPolicies =
+        stage === "hook"
+          ? []
+          : [
+              {
+                pluginId: "trusted-plugin",
+                pluginName: "Trusted Plugin",
+                source: "test",
+                policy: {
+                  id: "code-mode-rewrite-policy",
+                  description: "rewrite both code-mode exec aliases",
+                  evaluate: () => ({ params: { code: "return 2;", command: "return 2;" } }),
+                },
+              },
+            ];
+      if (stage === "trusted policy") {
+        registry.trustedToolPolicies.push({
+          pluginId: "trusted-plugin",
+          pluginName: "Trusted Plugin",
+          source: "test",
+          policy: {
+            id: "code-mode-invalidate-policy",
+            description: "invalidate one code-mode exec alias",
+            evaluate: (eventValue) => ({
+              params: {
+                ...eventValue.params,
+                [alias]: replacement,
+                ...pairedReplacement,
+              },
+            }),
+          },
+        });
+      } else {
+        addTestHook({
+          registry,
+          pluginId: "normal-plugin",
+          hookName: "before_tool_call",
+          handler: (async () => ({
+            params: {
+              [alias]: replacement,
+              ...pairedReplacement,
+            },
+          })) as PluginHookRegistration["handler"],
+        });
+      }
+      setActivePluginRegistry(registry);
+      initializeGlobalHookRunner(registry);
+      try {
+        const codeModeConfig: OpenClawConfig = { tools: { codeMode: true } };
+        const catalogRef = createToolSearchCatalogRef();
+        registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
+        const execTool = createCodeModeTools({
+          config: codeModeConfig,
+          runtimeConfig: codeModeConfig,
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "session-main",
+          runId: "run-main",
+          abortSignal: new AbortController().signal,
+          catalogRef,
+          executeTool: async () => {
+            throw new Error("catalog tool execution should not be reached");
+          },
+        }).find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
+        if (!execTool) {
+          throw new Error("missing code-mode exec tool");
+        }
+        const [def] = splitSdkTools({
+          tools: [execTool],
+          sandboxEnabled: false,
+          toolHookContext: {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            sessionId: "session-main",
+            runId: "run-main",
+          },
+        }).customTools;
+        if (!def) {
+          throw new Error("missing custom tool definition");
+        }
+
+        const result = await def.execute(
+          `call-code-mode-${stage}-${alias}-${replacement === "return 3;" ? "rewrite" : "invalidate"}`,
+          { code: "return 1;", command: "return 1;" },
+          undefined,
+          undefined,
+          {} as Parameters<typeof def.execute>[4],
+        );
+
+        if (replacement === "return 3;") {
+          expect(result.details).toMatchObject({ status: "completed", value: 3 });
+        } else {
+          expect(result.details).toEqual({
+            status: "error",
+            tool: "exec",
+            error: "code or command must be a non-empty string.",
+          });
+        }
+      } finally {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        resetGlobalHookRunner();
+      }
+    },
+  );
 
   it("renormalizes trusted policy rewrites before code-mode exec hooks observe params", async () => {
     resetGlobalHookRunner();
