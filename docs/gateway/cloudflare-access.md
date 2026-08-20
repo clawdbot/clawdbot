@@ -117,7 +117,7 @@ worker route. Both enforce their own short-lived credentials — a join code is 
 with a TTL, rate-limited per IP, and answers failures with an opaque 404; worker admission
 carries its own expiring credential. This keeps join links paste-and-go, at the cost of
 making those two routes publicly reachable. Prefer the service token unless you need that
-onboarding flow. See [Nodes](/nodes#edge-routing).
+onboarding flow. See [Nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
 
 If you do neither, `openclaw connect` fails against the tunnel even though the browser
 works, because the join request is redirected to the Access login page.
