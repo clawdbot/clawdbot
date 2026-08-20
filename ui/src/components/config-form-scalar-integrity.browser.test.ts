@@ -369,6 +369,43 @@ describe("config form scalar integrity", () => {
     expect(input.getAttribute("aria-invalid")).toBe("true");
   });
 
+  it("commits explicit boolean branches without retyping numeric strings", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderTextInput({
+        schema: {
+          anyOf: [{ type: "string" }, { type: "number" }, { const: false }],
+        },
+        value: "500mb",
+        path: ["maxDiskBytes"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        inputType: "text",
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='text']"),
+      "string-number-boolean union input",
+    );
+
+    input.value = "false";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], false);
+
+    input.value = "true";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], "true");
+
+    const identifier = "1048113311314608148";
+    input.value = identifier;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], identifier);
+  });
+
   it("does not commit a clear while a number input holds partial numeric text", () => {
     // Browsers report value === "" with validity.badInput while the user is
     // mid-keystroke ("0." on the way to "0.5"). Committing undefined here

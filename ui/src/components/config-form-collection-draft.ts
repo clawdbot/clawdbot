@@ -94,6 +94,16 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
     const stringNumberUnion =
       variants.some((variant) => schemaType(variant) === "string") &&
       variants.some((variant) => ["number", "integer"].includes(schemaType(variant) ?? ""));
+    if (stringNumberUnion) {
+      try {
+        const parsed = JSON.parse(this.draftValue) as unknown;
+        if (typeof parsed === "string" && isSupportedConfigValueValid(schema, parsed)) {
+          return { ok: true, value: parsed };
+        }
+      } catch {
+        // Unquoted string-capable input is handled by the raw fallback below.
+      }
+    }
     if (
       (valueType === "string" || stringNumberUnion) &&
       isSupportedConfigValueValid(schema, this.draftValue)

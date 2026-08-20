@@ -98,7 +98,23 @@ function syncScalarInputIdentity(
 function coerceTextInputValue(
   value: string,
   schema: ConfigNodeRenderParams["schema"],
-): string | number {
+): string | number | boolean {
+  const trimmed = value.trim();
+  const booleanCandidate =
+    trimmed === "true" ? true : trimmed === "false" ? false : undefined;
+  if (
+    booleanCandidate !== undefined &&
+    (schema.anyOf ?? schema.oneOf ?? []).some(
+      (variant) =>
+        (schemaType(variant) === "boolean" ||
+          typeof variant.const === "boolean" ||
+          variant.enum?.some((entry) => typeof entry === "boolean")) &&
+        isSupportedConfigValueValid(variant, booleanCandidate),
+    ) &&
+    isSupportedConfigValueValid(schema, booleanCandidate)
+  ) {
+    return booleanCandidate;
+  }
   if (isSupportedConfigValueValid(schema, value)) {
     return value;
   }

@@ -208,8 +208,9 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       return variant ? coerceFormValues(value, variant) : value;
     }
     if (typeof value === "string") {
-      // Editors commit branch-validated types, and loaded values already passed
-      // Gateway validation. Preserve strings instead of guessing again here.
+      // Editors commit branch-validated types (including boolean literals),
+      // and loaded values already passed Gateway validation. Preserve strings
+      // instead of guessing again here.
       if (variants.some((variant) => schemaType(variant) === "string")) {
         return value;
       }
