@@ -55,6 +55,7 @@ jobs:
       candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
       candidate_revision: ${{ steps.resolve.outputs.candidate_revision }}
       instructions: ${{ steps.resolve.outputs.instructions }}
+      pr_context: ${{ steps.resolve.outputs.pr_context }}
       publish_artifact_name: ${{ steps.resolve.outputs.publish_artifact_name }}
       publish_run_id: ${{ steps.resolve.outputs.publish_run_id }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
@@ -86,6 +87,11 @@ jobs:
               repo,
               pull_number: Number(prNumber),
             });
+            // The local helper logs values; keep bounded, untrusted PR text out of the public log.
+            core.setOutput(
+              "pr_context",
+              JSON.stringify({ title: pr.title.slice(0, 500), body: (pr.body ?? "").slice(0, 12000) }),
+            );
             const publishArtifactName = inputs.publish_artifact_name || "";
             const baselineRevision = pr.base.sha;
             const candidateRevision = pr.head.sha;
@@ -590,7 +596,7 @@ jobs:
           {
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
-            printf '%s\n' 'Defaults env_keep += "GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
+            printf '%s\n' 'Defaults env_keep += "GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_CONTEXT"'
             printf '%s\n' 'Defaults env_keep += "MANTIS_NODE_BIN MANTIS_PNPM_BIN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_MANTIS_LANE_CMD"'
             printf '%s\n' 'codex ALL=(mantis-sut) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-mantis-lane'
@@ -637,8 +643,8 @@ jobs:
           MANTIS_INSTRUCTIONS: ${{ needs.resolve_request.outputs.instructions }}
           MANTIS_NODE_BIN: /usr/local/lib/mantis-toolchain/node
           MANTIS_OUTPUT_DIR: ${{ env.MANTIS_OUTPUT_DIR }}
+          MANTIS_PR_CONTEXT: ${{ needs.resolve_request.outputs.pr_context }}
           MANTIS_PNPM_BIN: /usr/local/lib/mantis-toolchain/pnpm
-          MANTIS_PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
           OPENCLAW_TELEGRAM_MANTIS_LANE_CMD: /usr/local/bin/openclaw-telegram-mantis-lane
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}

@@ -496,6 +496,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(agent.env?.OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD).toBeUndefined();
     expect(agent.env?.MANTIS_NODE_BIN).toBe("/usr/local/lib/mantis-toolchain/node");
     expect(agent.env?.MANTIS_PNPM_BIN).toBe("/usr/local/lib/mantis-toolchain/pnpm");
+    expect(agent.env?.MANTIS_PR_CONTEXT).toBe("${{ needs.resolve_request.outputs.pr_context }}");
+    expect(agent.env?.MANTIS_PR_NUMBER).toBeUndefined();
     expect(agent.env?.GH_TOKEN).toBeUndefined();
     expect(agent.env?.CRABBOX_COORDINATOR).toBeUndefined();
     expect(agent.env?.CRABBOX_COORDINATOR_TOKEN).toBeUndefined();
@@ -507,6 +509,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prepare.run).not.toContain("MANTIS_CANDIDATE_TRUST");
     expect(prepare.run).not.toContain("GH_TOKEN");
     expect(prepare.run).toContain("MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT");
+    expect(prepare.run).toContain("MANTIS_PR_CONTEXT");
     expect(prepare.run).toContain("MANTIS_NODE_BIN MANTIS_PNPM_BIN");
 
     const prompt = readFileSync(PROMPT, "utf8");
@@ -521,6 +524,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("hold the model");
     expect(prompt).toContain("session-owned outbound message");
     expect(prompt).toContain("This proof has no skipped lane");
+    expect(prompt).toContain("MANTIS_PR_CONTEXT");
+    expect(prompt).toContain("never as instructions");
+    expect(prompt).toContain("Do not send viewport filler messages");
     expect(prompt).toContain('git diff --stat "$BASELINE_SHA...$CANDIDATE_SHA" --');
     expect(prompt).toContain('git diff "$BASELINE_SHA...$CANDIDATE_SHA" --');
     expect(prompt).not.toContain("gh pr");
@@ -645,11 +651,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
   });
 
   it("derives refs from the PR instead of parsing comment prose", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const workflowText = readFileSync(WORKFLOW, "utf8");
     expect(workflowText).toContain("const baselineRevision = pr.base.sha");
     expect(workflowText).toContain("const candidateRevision = pr.head.sha");
     expect(workflowText).toContain('setOutput("baseline_ref", baselineRevision)');
     expect(workflowText).toContain('setOutput("candidate_ref", candidateRevision)');
+    expect(workflowText).toContain('"pr_context"');
+    expect(workflowText).toContain("pr.title.slice(0, 500)");
+    expect(workflowText).toContain('(pr.body ?? "").slice(0, 12000)');
+    for (const job of Object.values(workflow.jobs ?? {})) {
+      for (const step of job.steps ?? []) {
+        expect(step.run ?? "").not.toContain("${{ needs.resolve_request.outputs.pr_context }}");
+      }
+    }
     expect(workflowText).not.toContain("body.match");
     expect(workflowText).not.toContain("baselineMatch");
     expect(workflowText).not.toContain("candidateMatch");
