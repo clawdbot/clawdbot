@@ -17,7 +17,6 @@ import {
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
 
-const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
@@ -175,7 +174,5 @@ export function buildQaForcedRuntimeEnvPatch(params: {
     providerBaseUrl,
     modelCatalogPath: params.codexModelCatalogPath,
   });
-  patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
-  patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
   return patch;
 }
