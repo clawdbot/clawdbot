@@ -24,6 +24,11 @@ import {
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import {
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  resolveTsdownBuildPlan,
+  type MemoryLimitParams,
+} from "./tsdown-build.mts";
 
 const nodeBin = process.execPath;
 type BuildCachePath = {
@@ -535,6 +540,21 @@ export function resolveBuildAllEnvironment(
   });
 }
 
+export function resolveBuildAllTsdownPlan(
+  profile: string,
+  env: NodeJS.ProcessEnv,
+  params: Omit<MemoryLimitParams, "env"> = {},
+) {
+  if (profile !== "full") {
+    return { env, heapShortfall: null };
+  }
+  const plan = resolveTsdownBuildPlan({ ...params, env });
+  return {
+    env: { ...env, [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(plan.maxOldSpaceMb) },
+    heapShortfall: plan.heapShortfall,
+  };
+}
+
 function resolveStepEnv(step: BuildAllStep, env: NodeJS.ProcessEnv, platform: NodeJS.Platform) {
   const stepEnv = step.env ? Object.assign({}, env, step.env) : env;
   if (platform !== "win32" || !step.windowsNodeOptions) {
@@ -974,7 +994,16 @@ if (isMainModule()) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
-    const buildEnv = resolveBuildAllEnvironment();
+    const buildPlan = resolveBuildAllTsdownPlan(args.profile, resolveBuildAllEnvironment());
+    const heapShortfall = buildPlan.heapShortfall;
+    if (heapShortfall) {
+      if (heapShortfall.fatal) {
+        console.error(heapShortfall.message);
+        process.exit(1);
+      }
+      console.warn(heapShortfall.message);
+    }
+    const buildEnv = buildPlan.env;
     const timings: BuildAllTiming[] = [];
     let exitCode = 0;
     for (const step of resolveBuildAllSteps(args.profile, buildEnv)) {

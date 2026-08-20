@@ -31,6 +31,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const { createTempDir } = createScriptTestHarness();
 const NO_MEMORY_LIMIT = {
   cgroupMemoryLimitPaths: [],
+  constrainedMemoryBytes: 0,
   procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
 };
 

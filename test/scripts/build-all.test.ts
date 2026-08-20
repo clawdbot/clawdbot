@@ -19,6 +19,7 @@ import {
   resolveBuildAllStep,
   resolveBuildAllStepOnCacheHit,
   resolveBuildAllSteps,
+  resolveBuildAllTsdownPlan,
   restoreBuildAllStepCacheOutputs,
   writeBuildAllStepCacheStamp,
 } from "../../scripts/build-all.mts";
@@ -373,6 +374,26 @@ describe("resolveBuildAllSteps", () => {
     ]);
     expect(BUILD_ALL_PROFILES.ciArtifacts).toContain("tsdown");
     expect(BUILD_ALL_PROFILES.ciArtifacts).not.toContain("tsdown-unified");
+  });
+
+  it("admits the complete default build once and freezes its heap for every child", () => {
+    const fullPlan = resolveBuildAllTsdownPlan(
+      "full",
+      {},
+      {
+        cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+      },
+    );
+
+    expect(fullPlan.heapShortfall?.fatal).toBe(true);
+    expect(fullPlan.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("3328");
+
+    const partialEnv = { MARKER: "unchanged" };
+    expect(
+      resolveBuildAllTsdownPlan("qaRuntime", partialEnv, {
+        cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+      }),
+    ).toEqual({ env: partialEnv, heapShortfall: null });
   });
 
   it("rebuilds runtime JS while reusing fresh declaration groups", () => {

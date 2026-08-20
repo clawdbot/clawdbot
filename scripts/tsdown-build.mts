@@ -45,7 +45,7 @@ const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
 const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
-const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
+export const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const DEFAULT_CGROUP_V2_MOUNT_PATH = "/sys/fs/cgroup";
 const DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH = "/sys/fs/cgroup/memory";
@@ -75,7 +75,7 @@ type OutputRootParams = {
   roots?: string[];
 };
 
-type MemoryLimitParams = {
+export type MemoryLimitParams = {
   cgroupMemoryLimitBytes?: number;
   cgroupMemoryLimitPaths?: string[];
   constrainedMemoryBytes?: number;
@@ -1032,11 +1032,13 @@ function isFullTsdownBuildPlan(args: string[]) {
 }
 
 export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
+  const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
   const preparedParams = {
     ...params,
-    resolvedMaxOldSpaceMb: resolveTsdownMaxOldSpaceMb(params),
+    resolvedMaxOldSpaceMb: maxOldSpaceMb,
   };
   return {
+    maxOldSpaceMb,
     heapShortfall: isFullTsdownBuildPlan(params.args ?? [])
       ? describeInsufficientTsdownHeap(preparedParams)
       : null,
