@@ -18,8 +18,11 @@ import {
   resolveActiveReplyOperationForSessionId,
   resolveActiveReplyRunSessionId,
   resolveReplyBackendQueueMessageMismatch,
+  resolveReplyRunMessageInjectionForSessionId,
   resolveReplyRunPhaseForSessionId,
   supersedeReplyRunByRunId,
+  type ReplyBackendQueueMessageOptions,
+  type ReplyMessageInjectionRejectionReason,
   type ReplyOperation,
   type ReplyOperationPhase,
   waitForReplyOperationOwnerSettlement,
@@ -112,9 +115,75 @@ type PreparedEmbeddedAgentQueueMessage =
       outcome: EmbeddedAgentQueueMessageOutcome;
     }
   | {
-      kind: "embedded_run";
+      kind: "embedded_run" | "reply_run";
       queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
     };
+
+/**
+ * Reply-run rejections projected onto the embedded injector's reason union.
+ *
+ * Exhaustive by construction so a new reply rejection reason cannot silently
+ * fall through as an unrelated failure. `not_running` collapses to
+ * `no_active_run` because that is what a caller saw for a reply-backed session
+ * before this path existed; every other mapping preserves the distinction the
+ * reply registry drew.
+ */
+const REPLY_RUN_INJECTION_FAILURE_REASONS: Readonly<
+  Record<ReplyMessageInjectionRejectionReason, EmbeddedAgentQueueFailureReason>
+> = {
+  no_active_run: "no_active_run",
+  not_running: "no_active_run",
+  stale_run: "stale_run",
+  injection_unavailable: "not_streaming",
+  tool_authority_mismatch: "tool_authority_mismatch",
+  image_input_unsupported: "image_input_unsupported",
+  source_reply_delivery_mode_mismatch: "source_reply_delivery_mode_mismatch",
+  task_suggestion_delivery_mode_mismatch: "task_suggestion_delivery_mode_mismatch",
+  runtime_rejected: "runtime_rejected",
+};
+
+/** Drops routing-only fields so a backend never receives them as queue options. */
+function toReplyBackendQueueMessageOptions(
+  options?: EmbeddedAgentQueueMessageOptions,
+): ReplyBackendQueueMessageOptions | undefined {
+  if (!options) {
+    return undefined;
+  }
+  const { allowReplyRunInjection: _allowReplyRunInjection, ...backendOptions } = options;
+  return backendOptions;
+}
+
+/**
+ * Serves a session whose reply operation is live but which owns no embedded
+ * handle. Without this, an activity gate that treats reply-backed runs as active
+ * (isEmbeddedAgentRunActive) commits to a steer that the injector then refuses as
+ * `no_active_run`, reporting an emphatically busy parent as idle.
+ */
+function prepareReplyRunQueueMessage(
+  sessionId: string,
+  options?: EmbeddedAgentQueueMessageOptions,
+): PreparedEmbeddedAgentQueueMessage {
+  const resolved = resolveReplyRunMessageInjectionForSessionId(
+    sessionId,
+    toReplyBackendQueueMessageOptions(options),
+  );
+  if ("injection" in resolved) {
+    const { injection } = resolved;
+    return {
+      kind: "reply_run",
+      queueMessage: (text, queueOptions) =>
+        injection.queueMessage(text, toReplyBackendQueueMessageOptions(queueOptions)),
+    };
+  }
+  const reason = REPLY_RUN_INJECTION_FAILURE_REASONS[resolved.reason];
+  diag.debug(
+    `queue message failed: sessionId=${sessionId} owner=reply_run reason=${reason} replyReason=${resolved.reason}`,
+  );
+  return {
+    kind: "complete",
+    outcome: createQueueFailureOutcome(sessionId, reason, resolved.errorMessage),
+  };
+}
 
 function createQueueFailureOutcome(
   sessionId: string,
@@ -357,7 +426,7 @@ export function queueEmbeddedAgentMessageWithOutcome(
   return {
     queued: true,
     sessionId,
-    target: "embedded_run",
+    target: prepared.kind,
     gatewayHealth: "live",
     enqueuedAtMs: Date.now(),
   };
@@ -535,6 +604,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
     return prepared.outcome;
   }
   const enqueuedAtMs = Date.now();
+  const target = prepared.kind;
   try {
     const queueResult = await prepared.queueMessage(text, options ?? { steeringMode: "all" });
     if (queueResult?.transcriptCommit === "unconfirmed") {
@@ -545,7 +615,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
       return {
         queued: true,
         sessionId,
-        target: "embedded_run",
+        target,
         gatewayHealth: "live",
         transcriptCommit: "unconfirmed",
         errorMessage: queueResult.errorMessage,
@@ -557,7 +627,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
     return {
       queued: true,
       sessionId,
-      target: "embedded_run",
+      target,
       gatewayHealth: "live",
       ...(deliveredAtMs !== undefined ? { deliveredAtMs } : {}),
       enqueuedAtMs,
@@ -582,6 +652,10 @@ function prepareEmbeddedAgentQueueMessage(
       diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
       return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
     }
+    // Stays ahead of the reply-run path on purpose: a reply backend exposes no
+    // supportsTranscriptCommitWait capability, so a caller demanding transcript
+    // commitment must be told it is unsupported and drop the flag before the
+    // best-effort reply injection can honestly report acceptance.
     if (options?.waitForTranscriptCommit === true) {
       diag.debug(
         `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
@@ -590,6 +664,9 @@ function prepareEmbeddedAgentQueueMessage(
         kind: "complete",
         outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
       };
+    }
+    if (options?.allowReplyRunInjection === true) {
+      return prepareReplyRunQueueMessage(sessionId, options);
     }
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "no_active_run") };
   }

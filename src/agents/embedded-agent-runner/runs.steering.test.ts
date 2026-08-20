@@ -306,6 +306,185 @@ describe("embedded-agent active-run steering", () => {
     }
   });
 
+  // A session with a live reply operation and no embedded handle is exactly the
+  // state isEmbeddedAgentRunActive reports as active. Serving it here is what
+  // keeps the activity gate and the injector from disagreeing.
+  it("injects into a reply-backed run when the caller opts in", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:cli-opt-in-steer",
+      sessionId: "session-cli-opt-in-steer",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "cli",
+      runId: "cli-run-1",
+      cancel: () => {},
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    try {
+      const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+        "session-cli-opt-in-steer",
+        "child done",
+        { steeringMode: "all", debounceMs: 0, allowReplyRunInjection: true },
+      );
+
+      expect(outcome).toMatchObject({
+        queued: true,
+        sessionId: "session-cli-opt-in-steer",
+        target: "reply_run",
+        gatewayHealth: "live",
+      });
+      // The routing flag is ours, not the backend's.
+      expect(queueMessage).toHaveBeenCalledWith("child done", {
+        steeringMode: "all",
+        debounceMs: 0,
+      });
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it("refuses reply-backed steering for callers that did not opt in", () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:cli-no-opt-in-steer",
+      sessionId: "session-cli-no-opt-in-steer",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "cli",
+      cancel: () => {},
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    try {
+      expect(
+        queueEmbeddedAgentMessageWithOutcome("session-cli-no-opt-in-steer", "child done"),
+      ).toEqual({
+        queued: false,
+        sessionId: "session-cli-no-opt-in-steer",
+        reason: "no_active_run",
+        gatewayHealth: "live",
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it("reports transcript-commit wait as unsupported before consulting a reply-backed run", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:cli-transcript-steer",
+      sessionId: "session-cli-transcript-steer",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "cli",
+      cancel: () => {},
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    try {
+      // A reply backend has no supportsTranscriptCommitWait capability, so a
+      // caller demanding transcript commitment must be refused and retry
+      // best-effort rather than be told the injection was committed.
+      expect(
+        await queueEmbeddedAgentMessageWithOutcomeAsync(
+          "session-cli-transcript-steer",
+          "child done",
+          { steeringMode: "all", waitForTranscriptCommit: true, allowReplyRunInjection: true },
+        ),
+      ).toEqual({
+        queued: false,
+        sessionId: "session-cli-transcript-steer",
+        reason: "transcript_commit_wait_unsupported",
+        gatewayHealth: "live",
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+
+      const bestEffort = await queueEmbeddedAgentMessageWithOutcomeAsync(
+        "session-cli-transcript-steer",
+        "child done",
+        { steeringMode: "all", allowReplyRunInjection: true },
+      );
+      expect(bestEffort).toMatchObject({ queued: true, target: "reply_run" });
+      // No transcript commitment was proven, so no deliveredAtMs may be claimed.
+      expect(bestEffort).not.toHaveProperty("deliveredAtMs");
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it("surfaces reply-backed injection rejections instead of collapsing them to no_active_run", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const mismatched = createReplyOperation({
+      sessionKey: "agent:main:cli-mismatch-steer",
+      sessionId: "session-cli-mismatch-steer",
+      resetTriggered: false,
+    });
+    mismatched.attachBackend({
+      kind: "cli",
+      cancel: () => {},
+      isStreaming: () => true,
+      queueMessage,
+    });
+    mismatched.setPhase("running");
+
+    const unavailable = createReplyOperation({
+      sessionKey: "agent:main:cli-unavailable-steer",
+      sessionId: "session-cli-unavailable-steer",
+      resetTriggered: false,
+    });
+    // No queueMessage and no messageInjection: the backend cannot take input.
+    unavailable.attachBackend({ kind: "cli", cancel: () => {}, isStreaming: () => true });
+    unavailable.setPhase("running");
+
+    try {
+      expect(
+        await queueEmbeddedAgentMessageWithOutcomeAsync(
+          "session-cli-mismatch-steer",
+          "child done",
+          {
+            steeringMode: "all",
+            sourceReplyDeliveryMode: "message_tool_only",
+            allowReplyRunInjection: true,
+          },
+        ),
+      ).toEqual({
+        queued: false,
+        sessionId: "session-cli-mismatch-steer",
+        reason: "source_reply_delivery_mode_mismatch",
+        gatewayHealth: "live",
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+
+      expect(
+        await queueEmbeddedAgentMessageWithOutcomeAsync(
+          "session-cli-unavailable-steer",
+          "child done",
+          { steeringMode: "all", allowReplyRunInjection: true },
+        ),
+      ).toEqual({
+        queued: false,
+        sessionId: "session-cli-unavailable-steer",
+        reason: "not_streaming",
+        gatewayHealth: "live",
+      });
+    } finally {
+      mismatched.complete();
+      unavailable.complete();
+    }
+  });
+
   it("accepts embedded steering with fresh or missing diagnostic evidence", () => {
     const freshQueueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(

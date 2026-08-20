@@ -153,7 +153,7 @@ export type ReplyRunInterruptTarget = {
   readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
-type ReplyMessageInjectionRejectionReason =
+export type ReplyMessageInjectionRejectionReason =
   | "no_active_run"
   | "not_running"
   | "stale_run"
@@ -174,7 +174,7 @@ export type ReplyMessageInjectionAttempt = {
   outcome: Promise<ReplyMessageInjectionOutcome>;
 };
 
-type ReplyBackendQueueMessageMismatch =
+export type ReplyBackendQueueMessageMismatch =
   | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"

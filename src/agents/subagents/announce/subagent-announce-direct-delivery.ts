@@ -257,6 +257,11 @@ export async function sendSubagentAnnounceDirectly(params: {
           ? { debounceMs: requesterQueueSettings.debounceMs }
           : {}),
         waitForTranscriptCommit: true,
+        // This gate reads requesterActivity.isActive, which is the union of
+        // embedded and reply-backed runs. The injector must cover the same union
+        // or a reply-backed-only requester is refused as no_active_run after the
+        // gate already committed to steering it.
+        allowReplyRunInjection: true,
       };
       // Ordinary subagent and harness handoffs must wait through compaction
       // and transcript retries before treating an active wake as failed.

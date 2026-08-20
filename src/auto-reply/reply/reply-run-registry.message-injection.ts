@@ -4,11 +4,13 @@ import {
   replyMessageInjectionTargetOperation,
   type ReplyBackendHandle,
   type ReplyBackendMessageInjection,
+  type ReplyBackendQueueMessageMismatch,
   type ReplyBackendQueueMessageOptions,
   type ReplyBackendQueueMessageResult,
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionOptions,
   type ReplyMessageInjectionOutcome,
+  type ReplyMessageInjectionRejectionReason,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
 } from "./reply-run-registry.contracts.js";
@@ -16,21 +18,8 @@ import {
   getAttachedBackend,
   isReplyRunEvidenceStale,
   replyRunState,
+  resolveReplyRunForCurrentSessionId,
 } from "./reply-run-registry.state.js";
-
-type ReplyBackendQueueMessageMismatch =
-  | "tool_authority_mismatch"
-  | "image_input_unsupported"
-  | "source_reply_delivery_mode_mismatch"
-  | "task_suggestion_delivery_mode_mismatch";
-
-type ReplyMessageInjectionRejectionReason =
-  | "no_active_run"
-  | "not_running"
-  | "stale_run"
-  | "injection_unavailable"
-  | ReplyBackendQueueMessageMismatch
-  | "runtime_rejected";
 
 export function resolveReplyBackendQueueMessageMismatch(
   backend: Pick<
@@ -155,6 +144,40 @@ export function resolveReplyMessageInjectionRejection(params: {
     };
   }
   return mismatch ? { reason: mismatch, backend } : { backend, injection };
+}
+
+export type ReplyRunMessageInjectionResolution =
+  | { injection: ReplyBackendMessageInjection; runId?: string }
+  | { reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
+
+/**
+ * Session-id-keyed view of {@link resolveReplyMessageInjectionRejection}.
+ *
+ * The embedded-run injector is keyed by session id, but reply ownership is keyed
+ * by session key. This resolves the one active operation for a session id so the
+ * embedded injector can serve a reply-backed run whose session has no embedded
+ * handle. It deliberately does NOT record activity or adopt the message the way
+ * {@link beginReplyMessageInjectionTarget} does: internal wakeups are not user
+ * input, so they must not re-arm a wedged run's staleness window.
+ */
+export function resolveReplyRunMessageInjectionForSessionId(
+  sessionId: string,
+  options?: ReplyBackendQueueMessageOptions,
+): ReplyRunMessageInjectionResolution {
+  const resolved = resolveReplyMessageInjectionRejection({
+    operation: resolveReplyRunForCurrentSessionId(sessionId),
+    options,
+  });
+  if (!("injection" in resolved)) {
+    return {
+      reason: resolved.reason,
+      ...(resolved.errorMessage ? { errorMessage: resolved.errorMessage } : {}),
+    };
+  }
+  return {
+    injection: resolved.injection,
+    ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
+  };
 }
 
 export function beginReplyMessageInjectionTarget(

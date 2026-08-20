@@ -11,15 +11,18 @@ export type {
   ReplyBackendQueueMessageOptions,
   ReplyBackendQueueMessageResult,
   ReplyMessageInjectionAttempt,
+  ReplyMessageInjectionRejectionReason,
   ReplyMessageInjectionTarget,
   ReplyOperation,
   ReplyOperationPhase,
   ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
+export type { ReplyRunMessageInjectionResolution } from "./reply-run-registry.message-injection.js";
 export {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
   resolveReplyBackendQueueMessageMismatch,
+  resolveReplyRunMessageInjectionForSessionId,
 } from "./reply-run-registry.message-injection.js";
 export {
   createReplyOperation,

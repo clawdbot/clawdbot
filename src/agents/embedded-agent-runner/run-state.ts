@@ -65,7 +65,18 @@ export type EmbeddedAgentQueueHandle = {
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
 };
 
-export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
+export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions & {
+  /**
+   * Opt in to injecting into a reply-backed run when the session has no embedded
+   * handle. Routing only: stripped before the backend sees its options.
+   *
+   * Off by default because a caller that opts in must be able to live with a
+   * best-effort acceptance — a reply backend has no `supportsTranscriptCommitWait`
+   * capability, so this path is reached only after the caller drops
+   * `waitForTranscriptCommit`.
+   */
+  allowReplyRunInjection?: boolean;
+};
 
 export type EmbeddedAgentQueueMessageResult = ReplyBackendQueueMessageResult;
 

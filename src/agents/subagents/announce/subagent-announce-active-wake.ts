@@ -230,6 +230,9 @@ export async function maybeSteerSubagentAnnounce(params: {
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
+    // Same union as the isActive gate above (resolveRequesterSessionActivity),
+    // so the steer fallback can reach a reply-backed-only requester too.
+    allowReplyRunInjection: true,
   };
   const queueOutcome = await resolveActiveWakeWithRetries(
     sessionId,
