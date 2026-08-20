@@ -191,7 +191,6 @@ export async function buildModelsProviderData(
     cfg,
     agentId,
     view: browseView,
-    preparedOnly: browseView !== "all" && !requiresFullDiscovery,
     loadCatalog: async ({ readOnly }) => {
       if (!readOnly && requiresFullDiscovery) {
         const prepared = await loadSnapshot(true);

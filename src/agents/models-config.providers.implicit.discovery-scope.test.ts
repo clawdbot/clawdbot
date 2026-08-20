@@ -210,7 +210,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   });
 
   it("rethrows non-timeout live catalog discovery failures", async () => {
-    mocks.runProviderCatalog.mockRejectedValueOnce(new Error("provider hook failed"));
+    mocks.runProviderCatalog.mockRejectedValueOnce(
+      new Error("provider catalog timed out after provider-defined retry window"),
+    );
     const outcomes: Array<{ provider: string; status: string }> = [];
 
     await expect(
@@ -222,7 +224,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         providerDiscoveryProviderIds: ["openai"],
         onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
       }),
-    ).rejects.toThrow("provider hook failed");
+    ).rejects.toThrow("provider catalog timed out after provider-defined retry window");
 
     expect(outcomes).toEqual([]);
   });
