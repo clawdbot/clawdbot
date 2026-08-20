@@ -101,6 +101,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
           skillFilter: params.skillFilter,
           skillOverrides: params.skillOverrides,
           eligibility: params.eligibility,
+          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
         })
       : undefined;
     const snapshot = buildSkillSnapshot(params.workspaceDir, {
