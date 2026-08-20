@@ -356,7 +356,7 @@ describe("Telegram Desktop recorder remote contract", () => {
     ).rejects.toThrow("permission denied while trying to connect to the Docker daemon socket");
   });
 
-  it("keeps the SSH failure text after exhausting login attempts", async () => {
+  it("stops retrying one desktop after two accepted tokens leave it on the QR screen", async () => {
     const root = makeTempDir();
     let qrAttempt = 0;
     const runCommand = vi.fn<RunCommand>(async () => ({
@@ -404,10 +404,12 @@ describe("Telegram Desktop recorder remote contract", () => {
         },
         operations,
       ),
-    ).rejects.toThrow("permission denied reading the remote Docker socket");
+    ).rejects.toThrow(
+      "Telegram server accepted 2 login tokens, but Telegram Desktop stayed on the QR screen: permission denied reading the remote Docker socket",
+    );
     expect(
       runCommand.mock.calls.filter(([call]) => call.args.includes("terminate-session")),
-    ).toHaveLength(6);
+    ).toHaveLength(2);
   });
 
   it("hides the prepared chat before recording starts", async () => {

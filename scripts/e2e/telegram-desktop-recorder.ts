@@ -322,6 +322,7 @@ async function authorizeDesktop(params: {
   // instead of asserting the client stayed on the login screen.
   let lastFailure: unknown;
   let lastLink = "";
+  let acceptedWithoutTransition = 0;
   for (let attempt = 1; attempt <= 6; attempt += 1) {
     let link: string;
     try {
@@ -359,6 +360,7 @@ async function authorizeDesktop(params: {
       return desktopSessionId;
     }
     lastFailure = mainWindow.error;
+    acceptedWithoutTransition += 1;
     await terminateDesktopSession({
       cwd: params.cwd,
       desktopSessionId,
@@ -366,6 +368,12 @@ async function authorizeDesktop(params: {
       userDriver: params.userDriver,
     });
     params.onDesktopSessionChanged(undefined);
+    // Observed 2026-08 in run 32330408746: one client ignored six server-accepted
+    // tokens for 138s; a fresh container accepted its first. A second accepted token
+    // distinguishes that wedged client from the ordinary rotating-token race.
+    if (acceptedWithoutTransition >= 2) {
+      break;
+    }
   }
   const detail = lastFailure === undefined ? "" : `: ${coerceErrorMessage(lastFailure)}`;
   // The screen the QR read could not decode is the only thing that separates "Telegram
@@ -386,10 +394,11 @@ async function authorizeDesktop(params: {
   } catch (error) {
     evidence = ` Login screen could not be fetched: ${coerceErrorMessage(error)}`;
   }
-  throw new Error(
-    `Telegram Desktop did not leave the login screen after 6 attempts${detail}.${evidence}`,
-    { cause: lastFailure },
-  );
+  const failure =
+    acceptedWithoutTransition >= 2
+      ? `Telegram server accepted ${acceptedWithoutTransition} login tokens, but Telegram Desktop stayed on the QR screen`
+      : "Telegram Desktop did not leave the login screen after 6 attempts";
+  throw new Error(`${failure}${detail}.${evidence}`, { cause: lastFailure });
 }
 
 // The recorder runs as a different user than the agent that drives it, so an output dir
