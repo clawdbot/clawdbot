@@ -1454,7 +1454,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
-    expect(subscription.getLastToolError()?.actionFingerprint).toContain("path=/tmp/a.txt");
+    expect(subscription.getLastToolError()).toBeUndefined();
 
     emitToolRun({
       emit,
@@ -1468,7 +1468,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
-  it("keeps unresolved mutating failure when same tool succeeds on a different target", () => {
+  it("clears a failure when the same tool succeeds on a different target", () => {
     const { emit, subscription } = createToolErrorHarness("run-tools-3");
 
     emitToolRun({
@@ -1489,31 +1489,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
-    expect(subscription.getLastToolError()?.toolName).toBe("write");
-  });
-
-  it("keeps unresolved session_status model-mutation failure on later read-only status success", () => {
-    const { emit, subscription } = createToolErrorHarness("run-tools-4");
-
-    emitToolRun({
-      emit,
-      toolName: "session_status",
-      toolCallId: "s1",
-      args: { sessionKey: "agent:main:main", model: "openai/gpt-4o" },
-      isError: true,
-      result: { error: "Model not allowed." },
-    });
-
-    emitToolRun({
-      emit,
-      toolName: "session_status",
-      toolCallId: "s2",
-      args: { sessionKey: "agent:main:main" },
-      isError: false,
-      result: { ok: true },
-    });
-
-    expect(subscription.getLastToolError()?.toolName).toBe("session_status");
+    expect(subscription.getLastToolError()).toBeUndefined();
   });
 
   it("emits lifecycle:error event on agent_end when last assistant message was an error", () => {

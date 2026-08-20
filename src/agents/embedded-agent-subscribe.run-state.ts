@@ -23,7 +23,6 @@ export function createEmbeddedAgentSubscribeState(
     itemCompletedCount: 0,
     assistantTurnCount: 0,
     lastToolError: undefined,
-    lastToolRecovery: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
     includeReasoning: reasoningMode === "on" && canShowReasoning,

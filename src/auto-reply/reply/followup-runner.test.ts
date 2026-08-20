@@ -130,7 +130,6 @@ function createRejectedExecution(order: string[] = []): FollowupExecutionResult 
       drain: vi.fn(async () => {
         order.push("progress-drained");
       }),
-      visibleToolErrorObserved: () => false,
     },
   } as FollowupExecutionResult;
 }

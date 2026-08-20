@@ -2261,13 +2261,10 @@ describe("createCopilotToolBridge tool conversion", () => {
     });
 
     expect(lastToolError).toMatchObject({
-      ownerKey: '["memory-lancedb","memory_forget"]',
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining('owner=["memory-lancedb","memory_forget"]|args='),
     });
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toContain("I forgot");
-    expect(payloads[1]).toMatchObject({ isError: true });
     expect(JSON.stringify(result)).not.toContain("memory-lancedb");
     expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
 
@@ -2302,7 +2299,6 @@ describe("createCopilotToolBridge tool conversion", () => {
     await runSdkTool(sdkTool, { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" });
 
     expect(lastToolError).toMatchObject({
-      ownerKey: '["memory-lancedb","memory_forget"]',
       mutatingAction: false,
     });
     expect(tool.execute).not.toHaveBeenCalled();

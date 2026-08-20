@@ -660,7 +660,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       }),
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
-    getLastToolRecovery: () => (state.lastToolRecovery ? { ...state.lastToolRecovery } : undefined),
     getUsageTotals,
     getLastAssistantUsage,
     getCompactionCount: () => compactionCount,

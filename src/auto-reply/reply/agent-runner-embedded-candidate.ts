@@ -264,8 +264,7 @@ export async function runEmbeddedFallbackCandidate(params: {
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
         })(),
         toolProgressDetail: turn.toolProgressDetail,
-        suppressToolErrorWarnings:
-          turn.opts?.shouldSuppressToolErrorWarnings ?? turn.opts?.suppressToolErrorWarnings,
+        suppressToolErrorWarnings: turn.opts?.suppressToolErrorWarnings,
         toolsAllow: turn.opts?.toolsAllow,
         disableTools: turn.opts?.disableTools,
         toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(

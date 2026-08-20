@@ -216,12 +216,10 @@ export function buildToolCallSummary(
     commandBearing: isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
-    ...(mutation.ownerKey ? { ownerKey: mutation.ownerKey } : {}),
+    ...(ownerKey ? { ownerKey } : {}),
     replaySafe:
       (instanceReplaySafe && !mutation.mutatingAction) ||
       (structuredReplaySafe && mutation.replaySafe),
-    actionFingerprint: mutation.actionFingerprint,
-    fileTarget: mutation.fileTarget,
   };
 }
 
