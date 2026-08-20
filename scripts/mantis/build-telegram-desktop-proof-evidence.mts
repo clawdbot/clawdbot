@@ -201,9 +201,19 @@ function laneStatus(lane: LoadedLane) {
 
 function requireLaneAttestation(lane: LoadedLane, expectedLane: LaneName, expectedSha: string) {
   const attestation = lane.summary.sutAttestation;
-  if (attestation?.lane !== expectedLane || attestation?.sha !== expectedSha) {
-    throw new Error(`SUT attestation mismatch for ${expectedLane}.`);
+  if (attestation?.lane === expectedLane && attestation.sha === expectedSha) {
+    return;
   }
+  if (
+    lane.status === "fail" &&
+    lane.summary.status === "infra-error" &&
+    attestation == null &&
+    Object.keys(lane.summary.artifacts ?? {}).length === 0 &&
+    lane.summary.report === undefined
+  ) {
+    return;
+  }
+  throw new Error(`SUT attestation mismatch for ${expectedLane}.`);
 }
 
 function laneArtifactEntries(statuses: Record<LaneName, "pass" | "fail">): EvidenceArtifact[] {

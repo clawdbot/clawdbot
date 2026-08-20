@@ -828,11 +828,20 @@ jobs:
             sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
               '.schemaVersion == 2 and
                (.status == "complete" or .status == "blocked" or .status == "aborted" or .status == "infra-error") and
-               .lane == $lane and .sutAttestation.lane == $lane and .sutAttestation.sha == $sha and
+               .lane == $lane and
+               (if .sutAttestation == null then
+                  .status == "infra-error" and .artifacts == {} and .sendCount == 0 and
+                  .providerRequests == [] and .observation.events == [] and
+                  .observation.truncated == false and
+                  (.invocations | length) == 1 and .invocations[0].command == "start"
+                else
+                  .sutAttestation.lane == $lane and .sutAttestation.sha == $sha
+                end) and
                (.invocations | type == "array") and (.observation.events | type == "array") and
                (.providerRequests | type == "array") and
                (if .status == "complete" or .status == "blocked" then (.cleanupErrors | length) == 0 else true end)' \
               "$verdict" >/dev/null
+            pre_attestation_failure="$(sudo jq -r '.sutAttestation == null' "$verdict")"
             fact_status="$(sudo jq -r '.status' "$verdict")"
             if [[ "$lane_status" == "pass" ]]; then
               [[ "$fact_status" == "complete" ]]
@@ -849,9 +858,11 @@ jobs:
                 (.artifacts.trimmedVideoCropped.bytes > 10000)
               ' "$verdict" >/dev/null
             fi
-            sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
-              '.lane == $lane and .sha == $sha' \
-              "$runtime_parent/attestations/$lane.json" >/dev/null
+            if [[ "$pre_attestation_failure" != "true" ]]; then
+              sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
+                '.lane == $lane and .sha == $sha' \
+                "$runtime_parent/attestations/$lane.json" >/dev/null
+            fi
             sudo mkdir -p "$trusted_output/$lane"
             sudo install -m 0644 "$SESSION_ROOT/published/$lane/mantis-lane-facts.json" \
               "$trusted_output/$lane/mantis-lane-facts.json"
@@ -880,9 +891,8 @@ jobs:
             sudo jq --arg root "$trusted_output" --arg lane "$lane" '
               {
                 artifacts: (.artifacts | with_entries(.value = ($root + "/" + $lane + "/" + .value.file))),
-                status: (if .status == "complete" then "pass" else .status end),
-                sutAttestation
-              }
+                status: (if .status == "complete" then "pass" else .status end)
+              } + (if .sutAttestation == null then {} else {sutAttestation} end)
             ' "$verdict" | sudo tee "$trusted_output/$lane/telegram-user-crabbox-session-summary.json" >/dev/null
             sudo install -m 0644 "$trusted_output/$lane/telegram-user-crabbox-session-summary.json" \
               "$trusted_output/$lane/summary.json"

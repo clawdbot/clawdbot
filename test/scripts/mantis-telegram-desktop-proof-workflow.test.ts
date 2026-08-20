@@ -888,6 +888,12 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(laneScript).not.toContain("readRecorderSession");
     expect(laneScript).toContain('"artifacts"');
     expect(laneScript).toContain('status: status === "complete" ? "pass" : "fail"');
+    expect(workflow).toContain("if .sutAttestation == null then");
+    expect(workflow).toContain('.status == "infra-error" and .artifacts == {} and .sendCount == 0');
+    expect(workflow).toContain(
+      '(.invocations | length) == 1 and .invocations[0].command == "start"',
+    );
+    expect(workflow).toContain('if [[ "$pre_attestation_failure" != "true" ]]');
     expect(laneScript).toContain('requiredEnv("OPENCLAW_MANTIS_CREDENTIAL_FILE")');
     expect(wrapper).toContain("network create --driver bridge");
     expect(wrapper).toContain("--cap-drop ALL");
