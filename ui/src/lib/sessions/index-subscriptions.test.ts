@@ -184,11 +184,12 @@ describe("createSessionCapability message subscriptions", () => {
       timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
       requestSent: true,
     });
+    const recoveryError = new Error("subscription recovery unavailable");
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.messages.subscribe") {
         throw timeout;
       }
-      throw new Error("subscription recovery unavailable");
+      throw recoveryError;
     });
     const forceReconnect = vi.fn();
     const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
@@ -202,8 +203,8 @@ describe("createSessionCapability message subscriptions", () => {
     ]);
 
     expect(failures).toEqual([
-      { status: "rejected", reason: expect.any(AggregateError) },
-      { status: "rejected", reason: expect.any(AggregateError) },
+      { status: "rejected", reason: expect.objectContaining({ cause: recoveryError }) },
+      { status: "rejected", reason: expect.objectContaining({ cause: recoveryError }) },
     ]);
     expect(request).toHaveBeenNthCalledWith(
       2,

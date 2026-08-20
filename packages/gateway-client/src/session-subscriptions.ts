@@ -349,10 +349,12 @@ export class GatewaySessionMessageSubscriptionCoordinator {
           );
         } catch (recoveryError) {
           if (!this.#retired) {
-            throw new AggregateError(
+            const subscriptionRecoveryFailure = new AggregateError(
               [error, recoveryError],
               "session message subscription recovery failed",
+              { cause: recoveryError },
             );
+            throw subscriptionRecoveryFailure;
           }
         }
         throw error;
