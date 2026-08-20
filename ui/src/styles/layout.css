@@ -3397,12 +3397,12 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-nav__head {
   position: absolute;
   z-index: 1;
-  top: 0;
+  top: 5px;
   right: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 2px 8px 2px 12px;
+  padding: 0 8px 0 12px;
 }
 
 .sidebar-nav__head-action {
@@ -3435,6 +3435,10 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   .sidebar-nav__head-action {
     opacity: 1;
   }
+
+  .sidebar-home-session-states {
+    transform: translateX(-25px);
+  }
 }
 
 .sidebar-nav__head-action:hover,
@@ -3463,6 +3467,14 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  transition: transform var(--duration-fast) ease;
+}
+
+/* The Pages editor shares Home's row. Move every trailing state together so
+   its hover/focus hitbox never covers progress, warning, or draft status. */
+.sidebar-nav:hover .sidebar-home-session-states,
+.sidebar-nav:focus-within .sidebar-home-session-states {
+  transform: translateX(-25px);
 }
 
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
