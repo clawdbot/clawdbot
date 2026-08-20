@@ -241,7 +241,7 @@ export function hasPersistedIMessageEcho(params: {
       mediaKey &&
       !hasConflictingMessageIds &&
       resolveIMessageEchoMediaKey(entry.media) === mediaKey &&
-      (!entry.pending || params.includePendingText)
+      (entry.pending ? params.includePendingText : Boolean(entry.messageId))
     ) {
       return true;
     }

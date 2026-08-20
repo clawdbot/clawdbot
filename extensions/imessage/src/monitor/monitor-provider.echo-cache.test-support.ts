@@ -167,6 +167,24 @@ describe("iMessage sent-message echo cache", () => {
     ).toBe(true);
   });
 
+  it("does not let an id-less completed media echo suppress later inbound attachments", () => {
+    const scope = "acct:imessage:+1555";
+    const media = { contentType: "image/jpeg", kind: "image" as const };
+    rememberPersistedIMessageEcho({ scope, media });
+
+    expect(
+      hasPersistedIMessageEcho({
+        scope,
+        media: { contentType: "image/heic", kind: "image" },
+        messageId: "guid-user-photo",
+      }),
+    ).toBe(false);
+    expect(hasPersistedIMessageEcho({ scope, media })).toBe(false);
+
+    rememberPersistedIMessageEcho({ scope, media, messageId: "guid-agent-image" });
+    expect(hasPersistedIMessageEcho({ scope, media, messageId: "guid-agent-image" })).toBe(true);
+  });
+
   it("does not match persisted text when both message ids differ", () => {
     // Outbound "ok" recorded with its GUID; a user later sends "ok" with a new
     // GUID. Same text, conflicting ids — a NEW message, not a reconnect echo.
