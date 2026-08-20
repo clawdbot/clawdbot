@@ -2220,6 +2220,8 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
 });
 
 test("sessions.create accepts a node-host cwd without provisioning a Gateway worktree", async () => {
+  // A running suite server can read config before this test installs its per-case session store.
+  getRuntimeConfig();
   const { storePath } = await createSessionStoreDir();
   const created = await directSessionReq<{
     key: string;
@@ -2238,9 +2240,9 @@ test("sessions.create accepts a node-host cwd without provisioning a Gateway wor
   });
   expect(created.payload?.entry.spawnedCwd).toBeUndefined();
   const sessionKey = requireNonEmptyString(created.payload?.key, "node session key");
-  expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
-    "sessionDiffBaselineCapture",
-  );
+  const stored = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+  expect(stored).toMatchObject({ execHost: "node", execNode: "macbook" });
+  expect(stored).not.toHaveProperty("sessionDiffBaselineCapture");
 });
 
 test("sessions.create accepts a Windows node-host cwd from a non-Windows Gateway", async () => {
