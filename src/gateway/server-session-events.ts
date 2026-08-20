@@ -369,6 +369,7 @@ async function handleTranscriptUpdateBroadcast(
     message: update.message,
     ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
+    ...(update.runId ? { runId: update.runId } : {}),
     sessionSnapshot,
   });
   if (projected.payload) {

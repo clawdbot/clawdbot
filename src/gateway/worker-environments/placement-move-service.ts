@@ -8,6 +8,7 @@ import type {
   WorkerPlacementMoveIntent,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
+import { isCurrentPlacementTurnClaim, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
@@ -28,6 +29,7 @@ export type WorkerPlacementMoveBarrier = (
   params: MoveSessionIdentity & {
     authorize?: WorkerPlacementAuthorization;
     sourceDisposition: WorkerPlacementMoveSourceDisposition;
+    prepareAbandon?: () => { runId: string; assertCurrent: () => void } | undefined;
     begin: () => {
       intent: WorkerPlacementMoveIntent;
       placement: WorkerDrainingDispatchPlacement;
@@ -127,6 +129,28 @@ export function createWorkerPlacementMoveService(options: {
         agentId: request.agentId,
         sourceDisposition: request.abandonSource ? "abandon" : "reconcile",
         authorize,
+        ...(request.abandonSource
+          ? {
+              prepareAbandon: () => {
+                options.validateAbandonSource(request);
+                const placement = options.placements.get(request.sessionId);
+                const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
+                return claim
+                  ? {
+                      runId: claim.runId,
+                      assertCurrent: () => {
+                        const current = options.placements.get(request.sessionId);
+                        if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
+                          throw new Error(
+                            `Session ${request.sessionKey} abandonment worker turn changed; retry`,
+                          );
+                        }
+                      },
+                    }
+                  : undefined;
+              },
+            }
+          : {}),
         begin: () => {
           if (request.abandonSource) {
             options.validateAbandonSource(request);

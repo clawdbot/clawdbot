@@ -231,7 +231,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
   const scope = readChatSessionProjectionScope(state);
-  const publishVisibleFinal = (
+  const publishVisibleTerminal = (
     message: Record<string, unknown>,
     visibleMessages: unknown[],
     runId: string | null | undefined,
@@ -316,7 +316,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (payload.state === "final") {
       const finalMessage = normalizedFinalMessage;
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-        publishVisibleFinal(finalMessage, [...state.chatMessages, finalMessage], payload.runId);
+        publishVisibleTerminal(finalMessage, [...state.chatMessages, finalMessage], payload.runId);
         return null;
       }
       return "final";
@@ -395,7 +395,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
               boundary.afterBoundaryRunId,
             ),
           );
-          publishVisibleFinal(boundary.tailMessage, visibleMessages, terminalRunId, true);
+          publishVisibleTerminal(boundary.tailMessage, visibleMessages, terminalRunId, true);
         } else {
           publishChatSessionProjectionMessages(state, visibleMessages, { scope });
         }
@@ -414,7 +414,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           terminalRunId,
           terminalAfterBoundaryRunId,
         );
-        publishVisibleFinal(
+        publishVisibleTerminal(
           finalMessage,
           appendTerminalAssistantMessage(visibleMessages, liveFinal),
           terminalRunId,
@@ -438,13 +438,19 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
-      state.chatMessages = materializeVisibleStream({
+      const visibleMessages = materializeVisibleStream({
         replacementMessages: [normalizedMessage],
         includeCurrent: false,
       });
-      state.chatMessages = appendTerminalAssistantMessage(
-        state.chatMessages,
-        rememberLiveTerminalRun(normalizedMessage, terminalRunId, terminalAfterBoundaryRunId),
+      const liveAborted = rememberLiveTerminalRun(
+        normalizedMessage,
+        terminalRunId,
+        terminalAfterBoundaryRunId,
+      );
+      publishVisibleTerminal(
+        normalizedMessage,
+        appendTerminalAssistantMessage(visibleMessages, liveAborted),
+        terminalRunId,
       );
     } else {
       state.chatMessages = materializeVisibleStream();

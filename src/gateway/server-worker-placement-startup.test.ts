@@ -105,9 +105,55 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
   };
 });
 
+import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
-import { createWorkerPlacementMoveService } from "./worker-environments/placement-move-service.js";
+import {
+  resolveCanonicalSessionEntryFromStoreKeys,
+  resolveGatewaySessionStoreTargetWithStore,
+} from "./session-utils.js";
+import {
+  createWorkerPlacementMoveService,
+  type WorkerPlacementMoveBarrier,
+} from "./worker-environments/placement-move-service.js";
+
+function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string) {
+  const source = { generation: 4, environmentId: "environment-source", ownerEpoch: 2 };
+  return {
+    intent: {
+      operationId: "move:v1:test",
+      sessionId,
+      source,
+      target: { kind: "gateway" },
+      abandonSource: true,
+      lastError: null,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    },
+    placement: {
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      executionMode: "worker-turn",
+      state: "draining",
+      generation: 5,
+      environmentId: source.environmentId,
+      activeOwnerEpoch: source.ownerEpoch,
+      workspaceBaseManifestRef: "manifest-source",
+      remoteWorkspaceDir: "/worker/session-source",
+      workerBundleHash: "c".repeat(64),
+      lastTranscriptAckCursor: null,
+      lastLiveEventAckCursor: null,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+      turnClaim: null,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      stateChangedAtMs: 2,
+    },
+    joined: false,
+  } satisfies ReturnType<Parameters<WorkerPlacementMoveBarrier>[0]["begin"]>;
+}
 
 describe("worker placement startup health lifetime", () => {
   it("samples disk on schedule while reconciliation is stuck and drains both on stop", async () => {
@@ -538,6 +584,158 @@ describe("worker placement startup health lifetime", () => {
 
 describe("worker placement move destination", () => {
   it.each([
+    { name: "persists the claimed partial", claimRunId: "worker-run", outcome: "success" },
+    { name: "fails before the durable move", claimRunId: "worker-run", outcome: "persist-error" },
+    {
+      name: "rejects a changed source after persistence",
+      claimRunId: "worker-run",
+      outcome: "stale-source",
+    },
+    {
+      name: "rejects authority revoked during persistence",
+      claimRunId: "worker-run",
+      outcome: "revoked-authority",
+    },
+    {
+      name: "rejects a worker claim rotated during persistence",
+      claimRunId: "worker-run",
+      outcome: "rotated-claim",
+    },
+    { name: "does not persist an unclaimed turn", claimRunId: undefined, outcome: "success" },
+  ] as const)("abandonment $name before interrupting its owner", async (scenario) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionId = "session-move-source";
+      const sessionKey = "agent:main:move-source";
+      const target = resolveGatewaySessionStoreTargetWithStore({
+        cfg: {},
+        key: sessionKey,
+        agentId: "main",
+        clone: false,
+      });
+      const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
+      const observed: string[] = [];
+      const admission = await beginSessionWorkAdmission({
+        scope: target.storePath,
+        identities,
+        assertAllowed: () => undefined,
+        onInterrupt: () => observed.push("interrupt"),
+      });
+      let sourceChanged = false;
+      const persistAbandonedPartial = vi.fn(async () => {
+        observed.push("persist");
+        if (scenario.outcome === "persist-error") {
+          throw new Error("transcript append failed");
+        }
+        sourceChanged = scenario.outcome === "stale-source";
+      });
+      const revokeSessionAuthority = vi.fn(() => observed.push("revoke"));
+      const barrier = createGatewayWorkerPlacementMoveBarrier({
+        placements: { waitForTurnClaimRelease: vi.fn() },
+        loadSessionRuntime: async () => ({
+          managedWorktrees: { findLiveByOwner: () => undefined },
+          resolveCanonicalSessionEntryFromStoreKeys,
+          resolveGatewaySessionStoreTargetWithStore,
+        }),
+        revokeSessionAuthority,
+        persistAbandonedPartial,
+      });
+      const begin = vi.fn(() => {
+        observed.push("begin");
+        if (sourceChanged) {
+          throw new Error("placement source changed");
+        }
+        return createMoveBarrierBeginFixture(sessionId, sessionKey);
+      });
+      const operation = barrier({
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        sourceDisposition: "abandon",
+        authorize: () => {
+          observed.push("authorize");
+          if (scenario.outcome === "revoked-authority" && observed.includes("persist")) {
+            throw new Error("session access revoked");
+          }
+        },
+        prepareAbandon: () => {
+          observed.push("validate-source");
+          return scenario.claimRunId
+            ? {
+                runId: scenario.claimRunId,
+                assertCurrent: () => {
+                  observed.push("validate-claim");
+                  if (scenario.outcome === "rotated-claim") {
+                    throw new Error("worker turn changed");
+                  }
+                },
+              }
+            : undefined;
+        },
+        begin,
+      });
+
+      try {
+        if (scenario.outcome === "persist-error") {
+          await expect(operation).rejects.toThrow("transcript append failed");
+          expect(begin).not.toHaveBeenCalled();
+          expect(revokeSessionAuthority).not.toHaveBeenCalled();
+          expect(observed).toEqual(["authorize", "validate-source", "persist"]);
+        } else if (scenario.outcome === "stale-source") {
+          await expect(operation).rejects.toThrow("placement source changed");
+          expect(revokeSessionAuthority).not.toHaveBeenCalled();
+          expect(observed).toEqual([
+            "authorize",
+            "validate-source",
+            "persist",
+            "authorize",
+            "validate-claim",
+            "begin",
+          ]);
+        } else if (scenario.outcome === "revoked-authority") {
+          await expect(operation).rejects.toThrow("session access revoked");
+          expect(begin).not.toHaveBeenCalled();
+          expect(revokeSessionAuthority).not.toHaveBeenCalled();
+          expect(observed).toEqual(["authorize", "validate-source", "persist", "authorize"]);
+        } else if (scenario.outcome === "rotated-claim") {
+          await expect(operation).rejects.toThrow("worker turn changed");
+          expect(begin).not.toHaveBeenCalled();
+          expect(revokeSessionAuthority).not.toHaveBeenCalled();
+          expect(observed).toEqual([
+            "authorize",
+            "validate-source",
+            "persist",
+            "authorize",
+            "validate-claim",
+          ]);
+        } else {
+          await expect(operation).resolves.toMatchObject({ placement: { state: "draining" } });
+          expect(observed).toEqual([
+            "authorize",
+            "validate-source",
+            ...(scenario.claimRunId ? ["persist", "authorize", "validate-claim"] : []),
+            "begin",
+            "revoke",
+            "interrupt",
+          ]);
+        }
+        if (scenario.claimRunId) {
+          expect(persistAbandonedPartial).toHaveBeenCalledWith({
+            sessionId,
+            sessionKey,
+            agentId: "main",
+            runId: scenario.claimRunId,
+          });
+        } else {
+          expect(persistAbandonedPartial).not.toHaveBeenCalled();
+        }
+      } finally {
+        admission.release();
+        await operation.catch(() => undefined);
+      }
+    });
+  });
+
+  it.each([
     { sourceDisposition: "abandon" as const, settlesImmediately: true },
     { sourceDisposition: "reconcile" as const, settlesImmediately: false },
   ])(
@@ -601,18 +799,14 @@ describe("worker placement move destination", () => {
         if (!dispatchOptions) {
           throw new Error("worker placement move barrier was not captured");
         }
-        const begin = vi.fn(() => ({
-          intent: {},
-          placement: { state: "draining" },
-          joined: false,
-        }));
+        const begin = vi.fn(() => createMoveBarrierBeginFixture(sessionId, sessionKey));
         const operation = dispatchOptions.runMoveBarrier({
           sessionId,
           sessionKey,
           agentId: "main",
           sourceDisposition,
           begin,
-        } as never);
+        });
         let settled = false;
         void operation.then(
           () => {

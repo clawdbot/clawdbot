@@ -16,8 +16,22 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
   placements: Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">;
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
+  persistAbandonedPartial?: (request: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+    runId: string;
+  }) => Promise<void>;
 }): WorkerPlacementMoveBarrier {
-  return async ({ sessionId, sessionKey, agentId, sourceDisposition, authorize, begin }) => {
+  return async ({
+    sessionId,
+    sessionKey,
+    agentId,
+    sourceDisposition,
+    authorize,
+    prepareAbandon,
+    begin,
+  }) => {
     const sessionRuntime = await params.loadSessionRuntime();
     const target = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
       cfg: getRuntimeConfig(),
@@ -41,6 +55,19 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
           errorMessage: `Session ${sessionKey} changed before placement move. Retry.`,
         });
         authorize?.();
+        const abandoned = sourceDisposition === "abandon" ? prepareAbandon?.() : undefined;
+        if (abandoned && params.persistAbandonedPartial) {
+          // Commit the exact live partial before durable drain clears its run owner;
+          // begin revalidates source ownership after asynchronous transcript I/O.
+          await params.persistAbandonedPartial({
+            sessionId,
+            sessionKey,
+            agentId,
+            runId: abandoned.runId,
+          });
+          authorize?.();
+          abandoned.assertCurrent();
+        }
         begun = begin();
         clearSessionQueues(lifecycleIdentities);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });

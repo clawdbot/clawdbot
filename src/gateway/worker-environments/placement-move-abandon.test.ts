@@ -74,7 +74,15 @@ describe("offline device placement abandonment", () => {
 
   it("forces the exact offline device local and closes its stale turn claim", async () => {
     let afterMoveBegin = () => {};
-    const harness = createHarness(placements, { afterMoveBegin: () => afterMoveBegin() });
+    const beforeMoveBegin = vi.fn(async (abandoned: { runId: string } | undefined) => {
+      expect(abandoned).toMatchObject({ runId: "offline-device-run" });
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active" });
+      expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+    });
+    const harness = createHarness(placements, {
+      beforeMoveBegin,
+      afterMoveBegin: () => afterMoveBegin(),
+    });
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
@@ -139,6 +147,87 @@ describe("offline device placement abandonment", () => {
       }),
     ).toBe(false);
     expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(beforeMoveBegin).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: "partial persistence fails", outcome: "persist-error" },
+    { name: "the source changes during persistence", outcome: "stale-source" },
+    { name: "the worker claim rotates during persistence", outcome: "rotated-claim" },
+  ] as const)("keeps abandonment uncommitted when $name", async (scenario) => {
+    const beforeMoveBegin = vi.fn(async (abandoned: { runId: string } | undefined) => {
+      expect(abandoned).toMatchObject({ runId: "offline-device-run" });
+      if (scenario.outcome === "persist-error") {
+        throw new Error("partial transcript persistence failed");
+      }
+      placements.releaseTurn({
+        sessionId: source.sessionId,
+        claimId: "offline-device-claim",
+        runId: "offline-device-run",
+        placementGeneration: source.generation,
+        owner: {
+          kind: "worker",
+          environmentId: source.environmentId,
+          ownerEpoch: source.activeOwnerEpoch,
+        },
+      });
+      if (scenario.outcome === "rotated-claim") {
+        placements.claimTurn({
+          sessionId: source.sessionId,
+          sessionKey: source.sessionKey,
+          agentId: source.agentId,
+          claimId: "replacement-device-claim",
+          runId: "replacement-device-run",
+          owner: {
+            kind: "worker",
+            environmentId: source.environmentId,
+            ownerEpoch: source.activeOwnerEpoch,
+          },
+        });
+      } else {
+        placements.startDrain({
+          sessionId: source.sessionId,
+          environmentId: source.environmentId,
+          ownerEpoch: source.activeOwnerEpoch,
+          expectedGeneration: source.generation,
+        });
+      }
+    });
+    const harness = createHarness(placements, { beforeMoveBegin });
+    const source = await harness.service.dispatch(REQUEST);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(source);
+    placements.claimTurn({
+      sessionId: source.sessionId,
+      sessionKey: source.sessionKey,
+      agentId: source.agentId,
+      claimId: "offline-device-claim",
+      runId: "offline-device-run",
+      owner: {
+        kind: "worker",
+        environmentId: source.environmentId,
+        ownerEpoch: source.activeOwnerEpoch,
+      },
+    });
+
+    await expect(harness.service.move(requestFor(source))).rejects.toThrow(
+      scenario.outcome === "persist-error"
+        ? "partial transcript persistence failed"
+        : "abandonment worker turn changed; retry",
+    );
+
+    expect(beforeMoveBegin).toHaveBeenCalledOnce();
+    expect(placements.getPlacementMove(source.sessionId)).toBeUndefined();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(placements.get(source.sessionId)?.state).toBe(
+      scenario.outcome === "stale-source" ? "draining" : "active",
+    );
+    if (scenario.outcome === "rotated-claim") {
+      expect(placements.get(source.sessionId)?.turnClaim).toMatchObject({
+        claimId: "replacement-device-claim",
+        runId: "replacement-device-run",
+      });
+    }
   });
 
   it("keeps an ordinary offline move reconcile-first", async () => {

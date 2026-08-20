@@ -6,6 +6,7 @@ import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   installMockGateway,
+  requireString,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -257,6 +258,230 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
+
+  it.each([{ attempt: 1 }, { attempt: 2 }, { attempt: 3 }, { attempt: 4 }, { attempt: 5 }])(
+    "preserves an abandoned partial and one owned local final in both panes (attempt $attempt)",
+    async ({ attempt }) => {
+      const context = await suite.newBrowserContext(contextOptions());
+      const page = await context.newPage();
+      const sessionKey = "agent:main:placement-move";
+      const abandonedRunId = `abandoned-placement-run-${attempt}`;
+      const partialText = `Gateway-synced device response ${attempt}.`;
+      const finalText = `Exactly one local Gateway response ${attempt}.`;
+      const session = {
+        ...activeSession(),
+        activeRunIds: [abandonedRunId],
+        placement: {
+          ...activeSession().placement,
+          runner: { kind: "device", status: "offline" },
+        },
+        status: "running",
+      };
+      const originalPrompt = {
+        __openclaw: {
+          id: `placement-user-${attempt}`,
+          idempotencyKey: `${abandonedRunId}:user`,
+          seq: 1,
+        },
+        content: [{ text: `Continue interrupted work ${attempt}.`, type: "text" }],
+        role: "user",
+        timestamp: 1_700_000_000_000,
+      };
+      const abandonedPartialIdentity = {
+        id: `placement-aborted-assistant-${attempt}`,
+        seq: 2,
+      };
+      const abandonedPartial = {
+        __openclaw: abandonedPartialIdentity,
+        content: [{ text: partialText, type: "text" }],
+        idempotencyKey: `${abandonedRunId}:assistant`,
+        openclawAbort: { aborted: true, origin: "placement-abandon", runId: abandonedRunId },
+        role: "assistant",
+        stopReason: "stop",
+        timestamp: 1_700_000_000_001,
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.startup", "sessions.move"],
+        historyMessages: [originalPrompt],
+        inFlightRun: { runId: abandonedRunId, text: partialText },
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([session]),
+        },
+        operatorScopes: ["operator.read", "operator.write"],
+        sessionInfo: session,
+        sessionKey,
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.getByRole("button", { name: "Device offline" }).waitFor();
+        await page.getByRole("button", { name: "Open split view" }).click();
+        const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+        await expect.poll(() => panes.count()).toBe(2);
+        for (const pane of await panes.all()) {
+          await expect.poll(() => pane.getByText(partialText, { exact: true }).count()).toBe(1);
+        }
+
+        await gateway.deferNext("sessions.move");
+        await panes.last().getByRole("button", { name: "Device offline" }).click();
+        await panes.last().getByText("Continue on Gateway…", { exact: true }).click();
+        await page.getByRole("button", { name: "Continue on Gateway", exact: true }).click();
+        const move = await gateway.waitForRequest("sessions.move");
+        expect(move.params).toEqual({
+          abandonSource: true,
+          agentId: "main",
+          expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+          key: sessionKey,
+          target: { kind: "gateway" },
+        });
+
+        await gateway.setHistoryMessages([originalPrompt, abandonedPartial]);
+        await gateway.emitGatewayEvent("session.message", {
+          activeRunIds: [abandonedRunId],
+          hasActiveRun: true,
+          message: abandonedPartial,
+          messageId: abandonedPartialIdentity.id,
+          messageSeq: abandonedPartialIdentity.seq,
+          runId: abandonedRunId,
+          session,
+          sessionKey,
+        });
+        await gateway.emitGatewayEvent("chat", {
+          message: {
+            content: [{ text: partialText, type: "text" }],
+            role: "assistant",
+            timestamp: 1_700_000_000_001,
+          },
+          runId: abandonedRunId,
+          seq: 8,
+          sessionKey,
+          state: "aborted",
+          stopReason: "restart",
+        });
+        const localSession = {
+          ...session,
+          activeRunIds: [],
+          hasActiveRun: false,
+          placement: {
+            createdAtMs: 1,
+            generation: 9,
+            state: "local",
+            stateChangedAtMs: 3,
+            updatedAtMs: 3,
+          },
+          status: "done",
+          updatedAt: Date.now(),
+        };
+        await gateway.setMethodResponse("sessions.list", chatSessionListResponse([localSession]));
+        await gateway.resolveDeferred("sessions.move", {
+          key: sessionKey,
+          ok: true,
+          placement: localSession.placement,
+          sessionId: "session-placement-move",
+        });
+        await expect
+          .poll(() => page.getByRole("button", { name: "Device offline" }).count())
+          .toBe(0);
+        for (const pane of await panes.all()) {
+          await expect.poll(() => pane.getByText(partialText, { exact: true }).count()).toBe(1);
+          await expect
+            .poll(() => pane.locator(`[data-entry-id="${abandonedPartialIdentity.id}"]`).count())
+            .toBe(1);
+        }
+
+        const composer = panes.last().locator(".agent-chat__composer-combobox textarea");
+        await composer.fill(`Resume locally ${attempt}.`);
+        await panes.last().getByRole("button", { name: "Send message" }).click();
+        const send = await gateway.waitForRequest("chat.send");
+        const localRunId = requireString(
+          (send.params as { idempotencyKey?: unknown }).idempotencyKey,
+          "local placement run id",
+        );
+        const localUser = {
+          __openclaw: {
+            id: `placement-local-user-${attempt}`,
+            idempotencyKey: `${localRunId}:user`,
+            seq: 3,
+          },
+          content: [{ text: `Resume locally ${attempt}.`, type: "text" }],
+          role: "user",
+          timestamp: 1_700_000_000_002,
+        };
+        const localFinalIdentity = { id: `placement-local-final-${attempt}`, seq: 4 };
+        const localFinal = {
+          __openclaw: localFinalIdentity,
+          content: [{ text: finalText, type: "text" }],
+          role: "assistant",
+          timestamp: 1_700_000_000_003,
+        };
+        await gateway.emitGatewayEvent("chat", {
+          deltaText: finalText,
+          message: {
+            content: [{ text: finalText, type: "text" }],
+            role: "assistant",
+            timestamp: 1_700_000_000_003,
+          },
+          runId: localRunId,
+          seq: 5,
+          sessionKey,
+          state: "delta",
+        });
+        for (const pane of await panes.all()) {
+          await pane.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
+        }
+        await gateway.setHistoryMessages([originalPrompt, abandonedPartial, localUser, localFinal]);
+        await gateway.emitGatewayEvent("session.message", {
+          activeRunIds: null,
+          hasActiveRun: true,
+          message: localFinal,
+          messageId: localFinalIdentity.id,
+          messageSeq: localFinalIdentity.seq,
+          runId: localRunId,
+          session: {
+            ...localSession,
+            activeRunIds: null,
+            hasActiveRun: true,
+            status: "running",
+          },
+          sessionKey,
+        });
+        for (const pane of await panes.all()) {
+          await expect
+            .poll(() => pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count())
+            .toBe(1);
+        }
+
+        await gateway.emitChatFinal({ runId: localRunId, sessionKey, text: finalText });
+        for (const pane of await panes.all()) {
+          await expect.poll(() => pane.getByText(partialText, { exact: true }).count()).toBe(1);
+          await expect.poll(() => pane.getByText(finalText, { exact: true }).count()).toBe(1);
+          expect(await pane.locator(".chat-duplicate-count").count()).toBe(0);
+          expect(await pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count()).toBe(1);
+        }
+        await capture(page, `08-split-abandoned-partial-local-final-${attempt}.png`);
+
+        await gateway.setMethodResponse("chat.history", {
+          inFlightRun: null,
+          messages: [originalPrompt, abandonedPartial, localUser, localFinal],
+          sessionId: "session-placement-move",
+          sessionInfo: localSession,
+          thinkingLevel: null,
+        });
+        await page.reload();
+        const reloadedPanes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+        await expect.poll(() => reloadedPanes.count()).toBe(2);
+        for (const pane of await reloadedPanes.all()) {
+          await expect.poll(() => pane.getByText(partialText, { exact: true }).count()).toBe(1);
+          await expect.poll(() => pane.getByText(finalText, { exact: true }).count()).toBe(1);
+          expect(await pane.locator(".chat-duplicate-count").count()).toBe(0);
+          expect(await pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count()).toBe(1);
+        }
+        await capture(page, `09-reloaded-split-abandoned-partial-local-final-${attempt}.png`);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
 
   it("keeps a rapid offline publication over stale deferred startup hydration", async () => {
     const context = await suite.newBrowserContext(contextOptions());

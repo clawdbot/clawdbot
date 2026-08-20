@@ -58,6 +58,7 @@ export function createHarness(
     publishAcceptedWorkspace?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["publishAcceptedWorkspace"];
+    beforeMoveBegin?: (abandoned: { runId: string } | undefined) => Promise<void>;
     afterMoveBegin?: () => void;
     deviceRunnerAvailable?: boolean;
   } = {},
@@ -386,8 +387,14 @@ export function createHarness(
       fail("activation");
       return activate();
     },
-    runMoveBarrier: async ({ authorize, begin }) => {
+    runMoveBarrier: async ({ authorize, prepareAbandon, begin }) => {
       authorize?.();
+      const abandoned = prepareAbandon?.();
+      if (options.beforeMoveBegin) {
+        await options.beforeMoveBegin(abandoned);
+        authorize?.();
+        abandoned?.assertCurrent();
+      }
       const begun = begin();
       options.afterMoveBegin?.();
       if (options.failMoveAfterBegin) {

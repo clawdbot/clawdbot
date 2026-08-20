@@ -3150,6 +3150,7 @@ describe("session accessor seam", () => {
       try {
         result = await persistSessionTranscriptTurn(scope, {
           ...(guarded ? { expectedSessionId: scope.sessionId } : {}),
+          runId: "run-ordered-turn",
           messages: [
             {
               message: {
@@ -3212,6 +3213,7 @@ describe("session accessor seam", () => {
           },
           messageId: result.messages[1]?.messageId,
           messageSeq: 3,
+          runId: "run-ordered-turn",
         },
       ]);
       expect(internalUpdates).toEqual([

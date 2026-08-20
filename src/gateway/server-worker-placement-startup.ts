@@ -73,6 +73,12 @@ export type GatewayWorkerPlacementRuntimeParams = {
   placements: WorkerSessionPlacementStore;
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
+  persistAbandonedPartial?: (request: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+    runId: string;
+  }) => Promise<void>;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
   warn: (message: string) => void;
 };
@@ -131,6 +137,7 @@ export function createGatewayWorkerPlacementRuntime(
   const runMoveBarrier = createGatewayWorkerPlacementMoveBarrier({
     placements: params.placements,
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+    persistAbandonedPartial: params.persistAbandonedPartial,
     revokeSessionAuthority: params.revokeSessionAuthority,
   });
   const resolveWorkspacePath = async ({
