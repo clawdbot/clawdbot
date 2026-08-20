@@ -29,7 +29,11 @@ describe("Docker E2E seed scripts", () => {
     expect(source).toContain('channel: "imessage"');
     expect(source).toContain('accountId: "imessage-default"');
     expect(source).toContain('"hello from seeded transcript"');
-    expect(source).toContain('media_type: "image/png"');
+    expect(source).toContain('content: "seeded image attachment"');
+    expect(source).toContain("__openclaw: {");
+    expect(source).toContain("media: [");
+    expect(source).toContain('url: "media://inbound/seeded-image.png"');
+    expect(source).toContain('contentType: "image/png"');
   });
 
   it("keeps cron MCP cleanup config wired to its probe server artifacts", () => {
