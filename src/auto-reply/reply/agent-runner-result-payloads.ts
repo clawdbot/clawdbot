@@ -377,7 +377,7 @@ export async function prepareReplyAgentPayloads(state: {
   const payloadResult = await buildFinalPayloads(payloadCandidates);
   let { replyPayloads } = payloadResult;
   didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
-  const hasTerminalReplyPayload = replyPayloads.some(
+  let hasTerminalReplyPayload = replyPayloads.some(
     (payload) =>
       !payload.isReasoning &&
       !payload.isCommentary &&
@@ -387,6 +387,7 @@ export async function prepareReplyAgentPayloads(state: {
   if (shouldDeliverTerminalFailure && !hasTerminalReplyPayload && terminalFailurePayload) {
     const terminalPayloadResult = await buildFinalPayloads([terminalFailurePayload]);
     replyPayloads = [...replyPayloads, ...terminalPayloadResult.replyPayloads];
+    hasTerminalReplyPayload = terminalPayloadResult.replyPayloads.length > 0;
     didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
   } else if (hasSpecificFallbackFailure && !hasTerminalReplyPayload) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
@@ -559,7 +560,7 @@ export async function prepareReplyAgentPayloads(state: {
     kind: "continue" as const,
     activeSessionEntry,
     completedSourceReplyDelivery,
-    completedTerminalSourceReplyDelivery: successfulTerminalDelivery,
+    completedTerminalSourceReplyDelivery: successfulTerminalDelivery || hasTerminalReplyPayload,
     didLogHeartbeatStrip,
     guardedReplyPayloads,
     responseUsageLine,
