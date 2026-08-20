@@ -1,5 +1,5 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
-import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
+import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 
 type WindowWithControlUiBasePath = Window &
@@ -7,22 +7,24 @@ type WindowWithControlUiBasePath = Window &
     [key: string]: unknown;
   };
 
-export function resolveControlUiBasePath(pathname: string): string {
-  if (typeof window !== "undefined") {
-    const windowValue = (window as WindowWithControlUiBasePath)[
-      "__OPENCLAW_CONTROL_UI_BASE_PATH__"
-    ];
-    if (typeof windowValue === "string") {
-      return normalizeBasePath(windowValue);
-    }
-  }
-  if (typeof document !== "undefined") {
-    const documentValue = document.documentElement.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
-    if (documentValue !== null) {
-      return normalizeBasePath(documentValue);
-    }
-  }
-  return inferBasePathFromPathname(pathname);
+function readControlUiResourceBasePath(): string | null {
+  const windowValue =
+    typeof window === "undefined"
+      ? undefined
+      : (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
+  const value =
+    typeof windowValue === "string"
+      ? windowValue
+      : typeof document === "undefined"
+        ? null
+        : document.documentElement.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
+  return value === null ? null : normalizeBasePath(value);
+}
+
+export function resolveControlUiPaths(pathname: string) {
+  const resourceBasePath = readControlUiResourceBasePath();
+  const basePath = resourceBasePath || inferBasePathFromPathname(pathname);
+  return [basePath, resourceBasePath ?? basePath] as const;
 }
 
 function readLocation(): RouteLocation {

@@ -1,4 +1,5 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
+import { placementTurnOwner } from "./placement-record.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -112,21 +113,13 @@ export async function forceAbandonWorkerEnvironment(params: {
           refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
         });
         const claim = placement.turnClaim;
-        if (
-          claim?.owner === "worker" &&
-          claim.claimId === pending.claimId &&
-          claim.runId === pending.runId
-        ) {
+        if (claim && claim.claimId === pending.claimId && claim.runId === pending.runId) {
           await placements.closeWorkerTurnToolState({
             sessionId: placement.sessionId,
             claimId: claim.claimId,
             runId: claim.runId,
             placementGeneration: claim.generation,
-            owner: {
-              kind: "worker",
-              environmentId: placement.environmentId,
-              ownerEpoch: claim.ownerEpoch,
-            },
+            owner: placementTurnOwner(placement),
           });
         }
         placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
@@ -155,18 +148,7 @@ export async function forceAbandonWorkerEnvironment(params: {
           claimId: current.turnClaim.claimId,
           runId: current.turnClaim.runId,
           placementGeneration: current.turnClaim.generation,
-          owner:
-            current.turnClaim.owner === "worker"
-              ? {
-                  kind: "worker",
-                  environmentId: current.environmentId,
-                  ownerEpoch: current.turnClaim.ownerEpoch,
-                }
-              : {
-                  kind: "local",
-                  environmentId: current.environmentId,
-                  ownerEpoch: current.activeOwnerEpoch,
-                },
+          owner: placementTurnOwner(current),
         });
       }
       current = placements.startReconcile({

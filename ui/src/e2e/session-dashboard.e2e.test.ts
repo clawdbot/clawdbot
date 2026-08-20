@@ -329,17 +329,41 @@ suite.define(() => {
     await page.locator(".board-session-surface").waitFor();
 
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
-    await preview.hover();
+    const previewBubble = page.locator(".chat-bubble", { has: preview });
+    const widgetActions = preview.locator("[data-widget-actions]");
+    await expect.poll(() => preview.locator(".chat-tool-card__preview-header").count()).toBe(0);
+    await expect
+      .poll(() =>
+        preview
+          .locator(".chat-tool-card__preview-panel")
+          .evaluate((element) => getComputedStyle(element).padding),
+      )
+      .toBe("0px");
+    await expect
+      .poll(() =>
+        preview.evaluate((element) => {
+          const actions = element.querySelector(".chat-tool-card__preview-actions");
+          return actions
+            ? actions.getBoundingClientRect().bottom <= element.getBoundingClientRect().top
+            : false;
+        }),
+      )
+      .toBe(true);
+    await expect
+      .poll(() =>
+        preview
+          .locator(".chat-tool-card__preview-frame")
+          .evaluate((element) => getComputedStyle(element).borderTopWidth),
+      )
+      .toBe("0px");
     if (recordProof) {
-      await preview.locator(".chat-tool-card__preview-header").hover();
+      await widgetActions.hover();
       await expect
-        .poll(() =>
-          preview
-            .locator("[data-widget-actions]")
-            .evaluate((element) => getComputedStyle(element).opacity),
-        )
+        .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
-      await preview.screenshot({ path: path.join(workboardPinProofDir, "01-pin-hover.png") });
+      await previewBubble.screenshot({
+        path: path.join(workboardPinProofDir, "01-pin-hover.png"),
+      });
     }
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
@@ -353,7 +377,7 @@ suite.define(() => {
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
     if (recordProof) {
-      await preview.screenshot({ path: path.join(workboardPinProofDir, "02-pinned.png") });
+      await previewBubble.screenshot({ path: path.join(workboardPinProofDir, "02-pinned.png") });
     }
     await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
 

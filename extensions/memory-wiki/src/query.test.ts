@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
+import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -159,7 +160,7 @@ function createMemoryManager(overrides?: {
     source: "memory" | "sessions";
     citation?: string;
   }>;
-  readResult?: { text: string; path: string; from?: number; lines?: number };
+  readResult?: MemoryReadResult;
 }) {
   return {
     search: vi.fn().mockResolvedValue(overrides?.searchResults ?? []),
@@ -183,7 +184,7 @@ describe("getMemoryWikiPage", () => {
       config: { search: { backend: "shared", corpus: "memory" } },
     });
     const manager = createMemoryManager({
-      readResult: { path: "MEMORY.md", text: "memory" },
+      readResult: { status: "ok", path: "MEMORY.md", text: "memory" },
     });
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
     for (const relPath of ["sessions/child-session.jsonl"]) {
@@ -1105,6 +1106,7 @@ describe("searchMemoryWiki", () => {
         },
       ],
       readResult: {
+        status: "ok",
         path: "sessions/secondary/private-session.jsonl",
         text: "other agent transcript",
       },
@@ -1702,6 +1704,7 @@ describe("getMemoryWikiPage", () => {
     });
     const manager = createMemoryManager({
       readResult: {
+        status: "ok",
         path: "MEMORY.md",
         text: "durable alpha memory\nline two",
       },
@@ -1754,7 +1757,7 @@ describe("getMemoryWikiPage", () => {
       config: { search: { backend: "shared", corpus: "memory" } },
     });
     const manager = createMemoryManager({
-      readResult: { path: "memory/missing.md", text: "" },
+      readResult: { status: "not_found", path: "memory/missing.md", text: "" },
     });
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
@@ -1773,7 +1776,7 @@ describe("getMemoryWikiPage", () => {
       config: { search: { backend: "shared", corpus: "memory" } },
     });
     const manager = createMemoryManager({
-      readResult: { path: "memory/empty.md", text: "", from: 1, lines: 0 },
+      readResult: { status: "ok", path: "memory/empty.md", text: "", from: 1, lines: 0 },
     });
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
@@ -1814,7 +1817,13 @@ describe("getMemoryWikiPage", () => {
       config: { search: { backend: "shared", corpus: "memory" } },
     });
     const manager = createMemoryManager({
-      readResult: { path: "memory/notes.md", text: "durable notes", from: 1, lines: 1 },
+      readResult: {
+        status: "ok",
+        path: "memory/notes.md",
+        text: "durable notes",
+        from: 1,
+        lines: 1,
+      },
     });
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
@@ -1863,6 +1872,7 @@ describe("getMemoryWikiPage", () => {
     });
     const manager = createMemoryManager({
       readResult: {
+        status: "ok",
         path: "MEMORY.md",
         text: "durable alpha memory",
       },
@@ -1896,6 +1906,7 @@ describe("getMemoryWikiPage", () => {
     mockSessionTranscriptStore();
     const manager = createMemoryManager({
       readResult: {
+        status: "ok",
         path: "sessions/main/child-session.jsonl",
         text: "own transcript content",
       },
@@ -1941,6 +1952,7 @@ describe("getMemoryWikiPage", () => {
     });
     const manager = createMemoryManager({
       readResult: {
+        status: "ok",
         path: "MEMORY.md",
         text: "secondary memory line",
       },
@@ -1982,6 +1994,7 @@ describe("getMemoryWikiPage", () => {
     );
     const manager = createMemoryManager({
       readResult: {
+        status: "ok",
         path: "MEMORY.md",
         text: "forced memory read",
       },

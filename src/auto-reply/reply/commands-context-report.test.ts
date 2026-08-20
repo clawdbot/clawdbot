@@ -30,6 +30,7 @@ function makeParams(
     storePath?: string;
     agentId?: string;
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
+    nativeUnverified?: boolean;
   },
 ): HandleCommandsParams {
   const totalTokensFresh = options?.totalTokensFresh ?? true;
@@ -68,16 +69,28 @@ function makeParams(
           nonProjectContextChars: 500,
         },
         ...(options?.currentTurn ? { currentTurn: options.currentTurn } : {}),
-        injectedWorkspaceFiles: [
-          {
-            name: "AGENTS.md",
-            path: "/tmp/workspace/AGENTS.md",
-            missing: false,
-            rawChars: truncated ? 200_000 : 10_000,
-            injectedChars: truncated ? 12_000 : 10_000,
-            truncated,
-          },
-        ],
+        injectedWorkspaceFiles: options?.nativeUnverified
+          ? [
+              {
+                name: "AGENTS.md",
+                path: "/tmp/workspace/AGENTS.md",
+                missing: false,
+                rawChars: 10_000,
+                injectionStatus: "native_unverified",
+                injectedChars: null,
+                truncated: null,
+              },
+            ]
+          : [
+              {
+                name: "AGENTS.md",
+                path: "/tmp/workspace/AGENTS.md",
+                missing: false,
+                rawChars: truncated ? 200_000 : 10_000,
+                injectedChars: truncated ? 12_000 : 10_000,
+                truncated,
+              },
+            ],
         skills: {
           promptChars: 10,
           entries: [{ name: "checks", blockChars: 10 }],
@@ -155,6 +168,21 @@ describe("buildContextReply", () => {
   it("does not show bootstrap truncation warning when there is no truncation", async () => {
     const result = await buildContextReply(makeParams("/context list", false));
     expect(result.text).not.toContain("Bootstrap context is over configured limits");
+  });
+
+  it("reports native Codex project docs as unverified without OpenClaw limit advice", async () => {
+    const result = await buildContextReply(
+      makeParams("/context detail", false, { nativeUnverified: true }),
+    );
+
+    expect(result.text).toContain(
+      "- AGENTS.md: NATIVE/UNVERIFIED | raw(local) 10,000 chars (~2,500 tok) | injected unknown",
+    );
+    expect(result.text).toContain("one aggregate root-to-CWD byte budget");
+    expect(result.text).toContain("later AGENTS.md files can be partial");
+    expect(result.text).toContain("read the relevant scoped file directly");
+    expect(result.text).not.toContain("Bootstrap context is over configured limits");
+    expect(result.text).not.toContain("agents.entries.*.bootstrapMaxChars");
   });
 
   it("falls back to config defaults when legacy reports are missing bootstrap limits", async () => {
@@ -352,6 +380,24 @@ describe("buildContextReply", () => {
       expect(png.subarray(12, 16).toString("ascii")).toBe("IHDR");
       expect(png.readUInt32BE(16)).toBe(1280);
       expect(png.readUInt32BE(20)).toBe(860);
+    } finally {
+      await unlink(result.mediaUrl);
+    }
+  });
+
+  it("omits unknown native project-document bytes from context maps", async () => {
+    const result = await buildContextReply(
+      makeParams("/context map", false, {
+        contextTokens: 8_192,
+        totalTokens: 900,
+        nativeUnverified: true,
+      }),
+    );
+    if (!result.mediaUrl) {
+      throw new Error("missing context map media path");
+    }
+    try {
+      expect(result.text).toContain("Tracked: 1,020 chars");
     } finally {
       await unlink(result.mediaUrl);
     }

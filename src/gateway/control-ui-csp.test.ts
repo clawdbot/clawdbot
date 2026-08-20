@@ -58,6 +58,7 @@ describe("buildControlUiCspHeader", () => {
       "data:",
       "blob:",
       "https://gravatar.com",
+      "https://avatars.githubusercontent.com",
     ]);
     expect(imgSrc?.split(" ")).not.toContain("https:");
   });

@@ -10,8 +10,11 @@ import type {
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
-import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import {
+  deriveLastRoutePolicy,
+  normalizeAccountId,
+  resolveThreadSessionKeys,
+} from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   expandTelegramAllowFromWithAccessGroups,
@@ -168,7 +171,7 @@ export const buildTelegramMessageContext = async ({
         isTopicMessage: msg.is_topic_message,
         getChat: getChatApi,
       });
-  const threadSpec = resolveTelegramMessageThreadSpec(msg, isForum);
+  const threadSpec = options?.threadSpec ?? resolveTelegramMessageThreadSpec(msg, isForum);
   const resolvedThreadId =
     threadSpec.scope === "forum" || threadSpec.scope === "direct-messages"
       ? threadSpec.id
@@ -247,8 +250,7 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
     chatId,
     isGroup,
-    resolvedThreadId,
-    replyThreadId,
+    threadSpec,
     senderId,
     topicAgentId: topicConfig?.agentId,
   });
@@ -472,6 +474,7 @@ export const buildTelegramMessageContext = async ({
     senderUsername,
     resolvedThreadId,
     replyThreadId,
+    threadSpec,
     originatingTo,
     routeAgentId: route.agentId,
     sessionKey,

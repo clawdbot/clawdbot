@@ -79,6 +79,7 @@ import {
   type SignalSender,
 } from "../identity.js";
 import { formatSignalMediaText } from "../media-text.js";
+import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
@@ -145,15 +146,17 @@ function resolveSignalStatusReactionTimestamp(params: {
 }
 
 type SignalStatusDispatchResult = {
-  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+  settledReceipt?: {
+    counts: Record<
+      "tool" | "block" | "final",
+      { failedBeforeSend: number; failedAfterSend: number }
+    >;
+  };
 };
 
 function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult): boolean {
-  const failedCounts = result.failedCounts;
-  return (
-    (failedCounts?.tool ?? 0) > 0 ||
-    (failedCounts?.block ?? 0) > 0 ||
-    (failedCounts?.final ?? 0) > 0
+  return Object.values(result.settledReceipt?.counts ?? {}).some(
+    (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
   );
 }
 
@@ -445,6 +448,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     };
     const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
       ...replyPipeline,
+      propagateRetryableNoSendFailure: true,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
     };
@@ -464,6 +468,34 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           replyContext: nativeReplyContext,
           chatType: entry.isGroup ? "group" : "direct",
         });
+      },
+      durable: (payload, info) => {
+        if (info.kind !== "final") {
+          return false;
+        }
+        const replyPlan = createSignalNativeReplyIdPlan({
+          payload,
+          replyContext: nativeReplyContext,
+          replyToMode,
+        });
+        const send: typeof sendMessageSignal = async (to, text, options) => {
+          entry.turnAdoptionLifecycle?.abortSignal.throwIfAborted();
+          deps.abortSignal?.throwIfAborted();
+          const result = await sendMessageSignal(to, text, {
+            ...options,
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            maxBytes: deps.mediaMaxBytes,
+            accountId: deps.accountId,
+          });
+          replyPlan.markSent();
+          return result;
+        };
+        return {
+          deps: { signal: send },
+          replyToId: replyPlan.peek() ?? null,
+          replyToMode,
+        };
       },
       onError: (err, info) => {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));

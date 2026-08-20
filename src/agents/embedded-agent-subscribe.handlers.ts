@@ -21,16 +21,14 @@ import {
   handleToolExecutionStart,
   handleToolExecutionUpdate,
 } from "./embedded-agent-subscribe.handlers.tools.js";
-import type {
-  EmbeddedAgentSubscribeContext,
-  EmbeddedAgentSubscribeEvent,
-} from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
+import type { AgentSessionEvent } from "./sessions/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
   const scheduleEvent = (
-    evt: EmbeddedAgentSubscribeEvent,
+    evt: AgentSessionEvent,
     handler: () => void | Promise<void>,
     options?: { detach?: boolean },
   ): void | Promise<void> => {
@@ -81,7 +79,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     }
   };
 
-  return (evt: EmbeddedAgentSubscribeEvent) => {
+  return (evt: AgentSessionEvent) => {
     switch (evt.type) {
       case "message_start":
         // Delivery from the previous message may still be queued, but usage is
@@ -146,13 +144,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return;
       case "compaction_end":
         void scheduleEvent(evt, () => {
-          handleCompactionEnd(ctx, {
-            type: "compaction_end",
-            reason: evt.reason,
-            willRetry: evt.willRetry,
-            result: evt.result,
-            aborted: evt.aborted,
-          });
+          handleCompactionEnd(ctx, evt);
         });
         return;
       case "agent_end":

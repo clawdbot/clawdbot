@@ -278,6 +278,7 @@ describe("withDurableMessageSendContext", () => {
             { platformMessageId: "platform-1", kind: "text", index: 0 },
             { platformMessageId: "platform-2", kind: "media", index: 1 },
           ],
+          threadId: "canonical-thread",
           sentAt: 123,
         },
       },
@@ -288,11 +289,17 @@ describe("withDurableMessageSendContext", () => {
       channel: "telegram",
       to: "chat-1",
       payloads: [{ text: "hello" }],
+      threadId: "requested-thread",
     });
 
     expectBatchStatus(result, "sent");
     expect(result.receipt?.primaryPlatformMessageId).toBe("platform-1");
     expect(result.receipt?.platformMessageIds).toEqual(["platform-1", "platform-2"]);
+    expect(result.receipt?.threadId).toBe("canonical-thread");
+    expect(result.receipt?.parts.map((part) => part.threadId)).toEqual([
+      "canonical-thread",
+      "canonical-thread",
+    ]);
     expect(
       result.receipt?.parts.map(({ platformMessageId, kind }) => ({ platformMessageId, kind })),
     ).toEqual([
@@ -593,7 +600,18 @@ describe("withDurableMessageSendContext", () => {
     const cause = new Error("network reset");
     const error = new OutboundDeliveryError("network reset", {
       cause,
-      results: [{ channel: "telegram", messageId: "msg-1" }],
+      results: [
+        {
+          channel: "telegram",
+          messageId: "msg-1",
+          receipt: {
+            platformMessageIds: ["msg-1"],
+            parts: [{ platformMessageId: "msg-1", kind: "text", index: 0 }],
+            threadId: "canonical-thread",
+            sentAt: 123,
+          },
+        },
+      ],
       payloadOutcomes: [
         {
           index: 0,
@@ -618,12 +636,15 @@ describe("withDurableMessageSendContext", () => {
       channel: "telegram",
       to: "chat-1",
       payloads: [{ text: "first" }, { text: "second" }],
+      threadId: "requested-thread",
       onSendFailure,
     });
 
     expectBatchStatus(result, "partial_failed");
-    expect(result.results).toEqual([{ channel: "telegram", messageId: "msg-1" }]);
+    expect(result.results).toEqual(error.results);
     expect(result.receipt?.platformMessageIds).toEqual(["msg-1"]);
+    expect(result.receipt?.threadId).toBe("canonical-thread");
+    expect(result.receipt?.parts[0]?.threadId).toBe("canonical-thread");
     expect(result.error).toBe(error);
     expect(result.sentBeforeError).toBe(true);
     expect(onSendFailure).toHaveBeenCalledWith(error);

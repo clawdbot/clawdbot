@@ -1,5 +1,5 @@
 import {
-  createChannelProgressReceiptTracker,
+  createChannelProgressWorkCounter,
   formatChannelProgressDraftText,
   type ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -23,7 +23,7 @@ export function createSlackDraftProgressCardRuntime(params: {
   setup: Pick<SlackDispatchSetup, "account" | "cfg" | "ctx" | "prepared" | "slackClient">;
   draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
   enabled: boolean;
-  progressReceipt: ReturnType<typeof createChannelProgressReceiptTracker>;
+  progressWorkCounter: ReturnType<typeof createChannelProgressWorkCounter>;
   progressSeed: string;
   explicitTitle: string | undefined;
   maxLineChars: number;
@@ -91,13 +91,10 @@ export function createSlackDraftProgressCardRuntime(params: {
       diffStat: snapshot.diffStat,
       ...(state === "working"
         ? {
-            toolCalls: params.progressReceipt.toolCalls,
-            elapsedSeconds: params.progressReceipt.elapsedSeconds,
+            toolCalls: params.progressWorkCounter.toolCalls,
+            elapsedSeconds: params.progressWorkCounter.elapsedSeconds,
           }
-        : {
-            receiptSummary: params.progressReceipt.buildSummaryLine(),
-            sessionUrl: resolveSessionUrl(),
-          }),
+        : { sessionUrl: resolveSessionUrl() }),
     });
   };
 

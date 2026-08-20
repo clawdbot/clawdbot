@@ -200,6 +200,75 @@ function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
   return registry.plugins.find((entry) => entry.id === scenario.id)?.status;
 }
 
+function loadSourceExternalArtifactScenario(params: {
+  sourceBody: string;
+  packageLocalBody: string;
+  rootBuildBody?: string;
+  runtimeOverlayBody?: string;
+}) {
+  const id = "source-external-artifact-test";
+  const repoRoot = makePluginLoaderTempDir();
+  const sourceDir = path.join(repoRoot, "extensions", id);
+  const rootBuildDir = path.join(repoRoot, "dist", "extensions", id);
+  mkdirSafe(path.join(repoRoot, ".git"));
+  mkdirSafe(path.join(repoRoot, "src"));
+  writeFixtureText(repoRoot, "pnpm-workspace.yaml", "packages: []\n");
+  writeFixtureJson(sourceDir, "openclaw.plugin.json", pluginManifest(id));
+  writeFixtureJson(sourceDir, "package.json", {
+    openclaw: {
+      extensions: ["./index.ts"],
+      build: { bundledDist: false },
+    },
+  });
+  writeFixtureText(sourceDir, "index.ts", params.sourceBody);
+  writeFixtureText(sourceDir, "dist/index.js", params.packageLocalBody);
+  if (params.rootBuildBody) {
+    mkdirSafe(rootBuildDir);
+    fs.copyFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      path.join(rootBuildDir, "openclaw.plugin.json"),
+    );
+    writeFixtureJson(rootBuildDir, "package.json", {
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeFixtureText(rootBuildDir, "index.js", params.rootBuildBody);
+  }
+  if (params.runtimeOverlayBody) {
+    writeFixtureText(
+      repoRoot,
+      path.join("dist-runtime", "extensions", id, "index.js"),
+      params.runtimeOverlayBody,
+    );
+  }
+
+  const config = {
+    plugins: {
+      allow: [id],
+      entries: { [id]: { enabled: true } },
+    },
+  };
+  const registry = withEnv(
+    {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: params.rootBuildBody
+        ? path.join(repoRoot, "dist", "extensions")
+        : path.join(repoRoot, "extensions"),
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+    },
+    () => {
+      const manifestRegistry = loadPluginManifestRegistryCore({ config });
+      return loadOpenClawPlugins({
+        cache: false,
+        preferBuiltPluginArtifacts: true,
+        onlyPluginIds: [id],
+        config,
+        manifestRegistry,
+      });
+    },
+  );
+  return registry.plugins.find((entry) => entry.id === id)?.status;
+}
+
 describe("loadOpenClawPlugins", () => {
   it("setup-loads a trusted global channel plugin when the caller scopes to it", () => {
     useNoBundledPlugins();
@@ -863,80 +932,25 @@ ${channelPluginSource({
     ).toBe("loaded");
   });
 
-  it("ignores built artifacts when the bundled source plugin opts out of core dist", () => {
-    const repoRoot = makePluginLoaderTempDir();
-    const sourceDir = path.join(repoRoot, "extensions", "source-only-artifact-test");
-    const builtPluginDir = path.join(repoRoot, "dist", "extensions", "source-only-artifact-test");
-    mkdirSafe(path.join(repoRoot, ".git"));
-    mkdirSafe(path.join(repoRoot, "src"));
-    writeFixtureText(repoRoot, "pnpm-workspace.yaml", "packages: []\n");
-    writeFixtureJson(
-      sourceDir,
-      "openclaw.plugin.json",
-      pluginManifest("source-only-artifact-test"),
-    );
-    writeFixtureJson(sourceDir, "package.json", {
-      openclaw: {
-        extensions: ["./index.ts"],
-        build: { bundledDist: false },
-      },
-    });
-    writeFixtureText(
-      sourceDir,
-      "index.ts",
-      'export default { id: "source-only-artifact-test", register() {} };\n',
-    );
-    writeFixtureText(
-      sourceDir,
-      "dist/index.js",
-      'throw new Error("stale package-local dist should not load");\n',
-    );
-    mkdirSafe(builtPluginDir);
-    fs.copyFileSync(
-      path.join(sourceDir, "openclaw.plugin.json"),
-      path.join(builtPluginDir, "openclaw.plugin.json"),
-    );
-    writeFixtureJson(builtPluginDir, "package.json", {
-      openclaw: { extensions: ["./index.js"] },
-    });
-    writeFixtureText(
-      builtPluginDir,
-      "index.js",
-      'throw new Error("stale discovered core dist should not load");\n',
-    );
-    writeFixtureText(
-      repoRoot,
-      "dist-runtime/extensions/source-only-artifact-test/index.js",
-      'throw new Error("stale core dist should not load");\n',
-    );
+  it("ignores package-local dist when a bundled source plugin opts out of core dist", () => {
+    expect(
+      loadSourceExternalArtifactScenario({
+        sourceBody: 'export default { id: "source-external-artifact-test", register() {} };\n',
+        packageLocalBody: 'throw new Error("stale package-local dist should not load");\n',
+      }),
+    ).toBe("loaded");
+  });
 
-    const config = {
-      plugins: {
-        allow: ["source-only-artifact-test"],
-        entries: { "source-only-artifact-test": { enabled: true } },
-      },
-    };
-    const registry = withEnv(
-      {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist", "extensions"),
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      },
-      () => {
-        const manifestRegistry = loadPluginManifestRegistryCore({ config });
-        return loadOpenClawPlugins({
-          cache: false,
-          preferBuiltPluginArtifacts: true,
-          onlyPluginIds: ["source-only-artifact-test"],
-          config,
-          manifestRegistry,
-        });
-      },
-    );
-
-    expect(registry.plugins.find((entry) => entry.id === "source-only-artifact-test")?.status).toBe(
-      "loaded",
-    );
+  it("prefers the root build when a bundled source plugin opts out of core dist", () => {
+    expect(
+      loadSourceExternalArtifactScenario({
+        sourceBody: 'throw new Error("source should not load when root build exists");\n',
+        packageLocalBody: 'throw new Error("stale package-local dist should not load");\n',
+        rootBuildBody: 'module.exports = { id: "source-external-artifact-test", register() {} };\n',
+        runtimeOverlayBody:
+          'throw new Error("staged runtime should canonicalize to the root build");\n',
+      }),
+    ).toBe("loaded");
   });
 
   it("prefers package-local dist artifacts over workspace source TS when requested", () => {

@@ -11,11 +11,13 @@ import type { RouteDraftComposerFocus } from "./route-draft-focus-handoff.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
-import type { ChatSplitPane } from "./split-layout.ts";
+import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import type { ChatSplitPane } from "./split-layout-types.ts";
 
 type ChatPagePaneRenderOptions = {
   active: boolean;
   chatMessagesBySession: ChatMessageCache;
+  sessionSnapshotStore: SessionSnapshotStore;
   consumedDraftData: SessionChatRouteData | null;
   context?: ApplicationContext;
   data?: SessionChatRouteData;
@@ -89,8 +91,10 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .paneId=${options.pane.id}
               .presentationId=${JSON.stringify([options.pane.id, sessionKey])}
               .chatMessagesBySession=${options.chatMessagesBySession}
+              .sessionSnapshotStore=${options.sessionSnapshotStore}
               .sessionKey=${sessionKey}
               .presented=${presented}
+              .visuallyPresented=${presented}
               .active=${active}
               .draft=${draft}
               .focusComposer=${options.draftFocus.shouldFocusPane(

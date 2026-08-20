@@ -394,31 +394,24 @@ function statusFromProducerEvidence(params: {
       status: "fail",
     };
   }
-  const blockingEntry = producerEvidence.entries.find(
-    (entry) =>
-      entry.result.status === "fail" ||
-      (!allowBlockedEvidence && entry.result.status === "blocked"),
-  );
-  if (blockingEntry) {
+  const failedEntry = producerEvidence.entries.find((entry) => entry.result.status === "fail");
+  const blockedEntry = producerEvidence.entries.find((entry) => entry.result.status === "blocked");
+  if (failedEntry) {
     return {
       failureMessage:
-        blockingEntry.result.failure?.reason ??
-        `${blockingEntry.test.id} reported ${blockingEntry.result.status}`,
-      status: blockingEntry.result.status,
+        failedEntry.result.failure?.reason ?? `${failedEntry.test.id} reported failed`,
+      status: "fail",
     };
   }
-  if (!producerEvidence.entries.some((entry) => entry.result.status === "pass")) {
-    // Allowing blocked checks does not make an entirely unexecuted producer a successful run.
-    const blockedEntry = producerEvidence.entries.find(
-      (entry) => entry.result.status === "blocked",
-    );
-    if (blockedEntry) {
-      return {
-        failureMessage:
-          blockedEntry.result.failure?.reason ?? `${blockedEntry.test.id} reported blocked`,
-        status: "blocked",
-      };
-    }
+  const hasPassed = producerEvidence.entries.some((entry) => entry.result.status === "pass");
+  if (blockedEntry && (!allowBlockedEvidence || !hasPassed)) {
+    return {
+      failureMessage:
+        blockedEntry.result.failure?.reason ?? `${blockedEntry.test.id} reported blocked`,
+      status: "blocked",
+    };
+  }
+  if (producerEvidence.entries.some((entry) => entry.result.status === "skipped")) {
     return { status: "skipped" };
   }
   return { status: "pass" };
@@ -455,8 +448,8 @@ function buildTestFileEvidence(params: {
   );
   if (producerEntries.length > 0) {
     const definition = testFileRunnerDefinitions[params.kind];
-    // Failed scripts still need generic fallback evidence unless their producer
-    // already recorded that scenario identity at the authoritative boundary.
+    // Producer failures stay authoritative; parent terminal failures replace
+    // colliding non-fail results without discarding producer execution facts.
     const producerEntryIds = new Set(producerEntries.map((entry) => entry.test.id));
     const fallbackResults = params.results.filter(
       (result) => !result.producerEvidence || result.includeFallbackEvidence,
@@ -493,10 +486,17 @@ function buildTestFileEvidence(params: {
       profile: resolveQaEvidenceProfile({ env: params.env }),
       entries: [
         ...producerEntries.map((entry) => {
+          const fallbackFailure = fallbackEvidence?.entries.find(
+            (fallback) => fallback.test.id === entry.test.id && fallback.result.status === "fail",
+          );
+          const resolvedEntry =
+            entry.result.status !== "fail" && fallbackFailure
+              ? Object.assign({}, entry, { result: fallbackFailure.result })
+              : entry;
           if (evidenceMode !== "slim") {
-            return entry;
+            return resolvedEntry;
           }
-          const { execution: _execution, ...withoutExecution } = entry;
+          const { execution: _execution, ...withoutExecution } = resolvedEntry;
           return withoutExecution;
         }),
         ...(fallbackEvidence?.entries.filter((entry) => !producerEntryIds.has(entry.test.id)) ??
@@ -550,6 +550,8 @@ async function writeTestFileEvidenceFile(params: {
   if (params.writeEvidenceFile ?? true) {
     await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  } else {
+    await fs.rm(evidencePath, { force: true });
   }
   return { evidencePath };
 }

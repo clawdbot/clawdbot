@@ -135,6 +135,9 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     if (typeof testState.cronEnabled === "boolean") {
       fileCron.enabled = testState.cronEnabled;
     }
+    if (typeof testState.cronTriggersEnabled === "boolean") {
+      fileCron.triggers = { enabled: testState.cronTriggersEnabled };
+    }
     if (typeof testState.cronStorePath === "string") {
       writeConfigMachineState("cron.store", testState.cronStorePath);
     }

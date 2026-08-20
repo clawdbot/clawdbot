@@ -29,8 +29,10 @@ Failed authentication attempts are throttled per client IP, before any
 request handling. This is the brute-force guard for exposed Gateways.
 
 - Only _wrong_ credentials count. Missing credentials (a client that never
-  sent a token) and successful authentications do not consume budget; a
-  successful auth resets the counter for that IP.
+  sent a token) and successful authentications do not consume budget. A
+  successful auth normally resets the matching credential-class counter for
+  that client IP; success with a device token does not erase shared-secret
+  failures, or vice versa.
 - Defaults: 10 failures per 60 seconds, then a 5 minute lockout for that IP.
 - Loopback (`127.0.0.1` / `::1`) is exempt by default so local CLI sessions
   cannot be locked out.
@@ -55,7 +57,8 @@ While locked out, connection attempts fail with:
 }
 ```
 
-Attempts from other IPs (including loopback) are unaffected during a lockout.
+Attempts from other resolved IPs (including direct loopback) are unaffected
+during a lockout.
 
 Tune it under `gateway.auth.rateLimit` in `openclaw.json`:
 
@@ -87,6 +90,46 @@ failures are keyed by the normalized page origin (for example
 `browser-origin:https://evil.example`) rather than the shared loopback IP,
 so each origin gets its own bucket; from non-loopback addresses the key
 stays the client IP. This is not configurable.
+
+### Unconfigured same-host reverse proxies
+
+When a request arrives from a loopback socket with forwarding headers but the
+proxy is not configured in `gateway.trustedProxies`, OpenClaw cannot safely
+attribute the request to the claimed forwarded IP. Gateway-authenticated routes
+reject the request before credentials or fallback auth are checked. HTTP
+requests receive `403` with error type `proxy_attribution_required`; WebSocket
+auth returns the same reason with configuration guidance. Registered
+plugin-authenticated webhook routes may handle the request through their own
+signature or credential policy, but they ignore forwarded client claims and use
+the non-exempt socket source for pre-auth limits.
+
+Configure the proxy address narrowly in `gateway.trustedProxies` and have the
+proxy overwrite or safely rebuild forwarding headers. OpenClaw then restores
+validated per-client attribution and rate-limit buckets. See [Trusted Proxy
+Auth](/gateway/trusted-proxy-auth) and the [Gateway security
+guide](/gateway/security#reverse-proxy-configuration).
+
+A headerless TCP forwarder provides no request-level provenance and is
+indistinguishable from a process connecting directly over loopback. This
+hardening does not classify that transport as a proxy. Do not use a same-host
+TCP forwarder as a remote-access security boundary; use managed Tailscale, SSH,
+or an HTTP reverse proxy configured as described above.
+
+OpenClaw-managed Tailscale Serve and Funnel use a separate private loopback
+listener. Reaching that listener establishes the managed ingress path, and
+Tailscale's rewritten source address selects a normal non-exempt, resettable
+per-client bucket. Serve tokenless identity auth additionally requires a
+matching WhoIs result; Funnel requires its marker and password authentication.
+
+An externally managed Serve or Funnel route targeting the ordinary Gateway
+listener can establish generic proxy attribution only when its immediate source
+is explicitly configured in `gateway.trustedProxies` and it supplies a valid
+non-loopback forwarded client address. OpenClaw then uses that client address
+for rate limits and applies normal gateway auth; Tailscale headers do not grant
+managed-ingress or tokenless-auth semantics. Without that trust configuration,
+Gateway-authenticated routes reject the unattributable ingress. Prefer
+`gateway.tailscale.mode: "serve"` or `"funnel"` when OpenClaw should own the
+route and its dedicated listener.
 
 ### Webhooks
 
@@ -159,8 +202,10 @@ the resulting restart obeys the cooldown.
 - Bucket maps are bounded (hard entry caps plus periodic pruning), so
   unique-key floods cannot grow memory without bound.
 - When a client is behind a reverse proxy, the effective IP is the resolved
-  client IP; see [trusted proxy auth](/gateway/trusted-proxy-auth) for how
-  proxy headers are validated before they can influence it.
+  client IP. An unconfigured loopback proxy is rejected until its address and
+  header-rebuilding behavior are trusted explicitly. See [trusted proxy
+  auth](/gateway/trusted-proxy-auth) for how proxy headers are validated before
+  they can influence attribution.
 - Retry signaling varies by surface: Gateway RPC limiters return
   `retryable: true` plus `retryAfterMs`, the webhook ingress uses HTTP 429
   with a `Retry-After` header, and ACP embeds the wait in the error message.

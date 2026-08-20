@@ -114,6 +114,19 @@ describe("typed in-process agent authorization", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("applies the pending-profile gate to typed in-process agent dispatch", async () => {
+    const client = createOperatorClient({ profileId: "pending", scopes: ["operator.write"] });
+    delete client.authenticatedUserProfile;
+    client.authenticatedGitHubIdentitySync = vi
+      .fn()
+      .mockRejectedValue(new Error("private provider detail"));
+
+    await expect(dispatchScopedAgent({ client, context: createContext() })).rejects.toThrow(
+      "Authenticated profile verification is unavailable",
+    );
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
   it("rejects a nonparticipant agent turn before preflight", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:private-draft";

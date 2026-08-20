@@ -59,6 +59,8 @@ describe("buildNodeInstallPlan", () => {
     expect(plan.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+      CF_ACCESS_CLIENT_ID: "file",
+      CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
     });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
@@ -129,6 +131,8 @@ describe("buildNodeInstallPlan", () => {
     expect(plan.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+      CF_ACCESS_CLIENT_ID: "file",
+      CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
     });
   });
 });

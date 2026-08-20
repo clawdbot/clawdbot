@@ -397,7 +397,7 @@ jobs:
       - name: Verify release contents
         env:
           OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR: ${{ steps.core_package_tarballs.outputs.dir }}
-        run: pnpm release:check
+        run: pnpm release:generated:check && node --import tsx scripts/release-check.ts
 
       - name: Exercise all extended-stable plugin npm packages
         id: plugin_npm_preflight

@@ -131,7 +131,6 @@ describe("sendGatewayHello setup completion ordering", () => {
           handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
           deviceToken: null,
           bootstrapDeviceTokens: [],
-          controlUiDeviceAuthMigrationPending: false,
         };
 
         const hello = sendGatewayHello(context as never, state as never, {});
@@ -233,7 +232,6 @@ describe("sendGatewayHello setup completion ordering", () => {
           handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
           deviceToken: null,
           bootstrapDeviceTokens: [],
-          controlUiDeviceAuthMigrationPending: false,
         };
 
         await sendGatewayHello(context as never, state as never, {});
@@ -339,7 +337,6 @@ describe("sendGatewayHello setup completion ordering", () => {
           handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
           deviceToken: null,
           bootstrapDeviceTokens: [],
-          controlUiDeviceAuthMigrationPending: false,
         };
 
         await sendGatewayHello(context as never, state as never, {});
@@ -431,7 +428,6 @@ describe("sendGatewayHello setup completion ordering", () => {
           handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
           deviceToken: null,
           bootstrapDeviceTokens: [],
-          controlUiDeviceAuthMigrationPending: false,
         };
 
         await sendGatewayHello(context as never, state as never, {});

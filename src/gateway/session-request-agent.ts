@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -10,6 +9,7 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeAgentId,
+  normalizeAgentIdStrict,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
@@ -39,11 +39,16 @@ export function resolveRequestedSessionAgentId(
   options?: { allowUnconfiguredExplicitAgent?: boolean },
 ): RequestedSessionAgentIdResolution {
   const parsed = parseAgentSessionKey(key.trim());
-  const requestedAgentId = normalizeOptionalString(explicitAgentId);
   const configuredAgentIds = listAgentIds(cfg);
-  const normalizedRequestedAgentId = requestedAgentId
-    ? normalizeAgentId(requestedAgentId)
-    : undefined;
+  const normalizedRequest =
+    explicitAgentId === undefined ? null : normalizeAgentIdStrict(explicitAgentId);
+  if (normalizedRequest && !normalizedRequest.ok) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
+    };
+  }
+  const normalizedRequestedAgentId = normalizedRequest?.value;
   if (
     normalizedRequestedAgentId &&
     !options?.allowUnconfiguredExplicitAgent &&

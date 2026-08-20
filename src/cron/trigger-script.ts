@@ -41,6 +41,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -478,7 +479,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
             : error instanceof CodeModeHeadlessAbortError
               ? "aborted"
               : "internal_error",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessageWithCode(error),
       };
     } finally {
       evaluationScope.cleanup();
@@ -508,7 +509,7 @@ function validateCronState(candidate: Record<string, unknown>, label: string) {
     return {
       ok: false as const,
       code: "internal_error" as const,
-      error: `${label} state is not JSON-serializable: ${String(error)}`,
+      error: `${label} state is not JSON-serializable: ${formatErrorMessageWithCode(error)}`,
     };
   }
   if (serialized === undefined) {

@@ -17,6 +17,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -83,7 +84,7 @@ function createLocalGatewayRequestContext(
         storePath,
         cronEnabled: cfg.cron?.enabled !== false,
         cronConfig: cfg.cron,
-        log: getChildLogger({ module: "cron", storePath }),
+        log: getChildLogger({ module: "cron", storeKey: storePath }),
         defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
         legacyDefaultAgentId: tryGetLegacyDefaultAgentId(cfg),
         resolveDefaultAgentId: () =>
@@ -125,6 +126,7 @@ function createLocalGatewayRequestContext(
   });
   return {
     deps: params.deps,
+    configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,

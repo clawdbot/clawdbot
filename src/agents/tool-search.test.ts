@@ -1127,6 +1127,25 @@ describe("Tool Search", () => {
     }
   });
 
+  it("falls back to structured controls under Electron without changing Node mode", () => {
+    const electronDescriptor = Object.getOwnPropertyDescriptor(process.versions, "electron");
+    Object.defineProperty(process.versions, "electron", {
+      configurable: true,
+      value: "99.0.0",
+    });
+    try {
+      expect(resolveToolSearchConfig({ tools: { toolSearch: true } } as never).mode).toBe("tools");
+    } finally {
+      if (electronDescriptor) {
+        Object.defineProperty(process.versions, "electron", electronDescriptor);
+      } else {
+        delete (process.versions as NodeJS.ProcessVersions & { electron?: string }).electron;
+      }
+    }
+
+    expect(resolveToolSearchConfig({ tools: { toolSearch: true } } as never).mode).toBe("code");
+  });
+
   it("guides structured control tools toward compact catalog calls", () => {
     const tools = createToolSearchTools({ config: {} as never });
     const byName = new Map(tools.map((tool) => [tool.name, tool]));

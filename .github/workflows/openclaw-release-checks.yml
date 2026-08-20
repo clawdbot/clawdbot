@@ -127,7 +127,7 @@ on:
         type: string
 
 concurrency:
-  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}
+  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
 
 env:
@@ -153,6 +153,7 @@ jobs:
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
       skip_package_telegram_e2e: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
+      trusted_qa_tooling_eligible: ${{ steps.trusted_qa_tooling.outputs.eligible }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
       repo_live_suite_filter: ${{ steps.inputs.outputs.repo_live_suite_filter }}
@@ -201,6 +202,79 @@ jobs:
             echo "Expected expected_sha to be a full commit SHA; got: ${EXPECTED_SHA}" >&2
             exit 1
           fi
+
+      - name: Validate trusted QA tooling context
+        id: trusted_qa_context
+        if: inputs.target_context_ref != ''
+        env:
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          normalized_context_ref="$TARGET_CONTEXT_REF"
+          case "$normalized_context_ref" in
+            refs/heads/*) normalized_context_ref="${normalized_context_ref#refs/heads/}" ;;
+            refs/tags/*) normalized_context_ref="${normalized_context_ref#refs/tags/}" ;;
+          esac
+          if [[ "$normalized_context_ref" =~ ^(release/[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*|extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
+            context_kind=branch
+            fetch_ref="refs/heads/${normalized_context_ref}"
+          elif [[ "$normalized_context_ref" =~ ^v[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?$ ]]; then
+            context_kind=tag
+            fetch_ref="refs/tags/${normalized_context_ref}"
+          else
+            echo "target_context_ref must be a canonical OpenClaw release branch or tag." >&2
+            exit 1
+          fi
+          if [[ ! "$TARGET_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "target_context_ref requires ref to be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          echo "normalized_ref=${normalized_context_ref}" >> "$GITHUB_OUTPUT"
+          echo "context_kind=${context_kind}" >> "$GITHUB_OUTPUT"
+          echo "fetch_ref=${fetch_ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate trusted QA tooling eligibility
+        id: trusted_qa_tooling
+        if: steps.trusted_qa_context.outputs.fetch_ref != ''
+        env:
+          CONTEXT_FETCH_REF: ${{ steps.trusted_qa_context.outputs.fetch_ref }}
+          CONTEXT_KIND: ${{ steps.trusted_qa_context.outputs.context_kind }}
+          CONTEXT_REF: ${{ steps.trusted_qa_context.outputs.normalized_ref }}
+          TARGET_REF: ${{ inputs.ref }}
+          TRUSTED_REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          context_repo="$(mktemp -d)"
+          trap 'rm -rf -- "$context_repo"' EXIT
+          git init --bare --quiet "$context_repo"
+          if ! GIT_TERMINAL_PROMPT=0 git -C "$context_repo" fetch --quiet --no-tags --filter=blob:none \
+            "$TRUSTED_REPOSITORY_URL" "$CONTEXT_FETCH_REF"; then
+            echo "Failed to fetch trusted QA tooling context ${CONTEXT_REF}." >&2
+            exit 1
+          fi
+          context_sha="$(git -C "$context_repo" rev-parse --verify 'FETCH_HEAD^{commit}')"
+          normalized_context_sha="$(printf '%s' "$context_sha" | tr '[:upper:]' '[:lower:]')"
+          normalized_target_sha="$(printf '%s' "$TARGET_REF" | tr '[:upper:]' '[:lower:]')"
+          case "$CONTEXT_KIND" in
+            tag)
+              if [[ "$normalized_context_sha" != "$normalized_target_sha" ]]; then
+                echo "Trusted QA tooling tag ${CONTEXT_REF} resolves to ${context_sha} and does not match target ${TARGET_REF}." >&2
+                exit 1
+              fi
+              ;;
+            branch)
+              if ! git -C "$context_repo" merge-base --is-ancestor "$normalized_target_sha" "$normalized_context_sha" 2>/dev/null; then
+                echo "Target ${TARGET_REF} is not reachable from branch ${CONTEXT_REF} at ${context_sha}." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Trusted QA tooling context kind is invalid: ${CONTEXT_KIND}." >&2
+              exit 1
+              ;;
+          esac
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout trusted workflow helper
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1261,6 +1335,32 @@ jobs:
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
+      - name: Checkout trusted QA Anthropic mock tooling
+        if: needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-qa-tooling-trusted
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          sparse-checkout: extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
+          sparse-checkout-cone-mode: false
+          submodules: false
+
+      - name: Install trusted QA Anthropic mock tooling
+        if: needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          trusted_checkout=.release-qa-tooling-trusted
+          trap 'rm -rf -- "$trusted_checkout"' EXIT
+          install -m 0644 \
+            "$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \
+            extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
+          rm -rf -- "$trusted_checkout"
+          trap - EXIT
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1981,6 +2081,8 @@ jobs:
       - name: Dispatch and await trusted Telegram QA
         env:
           GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
         shell: bash
@@ -1994,7 +2096,7 @@ jobs:
             RUN_NAME="$run_name" gh api -X GET \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
               -F event=workflow_dispatch \
-              -F branch=main \
+              -F branch="$PARENT_WORKFLOW_REF" \
               -F per_page=100 \
               --jq '[.workflow_runs[] | select(.display_title == env.RUN_NAME) | {id, head_sha}]'
           }
@@ -2027,51 +2129,40 @@ jobs:
           trap 'exit 130' INT
           trap 'exit 143' TERM
 
-          for dispatch_attempt in 1 2 3 4 5; do
-            expected_trusted_workflow_sha="$(
-              gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha
-            )"
-            dispatch_id="release-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${dispatch_attempt}-$(openssl rand -hex 16)"
-            run_name="OpenClaw Release Telegram QA ${dispatch_id}"
-            run_id=""
-            child_head_sha=""
+          dispatch_id="release-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(openssl rand -hex 16)"
+          run_name="OpenClaw Release Telegram QA ${dispatch_id}"
+          child_head_sha=""
 
-            gh workflow run "$workflow" \
-              --repo "$GITHUB_REPOSITORY" \
-              --ref main \
-              -f dispatch_id="$dispatch_id" \
-              -f expected_trusted_workflow_sha="$expected_trusted_workflow_sha" \
-              -f target_context_ref="$TARGET_CONTEXT_REF" \
-              -f target_ref="$TARGET_SHA" \
-              -f target_sha="$TARGET_SHA"
+          gh workflow run "$workflow" \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$PARENT_WORKFLOW_REF" \
+            -f dispatch_id="$dispatch_id" \
+            -f expected_trusted_workflow_sha="$PARENT_WORKFLOW_SHA" \
+            -f target_context_ref="$TARGET_CONTEXT_REF" \
+            -f target_ref="$TARGET_SHA" \
+            -f target_sha="$TARGET_SHA"
 
-            for _ in $(seq 1 60); do
-              matches_json="$(find_child_runs)"
-              match_count="$(jq 'length' <<<"$matches_json")"
-              if ((match_count > 1)); then
-                echo "Multiple Telegram QA runs matched ${run_name}; refusing to guess." >&2
-                exit 1
-              fi
-              if ((match_count == 1)); then
-                run_id="$(jq -r '.[0].id' <<<"$matches_json")"
-                child_head_sha="$(jq -r '.[0].head_sha' <<<"$matches_json")"
-                break
-              fi
-              sleep 5
-            done
-            if [[ -z "$run_id" ]]; then
-              echo "Could not find exact dispatched Telegram QA run ${run_name}." >&2
+          for _ in $(seq 1 60); do
+            matches_json="$(find_child_runs)"
+            match_count="$(jq 'length' <<<"$matches_json")"
+            if ((match_count > 1)); then
+              echo "Multiple Telegram QA runs matched ${run_name}; refusing to guess." >&2
               exit 1
             fi
-            if [[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]; then
+            if ((match_count == 1)); then
+              run_id="$(jq -r '.[0].id' <<<"$matches_json")"
+              child_head_sha="$(jq -r '.[0].head_sha' <<<"$matches_json")"
               break
             fi
-            echo "Trusted main moved from ${expected_trusted_workflow_sha} to ${child_head_sha} during dispatch attempt ${dispatch_attempt}; retrying." >&2
-            cancel_child
-            run_id=""
+            sleep 5
           done
           if [[ -z "$run_id" ]]; then
-            echo "Trusted main kept moving during Telegram QA dispatch; refusing an unpinned child." >&2
+            echo "Could not find exact dispatched Telegram QA run ${run_name}." >&2
+            exit 1
+          fi
+          if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+            echo "Telegram QA used tooling SHA ${child_head_sha}, expected ${PARENT_WORKFLOW_SHA}." >&2
+            cancel_child
             exit 1
           fi
 

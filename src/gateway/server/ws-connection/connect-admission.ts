@@ -1,6 +1,7 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
 import {
+  GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
@@ -12,6 +13,7 @@ import {
   MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  type ConnectParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -33,6 +35,52 @@ import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type { GatewayConnectPhaseContext } from "./message-handler-types.js";
+
+function hasCredential(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+export function isStartupNodeConnect(connectParams: ConnectParams): boolean {
+  return connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+}
+
+/** Exact first-connect shape emitted by `openclaw connect` for a setup-code node. */
+export function isStartupNodeBootstrapConnect(connectParams: ConnectParams): boolean {
+  const auth = connectParams.auth;
+  const device = connectParams.device;
+  return (
+    isStartupNodeConnect(connectParams) &&
+    connectParams.client.id === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    Array.isArray(connectParams.scopes) &&
+    connectParams.scopes.length === 0 &&
+    Boolean(device?.id.trim() && device.publicKey.trim()) &&
+    hasCredential(auth?.bootstrapToken) &&
+    !hasCredential(auth?.token) &&
+    !hasCredential(auth?.deviceToken) &&
+    !hasCredential(auth?.password) &&
+    !hasCredential(auth?.approvalRuntimeToken) &&
+    !hasCredential(auth?.agentRuntimeIdentityToken)
+  );
+}
+
+export async function rejectGatewayStartupConnect(
+  context: GatewayConnectPhaseContext,
+): Promise<void> {
+  const { close } = context.handler;
+  const { frame, markHandshakeFailure, sendFrame } = context;
+  markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
+  await sendFrame({
+    type: "res",
+    id: frame.id,
+    ok: false,
+    error: errorShape(ErrorCodes.UNAVAILABLE, "gateway starting; retry shortly", {
+      retryable: true,
+      retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+      details: gatewayStartupUnavailableDetails(),
+    }),
+  }).catch(() => {});
+  queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
+}
 
 export function applyConnectionScopeCap(params: {
   scopes: string[];
@@ -113,23 +161,12 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     markHandshakeFailure,
     sendHandshakeErrorResponse,
     isWebchatConnect,
-    frame,
-    sendFrame,
   } = context;
 
-  if (isStartupPending?.()) {
-    markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
-    await sendFrame({
-      type: "res",
-      id: frame.id,
-      ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, "gateway starting; retry shortly", {
-        retryable: true,
-        retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-        details: gatewayStartupUnavailableDetails(),
-      }),
-    }).catch(() => {});
-    queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
+  const isNodeClient = isStartupNodeConnect(connectParams);
+  const startupPending = isStartupPending?.() === true;
+  if (startupPending && !isNodeClient) {
+    await rejectGatewayStartupConnect(context);
     return undefined;
   }
 
@@ -144,8 +181,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   // Protocol v4 changed chat deltas, not node RPC frames. Keep N-1 limited to
   // the node role+mode so stale operator/UI clients cannot enter the v4 surface.
   const supportsPreviousNodeProtocol =
-    connectParams.role === "node" &&
-    connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+    isNodeClient &&
     maxProtocol >= MIN_NODE_PROTOCOL_VERSION &&
     minProtocol <= MIN_NODE_PROTOCOL_VERSION;
   const usesLegacyNodeProtocol = !supportsCurrentProtocol && supportsPreviousNodeProtocol;
@@ -281,5 +317,6 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     isBrowserOperatorUi,
     isWebchat,
     isNativeAppUi,
+    startupPending,
   };
 }

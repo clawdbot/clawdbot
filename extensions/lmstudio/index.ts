@@ -2,6 +2,7 @@ import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-
 // Lmstudio plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
+  type OpenClawConfig,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthMethod,
@@ -9,7 +10,6 @@ import {
   type ProviderAuthResult,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   normalizeOptionalSecretInput,
@@ -168,6 +168,10 @@ export default definePluginEntry({
           hint: "Connect to a running LM Studio server and use an already loaded model",
           kind: "custom",
           appGuidedSetup: {
+            detectAvailability: async (ctx) => {
+              const providerSetup = await loadProviderSetup();
+              return await providerSetup.detectAppGuidedLmstudioAvailability(ctx);
+            },
             detect: async (ctx) => {
               const providerSetup = await loadProviderSetup();
               const result = await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
@@ -190,6 +194,7 @@ export default definePluginEntry({
             return await providerSetup.promptAndConfigureLmstudioInteractive({
               config: ctx.config,
               agentDir: ctx.agentDir,
+              workspaceDir: ctx.workspaceDir,
               prompter: ctx.prompter,
               secretInputMode: ctx.secretInputMode,
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,

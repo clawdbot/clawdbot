@@ -44,6 +44,27 @@ function echoFirstInputLineScript(prefix: string): string {
   ].join(" ");
 }
 
+async function readStartedPid(
+  socket: Awaited<ReturnType<typeof openSocket>>,
+  processId: string,
+): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const read = (await rpc(socket, "process/read", {
+      processId,
+      afterSeq: 0,
+      waitMs: 100,
+    })) as { chunks?: Array<{ chunk: string }> };
+    const output = (read.chunks ?? [])
+      .map((chunk) => Buffer.from(chunk.chunk, "base64").toString("utf8"))
+      .join("");
+    const pid = /PID=(\d+)/u.exec(output)?.[1];
+    if (pid) {
+      return Number(pid);
+    }
+  }
+  throw new Error(`process ${processId} did not report its PID`);
+}
+
 describe("OpenClaw Codex sandbox exec-server", () => {
   it("reports unavailable app-server remote environment support without exposing an environment", async () => {
     const sandbox = createSandboxContext({});
@@ -213,7 +234,12 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     expect(buildExecSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         command: "'/bin/sh' '-lc' 'printf ok'",
-        env: { POLICY_ONLY: "1", POLICY_SET: "env-wins", TEST_FLAG: "1" },
+        env: expect.objectContaining({
+          CODEX_SANDBOX_EXEC_ID: expect.any(String),
+          POLICY_ONLY: "1",
+          POLICY_SET: "env-wins",
+          TEST_FLAG: "1",
+        }),
         usePty: false,
         workdir: "/workspace",
       }),
@@ -463,11 +489,10 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       arg0: null,
     });
 
-    expect(buildExecSpec).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: {},
-      }),
-    );
+    const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
+      { env: Record<string, string> },
+    ];
+    expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
     socket.close();
   });
 
@@ -625,6 +650,79 @@ describe("OpenClaw Codex sandbox exec-server", () => {
 
     await expect(openSocket(execServerUrl)).rejects.toThrow();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "reaps TERM-resistant process groups on socket loss and turn environment release",
+    async () => {
+      for (const cleanup of ["socket", "environment"] as const) {
+        const finalizeExec = vi.fn(async () => undefined);
+        const sandbox = createSandboxContext({
+          buildExecSpec: async () => ({
+            argv: [
+              "/bin/sh",
+              "-c",
+              'echo "PID=$$"; trap -- "" TERM; while :; do echo heartbeat; sleep 0.1; done',
+            ],
+            env: testExecEnv(),
+            finalizeToken: `${cleanup}-lease`,
+            stdinMode: "pipe-closed",
+          }),
+          finalizeExec,
+        });
+        sandbox.runtimeId = `openclaw-test-runtime-${cleanup}`;
+        const client = createClient();
+        await ensureCodexSandboxExecServerEnvironment({
+          client: client as never,
+          sandbox,
+        });
+        const socket = await openSocket(execServerUrlFromClient(client));
+        let pid: number | undefined;
+        try {
+          await rpc(socket, "initialize", { clientName: "test" });
+          socket.send(JSON.stringify({ method: "initialized" }));
+          await rpc(socket, "process/start", {
+            processId: `process-${cleanup}`,
+            argv: ["ignored"],
+            cwd: "file:///workspace",
+            env: {},
+            tty: false,
+            pipeStdin: false,
+            arg0: null,
+          });
+          pid = await readStartedPid(socket, `process-${cleanup}`);
+
+          if (cleanup === "socket") {
+            const closed = waitForSocketClose(socket);
+            socket.terminate();
+            await closed;
+            await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce(), {
+              timeout: 3_000,
+            });
+          } else {
+            await releaseCodexSandboxExecServerEnvironment(sandbox);
+          }
+
+          expect(() => process.kill(pid!, 0)).toThrow();
+          expect(finalizeExec).toHaveBeenCalledOnce();
+          expect(finalizeExec).toHaveBeenCalledWith({
+            status: "completed",
+            exitCode: 1,
+            timedOut: false,
+            token: `${cleanup}-lease`,
+          });
+        } finally {
+          if (pid) {
+            try {
+              process.kill(-pid, "SIGKILL");
+            } catch {
+              // The owner already reaped the process group.
+            }
+          }
+          await releaseCodexSandboxExecServerEnvironment(sandbox);
+        }
+      }
+    },
+  );
 
   it("keeps a shared exec-server open when another turn reacquires during release", async () => {
     const sandbox = createSandboxContext({});

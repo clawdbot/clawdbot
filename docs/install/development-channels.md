@@ -75,8 +75,6 @@ openclaw update --channel dev
 # Install a specific npm package spec
 openclaw update --tag openclaw@2026.4.1-beta.1
 
-# Install from GitHub main once without persisting the channel
-openclaw update --tag main
 ```
 
 Notes:
@@ -84,13 +82,11 @@ Notes:
 - `--tag` applies to **package (npm) installs only**; git installs ignore it.
 - The tag is not persisted; the next `openclaw update` uses the configured
   channel.
-- `--tag main` maps to the npm-compatible spec `github:openclaw/openclaw#main`
-  for that one run. For a persistent moving `main` install, use
+- The `--tag main` shorthand is rejected for package installs because the
+  workspace checkout is not a self-contained package artifact. Use
   `openclaw update --channel dev` (package installs switch to a git checkout)
   or reinstall with the installer's git method:
   `curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --version main`.
-  The npm install path rejects GitHub/git source targets outright and points
-  you at the git method instead.
 - Downgrade protection: if the target version is older than the current
   version, OpenClaw prompts for confirmation (skip with `--yes`).
 - Extended-stable always uses its verified exact package target. It is not a

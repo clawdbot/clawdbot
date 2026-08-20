@@ -741,13 +741,24 @@
   gap: 0;
 }
 
+/* Memory subviews vary substantially in height. Keep the shared hero anchored
+   when switching between a view that needs the content scrollbar and one that
+   does not. */
+.shell--settings .content:has(.memory-page) {
+  scrollbar-gutter: stable;
+}
+
 .memory-page__panel {
   display: grid;
   gap: 14px;
 }
 
-.shell--settings .content:has(.settings-page) .content-header.hub-page-header {
+/* Overview and Memories render a .settings-page descendant, while Dreams does
+   not. Keep the shared header on the settings-page padding rhythm regardless
+   of which tab is active so its title and actions do not jump by one space. */
+.shell--settings .content:has(.memory-page) .content-header.hub-page-header {
   max-width: 1120px;
+  padding-inline: var(--space-4);
 }
 
 .memory-page__panel .settings-page,

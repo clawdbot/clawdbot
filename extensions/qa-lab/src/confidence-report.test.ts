@@ -25,7 +25,15 @@ describe("qa confidence report", () => {
   async function writeJson(relativePath: string, payload: unknown) {
     const filePath = path.join(tempRoot, relativePath);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    const value =
+      relativePath.endsWith("qa-suite-summary.json") &&
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      !("run" in payload)
+        ? { run: { status: "completed" }, ...payload }
+        : payload;
+    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
     return filePath;
   }
 
@@ -91,6 +99,44 @@ describe("qa confidence report", () => {
     expect(report.lanes[0]?.details).toContain("counts.skipped=2");
     expect(renderQaConfidenceMarkdownReport(report)).toContain("Zero unknowns: yes");
     expect(renderQaConfidenceMarkdownReport(report)).toContain("Global pass: no");
+  });
+
+  it("uses suite lifecycle status before terminal outcome counts", async () => {
+    const manifest: QaConfidenceManifest = {
+      version: 1,
+      profile: "codex-100",
+      lanes: [
+        {
+          id: "suite",
+          title: "Suite",
+          kind: "qa-suite-summary",
+          artifact: "suite/qa-suite-summary.json",
+          required: true,
+        },
+      ],
+    };
+    for (const [runStatus, expectedPass, expectedLaneStatus, expectedDetails] of [
+      ["missing", false, "unknown", "missing run.status"],
+      ["running", false, "unknown", "still running"],
+      ["completed", true, "pass", "counts.failed=0"],
+      ["paused", false, "unknown", "unsupported run.status=paused"],
+    ] as const) {
+      await writeJson("suite/qa-suite-summary.json", {
+        run: runStatus === "missing" ? {} : { status: runStatus },
+        counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
+        scenarios: [{ name: "completed prefix", status: "pass" }],
+      });
+
+      const report = await buildQaConfidenceReport({
+        manifest,
+        artifactRoot: tempRoot,
+        strictGlobalPass: true,
+      });
+
+      expect(report.pass).toBe(expectedPass);
+      expect(report.lanes[0]).toMatchObject({ status: expectedLaneStatus });
+      expect(report.lanes[0]?.details).toContain(expectedDetails);
+    }
   });
 
   it("does not let optional lanes block strict gates", async () => {
@@ -750,7 +796,7 @@ describe("qa confidence report", () => {
     for (const [artifact, expectedDetail] of [
       [
         { counts: { total: 1, passed: -1, skipped: 0, failed: 0 } },
-        "counts.passed must be a non-negative integer",
+        "counts.passed must be a non-negative safe integer",
       ],
       [
         { counts: { total: 1, passed: 2, failed: 0 } },

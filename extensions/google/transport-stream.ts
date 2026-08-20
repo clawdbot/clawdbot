@@ -4,6 +4,7 @@ import {
   calculateCost,
   getEnvApiKey,
   resolveProviderContext,
+  type AssistantMessage,
   type Context,
   type Model,
   type ProviderCallStreamOptions,
@@ -131,24 +132,9 @@ type GoogleTransportContentBlock =
       thoughtSignature?: string;
     };
 
-type MutableAssistantOutput = {
-  role: "assistant";
+type MutableAssistantOutput = Omit<AssistantMessage, "api" | "content"> & {
   content: Array<GoogleTransportContentBlock>;
   api: CanonicalGoogleTransportApi;
-  provider: string;
-  model: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  };
-  stopReason: string;
-  timestamp: number;
-  responseId?: string;
-  errorMessage?: string;
 };
 
 const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
@@ -1389,7 +1375,7 @@ function pushTextBlockEnd(
       type: "thinking_end",
       contentIndex: blockIndex,
       content: block.thinking,
-      partial: output as never,
+      partial: output,
     });
     return;
   }
@@ -1398,7 +1384,7 @@ function pushTextBlockEnd(
       type: "text_end",
       contentIndex: blockIndex,
       content: block.text,
-      partial: output as never,
+      partial: output,
     });
   }
 }
@@ -1469,7 +1455,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 execute: openSse,
               })
             : await openSse(apiKey);
-        stream.push({ type: "start", partial: output as never });
+        stream.push({ type: "start", partial: output });
         let currentBlockIndex = -1;
         let sawTerminalReason = false;
         let terminalGenerationError: Error | undefined;
@@ -1541,7 +1527,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                     stream.push({
                       type: "thinking_start",
                       contentIndex: currentBlockIndex,
-                      partial: output as never,
+                      partial: output,
                     });
                   } else {
                     output.content.push({ type: "text", text: "" });
@@ -1549,7 +1535,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                     stream.push({
                       type: "text_start",
                       contentIndex: currentBlockIndex,
-                      partial: output as never,
+                      partial: output,
                     });
                   }
                 }
@@ -1564,7 +1550,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                     type: "thinking_delta",
                     contentIndex: currentBlockIndex,
                     delta: partText,
-                    partial: output as never,
+                    partial: output,
                   });
                 } else if (activeBlock?.type === "text") {
                   activeBlock.text += partText;
@@ -1576,7 +1562,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                     type: "text_delta",
                     contentIndex: currentBlockIndex,
                     delta: partText,
-                    partial: output as never,
+                    partial: output,
                   });
                 }
               }
@@ -1608,19 +1594,19 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 stream.push({
                   type: "toolcall_start",
                   contentIndex: blockIndex,
-                  partial: output as never,
+                  partial: output,
                 });
                 stream.push({
                   type: "toolcall_delta",
                   contentIndex: blockIndex,
                   delta: JSON.stringify(toolCall.arguments),
-                  partial: output as never,
+                  partial: output,
                 });
                 stream.push({
                   type: "toolcall_end",
                   contentIndex: blockIndex,
                   toolCall,
-                  partial: output as never,
+                  partial: output,
                 });
               }
             }
@@ -1664,7 +1650,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         failTransportStream({ stream, output, signal: options?.signal, error });
       }
     })();
-    return eventStream as unknown as ReturnType<StreamFn>;
+    return eventStream;
   };
 }
 

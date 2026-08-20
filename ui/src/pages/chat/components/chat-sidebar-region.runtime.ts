@@ -13,7 +13,9 @@ import {
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import {
+  SIDEBAR_GEOMETRY_COMMIT_EVENT,
   SIDEBAR_MIN_HEIGHT_PX,
   SIDEBAR_MIN_WIDTH_PX,
   sidebarDock,
@@ -23,88 +25,24 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import { renderChatResizableDivider } from "./chat-resizable-divider.ts";
-import type { SidebarPanelTemplates, SidebarRegionCallbacks } from "./chat-sidebar-region-types.ts";
+import type {
+  SidebarPanelDefinition,
+  SidebarPanelTemplates,
+  SidebarRegionCallbacks,
+} from "./chat-sidebar-region-types.ts";
 
-type PanelType = {
-  slot: SidebarSlotId;
-  label: string;
-  description: string;
-  icon: TemplateResult;
-  shortcut?: string;
-};
-
-function panelType(slot: SidebarSlotId): PanelType {
-  switch (slot) {
-    case "browser":
-      return {
-        slot,
-        label: t("chat.sidePanel.browser"),
-        description: t("chat.sidePanel.browserEmpty"),
-        icon: icons.globe,
-      };
-    case "chat":
-      return {
-        slot,
-        label: t("chat.sidePanel.boardChat"),
-        description: t("chat.sidePanel.boardChatEmpty"),
-        icon: icons.messageSquare,
-      };
-    case "companion":
-      return {
-        slot,
-        label: t("chat.sidePanel.companion"),
-        description: t("chat.sidePanel.companionEmpty"),
-        icon: icons.bot,
-      };
-    case "desktop":
-      return {
-        slot,
-        label: t("chat.sidePanel.desktop"),
-        description: t("chat.sidePanel.desktopEmpty"),
-        icon: icons.monitor,
-      };
-    case "detail":
-      return {
-        slot,
-        label: t("chat.sidePanel.review"),
-        description: t("chat.sidePanel.reviewEmpty"),
-        icon: icons.diff,
-      };
-    case "discussion":
-      return {
-        slot,
-        label: t("chat.sidePanel.discussion"),
-        description: t("chat.sidePanel.discussionEmpty"),
-        icon: icons.messageSquare,
-      };
-    case "tasks":
-      return {
-        slot,
-        label: t("chat.sidePanel.tasks"),
-        description: t("chat.sidePanel.tasksEmpty"),
-        icon: icons.listChecks,
-      };
-    case "terminal":
-      return {
-        slot,
-        label: t("chat.sidePanel.terminal"),
-        description: t("chat.sidePanel.terminalEmpty"),
-        icon: icons.terminal,
-        shortcut: "Ctrl+`",
-      };
-    // Exhaustive over SidebarSlotId; "workspace" is the remaining member.
-    default:
-      return {
-        slot,
-        label: t("chat.sidePanel.files"),
-        description: t("chat.sidePanel.filesEmpty"),
-        icon: icons.fileText,
-        shortcut: "⇧⌘B",
-      };
+function panelType(
+  definitions: SidebarPanelDefinition[],
+  slot: SidebarSlotId,
+): SidebarPanelDefinition {
+  const definition = definitions.find((candidate) => candidate.slot === slot);
+  if (!definition) {
+    throw new Error(`Missing sidebar panel definition for ${slot}`);
   }
+  return definition;
 }
 
-function renderPanelTypeOption(type: PanelType, slotted = false) {
+function renderPanelTypeOption(type: SidebarPanelDefinition, slotted = false) {
   return html`
     <span slot=${slotted ? "icon" : nothing} class="side-panel-type-option__icon" aria-hidden="true"
       >${type.icon}</span
@@ -124,6 +62,7 @@ function panelsOf(layout: SidebarLayout): SidebarPanel[] {
 
 class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
+  @property({ attribute: false }) panelDefinitions = sidebarPanelDefinitions();
   @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
   // Header actions owned by the active panel. The tabbed model gives a panel no
   // header of its own, so an action on its content (open externally, clear the
@@ -148,8 +87,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     return true;
   }
 
-  private panelTypes(): PanelType[] {
-    return this.availableSlots.map(panelType);
+  private panelTypes(): SidebarPanelDefinition[] {
+    return this.availableSlots.map((slot) => panelType(this.panelDefinitions, slot));
   }
 
   private renderTypeMenu() {
@@ -200,7 +139,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
 
   private renderHeader(column: SidebarColumn) {
     const tabs = column.panels.map((panel) => {
-      const type = panelType(panel.slot);
+      const type = panelType(this.panelDefinitions, panel.slot);
       return {
         id: panel.id,
         domId: `side-panel-tab-${panel.id}`,
@@ -308,12 +247,13 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
 
   private renderEmpty(panel?: SidebarPanel) {
     if (panel) {
-      const type = panelType(panel.slot);
+      const type = panelType(this.panelDefinitions, panel.slot);
       return html`<div class="side-panel-empty side-panel-empty--type">
         ${renderPanelEmptyState({
           icon: type.icon,
           heading: type.label,
-          description: type.description,
+          description: type.empty.description,
+          action: type.empty.action,
         })}
       </div>`;
     }
@@ -406,7 +346,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     }
     const column = this.layout.columns[0];
     const dock = sidebarDock(this.layout);
-    const width = this.layout.expanded || dock === "bottom" ? "100%" : `${column?.width ?? 360}px`;
+    const width = this.layout.expanded || dock === "bottom" ? "100%" : `${column?.width ?? 480}px`;
     const height = this.layout.expanded || dock === "right" ? "100%" : `${column?.height ?? 360}px`;
     return html`${!this.narrow && !this.layout.expanded && column
         ? this.renderDivider(column)
@@ -432,7 +372,13 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   protected override updated() {
     const root = this.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
     if (root) {
+      const previousWidth = root.querySelector<HTMLElement>(".side-panel")?.style.width;
       renderTemplate(this.renderPanel(), root);
+      const panel = root.querySelector<HTMLElement>(".side-panel");
+      // Wrapped row heights must update with their new width before the same paint.
+      if (panel && previousWidth !== undefined && panel.style.width !== previousWidth) {
+        panel.dispatchEvent(new Event(SIDEBAR_GEOMETRY_COMMIT_EVENT, { bubbles: true }));
+      }
     }
   }
 

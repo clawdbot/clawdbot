@@ -2,10 +2,12 @@
 // preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
+type AssistantMessageContent = Extract<AppendMessageArg, { role: "assistant" }>["content"];
 
 /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 type GatewayInjectedAbortMeta = {
@@ -53,6 +55,13 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
+/** Clone Gateway display blocks into the transcript's assistant-content boundary. */
+export function prepareGatewayInjectedAssistantContent(
+  content: readonly Record<string, unknown>[],
+): AssistantMessageContent {
+  return content.map((block) => Object.assign({}, block)) as unknown as AssistantMessageContent;
+}
+
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
 export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath?: string;
@@ -90,13 +99,19 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     label: params.label,
     content: params.content,
   });
-  const messageBody: AppendMessageArg & Record<string, unknown> = {
+  const rawDeliveryMessage: {
+    role: "assistant";
+    content: Array<Record<string, unknown>>;
+    openclawDelivery?: unknown;
+  } = {
+    role: "assistant",
+    content: [{ type: "text", text: params.message }],
+  };
+  const rawDeliveryFacts = applyAssistantDeliveryDirectives(rawDeliveryMessage).openclawDelivery;
+  const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
     // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
-    content: resolvedContent as unknown as Extract<
-      AppendMessageArg,
-      { role: "assistant" }
-    >["content"],
+    content: prepareGatewayInjectedAssistantContent(resolvedContent),
     timestamp: now,
     // stopReason is a strict runner enum; this is not model output, but we still store it as a
     // normal assistant message so it participates in the session parentId chain.
@@ -117,7 +132,10 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
           },
         }
       : {}),
-  };
+  });
+  if (rawDeliveryFacts && messageBody.openclawDelivery === undefined) {
+    messageBody.openclawDelivery = rawDeliveryFacts;
+  }
 
   try {
     if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {

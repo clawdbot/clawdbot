@@ -12,6 +12,7 @@ import { cronStoreKey } from "../store/key.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { createCronServiceState } from "./state.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
+import { authorCronRunCompletion } from "./timer.js";
 
 const fixtures = setupCronRegressionFixtures({
   prefix: "cron-failure-alert-persistence-",
@@ -67,8 +68,10 @@ async function finalizeAlertOutcome(params: {
       jobId: params.job.id,
       job: structuredClone(params.job),
       activeJobMarker: markCronJobActive(params.job.id),
-      status: params.status,
-      error: params.error,
+      ...authorCronRunCompletion(params.state, params.job, {
+        status: params.status,
+        error: params.error,
+      }),
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     },
@@ -95,10 +98,9 @@ describe("cron failure alert persistence", () => {
     const alertDone = new Promise<void>((resolve) => {
       resolveAlert = resolve;
     });
+    let persistedStateAtSend: CronJob["state"] | undefined;
     const sendCronFailureAlert = vi.fn(async () => {
-      expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureAlertAtMs).toBe(
-        endedAt,
-      );
+      persistedStateAtSend = (await loadCronStore(store.storePath)).jobs[0]?.state;
       order.push("persist");
       order.push("alert");
       resolveAlert?.();
@@ -119,6 +121,10 @@ describe("cron failure alert persistence", () => {
     await alertDone;
 
     expect(order).toEqual(["persist", "alert"]);
+    expect(persistedStateAtSend).toMatchObject({
+      lastFailureAlertAtMs: endedAt,
+      lastFailureNotificationDeliveryStatus: "unknown",
+    });
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
   });
 
@@ -190,9 +196,10 @@ describe("cron failure alert persistence", () => {
       endedAt: firstAlertAt,
     });
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-    expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureAlertAtMs).toBe(
-      firstAlertAt,
-    );
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      lastFailureAlertAtMs: firstAlertAt,
+      lastFailureNotificationDeliveryStatus: "unknown",
+    });
 
     now += 30_000;
     const currentJob = state.store?.jobs[0];
@@ -210,7 +217,11 @@ describe("cron failure alert persistence", () => {
 
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
     expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
-      state: { consecutiveErrors: 2, lastFailureAlertAtMs: firstAlertAt },
+      state: {
+        consecutiveErrors: 2,
+        lastFailureAlertAtMs: firstAlertAt,
+        lastFailureNotificationDeliveryStatus: "not-requested",
+      },
     });
   });
 });

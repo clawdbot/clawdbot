@@ -265,6 +265,7 @@ function acceptControlRequest(
       sessionKey: turn.diagnosticRefs.sessionKey,
       agentId: turn.diagnosticRefs.agentId,
       toolCallId: toolUseId,
+      cwd: turn.cwd,
       abortSignal: turn.abortSignal,
       ask: turn.execPermission.ask,
     });
@@ -292,9 +293,12 @@ function acceptControlRequest(
               message:
                 outcome.kind === "deny" && outcome.reason === "policy-oversized"
                   ? "OpenClaw denied Claude native tool use (Bash): the command is too large to display for out-of-band approval. Split it into smaller commands and retry."
-                  : outcome.kind === "deny" && outcome.reason === "user" && !runAborted
-                    ? `OpenClaw user denied Claude native tool use (${toolName}).`
-                    : `OpenClaw approval was not granted for Claude native tool use (${toolName}).`,
+                  : outcome.kind === "deny" && outcome.reason === "operand-binding"
+                    ? (outcome.message ??
+                      "OpenClaw denied Claude native tool use (Bash): the command could not be bound to stable script bytes.")
+                    : outcome.kind === "deny" && outcome.reason === "user" && !runAborted
+                      ? `OpenClaw user denied Claude native tool use (${toolName}).`
+                      : `OpenClaw approval was not granted for Claude native tool use (${toolName}).`,
             },
       });
     } catch {

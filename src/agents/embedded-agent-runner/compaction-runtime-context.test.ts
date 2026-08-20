@@ -19,43 +19,26 @@ import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstr
 const compactionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("resolveCompactionContextTokenBudget", () => {
-  const cfg = {
-    agents: {
-      list: [{ id: "capped", contextTokens: 200_000 }],
-      defaults: { contextTokens: 128_000 },
-    },
-  } as unknown as OpenClawConfig;
+  const cfg = {} as OpenClawConfig;
   const modelWithWindow = (contextWindow: number) =>
     ({ contextWindow }) as Parameters<typeof resolveCompactionContextTokenBudget>[0]["model"];
   it.each([
-    { requested: 500_000, modelWindow: 500_000, expected: 200_000 },
+    { requested: 500_000, modelWindow: 500_000, expected: 500_000 },
     { requested: 100_000, modelWindow: 500_000, expected: 100_000 },
     { requested: 500_000, modelWindow: 64_000, expected: 64_000 },
   ])(
-    "caps requested=$requested by agent and model ceilings to $expected",
+    "caps requested=$requested by the model ceiling to $expected",
     ({ requested, modelWindow, expected }) => {
       const budget = resolveCompactionContextTokenBudget({
         config: cfg,
         provider: "openai",
         modelId: "mock-model",
         model: modelWithWindow(modelWindow),
-        agentId: "capped",
         requestedTokenBudget: requested,
       });
       expect(budget).toBe(expected);
     },
   );
-
-  it("falls back to the default cap when no agent id is given", () => {
-    const budget = resolveCompactionContextTokenBudget({
-      config: cfg,
-      provider: "openai",
-      modelId: "mock-model",
-      model: modelWithWindow(272_000),
-      requestedTokenBudget: 200_000,
-    });
-    expect(budget).toBe(128_000);
-  });
 });
 
 describe("resolveEmbeddedCompactionThinkingLevel", () => {
@@ -84,25 +67,41 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
     ).toBe("high");
   });
 
-  it("inherits the session level and otherwise defaults to off", () => {
+  it("defaults compaction to low without inheriting the session level", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
         provider: "demo",
         modelId: "demo-model",
         inheritedLevel: "medium",
       }),
-    ).toBe("medium");
+    ).toBe("low");
     expect(
       resolveEmbeddedCompactionThinkingLevel({
         provider: "demo",
         modelId: "demo-model",
       }),
-    ).toBe("off");
+    ).toBe("low");
+  });
+
+  it("inherits the session level only when explicitly configured", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "inherit" } } },
+        } as unknown as OpenClawConfig,
+        provider: "demo",
+        modelId: "demo-model",
+        inheritedLevel: "medium",
+      }),
+    ).toBe("medium");
   });
 
   it("preserves thinking when the resolved Ollama model reports reasoning support", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "inherit" } } },
+        },
         provider: "ollama",
         modelId: "qwen3.5:4b",
         inheritedLevel: "high",

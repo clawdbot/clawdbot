@@ -9,7 +9,7 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
-import { formatUiError } from "../format-error.ts";
+import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
 import {
   normalizeSkillApiKeyReplacement,
@@ -631,7 +631,7 @@ export async function installSkill(
     });
     return {
       kind: "success",
-      message: result?.message ?? "Installed",
+      message: formatUiExternalText(result?.message, "Installed"),
     };
   });
 }
@@ -709,7 +709,10 @@ export async function installFromClawHub(
     }
     state.clawhubInstallMessage = {
       kind: "success",
-      text: formatClawHubInstallMessage(result?.message ?? `Installed ${ref}`, result?.warning),
+      text: formatClawHubInstallMessage(
+        formatUiExternalText(result?.message, `Installed ${ref}`),
+        result?.warning ? formatUiExternalText(result.warning) : undefined,
+      ),
     };
   } catch (err) {
     if (

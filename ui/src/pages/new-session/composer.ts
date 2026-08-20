@@ -1,10 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/tooltip.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
@@ -16,8 +19,20 @@ import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
+  paneDomId,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
+import {
+  createSkillMenuState,
+  getActiveSkillMenuOptionId,
+  getActiveSkillMenuOptionLabel,
+  handleSkillMenuKeydown,
+  isSkillMenuVisible,
+  renderSkillMenu,
+  resetSkillMenuState,
+  updateSkillMenu,
+  type SkillMenuHost,
+} from "../chat/components/chat-composer-skill-menu.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
@@ -32,7 +47,10 @@ type NewSessionComposerOptions = {
   pendingAttachmentReads: number;
   readSignal: AbortSignal;
   requiresModifier: boolean;
+  requestUpdate: () => void;
+  refreshCommands?: () => void | Promise<void>;
   submitDisabledReason?: string;
+  blockedSubmitNotice?: string;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -51,6 +69,14 @@ type NewSessionComposerOptions = {
   onSubmit: () => void;
 };
 
+function submitNewSession(
+  options: NewSessionComposerOptions,
+  skillMenuState: NewSessionComposerTextareaController["skillMenuState"],
+) {
+  resetSkillMenuState(skillMenuState);
+  options.onSubmit();
+}
+
 function renderStartControl(options: NewSessionComposerOptions) {
   const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
   if (!options.terminalAction) {
@@ -62,7 +88,7 @@ function renderStartControl(options: NewSessionComposerOptions) {
           ?disabled=${!options.canSubmit}
           aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
-          @click=${options.onSubmit}
+          @click=${() => submitNewSession(options, options.textareaController.skillMenuState)}
         >
           ${options.submitting ? icons.loader : icons.arrowUp}
         </button>
@@ -79,7 +105,7 @@ function renderStartControl(options: NewSessionComposerOptions) {
           ?disabled=${!options.canSubmit}
           aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
-          @click=${options.onSubmit}
+          @click=${() => submitNewSession(options, options.textareaController.skillMenuState)}
         >
           ${options.submitting ? icons.loader : icons.arrowUp}
         </button>
@@ -114,6 +140,7 @@ function renderStartControl(options: NewSessionComposerOptions) {
 
 export class NewSessionComposerTextareaController {
   private textarea: HTMLTextAreaElement | null = null;
+  readonly skillMenuState = createSkillMenuState();
 
   readonly ref = (element?: Element) => {
     const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
@@ -135,7 +162,10 @@ export class NewSessionComposerTextareaController {
     }
   }
 
+  readonly getTextarea = () => this.textarea;
+
   disconnect() {
+    resetSkillMenuState(this.skillMenuState);
     if (this.textarea) {
       disconnectTextareaOverflowObserver(this.textarea);
       this.textarea = null;
@@ -172,30 +202,70 @@ export function renderDraftError(message: string) {
   return html`
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
       <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span class="callout__content new-session-page__alert-message">${message}</span>
+      <span class="callout__content new-session-page__alert-message"
+        >${formatUiError(message)}</span
+      >
     </div>
   `;
 }
 
-function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposerOptions) {
+function handleComposerKeydown(
+  event: KeyboardEvent,
+  options: NewSessionComposerOptions,
+  skillMenuHost: SkillMenuHost,
+) {
+  if (event.isComposing || event.keyCode === 229) {
+    return;
+  }
   if (
-    !options.canSubmit ||
-    options.submitting ||
-    event.key !== "Enter" ||
-    event.shiftKey ||
-    event.isComposing ||
-    event.keyCode === 229
+    handleSkillMenuKeydown(
+      event,
+      options.textareaController.skillMenuState,
+      skillMenuHost,
+      options.requestUpdate,
+    )
   ) {
     return;
   }
-  if (!options.requiresModifier || event.metaKey || event.ctrlKey) {
+  if (event.key !== "Enter" || event.shiftKey) {
+    return;
+  }
+  if (options.requiresModifier && !event.metaKey && !event.ctrlKey) {
+    return;
+  }
+  // A reasoned gate still consumes the press: the submission flow records the
+  // attempt and surfaces the reason instead of silently inserting a newline.
+  // Only silent gates (busy button, empty draft) keep Enter native.
+  if (options.canSubmit || options.submitDisabledReason !== undefined) {
     event.preventDefault();
-    options.onSubmit();
+    submitNewSession(options, options.textareaController.skillMenuState);
   }
 }
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function renderNewSessionComposer(options: NewSessionComposerOptions) {
+  const skillMenuState = options.textareaController.skillMenuState;
+  const skillMenuHost: SkillMenuHost = {
+    paneId: "new-session",
+    getDraft: () => options.textareaController.getTextarea()?.value ?? options.message,
+    commitDraft: options.onInput,
+    getTextarea: options.textareaController.getTextarea,
+    refreshCommands: options.refreshCommands,
+  };
+  const updateSkills = (target: HTMLTextAreaElement) =>
+    updateSkillMenu(
+      target.value,
+      target.selectionStart,
+      skillMenuState,
+      skillMenuHost,
+      options.requestUpdate,
+    );
+  const handleSelect = (event: Event) => {
+    const target = event.currentTarget;
+    if (target instanceof HTMLTextAreaElement) {
+      updateSkills(target);
+    }
+  };
   const attachmentProps = {
     attachmentLimits: options.attachmentLimits,
     attachments: options.attachments,
@@ -214,6 +284,11 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     canCompose: !options.submitting && !options.messageLocked,
   });
   options.textareaController.syncDraft(options.message);
+  const skillMenuVisible =
+    !options.submitting && !options.messageLocked && isSkillMenuVisible(skillMenuState);
+  const skillMenuListboxId = paneDomId(skillMenuHost.paneId, "skill-menu-listbox");
+  const activeSkillOptionId = getActiveSkillMenuOptionId(skillMenuState, skillMenuHost.paneId);
+  const skillMenuAnnouncementId = paneDomId(skillMenuHost.paneId, "skill-active-announcement");
   return html`
     <div
       class="agent-chat__composer-shell new-session-page__composer"
@@ -226,6 +301,9 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
+            ${skillMenuVisible
+              ? renderSkillMenu(skillMenuState, skillMenuHost, options.requestUpdate)
+              : nothing}
             <textarea
               ${ref(options.textareaController.ref)}
               class="new-session-page__message"
@@ -233,18 +311,34 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               ?disabled=${options.submitting || options.messageLocked}
               placeholder=${t("newSession.messagePlaceholder")}
               .value=${options.message}
+              aria-autocomplete="list"
+              aria-controls=${ifDefined(skillMenuVisible ? skillMenuListboxId : undefined)}
+              aria-expanded=${ifDefined(skillMenuVisible ? "true" : undefined)}
+              aria-activedescendant=${ifDefined(activeSkillOptionId ?? undefined)}
+              aria-describedby=${skillMenuAnnouncementId}
               @input=${(event: Event) => {
                 const target = event.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
+                updateSkills(target);
                 options.onInput(target.value);
               }}
-              @keydown=${(event: KeyboardEvent) => handleComposerKeydown(event, options)}
+              @select=${handleSelect}
+              @keydown=${(event: KeyboardEvent) =>
+                handleComposerKeydown(event, options, skillMenuHost)}
               @paste=${(event: ClipboardEvent) => {
                 if (!options.submitting && !options.messageLocked) {
                   handleChatAttachmentPaste(event, attachmentProps);
                 }
               }}
             ></textarea>
+            <span
+              id=${skillMenuAnnouncementId}
+              class="sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              >${getActiveSkillMenuOptionLabel(skillMenuState)}</span
+            >
           </div>
           <div class="agent-chat__composer-actions">${renderStartControl(options)}</div>
         </div>
@@ -265,6 +359,11 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               : nothing}
           </div>
         </div>
+        ${options.blockedSubmitNotice
+          ? html`<div class="new-session-page__blocked-submit" role="status">
+              ${options.blockedSubmitNotice}
+            </div>`
+          : nothing}
         ${options.pendingAttachmentReads > 0
           ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
           : nothing}
@@ -286,7 +385,9 @@ export function renderNewSessionDraftComposer(options: {
   modelControl: NewSessionModelControl;
   textareaController: NewSessionComposerTextareaController;
   requiresModifier: boolean;
+  requestUpdate: () => void;
   submitDisabledReason?: string;
+  blockedSubmitNotice?: string;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -300,6 +401,7 @@ export function renderNewSessionDraftComposer(options: {
   onSubmit: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
+  const commandClient = options.context?.gateway.snapshot.client;
   return renderNewSessionComposer({
     attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
     attachments: options.attachmentDraft.attachments,
@@ -319,7 +421,12 @@ export function renderNewSessionDraftComposer(options: {
     pendingAttachmentReads: options.attachmentDraft.pendingReads,
     readSignal,
     requiresModifier: options.requiresModifier,
+    requestUpdate: options.requestUpdate,
+    refreshCommands: commandClient
+      ? () => refreshSlashCommands({ client: commandClient, agentId: options.agentId })
+      : undefined,
     submitDisabledReason: options.submitDisabledReason,
+    blockedSubmitNotice: options.blockedSubmitNotice,
     terminalAction: options.terminalAction,
     submitting: options.submitting,
     textareaController: options.textareaController,

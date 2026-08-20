@@ -1827,6 +1827,136 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("rejects a malformed later tool before any sibling becomes executable", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_tools", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_valid", name: "read", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"path":"README.md"}' },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "call_invalid", name: "read", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"path":"SECRET.md"' },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "read", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Provider completed tool call with malformed JSON arguments");
+    expect(result.errorMessage).not.toContain("SECRET.md");
+    expect(eventTypes).not.toContain("toolcall_end");
+    expect(eventTypes).not.toContain("done");
+  });
+
+  it("rejects an active tool call that never receives content_block_stop", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_unsealed", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_unsealed", name: "read", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"path":"README.md"' },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "read", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(eventTypes.at(-1)).toBe("error");
+    expect(eventTypes).not.toContain("toolcall_end");
+    expect(eventTypes).not.toContain("done");
+    expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
+  });
+
+  it("uses a complete tool input seeded at block start when no deltas arrive", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_seeded", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "call_seeded",
+          name: "read",
+          input: { path: "README.md" },
+        },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "read", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "toolCall", arguments: { path: "README.md" } }),
+    );
+  });
+
   it("discards buffered Fable output when the stream fails before terminal status", async () => {
     const client = createAnthropicSseClient([
       {
@@ -1885,7 +2015,6 @@ describe("Anthropic provider", () => {
     expect(result.stopReason).toBe("error");
     // Keep salient transport fields while replacing the cycle, so the terminal
     // diagnostic remains actionable without stranding the stream.
-    expect(result.errorMessage).toBeTruthy();
     expect(result.errorMessage).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
   });
 

@@ -9,7 +9,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { exportChatMarkdown } from "../export.ts";
+import { paneDomId } from "./chat-composer-dom.ts";
 import { commitComposerDraft, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -201,10 +201,6 @@ function slashOptionIdSegment(value: string): string {
   );
 }
 
-export function paneDomId(paneId: string, suffix: string): string {
-  return `chat-${encodeURIComponent(paneId)}-${suffix}`;
-}
-
 function getSlashCommandOptionId(paneId: string, cmd: SlashCommandDef): string {
   return paneDomId(paneId, `slash-option-command-${slashOptionIdSegment(cmd.name)}`);
 }
@@ -261,10 +257,6 @@ export function getActiveSlashMenuOptionLabel(state: ChatComposerState): string 
 
 function renderSlashIcon(name: string) {
   return icons[name as IconName] ?? icons.terminal;
-}
-
-export function exportMarkdown(props: Pick<ChatComposerProps, "messages" | "assistantName">): void {
-  exportChatMarkdown(props.messages, props.assistantName);
 }
 
 export function renderSlashMenu(

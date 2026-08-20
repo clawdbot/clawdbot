@@ -16,6 +16,10 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  completeSessionDelivery,
+  enqueueSessionDelivery,
+} from "../infra/session-delivery-queue-storage.js";
 import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
 import {
@@ -1986,7 +1990,7 @@ describe("attachManagedOutgoingImagesToMessage", () => {
       stateDir,
     });
 
-    await attachManagedOutgoingImagesToMessage({
+    attachManagedOutgoingImagesToMessage({
       messageId: "msg-committed",
       blocks: blocks as Record<string, unknown>[],
       stateDir,
@@ -2061,6 +2065,42 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     const attached = readManagedImageRecord(fixture.attachmentId, stateDir);
     expect(attached?.messageId).toBe("msg-late");
     expect(attached?.retentionClass).toBe("history");
+  });
+
+  it("retains transient records referenced by pending prepared session delivery", async () => {
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+      stateDir,
+    });
+    const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
+    const record = readManagedImageRecord(attachmentId, stateDir);
+    if (!record) {
+      throw new Error("expected pending managed media record");
+    }
+    const queueId = await enqueueSessionDelivery(
+      {
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "deliver generated image",
+        messageId: "generated-image-agent-turn",
+        expectedMediaUrls: ["/tmp/generated.png"],
+        preparedMediaBlocks: {
+          "/tmp/generated.png": blocks as Array<Record<string, unknown>>,
+        },
+      },
+      stateDir,
+    );
+    const afterTtl = Date.parse(record.createdAt) + 16 * 60 * 1000;
+
+    await expect(
+      cleanupManagedOutgoingImageRecords({ stateDir, nowMs: afterTtl }),
+    ).resolves.toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+
+    await completeSessionDelivery(queueId, stateDir);
+    await expect(
+      cleanupManagedOutgoingImageRecords({ stateDir, nowMs: afterTtl }),
+    ).resolves.toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
   });
 
   it("reaps an aged transient record once its session has no active run", async () => {

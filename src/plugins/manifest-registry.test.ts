@@ -2471,6 +2471,10 @@ describe("loadPluginManifestRegistry", () => {
         },
         memory_get: {
           replaySafe: true,
+          profiles: ["coding", "messaging", "invalid"],
+        },
+        memory_store: {
+          sideEffecting: true,
         },
       },
       configSchema: { type: "object" },
@@ -2550,6 +2554,10 @@ describe("loadPluginManifestRegistry", () => {
       },
       memory_get: {
         replaySafe: true,
+        profiles: ["coding", "messaging"],
+      },
+      memory_store: {
+        sideEffecting: true,
       },
     });
   });

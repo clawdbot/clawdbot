@@ -140,7 +140,7 @@ private final class UnreadTestTransport: @unchecked Sendable, OpenClawChatTransp
         true
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         []
     }
 
