@@ -1351,9 +1351,12 @@ describe("startTelegramWebhook", () => {
   });
 
   it("keeps a timed-out webhook lane guarded until replay settles", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     try {
       let finishFirstUpdate: (() => void) | undefined;
+      let firstAttempt = true;
       const seenUpdateIds: number[] = [];
       const firstUpdate = telegramMessageUpdate(40, "slow");
       const secondUpdate = telegramMessageUpdate(41, "blocked");
@@ -1368,7 +1371,8 @@ describe("startTelegramWebhook", () => {
       handleUpdateSpy.mockImplementation(async (update: unknown) => {
         const updateId = (update as { update_id: number }).update_id;
         seenUpdateIds.push(updateId);
-        if (updateId === 40) {
+        if (updateId === 40 && firstAttempt) {
+          firstAttempt = false;
           await new Promise<void>((resolve) => {
             finishFirstUpdate = resolve;
           });
@@ -1387,10 +1391,22 @@ describe("startTelegramWebhook", () => {
         await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40]));
         await vi.advanceTimersByTimeAsync(DEFAULT_INGRESS_ADOPTION_STALL_MS + 10_000);
         await yieldWebhookTask();
+        // Lane stays guarded while the stalled replay is unsettled: the update
+        // was never handled, so it is preserved (held) instead of dead-lettered,
+        // and the same-lane follower must not run ahead of it.
         expect(seenUpdateIds).toEqual([40]);
 
         finishFirstUpdate?.();
-        await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40, 41]));
+        // Quiescence releases the preserved claim for retry; lane ordering then
+        // redelivers 40 (successfully this time) before the blocked 41.
+        for (let i = 0; i < 40 && !seenUpdateIds.includes(41); i++) {
+          await yieldWebhookTask();
+          await vi.advanceTimersByTimeAsync(500);
+          await yieldWebhookTask();
+        }
+        // Redelivery of 40 before 41 proves the stalled update was preserved:
+        // a dead-lettered claim could never be dispatched again.
+        expect(seenUpdateIds).toEqual([40, 40, 41]);
       } finally {
         await started.stop();
       }

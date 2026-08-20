@@ -231,12 +231,18 @@ describe("Zalouser durable ingress", () => {
     });
   });
 
-  it("settles deferred bookkeeping when the adoption watchdog aborts a claim", async () => {
+  it("preserves a watchdog-aborted deferred claim until its bookkeeping settles", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
       let deferredLifecycle: ZalouserIngressLifecycle | undefined;
+      let firstDispatch = true;
       const dispatch = vi.fn(async (_message, lifecycle: ZalouserIngressLifecycle) => {
-        deferredLifecycle = lifecycle;
-        lifecycle.onDeferred();
+        if (firstDispatch) {
+          firstDispatch = false;
+          deferredLifecycle = lifecycle;
+          lifecycle.onDeferred();
+          return;
+        }
+        await lifecycle.onAdopted();
       });
       const ingress = createZalouserIngressMonitor({
         accountId: "default",
@@ -247,8 +253,16 @@ describe("Zalouser durable ingress", () => {
         adoptionStallTimeoutMs: 10,
       });
       await ingress.receive(createRawZalouserMessage({ msgId: "deferred-timeout" }));
-      await waitForZalouserIngressVerdict(queue, "deferred-timeout", "failed");
-      expect(deferredLifecycle?.abortSignal.aborted).toBe(true);
+      // The watchdog aborts the stalled pre-adoption claim, but the message was
+      // never handled: it is preserved (held behind the cancellation fence),
+      // not dead-lettered.
+      await vi.waitFor(() => expect(deferredLifecycle?.abortSignal.aborted).toBe(true));
+      expect(await queue.listClaims()).toHaveLength(1);
+      // Once the deferred participant settles, the held claim is released for
+      // retry and the preserved update is eventually delivered.
+      await deferredLifecycle?.onAbandoned();
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+      await waitForZalouserIngressVerdict(queue, "deferred-timeout", "completed");
 
       await ingress.stop();
     });

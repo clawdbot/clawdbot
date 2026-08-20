@@ -480,7 +480,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         if (drainIdleWake !== wake) {
           return;
         }
-        const shouldRearm = drainIdleWakeRequested && running && !isAborted();
+        // A wake armed before the stall watchdog claimed settle ownership can
+        // fire while its release is still committing (dispatch exited, lane
+        // held). Re-arm while that settlement pends so the post-settlement idle
+        // pumps the freed lane; otherwise a preserved webhook update waits for
+        // the next inbound POST. Deferred claims alone must NOT re-arm — their
+        // settled tasks would resolve the new wait instantly and spin.
+        const shouldRearm =
+          (drainIdleWakeRequested || (activeDrain.hasPendingStallSettlements?.() ?? false)) &&
+          running &&
+          !isAborted();
         drainIdleWake = undefined;
         drainIdleWakeRequested = false;
         if (shouldRearm) {

@@ -2711,7 +2711,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("fails buffered spooled claims instead of requeueing when deferred processing times out", async () => {
+  it("requeues a stalled deferred spooled claim instead of dead-lettering it", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const log = vi.fn();
@@ -2730,16 +2730,31 @@ describe("TelegramPollingSession", () => {
       });
 
       await waitForTelegramTestState(() => expect(participants).toHaveLength(1));
-      await waitForTelegramTestState(async () =>
-        expect(await failedUpdateIds(tempDir)).toEqual([42]),
+      // Core drain watchdog stalls pre-adoption. The update was never handled,
+      // so it must be preserved for retry, not destroyed (display-id stripped
+      // of zero padding in the log line).
+      await waitForTelegramTestState(() =>
+        expectLogIncludes(log, "claim→adoption stalled for event"),
       );
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      // Core drain watchdog log (display-id stripped of zero padding).
-      expectLogIncludes(log, "claim→adoption stalled for event");
-      expectLogIncludes(log, "handler-timeout");
-      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
-      expect(await failedUpdateReasons(tempDir)).toEqual([{ id: 42, reason: "handler-timeout" }]);
+      expectLogIncludes(log, "releasing for retry (attempt 1); message preserved");
+      // The release is fenced until the deferred participant settles.
+      participants[0]?.settle({
+        kind: "failed-retryable",
+        error: new Error("deferred processing timed out in test"),
+      });
+      // Preservation: the stalled update is re-dispatched instead of failed.
+      // Longer window: the release applies the shared retry backoff (~1s base)
+      // before the drain may re-claim the preserved row.
+      await vi.waitFor(() => expect(participants).toHaveLength(2), {
+        interval: 10,
+        timeout: 5_000,
+      });
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+      participants[1]?.settle({ kind: "completed" });
+      await waitForTelegramTestState(async () =>
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
+      );
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
       abort.abort();
       stopWorker();
       await runPromise;
@@ -3512,9 +3527,10 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("recovers a lone active spooled handler owned by a replaced session (#84158)", async () => {
-    // Core drain: a lone hanging claim is dead-lettered by the adoption-stall
-    // watchdog so a replacement session is not blocked forever on that lane.
+  it("recovers and re-dispatches a lone active spooled claim owned by a replaced session (#84158)", async () => {
+    // Core drain: a lone hanging pre-adoption claim is preserved (held, then
+    // recoverable) instead of dead-lettered, and a replacement session is not
+    // blocked forever on that lane: it reclaims and re-dispatches the update.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const firstAbort = new AbortController();
     const secondAbort = new AbortController();
@@ -3558,11 +3574,9 @@ describe("TelegramPollingSession", () => {
       });
       const firstRunPromise = firstSession.runUntilAbort();
       await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
-      // Watchdog dead-letters the hanging claim before the session is replaced.
+      // Watchdog stalls the hanging claim; the update is preserved, never failed.
       await vi.advanceTimersByTimeAsync(1_000);
-      await waitForTelegramTestState(async () =>
-        expect(await failedUpdateIds(tempDir)).toEqual([42]),
-      );
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
       firstAbort.abort();
       await vi.advanceTimersByTimeAsync(16_000);
       await firstRunPromise;
@@ -3578,10 +3592,10 @@ describe("TelegramPollingSession", () => {
         },
       });
       const secondRunPromise = secondSession.runUntilAbort();
-      await vi.advanceTimersByTimeAsync(1_000);
-      // Tombstoned/failed claim is not re-dispatched; replacement is unblocked.
-      expect(handleUpdate).toHaveBeenCalledTimes(1);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      // Replacement recovers the stale claim and re-dispatches the preserved
+      // update — unblocked lane AND no message loss.
+      await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(2));
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
 
       secondAbort.abort();
       await vi.advanceTimersByTimeAsync(20_000);
@@ -4434,75 +4448,13 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("fails a timed-out spooled handler and drains later same-lane updates without restart", async () => {
-    // Core drain: adoption-stall dead-letters 42 and frees the lane for 43 on
-    // the same bot. Session restart on handler timeout is removed private-drain
-    // behavior; the user-visible outcome is 42 failed and 43 processed.
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const abort = new AbortController();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
-    const log = vi.fn();
-    const events: string[] = [];
-    const bot = {
-      api: {
-        deleteWebhook: vi.fn(async () => true),
-        config: { use: vi.fn() },
-      },
-      init: vi.fn(async () => undefined),
-      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
-        events.push(`bot:${update.update_id}`);
-        if (update.update_id === 42) {
-          // Hang until the core watchdog aborts the drain lifecycle.
-          await new Promise<void>(() => {});
-        }
-        abort.abort();
-      }),
-      stop: vi.fn(async () => undefined),
-    };
-    createTelegramBotMock.mockReturnValue(bot);
-    await writeSpooledTestUpdates(tempDir, [
-      topicUpdate(42, 10, "wedged topic 10 turn"),
-      topicUpdate(43, 10, "later topic 10 turn"),
-    ]);
-
-    const worker = createIdleIngressWorker();
-    const session = createPollingSession({
-      abortSignal: abort.signal,
-      log,
-      isolatedIngress: {
-        enabled: true,
-        spoolDir: tempDir,
-        createWorker: worker.createWorker,
-        drainIntervalMs: 10,
-        spooledUpdateHandlerTimeoutMs: 100,
-      },
-    });
-
-    try {
-      const runPromise = session.runUntilAbort();
-      await waitForTelegramTestState(() => expect(events).toEqual(["bot:42"]));
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waitForTelegramTestState(async () =>
-        expect(await failedUpdateIds(tempDir)).toEqual([42]),
-      );
-      await waitForTelegramTestState(() => expect(events).toEqual(["bot:42", "bot:43"]));
-      await vi.advanceTimersByTimeAsync(15_000);
-      await runPromise;
-
-      // No private-drain session restart for handler timeout.
-      expect(worker.createWorker).toHaveBeenCalledTimes(1);
-      expect(createTelegramBotMock).toHaveBeenCalledTimes(1);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-      expectLogIncludes(log, "handler-timeout");
-    } finally {
-      abort.abort();
-      worker.stop();
-      vi.useRealTimers();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
+  // The former "fails a timed-out spooled handler and drains later same-lane
+  // updates without restart" case asserted the removed disposition: a wedged
+  // pre-adoption handler was dead-lettered to free its lane, destroying the
+  // inbound update. The drain now preserves stalled updates (release under the
+  // shared retry policy, hold while un-quiesced); an abort-ignoring handler
+  // intentionally holds its lane rather than risking duplicate dispatch — see
+  // ingress-drain-stall-watchdog.ts policy header and ingress-drain-stall.test.ts.
   it.each([
     {
       name: "forces a restart when polling stalls without getUpdates activity",

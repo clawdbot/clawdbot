@@ -2,11 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  isIngressAdoptionLostError,
-} from "./ingress-drain.js";
+import { createChannelIngressDrain, isIngressAdoptionLostError } from "./ingress-drain.js";
 import {
   createTestIngressQueue,
   type IngressDrainTestPayload as Payload,
@@ -288,6 +284,7 @@ describe("channel ingress drain", () => {
         now: () => clock,
         claimLeaseMs: 3_000,
         adoptionStallTimeoutMs: 2_000,
+        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
         deferredLaneOccupancy: "release",
         dispatchClaimedEvent: async () => ({ kind: "deferred" }),
       });
@@ -952,10 +949,6 @@ describe("channel ingress drain", () => {
       expect(drain.activeLaneKeys().has("l1")).toBe(true);
       drain.dispose();
     });
-  });
-
-  it("exports default adoption stall matching Telegram product default", () => {
-    expect(DEFAULT_INGRESS_ADOPTION_STALL_MS).toBe(5 * 60 * 1000);
   });
 
   it("tombstone-fail after handler completed keeps ownership and never re-dispatches", async () => {

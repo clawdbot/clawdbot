@@ -134,6 +134,12 @@ describe("channel ingress drain debounce failures", () => {
 
       clock += 73_000;
       await vi.advanceTimersByTimeAsync(73_000);
+      // The stall watchdog fires at the 200s budget and first releases for
+      // retry; the broken release store exhausts its bounded backoff (~127s)
+      // before the terminal dead-letter fallback commits.
+      clock += 130_000;
+      await vi.advanceTimersByTimeAsync(130_000);
+      await drain.waitForIdle();
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
         { id: "debounced-settlement-failure", reason: "handler-timeout" },

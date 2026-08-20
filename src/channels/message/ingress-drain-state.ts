@@ -14,6 +14,51 @@ export function isIngressAdoptionLostError(error: unknown): error is IngressAdop
   return error instanceof IngressAdoptionLostError;
 }
 
+type IngressDispatchQuiescence = {
+  task: Promise<void>;
+  markDispatchSettled: () => void;
+  markDeferred: () => void;
+  markDeferredSettled: () => void;
+};
+
+/** Tracks the dispatcher and any deferred participant it registered. */
+export function createIngressDispatchQuiescence(): IngressDispatchQuiescence {
+  let dispatchSettled = false;
+  let deferred = false;
+  let deferredSettled = false;
+  let resolved = false;
+  let resolveTask!: () => void;
+  const task = new Promise<void>((resolve) => {
+    resolveTask = resolve;
+  });
+  const resolveIfQuiesced = () => {
+    if (!resolved && dispatchSettled && !deferred) {
+      resolved = true;
+      resolveTask();
+    }
+  };
+  return {
+    task,
+    markDispatchSettled: () => {
+      dispatchSettled = true;
+      resolveIfQuiesced();
+    },
+    markDeferred: () => {
+      // A deferred participant can fail/settle before the dispatcher returns
+      // "deferred" (debounced flushes). Settlement is sticky: re-arming here
+      // would leave quiescence unresolvable and wedge the stall watchdog.
+      if (!resolved && !deferredSettled) {
+        deferred = true;
+      }
+    },
+    markDeferredSettled: () => {
+      deferredSettled = true;
+      deferred = false;
+      resolveIfQuiesced();
+    },
+  };
+}
+
 export type ChannelIngressDrainDispatchResult =
   | { kind: "completed" }
   | { kind: "deferred" }
@@ -34,6 +79,10 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   guillotined: boolean;
   /** Closed code: pre-adoption supersede has claimed settle ownership. */
   superseded: boolean;
+  /** Resolves only after the dispatcher and any registered deferred participant settle. */
+  quiescence: IngressDispatchQuiescence;
+  /** Watchdog-owned settlement, including a delayed post-fence release. */
+  stallSettlementTask?: Promise<void>;
   /** Single settle owner for complete / fail / release / supersede / guillotine. */
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
