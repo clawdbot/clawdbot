@@ -190,6 +190,11 @@ describe("imessage targets", () => {
     },
   );
 
+  it("normalizes tel URIs without treating arbitrary prefixed identifiers as phone numbers", () => {
+    expect(normalizeIMessageHandle("tel:+1 (555) 222-3333")).toBe("+15552223333");
+    expect(normalizeIMessageHandle("tel:C0AG22RN7L3")).toBe("tel:C0AG22RN7L3");
+  });
+
   it("accepts the all-digit edge of the 32-hex identifier contract", () => {
     const identifier = "1".repeat(32);
     expect(parseIMessageTarget(identifier)).toEqual({
