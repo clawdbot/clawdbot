@@ -121,6 +121,34 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "token", token: "flag-token" });
   });
 
+  it.each([
+    { name: "a fresh gateway", nextConfig: {} },
+    { name: "an existing plaintext token", nextConfig: createTokenConfig("existing-user-token") },
+    { name: "an existing token SecretRef", nextConfig: createTokenConfig(SAMPLE_SECRET_REF) },
+  ])("selects password auth when --gateway-password overrides $name", ({ nextConfig }) => {
+    const result = applyGatewayConfig({
+      nextConfig,
+      opts: { gatewayPassword: "explicit-password" } as OnboardOptions,
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toMatchObject({
+      mode: "password",
+      password: "explicit-password",
+    });
+    expect(randomToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "an explicit auth mode", opts: { gatewayAuth: "token" as const } },
+    { name: "an explicit token credential", opts: { gatewayToken: "flag-token" } },
+  ])("keeps $name authoritative over --gateway-password", ({ opts }) => {
+    const result = applyGatewayConfig({
+      opts: { ...opts, gatewayPassword: "explicit-password" } as OnboardOptions,
+    });
+
+    expect(result?.nextConfig.gateway?.auth?.mode).toBe("token");
+  });
+
   it("keeps password auth when a token-only rerun targets an existing Funnel", () => {
     const result = applyGatewayConfig({
       nextConfig: {
