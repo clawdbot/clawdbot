@@ -172,6 +172,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
           "-c",
           "init.templateDir=",
           "clone",
+          "--filter=blob:none",
           "--no-checkout",
           "--",
           identity.origin,

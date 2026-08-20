@@ -65,7 +65,7 @@ describe("node worker workspace origin fallback", () => {
     });
 
     expect(exec.mock.calls.map(([command]) => command.argv)).toEqual([
-      expect.arrayContaining(["clone", ORIGIN]),
+      expect.arrayContaining(["clone", "--filter=blob:none", ORIGIN]),
       expect.arrayContaining(["checkout", COMMIT]),
       expect.arrayContaining(["node", REMOTE_WORKSPACE, COMMIT]),
     ]);
