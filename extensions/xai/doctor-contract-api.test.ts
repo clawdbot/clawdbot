@@ -110,6 +110,46 @@ describe("xAI doctor contract", () => {
     expect(normalizeCompatibilityConfig({ cfg: config })).toEqual({ config, changes: [] });
   });
 
+  it("migrates retired xAI image models in tools.media.models to grok-4.3", () => {
+    const config = {
+      tools: {
+        media: {
+          models: [
+            { provider: "xai", model: "grok-4-fast", capability: "image" },
+            { provider: "xai", model: "grok-3", capability: "image" },
+            { provider: "xai", model: "grok-4.3", capability: "image" },
+            { provider: "openai", model: "grok-4-fast", capability: "image" },
+            { type: "cli", provider: "xai", model: "grok-4-fast", command: "vision" },
+            { provider: "xai", model: "custom-vision" },
+          ],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      legacyConfigRules.filter((rule) => rule.match(readPathForTest(config, rule.path))),
+    ).toHaveLength(1);
+
+    const result = normalizeCompatibilityConfig({ cfg: config });
+
+    expect(result.changes).toHaveLength(1);
+    expect(result.changes[0]).toMatch(/Migrated 2 retired xAI image models/);
+    expect(result.config).not.toBe(config);
+    expect(result.config.tools?.media?.models).toEqual([
+      { provider: "xai", model: "grok-4.3", capability: "image" },
+      { provider: "xai", model: "grok-4.3", capability: "image" },
+      { provider: "xai", model: "grok-4.3", capability: "image" },
+      { provider: "openai", model: "grok-4-fast", capability: "image" },
+      { type: "cli", provider: "xai", model: "grok-4-fast", command: "vision" },
+      { provider: "xai", model: "custom-vision" },
+    ]);
+    expect(config.tools?.media?.models?.[0]).toHaveProperty("model", "grok-4-fast");
+    expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+      config: result.config,
+      changes: [],
+    });
+  });
+
   it("removes only the obsolete xAI STT model selector from media entries", () => {
     const config = {
       tools: {
