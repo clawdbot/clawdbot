@@ -1,12 +1,42 @@
 // Memory Core plugin module implements manager source state behavior.
 import type { SQLInputValue } from "node:sqlite";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemoryEntryProvenance,
+  MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+
+export type MemoryIndexEntry = {
+  path: string;
+  absPath: string;
+  mtimeMs: number;
+  size: number;
+  hash: string;
+  kind?: "markdown" | "multimodal";
+  content?: string;
+  contentText?: string;
+  lineMap?: number[];
+  lineProvenance?: MemoryEntryProvenance[];
+};
 
 export type MemorySourceFileStateRow = {
   path: string;
   hash: string;
   mtime?: number;
   size?: number;
+};
+
+export type MemoryIndexWriteResult = { status: "committed" } | { status: "deferred-session-retry" };
+
+export type MemoryIndexWorkItem = {
+  entry: MemoryIndexEntry;
+  source: MemorySource;
+  afterIndex?: (result: MemoryIndexWriteResult) => void;
+};
+
+export type MemorySourceSyncPlan = {
+  indexItems: MemoryIndexWorkItem[];
+  deferredSessionFiles?: Set<string>;
+  finalize: () => Promise<void> | void;
 };
 
 type MemorySourceStateDb = {

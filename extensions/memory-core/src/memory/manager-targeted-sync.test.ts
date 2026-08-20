@@ -88,4 +88,29 @@ describe("memory targeted session sync", () => {
     expect(result).toEqual({ handled: true, sessionsDirty: true });
     expect(sessionsDirtyFiles.size).toBe(0);
   });
+
+  it("keeps a deferred target dirty until a later targeted sync commits", async () => {
+    const targetSessionPath = "/tmp/targeted-deferred.jsonl";
+    const sessionsDirtyFiles = new Set([targetSessionPath]);
+    const syncArchiveFiles = vi
+      .fn()
+      .mockResolvedValueOnce({ deferredSessionFiles: new Set([targetSessionPath]) })
+      .mockResolvedValueOnce({ deferredSessionFiles: new Set<string>() });
+    const runTargetedSync = async () =>
+      await runMemoryTargetedSessionSync({
+        hasSessionSource: true,
+        targetArchiveFiles: new Set([targetSessionPath]),
+        sessionsDirtyFiles,
+        syncArchiveFiles,
+        shouldFallbackOnError: () => false,
+        activateFallbackProvider: async () => false,
+      });
+
+    await expect(runTargetedSync()).resolves.toEqual({ handled: true, sessionsDirty: true });
+    expect(sessionsDirtyFiles).toEqual(new Set([targetSessionPath]));
+
+    await expect(runTargetedSync()).resolves.toEqual({ handled: true, sessionsDirty: false });
+    expect(sessionsDirtyFiles).toEqual(new Set());
+    expect(syncArchiveFiles).toHaveBeenCalledTimes(2);
+  });
 });

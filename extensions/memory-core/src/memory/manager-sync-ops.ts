@@ -278,7 +278,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         sessionsReconcileDirty: this.sessionsReconcileDirty,
         sessionsDirtyFiles: this.sessionsDirtyFiles,
         syncArchiveFiles: async (targetedParams) => {
-          await this.syncArchiveFiles({
+          return await this.syncArchiveFiles({
             ...targetedParams,
             corpusEntries: targetSessionSync?.corpusEntries,
           });
@@ -310,7 +310,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
       if (this.shouldDeferSourceWideBatch()) {
-        await this.executeSourceWideSync({
+        const sessionPlan = await this.executeSourceWideSync({
           shouldSyncMemory,
           shouldSyncSessions,
           needsFullReindex,
@@ -322,7 +322,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           this.clearMemoryRetryState();
         }
         if (shouldSyncSessions) {
-          this.clearSessionRetryState();
+          this.clearSessionRetryState(sessionPlan.deferredSessionFiles ?? []);
         } else {
           this.refreshSessionDirtyFlag();
         }
@@ -333,12 +333,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }
 
         if (shouldSyncSessions) {
-          await this.syncArchiveFiles({
+          const sessionPlan = await this.syncArchiveFiles({
             needsFullReindex: needsFullSessionReindex,
             targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
             progress: progress ?? undefined,
           });
-          this.clearSessionRetryState();
+          this.clearSessionRetryState(sessionPlan.deferredSessionFiles ?? []);
         } else {
           this.refreshSessionDirtyFlag();
         }
@@ -553,7 +553,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       const shouldSyncSessions = shouldRetrySessionsOnFailure;
 
       if (this.shouldDeferSourceWideBatch()) {
-        await this.executeSourceWideSync({
+        const sessionPlan = await this.executeSourceWideSync({
           shouldSyncMemory,
           shouldSyncSessions,
           needsFullReindex: true,
@@ -563,7 +563,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           this.clearMemoryRetryState();
         }
         if (shouldSyncSessions) {
-          this.clearSessionRetryState();
+          this.clearSessionRetryState(sessionPlan.deferredSessionFiles ?? []);
         } else {
           this.refreshSessionDirtyFlag();
         }
@@ -574,8 +574,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }
 
         if (shouldSyncSessions) {
-          await this.syncArchiveFiles({ needsFullReindex: true, progress: params.progress });
-          this.clearSessionRetryState();
+          const sessionPlan = await this.syncArchiveFiles({
+            needsFullReindex: true,
+            progress: params.progress,
+          });
+          this.clearSessionRetryState(sessionPlan.deferredSessionFiles ?? []);
         } else {
           this.refreshSessionDirtyFlag();
         }

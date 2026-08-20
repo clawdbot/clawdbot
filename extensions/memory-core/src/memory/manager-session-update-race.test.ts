@@ -4,6 +4,7 @@ import type { MemorySessionSyncTarget } from "openclaw/plugin-sdk/memory-core-ho
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import type { MemorySourceSyncPlan } from "./manager-source-state.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -28,7 +29,7 @@ describe("memory session update sync", () => {
       sessionPendingTargets: Map<string, MemorySessionSyncTarget>;
       sessionsDirty: boolean;
       sessionsReconcileDirty: boolean;
-      syncArchiveFiles: (params: unknown) => Promise<void>;
+      syncArchiveFiles: (params: unknown) => Promise<MemorySourceSyncPlan>;
       processSessionUpdateBatch: () => Promise<void>;
     };
     let releaseActiveSync = () => {};
@@ -54,9 +55,10 @@ describe("memory session update sync", () => {
       syncArchiveFilesSpy = vi
         .spyOn(owner, "syncArchiveFiles")
         .mockImplementationOnce(async (params) => {
-          await syncArchiveFiles(params);
+          const result = await syncArchiveFiles(params);
           markActiveSyncIndexed();
           await activeSyncGate;
+          return result;
         });
       const activeSync = manager.sync({ reason: "test-active" });
       await activeSyncIndexed;

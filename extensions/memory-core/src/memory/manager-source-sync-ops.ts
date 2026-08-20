@@ -16,6 +16,7 @@ import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
+  type MemoryIndexWriteResult,
 } from "./manager-source-state.js";
 import type {
   MemoryIndexEntry,
@@ -150,6 +151,14 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<MemorySourceSyncPlan> {
+    const deferredSessionFiles = new Set<string>();
+    const retainDeferredSessionRetry =
+      (sessionFile: string) =>
+      (result: MemoryIndexWriteResult): void => {
+        if (result.status === "deferred-session-retry") {
+          deferredSessionFiles.add(sessionFile);
+        }
+      };
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM memory_index_sources WHERE path = ? AND source = ?`,
     );
@@ -352,6 +361,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
             (entry): MemoryIndexWorkItem => ({
               entry,
               source: "sessions",
+              afterIndex: retainDeferredSessionRetry(entry.absPath),
             }),
           ),
         );
@@ -363,7 +373,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       await flushPendingIndexItems();
       deleteTargetArchiveStaleLiveRows();
       await deleteStaleRows();
-      return this.emptySourceSyncPlan();
+      return { indexItems: [], deferredSessionFiles, finalize: () => {} };
     }
     if ((params.prefixIndexItems?.length ?? 0) > 0) {
       throw new Error("Memory session sync prefix requires deferred source-wide indexing.");
@@ -375,7 +385,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         if (!entry) {
           return;
         }
-        await this.indexFile(entry, { source: "sessions", content: entry.content });
+        const result = await this.indexFile(entry, {
+          source: "sessions",
+          content: entry.content,
+        });
+        retainDeferredSessionRetry(absPath)(result);
         this.advanceSyncProgress(params.progress);
       } finally {
         await yieldAfterSessionFile();
@@ -385,6 +399,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
 
     deleteTargetArchiveStaleLiveRows();
     await deleteStaleRows();
-    return this.emptySourceSyncPlan();
+    return { indexItems: [], deferredSessionFiles, finalize: () => {} };
   }
 }
