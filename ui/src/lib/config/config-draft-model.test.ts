@@ -151,6 +151,11 @@ describe("config draft model", () => {
                   { type: "string", enum: ["60"] },
                 ],
               },
+              unionConstOnly: { anyOf: [{ const: "60" }, { type: "number" }] },
+              unionEnumOnly: { oneOf: [{ enum: ["60"] }, { type: "number" }] },
+              unionBooleanConstOnly: {
+                anyOf: [{ const: "true" }, { type: "boolean" }],
+              },
             },
           },
           uiHints: {},
@@ -176,6 +181,9 @@ describe("config draft model", () => {
     runtimeConfig.patchForm(["unionScientific"], "1e5");
     runtimeConfig.patchForm(["unionDigits"], "00123");
     runtimeConfig.patchForm(["unionEnum"], "60");
+    runtimeConfig.patchForm(["unionConstOnly"], "60");
+    runtimeConfig.patchForm(["unionEnumOnly"], "60");
+    runtimeConfig.patchForm(["unionBooleanConstOnly"], "true");
 
     await expect(runtimeConfig.save()).resolves.toBe(true);
     const submission = submitted.find((entry) => entry.method === "config.set");
@@ -195,6 +203,9 @@ describe("config draft model", () => {
       unionScientific: "1e5",
       unionDigits: "00123",
       unionEnum: "60",
+      unionConstOnly: "60",
+      unionEnumOnly: "60",
+      unionBooleanConstOnly: "true",
     });
     runtimeConfig.dispose();
   });

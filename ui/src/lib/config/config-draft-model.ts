@@ -179,6 +179,29 @@ function coerceBooleanString(value: string): boolean | string {
   return value;
 }
 
+function schemaMayAcceptString(schema: JsonSchema): boolean {
+  const declaredTypes = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  if (declaredTypes.length > 0 && !declaredTypes.includes("string")) {
+    return false;
+  }
+  if (schema.const !== undefined && typeof schema.const !== "string") {
+    return false;
+  }
+  if (schema.enum && !schema.enum.some((entry) => typeof entry === "string")) {
+    return false;
+  }
+  if (schema.allOf && !schema.allOf.every(schemaMayAcceptString)) {
+    return false;
+  }
+  if (schema.anyOf && !schema.anyOf.some(schemaMayAcceptString)) {
+    return false;
+  }
+  if (schema.oneOf && !schema.oneOf.some(schemaMayAcceptString)) {
+    return false;
+  }
+  return true;
+}
+
 function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   if (value === null || value === undefined) {
     return value;
@@ -211,7 +234,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       // Editors commit branch-validated types (including boolean literals),
       // and loaded values already passed Gateway validation. Preserve strings
       // instead of guessing again here.
-      if (variants.some((variant) => schemaType(variant) === "string")) {
+      if (variants.some(schemaMayAcceptString)) {
         return value;
       }
       for (const variant of variants) {
