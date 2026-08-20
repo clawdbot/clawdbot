@@ -57,13 +57,14 @@ observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option             | Effect                                                                                                                                                                                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `matcher`          | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
-| `priority`         | Ordering; higher runs first.                                                                                                                                                                                                                           |
-| `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
-| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                      |
-| `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| Option                  | Effect                                                                                                                                                                                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `matcher`               | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
+| `priority`              | Ordering; higher runs first.                                                                                                                                                                                                                           |
+| `registrationId`        | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
+| `timeoutMs`             | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                      |
+| `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| `requiresToolAuthority` | For `before_prompt_build` only, runs the handler after the host finalizes the current turn's tool surface and supplies ephemeral `ctx.toolAuthority`. Use this for context retrieval that must follow tool policy.                                     |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
 hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
@@ -135,16 +136,16 @@ observation-only.
 
 **Agent turn**
 
-| Hook                            | Purpose                                                                                  |
-| ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `before_model_resolve`          | Override provider or model before session messages load                                  |
-| `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks      |
-| `before_prompt_build`           | Add prompt context or narrow the current turn's submitted tool surface                   |
-| **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run |
-| **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                           |
-| **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                         |
-| `agent_end`                     | Observe final messages, success state, and run duration                                  |
-| `heartbeat_prompt_contribution` | Add heartbeat-only context for background monitor and lifecycle plugins                  |
+| Hook                            | Purpose                                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `before_model_resolve`          | Override provider or model before session messages load                                                     |
+| `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks                         |
+| `before_prompt_build`           | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment |
+| **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run                    |
+| **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                                              |
+| **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                                            |
+| `agent_end`                     | Observe final messages, success state, and run duration                                                     |
+| `heartbeat_prompt_contribution` | Add heartbeat-only context for background monitor and lifecycle plugins                                     |
 
 **Conversation observation**
 
@@ -577,9 +578,64 @@ Use the phase-specific hooks for new plugins:
   dynamic tools are thread-scoped and Codex `turn/start` has no tool-surface
   override; use the embedded or Copilot runtime when a plugin requires this
   policy.
+- `before_prompt_build` with `{ requiresToolAuthority: true }`: runs in a
+  second, post-policy phase. Use it when prompt enrichment reads data through
+  a tool-backed capability and the same turn must be allowed to call that
+  tool. See [Authorized prompt enrichment](#authorized-prompt-enrichment).
 - `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
+
+### Authorized prompt enrichment
+
+Register `before_prompt_build` with `requiresToolAuthority: true` when a plugin
+must verify the finalized per-turn tool policy before retrieving context:
+
+```typescript
+api.on(
+  "before_prompt_build",
+  async (event, ctx) => {
+    const authority = ctx.toolAuthority;
+    if (!authority?.allows("memory_search")) {
+      return;
+    }
+
+    const recalledContext = await recallForPrompt(event.prompt);
+    authority.assertActive();
+    return { prependContext: recalledContext };
+  },
+  { requiresToolAuthority: true },
+);
+```
+
+The host excludes this handler from the ordinary prompt-build phase. After all
+ordinary hooks and tool restrictions settle, a supported runtime invokes it
+with `ctx.toolAuthority` bound to that exact active turn and finalized tool
+surface. Embedded, CLI, Copilot, and Codex runtimes support this phase. If a
+runtime cannot prove the authority, it skips the handler.
+
+Treat `toolAuthority` as an ephemeral capability:
+
+- `allows(toolName)` checks a canonical tool id against the finalized surface
+  and also verifies that the capability is still active.
+- `assertActive()` rejects after abort, cancellation, run replacement,
+  lifecycle rotation, or hook dispatch completion. Call it after awaited work
+  and before committing plugin-owned side effects.
+- `fingerprint` is opaque cache-partitioning input. It is not a bearer token or
+  authorization proof; never persist, transmit, or compare it as authority.
+- Return only `prependContext` or `appendContext` from this phase. It cannot
+  replace the system prompt or change `toolsAllow` after policy has settled.
+
+The host revalidates authority after each awaited handler and discards stale
+enrichment. A retained `toolAuthority` object fails closed after dispatch.
+
+This option requires a host that implements the post-policy phase. Published
+plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
+with the first OpenClaw version they build against for this contract. Older
+hosts skip incompatible packages during discovery and reject incompatible
+installs or updates. Do not publish a package that uses this option while
+claiming compatibility with an older plugin API; an older host may otherwise
+treat an unknown option as an ordinary pre-policy hook.
 
 `before_agent_run` runs after prompt construction and before any model input,
 including prompt-local image loading and `llm_input` observation. It receives
