@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import path from "node:path";
+import { isMissingPathError } from "../infra/errors.js";
 import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 
 const MEMORY_ARTIFACT_PROVENANCE_OWNER_ID = "core:memory-artifact-provenance";
@@ -32,8 +34,19 @@ function sha256(value: string): string {
 }
 
 function normalizeWorkspaceKey(workspaceDir: string): string {
-  const resolved = path.resolve(workspaceDir).replaceAll("\\", "/");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  const resolved = path.resolve(workspaceDir);
+  let canonical = resolved;
+  try {
+    // Provenance follows the physical workspace so symlink or junction aliases
+    // cannot split the writer and reader into different trust records.
+    canonical = realpathSync.native(resolved);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+  }
+  const normalized = canonical.replaceAll("\\", "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 export function normalizeMemoryArtifactRelativePath(relativePath: string): string | undefined {

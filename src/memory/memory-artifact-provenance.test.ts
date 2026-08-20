@@ -1,3 +1,5 @@
+import { mkdir, symlink } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -14,6 +16,36 @@ afterEach(() => {
 });
 
 describe("memory artifact provenance", () => {
+  it("uses the same workspace identity through symlink aliases", async () => {
+    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+      const workspaceDir = path.join(tempRoot, "workspace");
+      const workspaceAlias = path.join(tempRoot, "workspace-alias");
+      const relativePath = "memory/2026-08-20.md";
+      await mkdir(workspaceDir);
+      await symlink(
+        workspaceDir,
+        workspaceAlias,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      await recordMemoryArtifactWriteProvenance({
+        workspaceDir: workspaceAlias,
+        relativePath,
+        contentBefore: "",
+        contentAfter: "restricted",
+        originClass: "untrusted",
+        observedAt: 1,
+      });
+
+      await expect(
+        readMemoryArtifactProvenance({ workspaceDir, relativePath }),
+      ).resolves.toMatchObject({ originClass: "untrusted" });
+      await expect(listMemoryArtifactProvenance({ workspaceDir })).resolves.toEqual([
+        expect.objectContaining({ relativePath }),
+      ]);
+    });
+  });
+
   it("keeps the least-trusted origin sticky across later writes", async () => {
     await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
       const address = { workspaceDir: tempRoot, relativePath: "memory/2026-08-20.md" };
