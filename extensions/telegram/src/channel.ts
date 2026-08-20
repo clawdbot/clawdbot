@@ -75,7 +75,11 @@ import {
 } from "./group-policy.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import * as monitorModule from "./monitor.js";
-import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
+import {
+  looksLikeTelegramTargetId,
+  normalizeTelegramMessagingTarget,
+  telegramMessagingTargetsMatch,
+} from "./normalize.js";
 import { createTelegramOutboundAdapter } from "./outbound-adapter.js";
 import { parseTelegramThreadId } from "./outbound-params.js";
 import { releaseStoppedTelegramPollingLease } from "./polling-lease.js";
@@ -1280,6 +1284,12 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   security: telegramSecurityAdapter,
   threading: {
+    matchesToolContextTarget: ({ target, toolContext }) => {
+      return [toolContext.currentMessagingTarget, toolContext.currentChannelId].some(
+        (currentTarget) =>
+          currentTarget != null && telegramMessagingTargetsMatch(target, currentTarget),
+      );
+    },
     resolveReplyToMode: ({ cfg, accountId }) =>
       resolveTelegramConfigAccessorAccount({ cfg, accountId }).config.replyToMode ?? "off",
     buildToolContext: (params) => buildTelegramThreadingToolContext(params),

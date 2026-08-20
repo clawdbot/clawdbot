@@ -66,6 +66,52 @@ describe("Code Mode guest execution", () => {
   });
 
   it.each([
+    { alias: "blank code", args: { code: "", command: "return 7;" } },
+    { alias: "whitespace code", args: { code: "   ", command: "return 7;" } },
+    { alias: "blank command", args: { code: "return 7;", command: "" } },
+    { alias: "whitespace command", args: { code: "return 7;", command: "  \n " } },
+  ])("runs the populated alias when the other is $alias", async ({ args }) => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const result = resultDetails(
+      await expectDefined(tools[0], "tools[0] test invariant").execute(
+        "code-call-blank-alias",
+        args,
+      ),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.value).toBe(7);
+  });
+
+  it("still rejects when both aliases are blank", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    await expect(
+      expectDefined(tools[0], "tools[0] test invariant").execute("code-call-blank-both", {
+        code: "",
+        command: "   ",
+      }),
+    ).rejects.toThrow("code or command must be a non-empty string");
+  });
+
+  it.each([
     { code: "ls -la /workspace/" },
     { code: "ls -1" },
     { command: "ls -la /workspace/" },

@@ -69,9 +69,9 @@ export type GatewayGmailRestartAbortController = {
 export type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
+  sourceConfig: OpenClawConfig;
   prepareRestartRuntimeConfig?: () => Promise<OpenClawConfig>;
   runtimeEnv?: NodeJS.ProcessEnv;
-  sourceConfig?: OpenClawConfig;
 };
 
 export type GatewayRestartTransactionState = "pending" | "committed" | "rejected";
@@ -151,12 +151,14 @@ export type GatewayReloadHandlerParams = {
   stopPostReadySidecars?: () => Promise<void> | void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
+    sourceConfig: OpenClawConfig;
     changedPaths: readonly string[];
     beforeReplace: (
       channels: ReadonlySet<ChannelKind>,
       accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
     ) => Promise<void>;
-    commitRuntime: () => Promise<void>;
+    commitRuntime: (onCommit?: () => void) => Promise<void>;
+    onReplacementTeardownFailure: (error: unknown) => void;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
   }) => Promise<GatewayPluginReloadResult>;
