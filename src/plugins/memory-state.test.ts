@@ -120,6 +120,21 @@ describe("memory plugin state", () => {
     expect(resolveMemoryWriteProvenancePlan()).toBe(writeProvenance);
   });
 
+  it("preserves write provenance registered through a flush plan", () => {
+    const recordWriteProvenance = vi.fn(async () => undefined);
+    const cfg = {};
+    const flushPlanResolver = vi.fn(() => ({
+      ...createMemoryFlushPlan("memory/legacy.md"),
+      recordWriteProvenance,
+    }));
+    registerMemoryCapability("memory-core", { flushPlanResolver });
+
+    expect(resolveMemoryWriteProvenancePlan({ cfg, nowMs: 123 })).toEqual(
+      expect.objectContaining({ recordWriteProvenance }),
+    );
+    expect(flushPlanResolver).toHaveBeenCalledWith({ cfg, nowMs: 123 });
+  });
+
   it("lists active public memory artifacts in deterministic order", async () => {
     registerMemoryCapability("memory-core", {
       publicArtifacts: {

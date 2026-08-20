@@ -390,7 +390,7 @@ async function saveSessionMemoryNow(
     const provenanceObserver = createMemoryWriteProvenanceObserver({
       mutationRoot: workspaceDir,
       workspaceDir,
-      plan: resolveMemoryWriteProvenancePlan() ?? {},
+      plan: resolveMemoryWriteProvenancePlan({ cfg, nowMs: now.getTime() }) ?? {},
       resolveOriginClass: () =>
         transcript.status === "available" ? transcript.originClass : "agent",
       now: () => now.getTime(),

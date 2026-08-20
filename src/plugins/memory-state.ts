@@ -259,8 +259,19 @@ export function resolveMemoryFlushPlan(params: {
 }): MemoryFlushPlan | null {
   return getMemoryCapability()?.capability.flushPlanResolver?.(params) ?? null;
 }
-export function resolveMemoryWriteProvenancePlan(): MemoryWriteProvenancePlan | null {
-  return getMemoryCapability()?.capability.writeProvenance ?? null;
+export function resolveMemoryWriteProvenancePlan(
+  params: {
+    cfg?: OpenClawConfig;
+    nowMs?: number;
+  } = {},
+): MemoryWriteProvenancePlan | null {
+  const capability = getMemoryCapability()?.capability;
+  if (!capability) {
+    return null;
+  }
+  // MemoryFlushPlan shipped with these callbacks before write provenance became
+  // independent of compaction. Preserve that SDK contract until a versioned transition.
+  return capability.writeProvenance ?? capability.flushPlanResolver?.(params) ?? null;
 }
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return getMemoryCapability()?.capability.runtime;
