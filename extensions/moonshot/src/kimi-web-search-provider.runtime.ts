@@ -333,11 +333,9 @@ async function runKimiSearch(params: {
     }
   }
 
-  return {
-    content: "Search completed but no final answer was produced.",
-    citations: [...collectedCitations],
-    grounded: hasGroundingEvidence,
-  };
+  throw new Error(
+    "Kimi web search exhausted its tool-call rounds without producing a final answer. Retry the query or choose another search provider.",
+  );
 }
 
 export async function executeKimiWebSearchProviderTool(
