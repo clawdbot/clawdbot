@@ -10763,21 +10763,25 @@ public struct SessionsResetParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
     public let reason: AnyCodable?
+    public let expectedsessionid: String?
 
     public init(
         key: String,
         agentid: String? = nil,
-        reason: AnyCodable? = nil)
+        reason: AnyCodable? = nil,
+        expectedsessionid: String? = nil)
     {
         self.key = key
         self.agentid = agentid
         self.reason = reason
+        self.expectedsessionid = expectedsessionid
     }
 
     private enum CodingKeys: String, CodingKey {
         case key
         case agentid = "agentId"
         case reason
+        case expectedsessionid = "expectedSessionId"
     }
 }
 
