@@ -339,6 +339,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(dispatchText).not.toContain("secrets.");
     expect(dispatch?.steps).toHaveLength(1);
     expect(workflowText).toContain('setOutput("request_source", requestSource)');
+    expect(workflowText).toContain('context.actor === "github-actions[bot]"');
+    expect(workflowText).toContain(
+      'const dispatcherSources = new Set(["clawsweeper_label", "issue_comment"]);',
+    );
+    expect(workflowText).toContain("dispatcherSources.has(inputs.request_source)");
     expect(workflowText).toContain('requestSource === "clawsweeper_label"');
     expect(workflowText).toContain("pr.head.repo.full_name !== `${owner}/${repo}`");
     expect(workflowText).toContain("allow-bot-users: github-actions[bot]");

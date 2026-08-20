@@ -29,7 +29,7 @@ on:
         required: false
         type: string
       request_source:
-        description: Internal request source for PR-triggered runs
+        description: Dispatcher request source; ignored for manual runs
         required: false
         default: workflow_dispatch
         type: string
@@ -87,7 +87,12 @@ jobs:
             }
 
             const body = inputs.instructions || "";
-            const requestSource = inputs.request_source || "workflow_dispatch";
+            const dispatcherSources = new Set(["clawsweeper_label", "issue_comment"]);
+            const requestSource =
+              context.actor === "github-actions[bot]" &&
+              dispatcherSources.has(inputs.request_source)
+                ? inputs.request_source
+                : "workflow_dispatch";
             const { owner, repo } = context.repo;
             const { data: pr } = await github.rest.pulls.get({
               owner,
