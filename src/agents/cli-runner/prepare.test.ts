@@ -2538,7 +2538,9 @@ describe("prepareCliRunContext", () => {
           extraSystemPromptStatic: staticPrompt,
           sourceReplyDeliveryMode: stableMode,
         };
+        const config = createCliBackendConfig({ bundleMcp: true });
         const first = await fixture.prepare({
+          config,
           sessionKey: "main",
           prompt: "first ask",
           extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
@@ -2547,6 +2549,7 @@ describe("prepareCliRunContext", () => {
           cliSessionBindingFacts,
         });
         const second = await fixture.prepare({
+          config,
           sessionKey: "main",
           prompt: "second ask",
           extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
@@ -2559,6 +2562,8 @@ describe("prepareCliRunContext", () => {
             messageToolPolicyHash: first.messageToolPolicyHash,
             promptToolNamesHash: first.promptToolNamesHash,
             cwdHash: hashCliSessionText(dir),
+            mcpConfigHash: first.preparedBackend.mcpConfigHash,
+            mcpResumeHash: first.preparedBackend.mcpResumeHash,
           },
         });
 
