@@ -648,6 +648,36 @@ describe("applyPluginAutoEnable channels", () => {
       );
     });
 
+    it("keeps a fallback another configured channel still needs", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            zzalpha: { someKey: "value" },
+            zzbeta: { someKey: "value" },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "zz-replacement",
+            channels: ["zzalpha"],
+            channelConfigs: {
+              zzalpha: {
+                schema: { type: "object" },
+                preferOver: ["zz-fallback"],
+              },
+            },
+          },
+          { id: "zz-fallback", channels: ["zzalpha", "zzbeta"] },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["zz-replacement"]?.enabled).toBe(true);
+      // zzbeta has no other claimant, so disabling the fallback plugin-wide takes that channel
+      // down with it.
+      expect(result.config.plugins?.entries?.["zz-fallback"]?.enabled).not.toBe(false);
+    });
+
     it("auto-enables imessage when only imessage is configured", () => {
       const result = applyPluginAutoEnable({
         config: {

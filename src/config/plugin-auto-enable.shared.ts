@@ -31,7 +31,10 @@ import {
   collectPluginIdsForConfiguredChannel,
   normalizeManifestChannelId,
 } from "./channel-activation-candidates.js";
-import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
+import {
+  isPluginSupersededOnEveryConfiguredChannel,
+  shouldSkipPreferredPluginAutoEnable,
+} from "./plugin-auto-enable.prefer-over.js";
 import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
@@ -970,12 +973,25 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
         preferOverCache,
       })
     ) {
-      next = disableImplicitPreferredOverPlugin({
-        config: next,
-        originalConfig: params.config ?? {},
-        pluginId: entry.pluginId,
-        manifestRegistry: params.manifestRegistry,
-      });
+      // Withhold the plugin-wide disable while another configured channel still has this plugin as
+      // its only unsuperseded claimant, or replacing it on one channel silently removes the others.
+      if (
+        isPluginSupersededOnEveryConfiguredChannel({
+          config: next,
+          pluginId: entry.pluginId,
+          configured: params.candidates,
+          env: params.env,
+          registry: params.manifestRegistry,
+          preferOverCache,
+        })
+      ) {
+        next = disableImplicitPreferredOverPlugin({
+          config: next,
+          originalConfig: params.config ?? {},
+          pluginId: entry.pluginId,
+          manifestRegistry: params.manifestRegistry,
+        });
+      }
       continue;
     }
 

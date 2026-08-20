@@ -252,6 +252,17 @@ function resolvePreferredOverIds(
   ];
 }
 
+/**
+ * The channel a candidate speaks for. A candidate that is not channel-configured has no channel of
+ * its own, so it stands for its plugin and can only be contested by another candidate for the same
+ * plugin — which the caller already skips.
+ */
+function candidateChannelId(candidate: PluginAutoEnableCandidate): string {
+  const channelId =
+    candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
+  return normalizeChatChannelId(channelId) ?? channelId;
+}
+
 function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
   return `${candidate.pluginId}:${candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId}`;
 }
@@ -279,6 +290,12 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   // raw check here leaves the preferred claimant eligible and disables its fallback: both end up
   // off while validation selected the fallback's schema.
   const resolveAlias = createManifestPluginAliasResolver(params.registry);
+  const entryChannelId = candidateChannelId(params.entry);
+  const claimsChannel = (pluginId: string, channelId: string): boolean =>
+    params.configured.some(
+      (candidate) => candidate.pluginId === pluginId && candidateChannelId(candidate) === channelId,
+    );
+
   for (const other of params.configured) {
     if (other.pluginId === params.entry.pluginId) {
       continue;
@@ -286,9 +303,61 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     if (isPluginPolicyDisabled(params.config, other.pluginId, resolveAlias)) {
       continue;
     }
-    if (getPreferredOverIds(other).includes(params.entry.pluginId)) {
-      return true;
+    if (!getPreferredOverIds(other).includes(params.entry.pluginId)) {
+      continue;
     }
+    // A declaration is made FOR one channel, and it means one of two things depending on whether
+    // the plugin it names also claims that channel.
+    //
+    // Both claim it: the two are rival owners of that channel and the declaration settles which
+    // one wins THERE. Letting it reach the loser's other channels replaces a plugin on channels
+    // nobody contested. `collectPluginIdsForConfiguredChannel` reads it the same way — a
+    // preferred-over id is only a competitor when it claims the channel being resolved.
+    //
+    // Only the declarer claims it: the named plugin is a predecessor being succeeded outright, not
+    // a rival for a shared channel, so the preference is not channel-bound.
+    const declaredChannelId = candidateChannelId(other);
+    if (
+      declaredChannelId !== entryChannelId &&
+      claimsChannel(params.entry.pluginId, declaredChannelId)
+    ) {
+      continue;
+    }
+    return true;
   }
   return false;
+}
+
+/**
+ * Whether every channel this plugin was a candidate for has a preferred replacement.
+ *
+ * Suppression is decided per channel, but the disablement it triggers writes
+ * `plugins.entries.<id>.enabled = false`, which is plugin-wide. A plugin serving channels X and Y
+ * that is superseded only on Y must stay enabled or X loses its only claimant, so the plugin-wide
+ * write is withheld until no channel still needs it.
+ */
+export function isPluginSupersededOnEveryConfiguredChannel(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+  configured: readonly PluginAutoEnableCandidate[];
+  env: NodeJS.ProcessEnv;
+  registry: PluginManifestRegistry;
+  preferOverCache: Map<string, string[]>;
+}): boolean {
+  const ownCandidates = params.configured.filter(
+    (candidate) => candidate.pluginId === params.pluginId,
+  );
+  if (ownCandidates.length === 0) {
+    return false;
+  }
+  return ownCandidates.every((entry) =>
+    shouldSkipPreferredPluginAutoEnable({
+      config: params.config,
+      entry,
+      configured: params.configured,
+      env: params.env,
+      registry: params.registry,
+      preferOverCache: params.preferOverCache,
+    }),
+  );
 }
