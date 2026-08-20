@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CronJob,
@@ -336,8 +337,11 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
-    if (parseCronEveryMs(form.everyAmount, form.everyUnit) === undefined) {
+    const everyMs = parseCronEveryMs(form.everyAmount, form.everyUnit);
+    if (everyMs === undefined) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
+    } else if (form.triggerEnabled && everyMs < resolveCronTriggerMinIntervalMs()) {
+      errors.everyAmount = "cron.errors.triggerIntervalTooShort";
     }
   } else if (form.scheduleKind === "cron") {
     if (!form.cronExpr.trim()) {
@@ -354,7 +358,9 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     }
   }
   if (form.triggerEnabled) {
-    if (
+    if (form.payloadKind === "script") {
+      errors.triggerScript = "cron.errors.triggerScriptPayloadUnsupported";
+    } else if (
       form.scheduleKind !== "every" &&
       form.scheduleKind !== "cron" &&
       form.scheduleKind !== "stream"

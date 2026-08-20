@@ -387,6 +387,46 @@ describe("subagent registry lifecycle error grace", () => {
       });
   }
 
+  it("does not replay a requester-owned final already delivered before its turn yields", async () => {
+    const requesterTurnRunId = "run-requester-already-delivered";
+    const runId = "run-completed-before-yield";
+    const childSessionKey = "agent:main:subagent:completed-before-yield";
+    registerCompletionRun(runId, "completed-before-yield", "finish once", requesterTurnRunId);
+    setAssistantOutput(childSessionKey, "child complete");
+
+    emitLifecycleEvent(runId, { phase: "end", endedAt: Date.now() });
+    await waitForDeliveredCleanup(runId);
+
+    const completed = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((run) => run.runId === runId);
+    expect(completed?.delivery?.requesterVisibleFinal).toEqual({
+      requesterTurnRunId,
+      batchRunIds: [runId],
+    });
+    expect(getAgentCalls()).toHaveLength(1);
+    expect(
+      mod.markRequesterTurnYielded({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+      }),
+    ).toBe(1);
+    expect(
+      mod.settleRequesterAfterSessionSpawns({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+        requesterYielded: true,
+        acceptedSessionSpawns: [{ runId, childSessionKey }],
+      }),
+    ).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()).toHaveLength(0);
+    expect(completed?.delivery?.requesterVisibleFinal).toBeUndefined();
+  });
+
   it("lets requester settlement own a yielded batch after sibling deliveries race", async () => {
     const requesterTurnRunId = "run-requester-yield-race";
     const alphaSessionKey = "agent:main:subagent:yield-alpha";

@@ -1,6 +1,7 @@
 // Defines lifecycle-owned cache primitives for plugin metadata.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 
 /** Result shape for cache lookups that need to distinguish a miss from cached `undefined`. */
 type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
@@ -105,7 +106,7 @@ export function createConfigScopedPromiseLoader<T>(
     return promise;
   };
 
-  return {
+  const loader: ConfigScopedPromiseLoader<T> = {
     async load(config?: OpenClawConfig): Promise<T> {
       if (!config) {
         defaultPromise ??= createPromise();
@@ -124,6 +125,9 @@ export function createConfigScopedPromiseLoader<T>(
       promisesByConfig = new WeakMap<OpenClawConfig, Promise<T>>();
     },
   };
+  // Resolved values can retain executable plugin callbacks past install, replacement, or removal.
+  registerPluginMetadataProcessMemoLifecycleClear(() => loader.clear());
+  return loader;
 }
 
 function normalizeMaxEntries(value: number, fallback: number): number {

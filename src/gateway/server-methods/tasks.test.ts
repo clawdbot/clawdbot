@@ -296,6 +296,87 @@ describe("tasks gateway handlers", () => {
     );
   });
 
+  it("ranks terminal tasks by completion time when the progress timestamp is stale", async () => {
+    const base = Date.now();
+    const justFinished = createSnapshotTask({
+      taskId: "task-just-finished",
+      runId: "run-just-finished",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      createdAt: base - 10_000,
+      startedAt: base - 9_000,
+      lastEventAt: base - 5_000,
+      endedAt: base - 1_000,
+    });
+    const finishedEarlier = createSnapshotTask({
+      taskId: "task-finished-earlier",
+      runId: "run-finished-earlier",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      createdAt: base - 8_000,
+      startedAt: base - 7_000,
+      lastEventAt: base - 2_000,
+      endedAt: base - 3_000,
+    });
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [justFinished.taskId, justFinished],
+        [finishedEarlier.taskId, finishedEarlier],
+      ]),
+      deliveryStates: new Map(),
+    });
+    reloadTaskRegistryFromStore();
+
+    const { payload } = await runTaskHandler("tasks.list", {});
+
+    expect(payload?.tasks?.map((task) => task.taskId)).toEqual([
+      justFinished.taskId,
+      finishedEarlier.taskId,
+    ]);
+  });
+
+  it("ranks a terminal task by its later activity when completion trails it", async () => {
+    const base = Date.now();
+    const laterActivity = createSnapshotTask({
+      taskId: "task-later-activity",
+      runId: "run-later-activity",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      createdAt: base - 10_000,
+      startedAt: base - 9_000,
+      lastEventAt: base - 100,
+      endedAt: base - 2_000,
+    });
+    const laterCompletion = createSnapshotTask({
+      taskId: "task-later-completion",
+      runId: "run-later-completion",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      createdAt: base - 8_000,
+      startedAt: base - 7_000,
+      lastEventAt: base - 4_000,
+      endedAt: base - 500,
+    });
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [laterActivity.taskId, laterActivity],
+        [laterCompletion.taskId, laterCompletion],
+      ]),
+      deliveryStates: new Map(),
+    });
+    reloadTaskRegistryFromStore();
+
+    const { payload } = await runTaskHandler("tasks.list", {});
+    const byId = new Map(payload?.tasks?.map((task) => [task.taskId, task]));
+
+    expect(payload?.tasks?.map((task) => task.taskId)).toEqual([
+      laterActivity.taskId,
+      laterCompletion.taskId,
+    ]);
+    expect(byId.get("task-later-activity")?.updatedAt).toBe(base - 100);
+    expect(byId.get("task-later-completion")?.updatedAt).toBe(base - 500);
+  });
+
   it("preserves activity ordering across cursor pages", async () => {
     const created = [500, 100, 700, 300, 500].map((lastEventAt, index) =>
       createTaskRecord({

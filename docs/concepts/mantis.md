@@ -357,45 +357,36 @@ marker comment as the upsert key.
 | Workflow                          | Trigger                                                                                         | What it does                                                                                                                                                                                                                                                                                                     |
 | --------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Mantis Discord Smoke`            | manual dispatch                                                                                 | Runs `discord-smoke` against a chosen ref.                                                                                                                                                                                                                                                                       |
-| `Mantis Discord Status Reactions` | PR comment or manual dispatch                                                                   | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.                                 |
+| `Mantis Discord Status Reactions` | manual dispatch                                                                                 | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.                                 |
 | `Mantis Scenario`                 | manual dispatch                                                                                 | Generic dispatcher: takes `scenario_id` (`discord-status-reactions-tool-only`, `discord-thread-reply-filepath-attachment`, `slack-desktop-smoke`, `telegram-live`, `telegram-desktop-proof`, `web-ui-chat-proof`), `baseline_ref`, `candidate_ref`, `pr_number`, and forwards to the matching scenario workflow. |
 | `Mantis Slack Desktop Smoke`      | manual dispatch                                                                                 | Leases a Crabbox Linux desktop (defaults to `aws`, choice of `hetzner`), runs `slack-desktop-smoke --gateway-setup` against the candidate, records the desktop, generates a motion preview, uploads artifacts, posts PR evidence when a PR number is given.                                                      |
-| `Mantis Telegram Live`            | PR comment or manual dispatch                                                                   | Runs the bot-API Telegram live QA lane (`openclaw qa telegram`), writes `mantis-evidence.json` from the QA summary, renders redacted evidence HTML through a Crabbox desktop browser, generates a motion GIF, posts PR evidence. Telegram Web login is not required for this lane.                               |
+| `Mantis Telegram Live`            | manual dispatch                                                                                 | Runs the bot-API Telegram live QA lane (`openclaw qa telegram`), writes `mantis-evidence.json` from the QA summary, renders redacted evidence HTML through a Crabbox desktop browser, generates a motion GIF, posts PR evidence. Telegram Web login is not required for this lane.                               |
 | `Mantis Telegram Desktop Proof`   | ClawSweeper label (`mantis: telegram-visible-proof`), maintainer PR comment, or manual dispatch | Agentic native Telegram Desktop before/after proof. Hands the PR, baseline/candidate refs, and maintainer instructions to Codex, which runs each container-isolated SUT against a local Docker desktop recorder and posts a 2-column PR evidence table.                                                          |
-| `Mantis Web UI Chat Proof`        | PR comment or manual dispatch                                                                   | Runs the focused OpenClaw Control UI chat Playwright proof against the candidate, verifies the browser sends through the mocked Gateway, captures screenshot/video artifacts, and posts PR evidence. This lane is web chat proof only, not WinUI/native-app or arbitrary visual proof.                           |
+| `Mantis Web UI Chat Proof`        | manual dispatch                                                                                 | Runs the focused OpenClaw Control UI chat Playwright proof against the candidate, verifies the browser sends through the mocked Gateway, captures screenshot/video artifacts, and posts PR evidence. This lane is web chat proof only, not WinUI/native-app or arbitrary visual proof.                           |
 
 `Mantis Discord Status Reactions` and `Mantis Telegram Live` both accept
-`baseline_ref`/`candidate_ref` (or `baseline=`/`candidate=` in a PR comment)
-and validate that the resolved SHA is either an ancestor of `origin/main`, a
-release tag (`v*`), or the head of an open PR before running with
-secret-bearing credentials.
+`baseline_ref`/`candidate_ref` and validate that the resolved SHA is either an
+ancestor of `origin/main`, a release tag (`v*`), or the head of an open PR
+before running with secret-bearing credentials.
 
 Comment triggers, from a PR with write/maintain/admin access:
 
 ```text
-@openclaw-mantis discord status reactions
-@openclaw-mantis discord status reactions baseline=origin/main candidate=HEAD
-@openclaw-mantis telegram
-@openclaw-mantis telegram scenario=telegram-status-command
-@openclaw-mantis telegram scenarios=telegram-status-command,channel-canary
-@openclaw-mantis web ui chat
-@openclaw-mantis web-ui-chat candidate=HEAD
+@openclaw-mantis
+@openclaw-mantis verify the streamed reply stays visible while it arrives
 ```
 
-Telegram comment triggers default to the PR head SHA as candidate and
-`telegram-status-command` as scenario; they accept `provider=aws|hetzner` and
-`lease=<cbx_...>` to target a specific Crabbox provider or a pre-warmed
-desktop. `Mantis Telegram Desktop Proof` only responds to a PR comment when
-the commenter has write, maintain, or admin access. ClawSweeper's
+`Mantis Telegram Desktop Proof` only responds to a PR comment when
+the commenter has write, maintain, or admin access. A bare mention starts the
+desktop proof; any remaining text becomes optional proof guidance. Mantis
+reacts with 👀 when it accepts the request, then posts the active run link in
+its evidence comment and replaces that same comment with the result. ClawSweeper's
 `mantis: telegram-visible-proof` label starts the proof automatically for
 branches in `openclaw/openclaw`; fork PRs still require an explicit maintainer
 comment. Manual runs first inspect the diff and stop before desktop setup when
 there is no Telegram-visible behavior to test.
 
-Web UI chat comment triggers default to the PR head SHA as candidate. They run
-the Control UI mocked-Gateway chat proof and publish browser artifacts; use
-normal Playwright/browser proof, maintainer screenshots, Crabbox, or local
-artifacts for other web pages and native app surfaces.
+The other scenario workflows remain available through manual Actions dispatch.
 
 ClawSweeper can also dispatch a scenario directly:
 
