@@ -1,4 +1,4 @@
-// Per-gateway, per-browser snooze state for the sidebar attention chips.
+// Per-gateway, per-browser dismissal state for the sidebar attention chips.
 // Deliberately client-side chrome (like nav width / dock layout), not gateway
 // state: dismissing a nag on one device should not acknowledge it everywhere.
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
@@ -12,7 +12,7 @@ const SIDEBAR_ATTENTION_KINDS = [
 ] as const;
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
 
-export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string>>;
+export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string | true>>;
 
 // Minimal chip shape the snooze logic needs; keeps this module free of the
 // component's item type so the two files cannot form an import cycle.
@@ -37,7 +37,7 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
     const result: SidebarAttentionDismissals = {};
     for (const kind of SIDEBAR_ATTENTION_KINDS) {
       const value = (parsed as Record<string, unknown>)[kind];
-      if (typeof value === "string") {
+      if (typeof value === "string" || value === true) {
         result[kind] = value;
       }
     }
@@ -59,7 +59,7 @@ export function saveDismissals(gatewayUrl: string, dismissals: SidebarAttentionD
       storage.setItem(dismissalStoreKey(gatewayUrl), JSON.stringify(dismissals));
     }
   } catch {
-    // Quota/privacy-mode failures just lose the snooze; chips reappear.
+    // Quota/privacy-mode failures lose persistence; chips can reappear after reload.
   }
 }
 
@@ -78,6 +78,23 @@ export function addDismissal(
   return next;
 }
 
+export function addPermanentDismissal(
+  gatewayUrl: string,
+  kind: SidebarAttentionKind,
+): SidebarAttentionDismissals {
+  const next = { ...loadDismissals(gatewayUrl), [kind]: true };
+  saveDismissals(gatewayUrl, next);
+  return next;
+}
+
+export function isDismissed(
+  dismissals: SidebarAttentionDismissals,
+  item: DismissableChip,
+): boolean {
+  const dismissal = dismissals[item.kind];
+  return dismissal === true || dismissal === item.signature;
+}
+
 /**
  * Drop dismissals whose chip is gone or whose entity set changed, so a state
  * that clears and later recurs surfaces again instead of staying hidden by a
@@ -94,7 +111,7 @@ export function pruneDismissals(
     if (stored === undefined) {
       continue;
     }
-    if (items.some((item) => item.kind === kind && item.signature === stored)) {
+    if (stored === true || items.some((item) => item.kind === kind && item.signature === stored)) {
       next[kind] = stored;
     } else {
       changed = true;

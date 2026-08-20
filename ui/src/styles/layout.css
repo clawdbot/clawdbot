@@ -1070,7 +1070,6 @@ openclaw-settings-save-indicator {
 
 .sidebar-attention__dismiss {
   display: inline-flex;
-  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   padding: 6px 8px 6px 6px;
@@ -1079,6 +1078,20 @@ openclaw-settings-save-indicator {
   color: var(--muted);
   cursor: var(--cursor-action);
   opacity: 0.6;
+}
+
+wa-dropdown.sidebar-attention__dismiss-menu {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+wa-dropdown.sidebar-attention__dismiss-menu::part(menu) {
+  min-width: max-content;
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
 }
 
 .sidebar-attention__dismiss:hover {

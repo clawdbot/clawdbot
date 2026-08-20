@@ -4222,6 +4222,7 @@ export const en: TranslationMap = {
     cronErrorUnknown: "Unknown error",
     cronFailed: "{count} automation(s) failed",
     cronOverdue: "{count} automation(s) overdue",
+    dismissOptions: "Dismiss options",
     modelAuthExpired: "Model auth expired: {providers}",
     pendingApproval: "{count} pending approval",
     pendingApprovals: "{count} pending approvals",

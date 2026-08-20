@@ -18,7 +18,9 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import {
   addDismissal,
+  addPermanentDismissal,
   dismissalStoreKey,
+  isDismissed,
   loadDismissals,
   pruneDismissals,
   saveDismissals,
@@ -29,6 +31,7 @@ import {
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
 import "./tooltip.ts";
+import "./web-awesome.ts";
 
 // Reloads are connection-scoped; a visibility change only refetches after the
 // snapshot is older than this, so tab switches stay free of request bursts.
@@ -227,14 +230,14 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     ]);
   }
 
-  // Re-arm stale snoozes only right after this tab's own data refresh: fresh
+  // Re-arm stale incident snoozes only right after this tab's own data refresh: fresh
   // data is the only safe basis for deciding a chip is gone. Pruning from
   // render/update hooks would let a hidden tab with stale data clobber a
   // dismissal another tab just wrote (its storage event triggers an update
   // here). Against the persisted map, not the in-memory snapshot, for the
   // same lost-update reason as addDismissal. A failed fetch (empty cron list,
-  // null auth status) prunes those kinds, which fails safe — re-nag, never
-  // stay hidden.
+  // null auth status) prunes incident snoozes, which fails safe — re-nag,
+  // never stay hidden. Explicit permanent dismissals survive refreshes.
   private pruneAfterRefresh() {
     if (!this.dismissedScope) {
       return;
@@ -261,6 +264,13 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.dismissed = addDismissal(this.dismissedScope, item.kind, item.signature);
   }
 
+  private dismissPermanently(item: SidebarAttentionItem) {
+    if (!this.dismissedScope) {
+      return;
+    }
+    this.dismissed = addPermanentDismissal(this.dismissedScope, item.kind);
+  }
+
   private open(item: SidebarAttentionItem) {
     if (item.action.kind === "openApprovals") {
       this.onOpenApprovals?.();
@@ -279,7 +289,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       modelAuthAgentId: this.modelAuthAgentId,
       approvalQueue: this.context.overlays.snapshot.approvalQueue,
       now: Date.now(),
-    }).filter((item) => this.dismissed[item.kind] !== item.signature);
+    }).filter((item) => !isDismissed(this.dismissed, item));
     if (items.length === 0) {
       return nothing;
     }
@@ -300,15 +310,37 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
                   <span class="sidebar-attention__label">${item.label}</span>
                 </button>
               </openclaw-tooltip>
-              <openclaw-tooltip .content=${t("common.dismiss")}>
-                <button
-                  type="button"
-                  class="sidebar-attention__dismiss"
-                  aria-label=${t("common.dismiss")}
-                  @click=${() => this.dismiss(item)}
+              <openclaw-tooltip .content=${t("attention.dismissOptions")}>
+                <wa-dropdown
+                  class="sidebar-attention__dismiss-menu"
+                  placement="top-end"
+                  size="s"
+                  aria-label=${t("attention.dismissOptions")}
+                  @wa-select=${(
+                    event: CustomEvent<{ item: { value?: "dismiss" | "dismiss-permanently" } }>,
+                  ) => {
+                    if (event.detail.item.value === "dismiss") {
+                      this.dismiss(item);
+                    } else if (event.detail.item.value === "dismiss-permanently") {
+                      this.dismissPermanently(item);
+                    }
+                  }}
                 >
-                  ${icons.x}
-                </button>
+                  <button
+                    slot="trigger"
+                    type="button"
+                    class="sidebar-attention__dismiss"
+                    aria-label=${t("attention.dismissOptions")}
+                  >
+                    ${icons.x}
+                  </button>
+                  <wa-dropdown-item class="session-menu__item" value="dismiss">
+                    ${t("common.dismiss")}
+                  </wa-dropdown-item>
+                  <wa-dropdown-item class="session-menu__item" value="dismiss-permanently">
+                    ${t("common.dismissAndDontShowAgain")}
+                  </wa-dropdown-item>
+                </wa-dropdown>
               </openclaw-tooltip>
             </div>
           `,
