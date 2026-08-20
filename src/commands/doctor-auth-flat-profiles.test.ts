@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listAuthProfileStoresRequiringMigration } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { assertAuthProfileMigrationReady } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js";
 import {
   loadPersistedAuthProfileStore,
@@ -780,12 +780,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     ).toEqual({ eligible: false, reasonCode: "unresolved_ref" });
     expect(fs.existsSync(authPath)).toBe(false);
     expectMigratedArchive(authPath);
-    expect(
-      listAuthProfileStoresRequiringMigration({
-        agentDirs: [state.agentDir()],
-        env: state.env,
-      }),
-    ).toEqual([]);
+    expect(() => assertAuthProfileMigrationReady(state.agentDir())).not.toThrow();
   });
 
   it("imports valid profiles when one legacy OAuth sidecar ref is unresolved", async () => {
@@ -844,12 +839,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     });
     expect(fs.existsSync(authPath)).toBe(false);
     expectMigratedArchive(authPath);
-    expect(
-      listAuthProfileStoresRequiringMigration({
-        agentDirs: [state.agentDir()],
-        env: state.env,
-      }),
-    ).toEqual([]);
+    expect(() => assertAuthProfileMigrationReady(state.agentDir())).not.toThrow();
   });
 
   it("keeps existing SQLite credentials when importing stale JSON", async () => {
