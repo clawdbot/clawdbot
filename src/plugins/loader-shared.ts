@@ -381,10 +381,16 @@ export function pushCededChannelWithoutOwnerDiagnostics(params: {
   registry: PluginRegistry;
   cededChannelOwners: ReadonlyMap<string, string>;
 }): void {
+  // One dead channel is one diagnostic: a plugin id seen from two origins carries the cede on both
+  // records, and several claimants can cede the same channel to one replacement.
+  const reported = new Set<string>();
   for (const record of params.registry.plugins) {
-    // Bundle-format plugins register their channels outside this loader, so absence from the
-    // runtime catalog says nothing about whether such a channel is served.
-    if (record.status !== "loaded" || record.format === "bundle") {
+    // Activation status is deliberately not a filter. The common shape of this feature disables the
+    // fallback — auto-enable turns it off when a replacement supersedes its only channel — so
+    // skipping records that never loaded would stay silent in exactly the case the diagnostic
+    // exists for. Bundle-format plugins register outside this loader, so their absence from the
+    // runtime catalog says nothing about whether the channel is served.
+    if (record.format === "bundle") {
       continue;
     }
     for (const channelId of record.cededChannelIds ?? []) {
@@ -404,6 +410,10 @@ export function pushCededChannelWithoutOwnerDiagnostics(params: {
       if (cededTo === undefined || cededToRecord?.format === "bundle") {
         continue;
       }
+      if (reported.has(claimedId)) {
+        continue;
+      }
+      reported.add(claimedId);
       params.registry.diagnostics.push({
         level: "error",
         pluginId: record.id,

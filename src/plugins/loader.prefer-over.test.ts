@@ -963,4 +963,58 @@ describe("plugin loader preferOver activation", () => {
       message: "ceded channel has no registered owner: zzalpha (ceded to zz-replacement)",
     });
   });
+
+  // The shape above keeps the fallback loaded through a second channel. The ordinary shape is one
+  // contested channel, where auto-enable turns the fallback off entirely — so the only record
+  // carrying the cede never loads, and a diagnostic that reads activation status would go quiet in
+  // exactly the case an operator hits.
+  it("reports a ceded channel when auto-enable disabled the plugin that ceded it", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+      throwOnRegister: true,
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    expect(autoEnabled.config.plugins?.entries?.["zz-fallback"]?.enabled).toBe(false);
+    expect(registry.plugins.find((plugin) => plugin.id === "zz-fallback")?.status).not.toBe(
+      "loaded",
+    );
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")).toBeUndefined();
+    const matching = registry.diagnostics.filter((diag) =>
+      diag.message.includes("ceded channel has no registered owner"),
+    );
+    expect(matching).toHaveLength(1);
+    expect(matching[0]).toMatchObject({
+      level: "error",
+      pluginId: "zz-fallback",
+      message: "ceded channel has no registered owner: zzalpha (ceded to zz-replacement)",
+    });
+  });
 });
