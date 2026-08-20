@@ -38,9 +38,9 @@ type MissingStylesheetRecoveryDeps = {
   retry?: () => Promise<boolean>;
 };
 
-const lastAttemptAtByStorage = new WeakMap<object, number>();
-let lastAttemptWithoutStorage: number | null = null;
-let inFlightDocumentProbe: Promise<boolean> | null = null;
+const lastAttemptAtByStorage = new WeakMap<object, Map<string, number>>();
+const unavailableStorage = {};
+let inFlightDocumentProbe: { buildId?: string; promise: Promise<boolean> } | null = null;
 
 export function isStaleChunkImportError(error: unknown): boolean {
   return (
@@ -65,9 +65,9 @@ function sessionStorageOrNull(): Pick<Storage, "getItem" | "setItem"> | null {
   }
 }
 
-function probeControlUiDocument(): Promise<boolean> {
+function probeControlUiDocument(buildId?: string): Promise<boolean> {
   if (inFlightDocumentProbe) {
-    return inFlightDocumentProbe;
+    return inFlightDocumentProbe.promise;
   }
   const probe = (async () => {
     const controller = new AbortController();
@@ -86,11 +86,11 @@ function probeControlUiDocument(): Promise<boolean> {
     }
   })();
   const settledProbe = probe.finally(() => {
-    if (inFlightDocumentProbe === settledProbe) {
+    if (inFlightDocumentProbe?.promise === settledProbe) {
       inFlightDocumentProbe = null;
     }
   });
-  inFlightDocumentProbe = settledProbe;
+  inFlightDocumentProbe = { buildId, promise: settledProbe };
   return settledProbe;
 }
 
@@ -125,19 +125,7 @@ function persistGuardBuildId(
  * app webviews) instead of the recoverable panel error.
  */
 export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  const now = deps.now?.() ?? Date.now();
   const storage = deps.storage === undefined ? sessionStorageOrNull() : deps.storage;
-  const lastAttemptAt = storage
-    ? (lastAttemptAtByStorage.get(storage) ?? null)
-    : lastAttemptWithoutStorage;
-  if (lastAttemptAt !== null && now - lastAttemptAt < ATTEMPT_COOLDOWN_MS) {
-    return false;
-  }
-  if (storage) {
-    lastAttemptAtByStorage.set(storage, now);
-  } else {
-    lastAttemptWithoutStorage = now;
-  }
   const buildId = deps.buildId ?? CONTROL_UI_BUILD_INFO.buildId;
   // One automatic reload per build id: if the reloaded document still fails
   // with the same build, the build itself is broken and reloading cannot help.
@@ -145,7 +133,27 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   if (readGuardBuildId(storage) === buildId) {
     return false;
   }
-  if (!(await probeControlUiDocument())) {
+  const now = deps.now?.() ?? Date.now();
+  const storageIdentity = storage ?? unavailableStorage;
+  const attemptsByBuild = lastAttemptAtByStorage.get(storageIdentity) ?? new Map<string, number>();
+  for (const [attemptedBuildId, attemptedAt] of attemptsByBuild) {
+    if (now - attemptedAt >= ATTEMPT_COOLDOWN_MS) {
+      attemptsByBuild.delete(attemptedBuildId);
+    }
+  }
+  if (attemptsByBuild.has(buildId)) {
+    return false;
+  }
+  attemptsByBuild.set(buildId, now);
+  lastAttemptAtByStorage.set(storageIdentity, attemptsByBuild);
+  // A newer build cannot inherit the failed probe started for an older build.
+  const joinedOlderBuildProbe = Boolean(
+    inFlightDocumentProbe && inFlightDocumentProbe.buildId !== buildId,
+  );
+  if (
+    !(await probeControlUiDocument(buildId)) &&
+    (!joinedOlderBuildProbe || !(await probeControlUiDocument(buildId)))
+  ) {
     return false;
   }
   // A reload resets the in-memory state, so without a persisted guard a broken
