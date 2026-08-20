@@ -185,6 +185,59 @@ jobs:
               requestSource === "clawsweeper_label" || publishArtifactName ? "false" : "true",
             );
 
+      - name: Create Mantis status token
+        id: mantis_status_token
+        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: write
+
+      - name: Report Mantis run started
+        if: ${{ steps.mantis_status_token.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TARGET_PR: ${{ steps.resolve.outputs.pr_number }}
+        with:
+          github-token: ${{ steps.mantis_status_token.outputs.token }}
+          script: |
+            const marker = "<!-- mantis-telegram-desktop-proof -->";
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const body = `${marker}\nMantis started this proof. [Follow the active job](${runUrl}).`;
+            const { owner, repo } = context.repo;
+            const issueNumber = Number(process.env.TARGET_PR);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+            const existing = comments.findLast(
+              (comment) =>
+                comment.user?.login === "openclaw-mantis[bot]" &&
+                comment.body?.includes(marker),
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              body,
+            });
+
       - name: Checkout preflight refs
         id: checkout
         if: ${{ steps.resolve.outputs.should_run == 'true' && steps.resolve.outputs.requires_preflight == 'true' }}

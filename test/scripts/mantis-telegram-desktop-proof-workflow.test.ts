@@ -322,10 +322,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(dispatchWorkflow.on?.pull_request_target?.types).toEqual(["labeled"]);
     expect(dispatchWorkflow.permissions).toEqual({
       actions: "write",
+      issues: "write",
       "pull-requests": "read",
     });
     expect(dispatchText).toContain("@openclaw-mantis");
-    expect(dispatchText).toContain("telegram desktop proof");
+    expect(dispatchText).not.toContain("requestsDesktopProof");
+    expect(dispatchText).toContain("createForIssueComment");
+    expect(dispatchText).toContain('content: "eyes"');
+    expect(dispatchText).toContain('.replace(/(?:@|\\/)openclaw-mantis/giu, "")');
     expect(dispatchText).toContain('new Set(["admin", "maintain", "write"])');
     expect(dispatchText).toContain('context.actor !== "clawsweeper[bot]"');
     expect(dispatchText).toContain("Ignoring Mantis label applied by");
@@ -349,6 +353,21 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
     expect(workflowText).not.toContain("allow-bot-users: github-actions[bot],clawsweeper[bot]");
     expect(workflowText).toContain("inputs.approved_head_sha !== candidateRevision");
+
+    const startedToken = resolver?.steps?.find(
+      (step) => step.name === "Create Mantis status token",
+    );
+    const startedComment = resolver?.steps?.find(
+      (step) => step.name === "Report Mantis run started",
+    );
+    expect(startedToken?.if).toContain("request_source == 'issue_comment'");
+    expect(startedToken?.with?.["permission-pull-requests"]).toBe("write");
+    expect(startedComment?.["continue-on-error"]).toBe(true);
+    expect(startedComment?.with?.script).toContain("Mantis started this proof.");
+    expect(startedComment?.with?.script).toContain("actions/runs/${process.env.GITHUB_RUN_ID}");
+    expect(startedComment?.with?.script).toContain("mantis-telegram-desktop-proof");
+    expect(startedComment?.with?.script).toContain("issues.updateComment");
+    expect(startedComment?.with?.script).toContain("issues.createComment");
 
     const preflightCheckout = resolver?.steps?.find(
       (step) => step.name === "Checkout preflight refs",

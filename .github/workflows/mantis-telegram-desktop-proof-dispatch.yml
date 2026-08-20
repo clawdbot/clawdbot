@@ -8,6 +8,7 @@ on:
 
 permissions:
   actions: write
+  issues: write
   pull-requests: read
 
 jobs:
@@ -40,14 +41,6 @@ jobs:
             let requestSource;
 
             if (eventName === "issue_comment") {
-              const normalized = (context.payload.comment?.body ?? "").toLowerCase();
-              const requestsDesktopProof =
-                /\b(?:telegram desktop proof|desktop proof|native telegram|visible proof|telegram-visible-proof)\b/u.test(
-                  normalized,
-                );
-              if (!requestsDesktopProof) {
-                return;
-              }
               const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
                 owner,
                 repo,
@@ -59,8 +52,18 @@ jobs:
                 );
                 return;
               }
+              await github.rest.reactions
+                .createForIssueComment({
+                  owner,
+                  repo,
+                  comment_id: context.payload.comment.id,
+                  content: "eyes",
+                })
+                .catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
               prNumber = context.payload.issue.number;
-              instructions = context.payload.comment.body;
+              instructions = context.payload.comment.body
+                .replace(/(?:@|\/)openclaw-mantis/giu, "")
+                .trim();
               requestSource = "issue_comment";
             } else {
               const pr = context.payload.pull_request;
