@@ -1206,6 +1206,40 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(identifiers).toContain("/tmp/x.log");
   });
 
+  it("ignores decimal fragments while preserving standalone numeric identifiers", () => {
+    expect(extractOpaqueIdentifiers("metric=0.123456789")).not.toContain("123456789");
+    expect(extractOpaqueIdentifiers("order_id=123456789")).toContain("123456789");
+  });
+
+  it("keeps numeric tool-result noise out of the strict identifier candidate set", () => {
+    const toolResult = [
+      "latency_p50=0.123456789 latency_p99=3.1415926535",
+      "throughput=1.234567e+8 ratio=2.654321 cost_usd=12345678.90",
+      "run_id=987654321 commit=a1b2c3d4e5f6 endpoint=host.local:18789",
+    ].join("\n");
+
+    const identifiers = extractOpaqueIdentifiers(toolResult);
+
+    // Fractional digit runs are data, not identifiers.
+    expect(identifiers).not.toContain("123456789");
+    expect(identifiers).not.toContain("1415926535");
+    expect(identifiers).not.toContain("234567");
+    expect(identifiers).not.toContain("654321");
+    // The integer part of a decimal is data too.
+    expect(identifiers).not.toContain("12345678");
+    // Genuine identifiers still survive.
+    expect(identifiers).toContain("987654321");
+    expect(identifiers).toContain("A1B2C3D4E5F6"); // pragma: allowlist secret
+    expect(identifiers).toContain("host.local:18789");
+  });
+
+  it("does not extract numeric or hex fragments from inside larger tokens", () => {
+    expect(extractOpaqueIdentifiers("build-artifact-xyz123456789")).not.toContain("123456789");
+    expect(extractOpaqueIdentifiers("v2026.8.123456")).not.toContain("123456");
+    // A sentence-final identifier still matches; only decimals are excluded.
+    expect(extractOpaqueIdentifiers("Filed as ticket 123456.")).toContain("123456");
+  });
+
   it("fails quality audit when required sections are missing", () => {
     const quality = auditSummaryQuality({
       summary: "Short summary without structure",
