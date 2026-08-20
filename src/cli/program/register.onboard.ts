@@ -1,4 +1,5 @@
 // Commander registration for onboard setup flags and lazy onboard runtime execution.
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -367,7 +368,7 @@ export function registerOnboardCommand(program: Command): void {
           gatewayPassword: opts.gatewayPassword as string | undefined,
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
-          remotePassword: opts.remotePassword as string | undefined,
+          remotePassword: readStringValue(opts.remotePassword),
           tailscale: opts.tailscale as TailscaleMode | undefined,
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
