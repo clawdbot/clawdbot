@@ -377,7 +377,7 @@ suite.define(() => {
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
       const identitySave = page.locator(".agent-identity-editor__actions button");
-      await expect.poll(() => identitySave.innerText()).toBe("Save");
+      await expect.poll(async () => (await identitySave.textContent())?.trim()).toBe("Save");
       await expect.poll(() => identitySave.isDisabled()).toBe(true);
       await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
