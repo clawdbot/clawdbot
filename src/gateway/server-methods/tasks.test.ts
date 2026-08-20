@@ -10,8 +10,10 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
@@ -29,7 +31,7 @@ import {
 } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { tasksHandlers } from "./tasks.js";
-import type { RespondFn } from "./types.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const cancelSessionMock = vi.fn();
@@ -72,8 +74,28 @@ afterEach(async () => {
   resetTaskRegistryControlRuntimeForTests();
   resetTaskRegistryForTests();
   stateDirEnvSnapshot.restore();
+  closeOpenClawAgentDatabasesForTest();
   await fs.rm(stateDir, { recursive: true, force: true });
 });
+
+function identifiedClient(scopes: string[]): GatewayClient {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+      role: "operator",
+      scopes,
+    },
+    authenticatedUserId: "viewer@example.com",
+    authenticatedUserProfile: {
+      profileId: "viewer@example.com",
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+  };
+}
 
 function captureRespond() {
   const calls: Parameters<RespondFn>[] = [];
@@ -112,6 +134,7 @@ async function runTaskHandler(
   method: "tasks.list" | "tasks.get" | "tasks.cancel" | "tasks.retry" | "tasks.dismiss",
   params: Record<string, unknown>,
   config: Record<string, unknown> = {},
+  client: GatewayClient | null = null,
 ) {
   const { calls, respond } = captureRespond();
   await expectDefined(
@@ -122,7 +145,7 @@ async function runTaskHandler(
     params,
     respond,
     context: createContext(config),
-    client: null,
+    client,
     isWebchatConnect: () => false,
   });
   return {
@@ -464,6 +487,68 @@ describe("tasks gateway handlers", () => {
     } finally {
       cloneSpy.mockRestore();
     }
+  });
+
+  it("hides incognito tasks before pagination and blocks direct access", async () => {
+    const hiddenSessionKey = "agent:main:dashboard:incognito-task";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: hiddenSessionKey },
+      {
+        sessionId: "session-incognito-task",
+        updatedAt: 1,
+        incognito: true,
+        visibility: "shared",
+      },
+    );
+    const hidden = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: hiddenSessionKey,
+      requesterAgentId: "main",
+      ownerKey: hiddenSessionKey,
+      scopeKind: "session",
+      task: "Private task",
+      status: "running",
+      deliveryStatus: "pending",
+      lastEventAt: 2_000,
+    });
+    const visible = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      requesterAgentId: "main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Visible task",
+      status: "running",
+      deliveryStatus: "pending",
+      lastEventAt: 1_000,
+    });
+    const viewer = identifiedClient(["operator.read", "operator.write"]);
+
+    const list = await runTaskHandler("tasks.list", { limit: 1 }, {}, viewer);
+    expect(list.payload?.tasks?.map((task) => task.taskId)).toEqual([visible.taskId]);
+    expect(list.payload?.nextCursor).toBeUndefined();
+
+    const get = await runTaskHandler("tasks.get", { taskId: hidden.taskId }, {}, viewer);
+    expect(get.calls[0]).toMatchObject([
+      false,
+      undefined,
+      { message: `task not found: ${hidden.taskId}` },
+    ]);
+
+    const cancel = await runTaskHandler("tasks.cancel", { taskId: hidden.taskId }, {}, viewer);
+    expect(cancel.payload).toMatchObject({ found: false, cancelled: false });
+
+    for (const method of ["tasks.retry", "tasks.dismiss"] as const) {
+      const recovery = await runTaskHandler(method, { taskIds: [hidden.taskId] }, {}, viewer);
+      expect(recovery.payload?.results).toEqual([
+        { taskId: hidden.taskId, ok: false, reason: "task not found" },
+      ]);
+    }
+
+    const admin = identifiedClient(["operator.admin"]);
+    const adminGet = await runTaskHandler("tasks.get", { taskId: hidden.taskId }, {}, admin);
+    expect(adminGet.calls[0]?.[0]).toBe(true);
+    expect(adminGet.payload?.task?.taskId).toBe(hidden.taskId);
   });
 
   it("returns page records isolated from the registry", () => {
