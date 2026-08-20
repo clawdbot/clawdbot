@@ -248,6 +248,20 @@ function activityAlignmentHtml() {
   `;
 }
 
+function completedWorkSpacingHtml() {
+  return `
+    <div class="chat-thread" role="log">
+      <div class="chat-thread-inner">
+        <div class="chat-group user"><div class="chat-group-messages">Prompt</div></div>
+        <div class="chat-group tool chat-group--work">
+          <div class="chat-group-messages">Worked for 10s</div>
+        </div>
+        <div class="chat-group assistant"><div class="chat-group-messages">Final reply</div></div>
+      </div>
+    </div>
+  `;
+}
+
 function chatFooterActionsHtml() {
   return `
     <div class="chat-group-footer-actions">
@@ -1220,6 +1234,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         chevronGap: 5,
         tool: "text",
       });
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it.each([
+    { width: 430, expected: { marginTop: "4px", marginBottom: "10px" } },
+    { width: 1366, expected: { marginTop: "0px", marginBottom: "0px" } },
+  ])("balances completed-work spacing at $width px", async ({ width, expected }) => {
+    const page = await openBrowserPage(width, 720);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${completedWorkSpacingHtml()}</body></html>`,
+      );
+
+      expect(
+        await page.locator(".chat-group--work").evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            marginTop: style.marginTop,
+            marginBottom: style.marginBottom,
+            paddingTop: style.paddingTop,
+            paddingBottom: style.paddingBottom,
+          };
+        }),
+      ).toEqual({ ...expected, paddingTop: "4px", paddingBottom: "4px" });
     } finally {
       await closeBrowserPage(page);
     }
