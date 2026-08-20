@@ -1876,6 +1876,39 @@ describe("finalizeSetupWizard", () => {
     expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
   });
 
+  it("ends with a health-failure outro when the health check exits after a reachable probe", async () => {
+    // importActual yields the ExitError instance the prod graph sees; the test
+    // file's static import can be a second class instance under Vitest.
+    const { ExitError } = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+    healthCommand.mockRejectedValueOnce(new ExitError(1));
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
+  });
+
   it("labels unavailable systemd as container runtime information in containers", async () => {
     await withPlatform("linux", async () => {
       isSystemdUserServiceAvailable.mockResolvedValue(false);
