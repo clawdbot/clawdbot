@@ -338,10 +338,24 @@ suite.define(() => {
           content: [
             {
               type: "text",
-              text: Array.from(
-                { length: 24 },
-                (_, index) => `Focused test ${index + 1}: passed with stable transcript geometry.`,
-              ).join("\n"),
+              text: JSON.stringify(
+                {
+                  kind: "canvas",
+                  presentation: { target: "assistant_message" },
+                  proof: Array.from(
+                    { length: 24 },
+                    (_, index) => `Focused test ${index + 1}: passed with stable geometry.`,
+                  ),
+                  view: {
+                    id: "disclosure-geometry-proof",
+                    preferred_height: 160,
+                    title: "Disclosure geometry proof",
+                    url: "/__openclaw__/canvas/documents/disclosure-geometry-proof/index.html",
+                  },
+                },
+                null,
+                2,
+              ),
             },
           ],
           timestamp: 101,
@@ -439,6 +453,10 @@ suite.define(() => {
     traces.activityMiddleExpand = await toggleDisclosureWithFrameTrace(page, activitySummary);
     const toolSummary = page.locator(".chat-group--activity .chat-tool-msg-summary").first();
     traces.toolMiddleExpand = await toggleDisclosureWithFrameTrace(page, toolSummary);
+    const rawDetailsToggle = page.locator(".chat-tool-card__raw-toggle").first();
+    await rawDetailsToggle.waitFor();
+    traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+    traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
     traces.toolMiddleCollapse = await toggleDisclosureWithFrameTrace(page, toolSummary);
     const fileToolToggle = page.locator(".chat-group--activity .chat-tool-row__toggle").first();
     traces.fileToolMiddleExpand = await toggleDisclosureWithFrameTrace(page, fileToolToggle);

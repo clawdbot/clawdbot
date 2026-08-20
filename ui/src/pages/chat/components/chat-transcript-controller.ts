@@ -146,10 +146,16 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const disclosure =
       target instanceof Element
         ? target.closest(
-            ".chat-tool-row__toggle, .chat-tool-msg-summary[aria-expanded], .chat-activity-group__summary",
+            ".chat-tool-row__toggle, .chat-tool-msg-summary[aria-expanded], .chat-activity-group__summary, .chat-tool-card__raw-toggle",
           )
         : null;
-    this.pendingDisclosureRow = disclosure?.closest<HTMLElement>(".chat-virtual-row") ?? null;
+    const row = disclosure?.closest<HTMLElement>(".chat-virtual-row") ?? null;
+    this.pendingDisclosureRow = row;
+    if (row) {
+      // Direct-DOM disclosures do not otherwise enter the Lit update cycle.
+      // Schedule the owner reconciliation after their click handler commits.
+      this.host.requestUpdate();
+    }
   };
   private measureConnectedRows(): void {
     // Only width invalidation owns forced DOM reads. Ordinary row refs stay on
