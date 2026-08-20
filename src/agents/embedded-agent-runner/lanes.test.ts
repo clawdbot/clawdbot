@@ -1,7 +1,14 @@
 // Coverage for global and per-session command lane normalization.
 import { describe, expect, it } from "vitest";
 import { CommandLane } from "../../process/lanes.js";
-import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
+import { resolveEmbeddedRunGlobalLane, resolveGlobalLane, resolveSessionLane } from "./lanes.js";
+
+describe("resolveEmbeddedRunGlobalLane", () => {
+  it("keeps heartbeat runs on the bounded background lane", () => {
+    expect(resolveEmbeddedRunGlobalLane({ isHeartbeat: true })).toBe(CommandLane.CronNested);
+    expect(resolveEmbeddedRunGlobalLane({ isHeartbeat: false })).toBe(CommandLane.Main);
+  });
+});
 
 describe("resolveGlobalLane", () => {
   it("defaults to main lane when no lane is provided", () => {
