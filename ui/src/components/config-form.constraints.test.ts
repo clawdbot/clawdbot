@@ -13,7 +13,7 @@ import {
   objectPropertySchema,
   requiredPropertyKeys,
 } from "./config-form.constraints.ts";
-import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
+import { coerceConfigFormNumberString, formatConfigFormNumber } from "./config-form.numeric.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 
 describe("config form schema constraints", () => {
@@ -65,14 +65,19 @@ describe("config form schema constraints", () => {
   });
 
   it("compares integer spellings against the exact binary double", () => {
+    const exactLargeInteger = Number("1000000000000000128");
     expect(coerceConfigFormNumberString("1000000000000000100", true)).toBe("1000000000000000100");
     expect(coerceConfigFormNumberString("1000000000000000100", false)).toBe("1000000000000000100");
     expect(coerceConfigFormNumberString("-1000000000000000100", false)).toBe(
       "-1000000000000000100",
     );
     expect(coerceConfigFormNumberString("1000000000000000127", true)).toBe("1000000000000000127");
-    expect(coerceConfigFormNumberString("1000000000000000128", true)).toBe(
-      1_000_000_000_000_000_128,
+    expect(coerceConfigFormNumberString("1000000000000000128", true)).toBe(exactLargeInteger);
+    expect(formatConfigFormNumber(exactLargeInteger)).toBe("1000000000000000128");
+    expect(formatConfigFormNumber(-0)).toBe("0");
+    expect(formatConfigFormNumber(0.1)).toBe("0.1");
+    expect(coerceConfigFormNumberString(formatConfigFormNumber(exactLargeInteger), true)).toBe(
+      exactLargeInteger,
     );
     expect(coerceConfigFormNumberString("9007199254740994", true)).toBe(9_007_199_254_740_994);
   });

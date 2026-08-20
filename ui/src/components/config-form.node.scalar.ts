@@ -23,6 +23,7 @@ import {
 } from "./config-form.node.shared.ts";
 import {
   coerceConfigFormNumberString,
+  formatConfigFormNumber,
   isConfigFormDecimalNumberString,
 } from "./config-form.numeric.ts";
 import {
@@ -58,6 +59,10 @@ function setControlValidity(target: HTMLInputElement, message: string): boolean 
   target.setCustomValidity(message);
   target.setAttribute("aria-invalid", String(Boolean(message)));
   return !message;
+}
+
+function formatScalarInputValue(value: unknown): string {
+  return typeof value === "number" ? formatConfigFormNumber(value) : formatUnknownText(value);
 }
 
 function syncScalarInputIdentity(
@@ -158,7 +163,11 @@ function coerceTextInputValue(
       return numberCandidate;
     }
     if (isConfigFormDecimalNumberString(value)) {
-      return undefined;
+      return stringCandidateValid &&
+        /^-?\d+$/u.test(trimmed) &&
+        !Number.isSafeInteger(Number(trimmed))
+        ? value
+        : undefined;
     }
   }
   if (currentBranch === "string" && stringCandidateValid) {
@@ -291,7 +300,7 @@ export function renderTextInput(
       : redactedPlaceholder()
     : (hint?.placeholder ??
       (schema.default !== undefined
-        ? t("configForm.defaultValue", { value: formatUnknownText(schema.default) })
+        ? t("configForm.defaultValue", { value: formatScalarInputValue(schema.default) })
         : ""));
   const displayValue = effectiveRedacted
     ? ""
@@ -309,7 +318,7 @@ export function renderTextInput(
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
   const controlPathKey = configFieldId(path, "scalar-identity");
-  const renderedValue = formatUnknownText(displayValue);
+  const renderedValue = formatScalarInputValue(displayValue);
   const presentationIdentity = [
     effectiveRedacted ? "redacted" : "visible",
     effectiveInputType,
@@ -515,7 +524,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
   const controlPathKey = configFieldId(path, "scalar-identity");
-  const renderedValue = formatUnknownText(displayValue);
+  const renderedValue = formatScalarInputValue(displayValue);
   const revalidate = (target: HTMLInputElement) => {
     setControlValidity(
       target,
@@ -573,7 +582,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       aria-describedby=${helpId ?? nothing}
       aria-invalid="false"
       placeholder=${schema.default !== undefined
-        ? t("configForm.defaultValue", { value: formatUnknownText(schema.default) })
+        ? t("configForm.defaultValue", { value: formatScalarInputValue(schema.default) })
         : nothing}
       min=${constraints.min ?? nothing}
       max=${constraints.max ?? nothing}
@@ -607,7 +616,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           return;
         }
         const normalized = normalizeNumericValue(state.parsed, schema);
-        target.value = formatUnknownText(normalized);
+        target.value = formatConfigFormNumber(normalized);
         if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
           commitScalarValue(target, normalized);
         }
