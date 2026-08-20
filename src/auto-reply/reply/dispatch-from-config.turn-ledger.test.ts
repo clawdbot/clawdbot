@@ -174,4 +174,27 @@ describe("createReplyTurnLedger", () => {
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
   });
+
+  it("settles immediately when the abort signal already fired", async () => {
+    let releaseDeliver!: () => void;
+    const stalled = new Promise<void>((resolve) => {
+      releaseDeliver = resolve;
+    });
+    const dispatcher = createReplyDispatcher({ deliver: () => stalled });
+    const ledger = createReplyTurnLedger(dispatcher);
+    ledger.sendQueued("final", { text: "hello" });
+    const abortController = new AbortController();
+    abortController.abort();
+    const settled = ledger.settleQueued(abortController.signal);
+
+    try {
+      await expect(Promise.race([settled, Promise.resolve("pending")])).resolves.toBe("aborted");
+      expect(ledger.hasVisibleDelivery()).toBe(false);
+    } finally {
+      releaseDeliver();
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      await settled;
+    }
+  });
 });

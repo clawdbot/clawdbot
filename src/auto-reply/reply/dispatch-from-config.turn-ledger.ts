@@ -101,6 +101,9 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       }
     },
     async settleQueued(abortSignal) {
+      if (abortSignal?.aborted) {
+        return "aborted";
+      }
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<void>((resolve) => {
