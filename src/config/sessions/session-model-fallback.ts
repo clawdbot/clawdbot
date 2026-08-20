@@ -13,10 +13,13 @@ export type AgentPatchedSessionModelFallback = {
   prevAuthProfileOverrideSource?: "auto" | "user";
   prevAuthProfileOverrideCompactionCount?: number;
   prevThinkingLevel?: string;
-  prevThinkingLevelSelection?: SessionThinkingLevelSelection;
   lastValidatedPatchTs?: number;
   ts: number;
   source: "agent-patch";
+};
+
+export type InternalAgentPatchedSessionModelFallback = AgentPatchedSessionModelFallback & {
+  prevThinkingLevelSelection?: SessionThinkingLevelSelection;
 };
 
 export function createAgentPatchedSessionModelFallback(params: {
@@ -36,7 +39,7 @@ export function createAgentPatchedSessionModelFallback(params: {
     thinkingLevelSelection?: SessionThinkingLevelSelection;
   };
   ts: number;
-}): AgentPatchedSessionModelFallback {
+}): InternalAgentPatchedSessionModelFallback {
   const { entry } = params;
   return {
     prevModel: params.model,

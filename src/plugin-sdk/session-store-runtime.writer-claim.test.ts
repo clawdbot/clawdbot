@@ -57,6 +57,12 @@ const sessionEntryKeepsThinkingSelectionPrivate: "thinkingLevelSelection" extend
   ? false
   : true = true;
 void sessionEntryKeepsThinkingSelectionPrivate;
+const sessionFallbackKeepsThinkingSelectionPrivate: "prevThinkingLevelSelection" extends keyof NonNullable<
+  SessionEntry["modelFallback"]
+>
+  ? false
+  : true = true;
+void sessionFallbackKeepsThinkingSelectionPrivate;
 
 describe("plugin session writer claim projection", () => {
   it("excludes the durable writer claim from entries and patches", () => {
@@ -69,6 +75,18 @@ describe("plugin session writer claim projection", () => {
         status: "pending",
       },
       model: "gpt-5.6",
+      modelFallback: {
+        prevModel: "gpt-5.5",
+        prevProvider: "openai",
+        prevThinkingLevelSelection: {
+          provider: "openai",
+          model: "gpt-5.5",
+          agentRuntime: "codex",
+          level: "max",
+        },
+        source: "agent-patch",
+        ts: 1,
+      },
       sessionId: "session-writer",
       thinkingLevelSelection: {
         provider: "openai",
@@ -81,6 +99,12 @@ describe("plugin session writer claim projection", () => {
 
     expect(projectPluginSessionEntry(entry)).toEqual({
       model: "gpt-5.6",
+      modelFallback: {
+        prevModel: "gpt-5.5",
+        prevProvider: "openai",
+        source: "agent-patch",
+        ts: 1,
+      },
       sessionId: "session-writer",
       updatedAt: 10,
     });
@@ -94,6 +118,18 @@ describe("plugin session writer claim projection", () => {
           status: "pending",
         },
         model: "gpt-5.5",
+        modelFallback: {
+          prevModel: "gpt-5.4",
+          prevProvider: "openai",
+          prevThinkingLevelSelection: {
+            provider: "openai",
+            model: "gpt-5.4",
+            agentRuntime: "codex",
+            level: "max",
+          },
+          source: "agent-patch",
+          ts: 2,
+        },
         thinkingLevelSelection: {
           provider: "openai",
           model: "gpt-5.5",
@@ -101,7 +137,15 @@ describe("plugin session writer claim projection", () => {
           level: "max",
         },
       }),
-    ).toEqual({ model: "gpt-5.5" });
+    ).toEqual({
+      model: "gpt-5.5",
+      modelFallback: {
+        prevModel: "gpt-5.4",
+        prevProvider: "openai",
+        source: "agent-patch",
+        ts: 2,
+      },
+    });
   });
 
   it("preserves private generation fields when patches and upserts omit lifecycle revision", async () => {

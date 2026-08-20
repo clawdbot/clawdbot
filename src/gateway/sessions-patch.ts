@@ -40,7 +40,10 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
-import type { SessionEntry, SessionToolOverrides } from "../config/sessions.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionToolOverrides,
+} from "../config/sessions.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -77,6 +80,7 @@ import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session
 import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
+  updateAgentModelFallbackThinking,
 } from "./session-model-patch-origin.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
@@ -706,17 +710,10 @@ export async function projectSessionsPatchEntry(params: {
     !("model" in patch) &&
     next.modelFallback?.source === "agent-patch"
   ) {
-    next.modelFallback = next.thinkingLevel
-      ? {
-          ...next.modelFallback,
-          prevThinkingLevel: next.thinkingLevel,
-          prevThinkingLevelSelection: readSessionThinkingLevelSelection(next),
-        }
-      : {
-          ...next.modelFallback,
-          prevThinkingLevel: undefined,
-          prevThinkingLevelSelection: undefined,
-        };
+    updateAgentModelFallbackThinking(next.modelFallback, {
+      thinkingLevel: next.thinkingLevel,
+      thinkingLevelSelection: readSessionThinkingLevelSelection(next),
+    });
   }
 
   if ("sendPolicy" in patch) {

@@ -1,3 +1,7 @@
+import type {
+  AgentPatchedSessionModelFallback,
+  InternalAgentPatchedSessionModelFallback,
+} from "./session-model-fallback.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
@@ -16,6 +20,16 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "thinkingLevelSelection",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
+function projectPublicModelFallback(
+  fallback: InternalAgentPatchedSessionModelFallback | undefined,
+): AgentPatchedSessionModelFallback | undefined {
+  if (!fallback) {
+    return undefined;
+  }
+  const { prevThinkingLevelSelection: _privateSelection, ...publicFallback } = fallback;
+  return publicFallback;
+}
+
 function stripPrivateSessionEntryFields(entry: InternalSessionEntry): SessionEntry;
 function stripPrivateSessionEntryFields(
   entry: Partial<InternalSessionEntry>,
@@ -26,6 +40,12 @@ function stripPrivateSessionEntryFields(
   const projected = { ...entry };
   for (const key of PRIVATE_SESSION_ENTRY_KEYS) {
     delete projected[key];
+  }
+  const modelFallback = projectPublicModelFallback(entry.modelFallback);
+  if (modelFallback) {
+    projected.modelFallback = modelFallback;
+  } else {
+    delete projected.modelFallback;
   }
   return projected;
 }
