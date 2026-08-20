@@ -4,7 +4,6 @@ import "../components/app-topbar.ts";
 import "../components/macos-titlebar-controls.ts";
 import "../components/modal-dialog.ts";
 import { formatDocumentTitle, titleForRoute } from "../app-navigation.ts";
-import "../components/onboarding-memory-import.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/update-banner.ts";
@@ -722,6 +721,9 @@ class OpenClawShell
   }
 
   override render() {
+    if (this.onboardingMode && this.routeState.routeId !== "custodian") {
+      void import("../components/onboarding-memory-import.ts");
+    }
     return renderApplicationShell(this);
   }
 }
