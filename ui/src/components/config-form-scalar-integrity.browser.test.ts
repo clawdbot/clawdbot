@@ -533,6 +533,39 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["sampleRate"], undefined);
   });
 
+  it.each([
+    ["unsafe integer", { type: "integer" }, "9007199254740993"],
+    ["lossy decimal", { type: "number" }, "1.0000000000000001"],
+    ["underflow", { type: "number" }, "1e-324"],
+  ])("rejects %s text before a pure numeric input can round it", (_name, schema, raw) => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderNumberInput({
+        schema,
+        value: 0,
+        path: ["numeric"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "lossless number input",
+    );
+
+    input.value = raw;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.value).toBe(raw);
+  });
+
   it("keeps restore disabled while a sensitive value is concealed", () => {
     const container = document.createElement("div");
 

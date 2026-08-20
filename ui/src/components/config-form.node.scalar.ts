@@ -182,6 +182,7 @@ function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams[
 type NumericInputState =
   | { kind: "badInput" }
   | { kind: "empty" }
+  | { kind: "invalid" }
   | { kind: "value"; parsed: number; message: string };
 
 // Partial numeric text ("3.", "-", "1e") reports value === "" with
@@ -195,13 +196,19 @@ function resolveNumericInputState(
   if (raw.trim() === "") {
     return target.validity.badInput ? { kind: "badInput" } : { kind: "empty" };
   }
-  const parsed = Number(raw);
+  const parsed = coerceConfigFormNumberString(raw, schemaType(schema) === "integer");
+  if (typeof parsed !== "number") {
+    return { kind: "invalid" };
+  }
   return { kind: "value", parsed, message: numericConstraintMessage(parsed, schema) };
 }
 
 function numericStateMessage(state: NumericInputState, isRequired: boolean): string {
   if (state.kind === "value") {
     return state.message;
+  }
+  if (state.kind === "invalid") {
+    return t("configForm.invalidNumber");
   }
   return state.kind === "badInput" || isRequired ? t("configForm.invalidNumber") : "";
 }
@@ -218,7 +225,7 @@ function applyNumericInputState(
   if (state.kind === "empty") {
     commit(undefined);
   } else if (state.kind === "value") {
-    commit(Number.isNaN(state.parsed) ? target.value : state.parsed);
+    commit(state.parsed);
   }
 }
 
@@ -535,18 +542,12 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       }}
       @change=${(event: Event) => {
         const target = event.target as HTMLInputElement;
-        if (target.value === "") {
-          if (target.validity.badInput) {
-            setControlValidity(target, t("configForm.invalidNumber"));
-          }
+        const state = resolveNumericInputState(target, schema);
+        if (state.kind !== "value") {
+          setControlValidity(target, numericStateMessage(state, params.isRequired === true));
           return;
         }
-        const parsed = Number(target.value);
-        if (!Number.isFinite(parsed)) {
-          setControlValidity(target, t("configForm.invalidNumber"));
-          return;
-        }
-        const normalized = normalizeNumericValue(parsed, schema);
+        const normalized = normalizeNumericValue(state.parsed, schema);
         target.value = formatUnknownText(normalized);
         if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
           commitScalarValue(target, normalized);
