@@ -4,7 +4,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
-import { applyFalConfig, FAL_DEFAULT_IMAGE_MODEL_REF } from "./onboard.js";
+import { applyFalConfig } from "./onboard.js";
 
 const emptyCfg: OpenClawConfig = {};
 
@@ -13,7 +13,7 @@ describe("applyFalConfig", () => {
     const result = applyFalConfig(emptyCfg);
 
     expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.mediaModels?.image)).toBe(
-      FAL_DEFAULT_IMAGE_MODEL_REF,
+      "fal/fal-ai/flux/dev",
     );
     // The retired key must stay untouched: nothing in the runtime reads it.
     expect(result.agents?.defaults).not.toHaveProperty("imageGenerationModel");
