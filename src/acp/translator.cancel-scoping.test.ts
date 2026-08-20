@@ -1,8 +1,13 @@
-import type { CancelNotification, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk";
+import type {
+  AgentSideConnection,
+  CancelNotification,
+  PromptRequest,
+  PromptResponse,
+} from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 /** Tests prompt cancellation scoping across concurrent ACP sessions and Gateway runs. */
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type Mock, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { AcpGatewayAgent } from "./translator.js";
@@ -10,8 +15,10 @@ import { createAcpConnection, createAcpGateway } from "./translator.test-helpers
 
 type Harness = {
   agent: AcpGatewayAgent;
-  requestSpy: ReturnType<typeof vi.fn>;
-  sessionUpdateSpy: ReturnType<typeof vi.fn>;
+  requestSpy: Mock<
+    (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
+  >;
+  sessionUpdateSpy: Mock<AgentSideConnection["sessionUpdate"]>;
   sessionStore: ReturnType<typeof createInMemorySessionStore>;
   sentRunIds: string[];
 };
@@ -50,7 +57,10 @@ function createToolEvent(payload: Record<string, unknown>): EventFrame {
   } as EventFrame;
 }
 
-function createHarness(sessions: Array<{ sessionId: string; sessionKey: string }>): Harness {
+function createHarness(
+  sessions: Array<{ sessionId: string; sessionKey: string }>,
+  options: { provenanceMode?: "meta" | "meta+receipt" } = {},
+): Harness {
   const sentRunIds: string[] = [];
   const requestSpy = vi.fn(async (method: string, params?: Record<string, unknown>) => {
     if (method === "chat.send") {
@@ -63,6 +73,8 @@ function createHarness(sessions: Array<{ sessionId: string; sessionKey: string }
     return {};
   });
   const connection = createAcpConnection();
+  const sessionUpdateSpy = vi.fn<AgentSideConnection["sessionUpdate"]>(async () => {});
+  connection.sessionUpdate = sessionUpdateSpy;
   const sessionStore = createInMemorySessionStore();
   for (const session of sessions) {
     sessionStore.createSession({
@@ -75,13 +87,13 @@ function createHarness(sessions: Array<{ sessionId: string; sessionKey: string }
   const agent = new AcpGatewayAgent(
     connection,
     createAcpGateway(requestSpy as unknown as GatewayClient["request"]),
-    { sessionStore },
+    { sessionStore, ...options },
   );
 
   return {
     agent,
     requestSpy,
-    sessionUpdateSpy: connection["sessionUpdate"] as unknown as ReturnType<typeof vi.fn>,
+    sessionUpdateSpy,
     sessionStore,
     sentRunIds,
   };
@@ -143,6 +155,298 @@ function sessionUpdatePayloadAt(harness: Harness, index: number): SessionUpdateP
 }
 
 describe("acp translator cancel and run scoping", () => {
+  it("aborts and settles an overlapping prompt before submitting its replacement", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
+    const first = await startPendingPrompt(harness, "session-1");
+
+    const replacement = await startPendingPrompt(harness, "session-1");
+
+    expect(harness.requestSpy.mock.calls.map(([method]) => method)).toEqual([
+      "chat.send",
+      "chat.abort",
+      "chat.send",
+    ]);
+    expect(harness.requestSpy).toHaveBeenCalledWith("chat.abort", {
+      sessionKey,
+      runId: first.runId,
+    });
+    await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+    expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(replacement.runId);
+
+    await deliverFinalChatEventAndExpectEndTurn(harness, sessionKey, replacement, 1);
+  });
+
+  it.each([
+    {
+      closure: "cancel",
+      close: (harness: Harness) => harness.agent.cancel({ sessionId: "session-1" }),
+    },
+    {
+      closure: "closeSession",
+      close: (harness: Harness) =>
+        harness.agent.closeSession({ sessionId: "session-1", _meta: {} }),
+    },
+    {
+      closure: "shutdown",
+      close: (harness: Harness) => harness.agent.shutdown(),
+    },
+  ])(
+    "does not submit a replacement closed by $closure while its prior abort is pending",
+    async ({ close, closure }) => {
+      const sessionKey = "agent:main:shared";
+      const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
+      const first = await startPendingPrompt(harness, "session-1");
+      let releaseAbort: (() => void) | undefined;
+      harness.requestSpy.mockImplementationOnce(async (method: string) => {
+        expect(method).toBe("chat.abort");
+        await new Promise<void>((resolve) => {
+          releaseAbort = resolve;
+        });
+        return {};
+      });
+
+      const replacement = harness.agent.prompt(createPromptRequest("session-1"));
+      await vi.waitFor(() => {
+        expect(releaseAbort).toBeDefined();
+      });
+      const closed = close(harness);
+
+      expect(harness.sentRunIds).toEqual([first.runId]);
+      expectDefined(releaseAbort, `${closure} owns the blocked prior abort`)();
+      await closed;
+      await Promise.resolve();
+
+      expect(harness.sentRunIds).toEqual([first.runId]);
+      await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+      await expect(replacement).resolves.toEqual({ stopReason: "cancelled" });
+      expect(harness.sessionStore.getSession("session-1")?.activeRunId).not.toBeTruthy();
+    },
+  );
+
+  it("settles shutdown when a superseded prompt's abort never returns", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
+    const first = await startPendingPrompt(harness, "session-1");
+    harness.requestSpy.mockImplementationOnce(async (method: string) => {
+      expect(method).toBe("chat.abort");
+      return await new Promise<Record<string, unknown>>(() => {});
+    });
+
+    const replacement = harness.agent.prompt(createPromptRequest("session-1"));
+    await vi.waitFor(() => {
+      expect(harness.requestSpy).toHaveBeenCalledWith("chat.abort", {
+        sessionKey,
+        runId: first.runId,
+      });
+    });
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const shutdownResult = await Promise.race([
+      harness.agent.shutdown().then(() => "closed" as const),
+      new Promise<"still pending">((resolve) => {
+        timeout = setTimeout(() => resolve("still pending"), 25);
+      }),
+    ]);
+    clearTimeout(timeout);
+
+    expect(shutdownResult).toBe("closed");
+    expect(harness.sentRunIds).toEqual([first.runId]);
+    await expect(replacement).resolves.toEqual({ stopReason: "cancelled" });
+  });
+
+  it("closes every queued overlapping admission when cancellation wins the blocked abort", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
+    const first = await startPendingPrompt(harness, "session-1");
+    let releaseAbort: (() => void) | undefined;
+    harness.requestSpy.mockImplementationOnce(async (method: string) => {
+      expect(method).toBe("chat.abort");
+      await new Promise<void>((resolve) => {
+        releaseAbort = resolve;
+      });
+      return {};
+    });
+
+    const second = harness.agent.prompt(createPromptRequest("session-1"));
+    await vi.waitFor(() => {
+      expect(releaseAbort).toBeDefined();
+    });
+    const third = harness.agent.prompt(createPromptRequest("session-1"));
+    const cancellation = harness.agent.cancel({ sessionId: "session-1" });
+
+    expectDefined(releaseAbort, "blocked prior abort")();
+    await cancellation;
+    await Promise.resolve();
+
+    expect(harness.sentRunIds).toEqual([first.runId]);
+    await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+    await expect(second).resolves.toEqual({ stopReason: "cancelled" });
+    await expect(third).resolves.toEqual({ stopReason: "cancelled" });
+  });
+
+  it("serializes three overlapping prompts while the first abort is still pending", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
+    const first = await startPendingPrompt(harness, "session-1");
+    let releaseAbort: (() => void) | undefined;
+    harness.requestSpy.mockImplementationOnce(async (method: string) => {
+      expect(method).toBe("chat.abort");
+      await new Promise<void>((resolve) => {
+        releaseAbort = resolve;
+      });
+      return {};
+    });
+
+    const secondPrompt = harness.agent.prompt({
+      ...createPromptRequest("session-1"),
+      prompt: [{ type: "text", text: "second" }],
+    });
+    await vi.waitFor(() => {
+      expect(releaseAbort).toBeDefined();
+    });
+    const thirdPrompt = harness.agent.prompt({
+      ...createPromptRequest("session-1"),
+      prompt: [{ type: "text", text: "third" }],
+    });
+    await Promise.resolve();
+    const sendsWhileAbortPending = [...harness.sentRunIds];
+
+    expectDefined(releaseAbort, "blocked first chat.abort request")();
+    await vi.waitFor(() => {
+      expect(harness.sentRunIds).toHaveLength(3);
+    });
+
+    expect(sendsWhileAbortPending).toEqual([first.runId]);
+    await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+    await expect(secondPrompt).resolves.toEqual({ stopReason: "cancelled" });
+    const thirdRunId = expectDefined(
+      harness.sentRunIds[2],
+      "third prompt remains the final admitted run",
+    );
+    expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(thirdRunId);
+    await deliverFinalChatEventAndExpectEndTurn(
+      harness,
+      sessionKey,
+      { promptPromise: thirdPrompt, runId: thirdRunId },
+      1,
+    );
+  });
+
+  it("does not replay a superseded prompt after its delayed provenance rejection", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([{ sessionId: "session-1", sessionKey }], {
+      provenanceMode: "meta",
+    });
+    let rejectFirstSend: ((error: Error) => void) | undefined;
+    harness.requestSpy.mockImplementation(async (method, params) => {
+      if (method !== "chat.send") {
+        return {};
+      }
+      const runId = params?.idempotencyKey;
+      if (typeof runId === "string") {
+        harness.sentRunIds.push(runId);
+      }
+      if (harness.sentRunIds.length === 1) {
+        return await new Promise<Record<string, unknown>>((_, reject) => {
+          rejectFirstSend = reject;
+        });
+      }
+      return await new Promise<Record<string, unknown>>(() => {});
+    });
+    const first = await startPendingPrompt(harness, "session-1");
+    const replacement = await startPendingPrompt(harness, "session-1");
+    await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+
+    expectDefined(
+      rejectFirstSend,
+      "blocked first chat.send request",
+    )(
+      Object.assign(new Error("system provenance fields require admin scope"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(harness.sentRunIds).toEqual([first.runId, replacement.runId]);
+    expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(replacement.runId);
+    await deliverFinalChatEventAndExpectEndTurn(harness, sessionKey, replacement, 1);
+  });
+
+  it("does not let a stale final event clear a replacement admitted during client delivery", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
+    const first = await startPendingPrompt(harness, "session-1");
+    let releaseDelivery: (() => void) | undefined;
+    harness.sessionUpdateSpy.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseDelivery = resolve;
+        }),
+    );
+
+    const staleFinal = harness.agent.handleGatewayEvent(
+      createChatEvent({
+        runId: first.runId,
+        sessionKey,
+        seq: 1,
+        state: "final",
+        message: { content: [{ type: "text", text: "old response" }] },
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(releaseDelivery).toBeDefined();
+    });
+
+    const replacement = await startPendingPrompt(harness, "session-1");
+    expectDefined(releaseDelivery, "blocked session-update delivery")();
+    await staleFinal;
+
+    expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(replacement.runId);
+    await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+    await deliverFinalChatEventAndExpectEndTurn(harness, sessionKey, replacement, 2);
+  });
+
+  it("does not let a stale cancel completion remove a newer prompt", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
+    const first = await startPendingPrompt(harness, "session-1");
+    let releaseAbort: (() => void) | undefined;
+    harness.requestSpy.mockImplementationOnce(async (method: string) => {
+      expect(method).toBe("chat.abort");
+      await new Promise<void>((resolve) => {
+        releaseAbort = resolve;
+      });
+      return {};
+    });
+
+    const cancellation = harness.agent.cancel({ sessionId: "session-1" } as CancelNotification);
+    await vi.waitFor(() => {
+      expect(releaseAbort).toBeDefined();
+    });
+    const replacement = await startPendingPrompt(harness, "session-1");
+
+    expectDefined(releaseAbort, "blocked chat.abort request")();
+    await cancellation;
+    await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+    expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(replacement.runId);
+
+    await harness.agent.handleGatewayEvent(
+      createChatEvent({
+        runId: replacement.runId,
+        sessionKey,
+        seq: 1,
+        state: "final",
+      }),
+    );
+    await expect(
+      Promise.race([replacement.promptPromise, Promise.resolve("still pending")]),
+    ).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
   it("cancel passes active runId to chat.abort", async () => {
     const sessionKey = "agent:main:shared";
     const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
@@ -250,6 +554,52 @@ describe("acp translator cancel and run scoping", () => {
       text: "Final visible reply",
     });
   });
+
+  it.each(["delta", "final"] as const)(
+    "drops stale text from a mixed %s snapshot after replacement during thought delivery",
+    async (state) => {
+      const sessionKey = "agent:main:shared";
+      const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
+      const first = await startPendingPrompt(harness, "session-1");
+      let releaseThought: (() => void) | undefined;
+      harness.sessionUpdateSpy.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseThought = resolve;
+          }),
+      );
+
+      const staleSnapshot = harness.agent.handleGatewayEvent(
+        createChatEvent({
+          runId: first.runId,
+          sessionKey,
+          seq: 1,
+          state,
+          message: {
+            content: [
+              { type: "thinking", thinking: "old hidden thought" },
+              { type: "text", text: "old visible response" },
+            ],
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(releaseThought).toBeDefined();
+      });
+
+      const replacement = await startPendingPrompt(harness, "session-1");
+      expectDefined(releaseThought, "blocked stale thought delivery")();
+      await staleSnapshot;
+
+      const visibleChunks = harness.sessionUpdateSpy.mock.calls.filter(
+        ([payload]) => payload.update.sessionUpdate === "agent_message_chunk",
+      );
+      expect(visibleChunks).toEqual([]);
+      expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(replacement.runId);
+      await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+      await deliverFinalChatEventAndExpectEndTurn(harness, sessionKey, replacement, 2);
+    },
+  );
 
   it("drops tool events when runId does not match the active prompt", async () => {
     const sessionKey = "agent:main:shared";

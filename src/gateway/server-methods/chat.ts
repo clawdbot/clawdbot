@@ -72,11 +72,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const requestedAgentId = requestedAgent.agentId;
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: params.sessionKey,
-      agentId: requestedAgentId,
+      explicitAgentId: agentIdOverride,
     });
     if (!selectedAgent.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
@@ -124,10 +123,11 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
+    const agentIdOverride = normalizeOptionalText(p.agentId);
     const requestedAgent = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
       requestedSessionKey: rawSessionKey,
-      agentId: p.agentId,
+      agentId: agentIdOverride,
     });
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
@@ -144,7 +144,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: rawSessionKey,
-      agentId: requestedAgentId,
+      explicitAgentId: agentIdOverride,
     });
     if (!selectedAgent.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
