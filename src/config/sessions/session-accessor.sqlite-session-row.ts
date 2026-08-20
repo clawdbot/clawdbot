@@ -84,6 +84,19 @@ export function bindSessionNode(params: {
   updatedAt: number;
 }) {
   const canonicalEntry = projectCanonicalSessionEntryShape({ ...params.entry });
+  // resolvedSkills is runtime-only (SessionSkillSnapshot): persistence keeps the
+  // lightweight catalog/prompt; consumers hydrate concrete SKILL.md paths from a
+  // fresh workspace scan on resume (snapshot-hydration). Stripping before the
+  // SQLite write mirrors the file-store path in session-accessor.entry-mutation
+  // and keeps every session_nodes.entry_json ~20× smaller (~293 KB → ~15 KB).
+  const skillsSnapshot = canonicalEntry.skillsSnapshot;
+  const persistedEntry =
+    skillsSnapshot?.resolvedSkills === undefined
+      ? canonicalEntry
+      : {
+          ...canonicalEntry,
+          skillsSnapshot: (({ resolvedSkills: _drop, ...rest }) => rest)(skillsSnapshot),
+        };
   const actor = params.entry.createdActor;
   const legacyActorId = normalizeText(
     (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,
@@ -91,7 +104,7 @@ export function bindSessionNode(params: {
   return {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
-    entry_json: JSON.stringify(canonicalEntry),
+    entry_json: JSON.stringify(persistedEntry),
     entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeStatus(params.entry.status),
