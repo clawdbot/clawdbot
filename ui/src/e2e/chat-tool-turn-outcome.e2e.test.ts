@@ -86,11 +86,13 @@ async function toggleDisclosureWithFrameTrace(
   }, actionSelector);
 }
 
-function expectStableDisclosureFrames(frames: DisclosureFrame[]) {
+function expectStableDisclosureFrames(frames: DisclosureFrame[], label = "disclosure") {
   const initial = frames[0];
   expect(initial).toBeDefined();
+  expect(frames.at(-1)?.expanded, `${label} state`).toBe(!initial!.expanded);
   expect(
     Math.max(...frames.map((frame) => Math.abs(frame.rowTop - initial!.rowTop))),
+    `${label} geometry`,
   ).toBeLessThanOrEqual(2);
 }
 
@@ -588,6 +590,7 @@ suite.define(() => {
     const widgetActions = widgetHost.getByRole("button", { name: "Widget actions" });
     const rawDetailsAction =
       '.chat-tool-card__widget-actions wa-dropdown-item[value="raw-details"]';
+    const rawDetailsItem = widgetHost.locator(rawDetailsAction);
     await page.locator(".chat-thread").evaluate((thread) => {
       thread.scrollTop = thread.scrollHeight;
     });
@@ -595,12 +598,14 @@ suite.define(() => {
     expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
     const traces: Record<string, DisclosureFrame[]> = {};
     await widgetActions.click();
+    await rawDetailsItem.waitFor({ state: "visible" });
     traces.rawDetailsEndExpand = await toggleDisclosureWithFrameTrace(
       page,
       rawDetailsToggle,
       rawDetailsAction,
     );
     await widgetActions.click();
+    await rawDetailsItem.waitFor({ state: "visible" });
     traces.rawDetailsEndCollapse = await toggleDisclosureWithFrameTrace(
       page,
       rawDetailsToggle,
@@ -618,6 +623,7 @@ suite.define(() => {
     });
     await waitForChatScrollIdle(page);
     await widgetActions.click();
+    await rawDetailsItem.waitFor({ state: "visible" });
     traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(
       page,
       rawDetailsToggle,
@@ -642,6 +648,7 @@ suite.define(() => {
       });
     }
     await widgetActions.click();
+    await rawDetailsItem.waitFor({ state: "visible" });
     traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(
       page,
       rawDetailsToggle,
@@ -652,8 +659,8 @@ suite.define(() => {
     if (artifactDir) {
       await video?.saveAs(path.join(artifactDir, "raw-details-geometry.webm"));
     }
-    for (const frames of Object.values(traces)) {
-      expectStableDisclosureFrames(frames);
+    for (const [label, frames] of Object.entries(traces)) {
+      expectStableDisclosureFrames(frames, label);
     }
   });
 
