@@ -22,6 +22,7 @@ import {
   pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   resolveTsdownBuildInvocations,
+  resolveTsdownBuildPlan,
   resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
 } from "../../scripts/tsdown-build.mts";
@@ -291,6 +292,49 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(results[0]?.args.slice(-args.length)).toEqual(args);
   });
 
+  it("freezes one heap budget for admission and every full-build invocation", () => {
+    let memoryReads = 0;
+    const result = resolveTsdownBuildPlan({
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      cgroupMemoryLimitPaths: ["/test/memory.max"],
+      fs: {
+        readFileSync(filePath: string) {
+          if (filePath !== "/test/memory.max") {
+            throw new Error(`unexpected path ${filePath}`);
+          }
+          memoryReads += 1;
+          return `${(memoryReads === 1 ? 5 : 4) * 1024 * 1024 * 1024}\n`;
+        },
+      },
+    });
+
+    expect(memoryReads).toBe(1);
+    expect(result.heapShortfall).toBeNull();
+    expect(result.invocations).not.toHaveLength(0);
+    for (const invocation of result.invocations) {
+      expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    }
+  });
+
+  it.each([
+    ["custom config", ["--config", "custom.tsdown.config.ts"]],
+    ["filtered build", ["--filter", "openclaw-unified"]],
+  ])("does not apply full-build admission to a %s", (_label, args) => {
+    const result = resolveTsdownBuildPlan({
+      args,
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall).toBeNull();
+  });
+
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
     const rootDir = createTempDir("openclaw-pnpm-runner-");
     const npmExecPath = path.join(rootDir, "pnpm.cjs");
@@ -397,7 +441,7 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(shortfall?.fatal).toBe(true);
-    expect(shortfall?.message).toContain("732MB build heap");
+    expect(shortfall?.message).toContain("resolved OpenClaw build heap is 732MB");
     expect(shortfall?.message).toContain("OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP=1");
   });
 
@@ -417,12 +461,29 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("downgrades the refusal to a warning when the operator opts in", () => {
-    expect(
-      describeInsufficientTsdownHeap({
-        env: { OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP: "1" },
-        cgroupMemoryLimitBytes: 1500 * 1024 * 1024,
-      })?.fatal,
-    ).toBe(false);
+    const shortfall = describeInsufficientTsdownHeap({
+      env: { OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP: "1" },
+      cgroupMemoryLimitBytes: 1500 * 1024 * 1024,
+    });
+
+    expect(shortfall?.fatal).toBe(false);
+    expect(shortfall?.message).toContain(
+      "Continuing because OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP=1 permits a smaller heap",
+    );
+    expect(shortfall?.message).not.toContain("Stopping");
+  });
+
+  it("treats an explicit heap override as the operator's opt-in", () => {
+    const shortfall = describeInsufficientTsdownHeap({
+      env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "4096" },
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(shortfall?.fatal).toBe(false);
+    expect(shortfall?.message).toContain(
+      "Continuing because OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB explicitly requests 4096MB",
+    );
+    expect(shortfall?.message).not.toContain("Stopping");
   });
 
   it("stays silent when the host budget fits the build", () => {
@@ -443,6 +504,32 @@ describe("resolveTsdownBuildInvocation", () => {
 
     // 1500 MiB budget minus the 768 MiB headroom, not the former 2048 MiB floor.
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=732");
+  });
+
+  it.each([0, 4096, 1024 * 1024 - 1])(
+    "keeps a %i-byte cgroup limit bounded instead of treating it as unbounded",
+    (cgroupMemoryLimitBytes) => {
+      const result = resolveTsdownBuildInvocation({
+        nodeExecPath: "/usr/bin/node",
+        npmExecPath: "/tmp/pnpm.cjs",
+        env: {},
+        cgroupMemoryLimitBytes,
+      });
+
+      expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=1");
+    },
+  );
+
+  it("uses Node's constrained-memory result as a canonical cgroup candidate", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      constrainedMemoryBytes: 5 * 1024 * 1024 * 1024,
+      cgroupMemoryLimitPaths: [],
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
   it("caps the tsdown heap using the process's own cgroup slice budget", () => {
@@ -470,6 +557,32 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     // 5 GiB slice budget minus the 768 MiB build headroom.
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
+  it("uses the tightest finite cgroup ancestor when the leaf is also bounded", () => {
+    const leafPath = "/user.slice/openclaw.service";
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `0::${leafPath}\n`],
+      [`/sys/fs/cgroup${leafPath}/memory.max`, `${6 * 1024 * 1024 * 1024}\n`],
+      ["/sys/fs/cgroup/user.slice/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
@@ -504,10 +617,10 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
-  it("ignores an inherited namespace mount whose root is not derivable", () => {
-    // cgroup_namespaces(7): an inherited mount can report a field-4 root of "/..". Which
-    // cgroup it exposes is not derivable, so it must not be probed as if it were the
-    // process's own; the resolver falls back rather than sizing from an unrelated limit.
+  it("uses the visible ancestor limit from an inherited namespace mount", () => {
+    // cgroup_namespaces(7): an inherited mount rooted at "/.." exposes an ancestor of the
+    // namespace root. The hidden leaf name is unavailable, but the visible root limit still
+    // constrains this process.
     const cgroupFiles = new Map([
       ["/proc/self/cgroup", "0::/\n"],
       ["/proc/self/mountinfo", "30 25 0:26 /.. /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"],
@@ -530,8 +643,35 @@ describe("resolveTsdownBuildInvocation", () => {
       },
     });
 
-    // Host MemTotal sizing, not the unrelated 5 GiB limit behind the inherited mount.
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=12288");
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
+  it("rejects parent segments in a cgroup record instead of escaping the mount", () => {
+    const pathsRead: string[] = [];
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/../peer.slice\n"],
+      ["/proc/self/mountinfo", "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"],
+      ["/proc/meminfo", `MemTotal:       ${7 * 1024 * 1024} kB\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          pathsRead.push(filePath);
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+    expect(pathsRead.some((filePath) => filePath.includes("/sys/fs/peer.slice"))).toBe(false);
   });
 
   it("ignores an unrelated mounted subtree for a namespace-root record", () => {

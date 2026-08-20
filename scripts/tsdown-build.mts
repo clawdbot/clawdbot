@@ -78,6 +78,7 @@ type OutputRootParams = {
 type MemoryLimitParams = {
   cgroupMemoryLimitBytes?: number;
   cgroupMemoryLimitPaths?: string[];
+  constrainedMemoryBytes?: number;
   env?: NodeJS.ProcessEnv;
   fs?: { readFileSync(filePath: string, encoding: "utf8"): string };
   platform?: string;
@@ -85,6 +86,7 @@ type MemoryLimitParams = {
   procMemTotalBytes?: number;
   procSelfCgroupPath?: string;
   procSelfMountinfoPath?: string;
+  resolvedMaxOldSpaceMb?: number;
 };
 
 type CgroupMount = { mountPoint: string; root: string };
@@ -320,6 +322,12 @@ function readForwardedOption(args: string[], names: string[]) {
 const isFilterFlag = (arg: string | undefined) => arg === "--filter" || arg === "-F";
 const isFilterArg = (arg: string) =>
   isFilterFlag(arg) || arg.startsWith("--filter=") || arg.startsWith("-F=");
+const isConfigArg = (arg: string) =>
+  arg === "--config" ||
+  arg.startsWith("--config=") ||
+  arg === "-c" ||
+  arg.startsWith("-c=") ||
+  arg === "--no-config";
 const isUnifiedDtsGroup = (value: string | undefined) =>
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((group) => group === value);
 
@@ -478,7 +486,7 @@ function parseCgroupMemoryLimitBytes(value: string) {
     return null;
   }
   const parsed = BigInt(trimmed);
-  if (parsed <= 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+  if (parsed < 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
     return null;
   }
   return Number(parsed);
@@ -539,13 +547,20 @@ function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
 // host-absolute path. A record outside that subtree is not reachable through this mount, and
 // probing the mount root instead would size the build from an unrelated cgroup's limit.
 function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
+  if (cgroupPath.split("/").includes("..")) {
+    return null;
+  }
   if (mountRoot === "/") {
     return cgroupPath;
   }
-  // cgroup_namespaces(7): a mount inherited across a namespace can report a field-4 root of
-  // "/.." or another non-canonical path. Which cgroup such a view exposes is not derivable
-  // here, and guessing would size the build from an unrelated cgroup's limit.
-  if (mountRoot.split("/").includes("..")) {
+  const mountRootSegments = mountRoot.split("/").filter(Boolean);
+  if (mountRootSegments.length > 0 && mountRootSegments.every((segment) => segment === "..")) {
+    // cgroup_namespaces(7): an inherited mount rooted at /.. exposes a real ancestor of
+    // the namespace root. Its root limit still constrains this process even when the hidden
+    // leaf name cannot be reconstructed.
+    return "/";
+  }
+  if (mountRootSegments.includes("..")) {
     return null;
   }
   // A namespace-root record proves nothing about a mount rooted elsewhere: the kernel
@@ -620,14 +635,21 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
 
 function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
   const configuredLimit = params.cgroupMemoryLimitBytes;
-  if (configuredLimit && Number.isFinite(configuredLimit) && configuredLimit > 0) {
+  if (configuredLimit !== undefined && Number.isFinite(configuredLimit) && configuredLimit >= 0) {
     return Math.trunc(configuredLimit);
   }
 
   const fsImpl = params.fs ?? fs;
   const paths = params.cgroupMemoryLimitPaths ?? resolveCgroupMemoryLimitPaths(params);
+  // Supported Node versions expose libuv's canonical cgroup v1/v2 result. Keep it as an
+  // authoritative candidate while the custom walk adds nonstandard mounts and ancestor caps.
+  const constrainedMemoryBytes =
+    params.constrainedMemoryBytes ?? (params.fs === undefined ? process.constrainedMemory() : 0);
   // An ancestor may bound the leaf, so the tightest limit in the chain wins.
-  let tightestLimitBytes: number | null = null;
+  let tightestLimitBytes =
+    Number.isFinite(constrainedMemoryBytes) && constrainedMemoryBytes > 0
+      ? Math.trunc(constrainedMemoryBytes)
+      : null;
   for (const limitPath of paths) {
     try {
       const limitBytes = parseCgroupMemoryLimitBytes(fsImpl.readFileSync(limitPath, "utf8"));
@@ -672,6 +694,9 @@ function readProcMemTotalBytes(params: MemoryLimitParams = {}) {
 }
 
 function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
+  if (params.resolvedMaxOldSpaceMb !== undefined) {
+    return params.resolvedMaxOldSpaceMb;
+  }
   const defaultMaxOldSpaceMb =
     (params.platform ?? process.platform) === "win32"
       ? DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB
@@ -690,10 +715,6 @@ function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
   }
 
   const limitMb = Math.floor(limitBytes / 1024 / 1024);
-  if (limitMb <= 0) {
-    return defaultMaxOldSpaceMb;
-  }
-
   // Never exceed the budget just discovered: a floor applied on top of a real limit produces
   // a heap the cgroup cannot honour, which is an OOM kill rather than a smaller build.
   const cgroupCap = Math.max(1, limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB);
@@ -723,15 +744,27 @@ export function describeInsufficientTsdownHeap(params: MemoryLimitParams = {}) {
     return null;
   }
   const env = params.env ?? process.env;
+  const explicitHeapMb = parsePositiveIntegerEnv(
+    env[TSDOWN_MAX_OLD_SPACE_MB_ENV],
+    TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  );
+  const fatal = explicitHeapMb === null && env[TSDOWN_ALLOW_SMALL_HEAP_ENV] !== "1";
+  const outcome = fatal
+    ? [
+        "Stopping before any build output is removed. Pick one:",
+        "  - give this machine or container more memory",
+        `  - set ${TSDOWN_ALLOW_SMALL_HEAP_ENV}=1 to attempt the build anyway`,
+      ]
+    : [
+        `Continuing because ${explicitHeapMb === null ? `${TSDOWN_ALLOW_SMALL_HEAP_ENV}=1 permits a smaller heap` : `${TSDOWN_MAX_OLD_SPACE_MB_ENV} explicitly requests ${explicitHeapMb}MB`}. Existing build output will now be cleaned; the build may stall or fail.`,
+      ];
   return {
-    fatal: env[TSDOWN_ALLOW_SMALL_HEAP_ENV] !== "1",
+    fatal,
     message: [
-      `[tsdown-build] This host cannot build OpenClaw: it allows a ${maxOldSpaceMb}MB build heap, ` +
+      `[tsdown-build] The resolved OpenClaw build heap is ${maxOldSpaceMb}MB, ` +
         `and a full build needs ${MEASURED_MIN_TSDOWN_HEAP_MB}MB, peaking near 4.7GB once rolldown's ` +
         `native allocations are counted; those are not covered by --max-old-space-size.`,
-      "Stopping before any build output is removed. Pick one:",
-      "  - give this machine or container more memory",
-      `  - set ${TSDOWN_ALLOW_SMALL_HEAP_ENV}=1 to attempt the build anyway`,
+      ...outcome,
       // Deliberately not suggesting a declarations-only build. Skipping them collapses the
       // invocation list into one larger pass that measured worse twice over: it pinned a 3GB
       // container at its ceiling with oom_kill still 0 and never finished, which is the same
@@ -935,14 +968,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   const declarationsEnabled = dtsArg
     ? dtsArg === "--dts"
     : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
-  const hasForwardedConfig = aiArgs.some(
-    (arg) =>
-      arg === "--config" ||
-      arg.startsWith("--config=") ||
-      arg === "-c" ||
-      arg.startsWith("-c=") ||
-      arg === "--no-config",
-  );
+  const hasForwardedConfig = aiArgs.some(isConfigArg);
 
   const forwardedConfig = readForwardedOption(forwardedArgs, ["--config", "-c"]);
   const forwardedFilter = readForwardedOption(forwardedArgs, ["--filter", "-F"]);
@@ -999,6 +1025,23 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     );
   }
   return invocations;
+}
+
+function isFullTsdownBuildPlan(args: string[]) {
+  return !args.some(isConfigArg) && !args.some(isFilterArg);
+}
+
+export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
+  const preparedParams = {
+    ...params,
+    resolvedMaxOldSpaceMb: resolveTsdownMaxOldSpaceMb(params),
+  };
+  return {
+    heapShortfall: isFullTsdownBuildPlan(params.args ?? [])
+      ? describeInsufficientTsdownHeap(preparedParams)
+      : null,
+    invocations: resolveTsdownBuildInvocations(preparedParams),
+  };
 }
 
 type TaskkillRunner = (
@@ -1210,7 +1253,8 @@ if (isMainModule()) {
     console.log(tsdownBuildUsage());
     process.exit(0);
   }
-  const heapShortfall = describeInsufficientTsdownHeap();
+  const plan = resolveTsdownBuildPlan({ args: args.forwardedArgs });
+  const heapShortfall = plan.heapShortfall;
   if (heapShortfall) {
     if (heapShortfall.fatal) {
       console.error(heapShortfall.message);
@@ -1222,15 +1266,14 @@ if (isMainModule()) {
   pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
   cleanTsdownOutputRoots({ roots: resolveTsdownCleanOutputRoots(args.forwardedArgs) });
-  const invocations = resolveTsdownBuildInvocations({ args: args.forwardedArgs });
   let result: TsdownBuildResult | undefined;
-  for (const [index, invocation] of invocations.entries()) {
+  for (const [index, invocation] of plan.invocations.entries()) {
     const startedAt = performance.now();
     result = await runTsdownBuildInvocation(invocation);
     // Per-invocation timing separates the AI-declarations pass from the main
     // graph in CI logs; the combined step is otherwise a single opaque cost.
     console.log(
-      `[tsdown-build] invocation ${index + 1}/${invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+      `[tsdown-build] invocation ${index + 1}/${plan.invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
     );
     if (result.status !== 0 || result.hasIneffectiveDynamicImport || result.fatalUnresolvedImport) {
       break;
