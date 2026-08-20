@@ -1,10 +1,6 @@
 name: Mantis Telegram Desktop Proof
 
 on:
-  issue_comment:
-    types: [created]
-  pull_request_target: # zizmor: ignore[dangerous-triggers] trusted base workflow; candidate code remains container-isolated
-    types: [labeled]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -31,6 +27,11 @@ on:
       approved_head_sha:
         description: Exact fork PR head SHA approved for this secret-bearing run
         required: false
+        type: string
+      request_source:
+        description: Internal request source for PR-triggered runs
+        required: false
+        default: workflow_dispatch
         type: string
 
 permissions:
@@ -67,22 +68,6 @@ jobs:
       request_source: ${{ steps.resolve.outputs.request_source }}
       should_run: ${{ steps.resolve.outputs.should_run }}
       visibility_decision: ${{ steps.read_decision.outputs.decision }}
-    if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'issue_comment' &&
-          github.event.issue.pull_request &&
-          (
-            contains(github.event.comment.body, '@openclaw-mantis') ||
-            contains(github.event.comment.body, '/openclaw-mantis')
-          )
-        ) ||
-        (
-          github.event_name == 'pull_request_target' &&
-          github.event.label.name == 'mantis: telegram-visible-proof'
-        )
-      }}
     steps:
       - name: Resolve refs and target PR
         id: resolve
@@ -95,60 +80,14 @@ jobs:
             }
 
             const inputs = context.payload.inputs ?? {};
-            const eventName = context.eventName;
-            let prNumber = inputs.pr_number;
-            let body = inputs.instructions || "";
-            let requestSource = "workflow_dispatch";
-
-            if (eventName === "issue_comment") {
-              const issue = context.payload.issue;
-              const commentBody = context.payload.comment?.body ?? "";
-              const normalized = commentBody.toLowerCase();
-              const mentionsMantis =
-                normalized.includes("@openclaw-mantis") ||
-                normalized.includes("/openclaw-mantis");
-              const requestsDesktopProof =
-                /\b(?:telegram desktop proof|desktop proof|native telegram|visible proof|telegram-visible-proof)\b/u.test(
-                  normalized,
-                );
-              if (!issue?.pull_request || !mentionsMantis || !requestsDesktopProof) {
-                setOutput("should_run", "false");
-                setOutput("request_source", "unsupported_issue_comment");
-                return;
-              }
-              const allowed = new Set(["admin", "maintain", "write"]);
-              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-                ...context.repo,
-                username: context.actor,
-              });
-              if (!allowed.has(data.permission)) {
-                core.notice(
-                  `Mantis requires write/maintain/admin access; ${context.actor} has ${data.permission}.`,
-                );
-                setOutput("should_run", "false");
-                setOutput("request_source", "unauthorized_issue_comment");
-                return;
-              }
-              prNumber = String(issue.number);
-              body = commentBody;
-              requestSource = "issue_comment";
-            } else if (eventName === "pull_request_target") {
-              if (context.payload.label?.name !== "mantis: telegram-visible-proof") {
-                setOutput("should_run", "false");
-                setOutput("request_source", "unsupported_label");
-                return;
-              }
-              prNumber = String(context.payload.pull_request?.number ?? "");
-              requestSource = "clawsweeper_label";
-            } else if (eventName !== "workflow_dispatch") {
-              core.setFailed(`Unsupported event: ${eventName}`);
-              return;
-            }
+            const prNumber = inputs.pr_number;
             if (!prNumber) {
               core.setFailed("Mantis Telegram desktop proof requires a pull request.");
               return;
             }
 
+            const body = inputs.instructions || "";
+            const requestSource = inputs.request_source || "workflow_dispatch";
             const { owner, repo } = context.repo;
             const { data: pr } = await github.rest.pulls.get({
               owner,
@@ -205,16 +144,7 @@ jobs:
               }
 
               if (pr.head.repo.full_name !== `${owner}/${repo}`) {
-                if (requestSource === "clawsweeper_label") {
-                  core.notice(
-                    "ClawSweeper labels do not authorize secret-bearing fork execution; a maintainer can invoke Mantis from a PR comment.",
-                  );
-                  setOutput("should_run", "false");
-                  setOutput("request_source", requestSource);
-                  return;
-                }
                 const allowFork =
-                  requestSource === "issue_comment" ||
                   inputs.allow_fork_candidate === true ||
                   inputs.allow_fork_candidate === "true";
                 if (!allowFork) {
@@ -224,9 +154,8 @@ jobs:
                   return;
                 }
                 if (
-                  requestSource !== "issue_comment" &&
-                  (!immutableSha.test(inputs.approved_head_sha || "") ||
-                    inputs.approved_head_sha !== candidateRevision)
+                  !immutableSha.test(inputs.approved_head_sha || "") ||
+                  inputs.approved_head_sha !== candidateRevision
                 ) {
                   core.setFailed(
                     `Fork approval must name the exact current PR head SHA (${candidateRevision}).`,
@@ -824,7 +753,7 @@ jobs:
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
           safety-strategy: unprivileged-user
           codex-user: codex
-          allow-bot-users: github-actions[bot],clawsweeper[bot]
+          allow-bot-users: github-actions[bot]
 
       - name: Clean up abandoned Mantis sessions
         id: abandoned_cleanup

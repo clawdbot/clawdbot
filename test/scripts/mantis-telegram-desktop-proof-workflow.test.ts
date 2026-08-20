@@ -13,6 +13,7 @@ const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const QA_LAB_RUNTIME_API = "extensions/qa-lab/runtime-api.ts";
 const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
+const DISPATCH_WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof-dispatch.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const SCENARIO_WORKFLOW = ".github/workflows/mantis-scenario.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
@@ -305,22 +306,39 @@ describe("Mantis Telegram Desktop proof workflow", () => {
   it("accepts maintainer comments and ClawSweeper labels without wasting proof setup", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const workflowText = readFileSync(WORKFLOW, "utf8");
+    const dispatchWorkflow = parse(readFileSync(DISPATCH_WORKFLOW, "utf8")) as Workflow;
+    const dispatchText = readFileSync(DISPATCH_WORKFLOW, "utf8");
+    const dispatch = dispatchWorkflow.jobs?.dispatch;
     const resolver = workflow.jobs?.resolve_request;
     const capture = workflow.jobs?.run_telegram_desktop_proof;
     const noVisible = workflow.jobs?.report_no_visible_change;
 
     expect(workflow.on?.workflow_dispatch).toBeDefined();
     expect(workflow.on?.workflow_dispatch?.inputs?.approved_head_sha?.required).toBe(false);
-    expect(workflow.on?.issue_comment?.types).toEqual(["created"]);
-    expect(workflow.on?.pull_request_target?.types).toEqual(["labeled"]);
-    expect(workflowText).toContain("@openclaw-mantis");
-    expect(workflowText).toContain("telegram desktop proof");
-    expect(workflowText).toContain('new Set(["admin", "maintain", "write"])');
+    expect(workflow.on?.workflow_dispatch?.inputs?.request_source?.required).toBe(false);
+    expect(workflow.on?.issue_comment).toBeUndefined();
+    expect(workflow.on?.pull_request_target).toBeUndefined();
+    expect(dispatchWorkflow.on?.issue_comment?.types).toEqual(["created"]);
+    expect(dispatchWorkflow.on?.pull_request_target?.types).toEqual(["labeled"]);
+    expect(dispatchWorkflow.permissions).toEqual({
+      actions: "write",
+      "pull-requests": "read",
+    });
+    expect(dispatchText).toContain("@openclaw-mantis");
+    expect(dispatchText).toContain("telegram desktop proof");
+    expect(dispatchText).toContain('new Set(["admin", "maintain", "write"])');
+    expect(dispatchText).toContain("actions.createWorkflowDispatch");
+    expect(dispatchText).toContain('workflow_id: "mantis-telegram-desktop-proof.yml"');
+    expect(dispatchText).toContain('inputs.allow_fork_candidate = "true"');
+    expect(dispatchText).toContain("inputs.approved_head_sha = pr.head.sha");
+    expect(dispatchText).not.toContain("actions/checkout");
+    expect(dispatchText).not.toContain("secrets.");
+    expect(dispatch?.steps).toHaveLength(1);
     expect(workflowText).toContain('setOutput("request_source", requestSource)');
-    expect(workflowText).toContain('requestSource === "issue_comment"');
     expect(workflowText).toContain('requestSource === "clawsweeper_label"');
     expect(workflowText).toContain("pr.head.repo.full_name !== `${owner}/${repo}`");
-    expect(workflowText).toContain("allow-bot-users: github-actions[bot],clawsweeper[bot]");
+    expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
+    expect(workflowText).not.toContain("allow-bot-users: github-actions[bot],clawsweeper[bot]");
     expect(workflowText).toContain("inputs.approved_head_sha !== candidateRevision");
 
     const preflightCheckout = resolver?.steps?.find(
