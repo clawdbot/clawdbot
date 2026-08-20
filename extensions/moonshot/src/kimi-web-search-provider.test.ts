@@ -298,6 +298,40 @@ describe("kimi web search provider", () => {
     });
   });
 
+  it("reuses cached Kimi answers across ignored result counts while rejecting invalid counts", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          search_results: [{ title: "OpenClaw", url: "https://github.com/openclaw/openclaw" }],
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { content: "OpenClaw is on GitHub." },
+            },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
+      const tool = createKimiWebSearchProvider().createTool({ config: {}, searchConfig: {} });
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
+      const query = "unique Kimi ignored result count cache regression";
+
+      await tool.execute({ query, count: 1 });
+      await tool.execute({ query, count: 10 });
+      await tool.execute({ query });
+
+      await expect(tool.execute({ query, count: 0 })).rejects.toThrow(
+        "count must be an integer from 1 to 10.",
+      );
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+  });
+
   it("returns original tool arguments as tool content", () => {
     const rawArguments = '  {"query":"MacBook Neo","usage":{"total_tokens":123}}  ';
 
