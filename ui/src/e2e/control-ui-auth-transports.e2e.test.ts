@@ -1,4 +1,5 @@
 // Control UI tests prove trusted-proxy and browser-origin auth through real transports.
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import net from "node:net";
@@ -85,6 +86,7 @@ type RealTransportProxy = {
 
 type RealGateway = {
   cleanup: () => Promise<void>;
+  httpUrl: string;
   port: number;
   server: GatewayServer;
   state: OpenClawTestState;
@@ -387,6 +389,7 @@ async function getFreePort(): Promise<number> {
 
 async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
   const port = await getFreePort();
+  const httpUrl = `http://127.0.0.1:${port}/`;
   const state = await createOpenClawTestState({
     label: "control-ui-auth-transports",
     layout: "home",
@@ -432,8 +435,9 @@ async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
         trustedProxy,
       },
       controlUi: {
-        allowedOrigins: [allowedOrigin],
-        enabled: false,
+        allowedOrigins: [allowedOrigin, new URL(httpUrl).origin],
+        enabled: true,
+        root: path.resolve("dist/control-ui"),
       },
       port,
       trustedProxies: ["127.0.0.1", "::1"],
@@ -448,7 +452,7 @@ async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
         trustedProxy,
       },
       bind: "loopback",
-      controlUiEnabled: false,
+      controlUiEnabled: true,
       sidecarStartup: "defer",
     });
     return {
@@ -456,6 +460,7 @@ async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
         await server.close({ reason: "control ui auth transports test cleanup" });
         await state.cleanup();
       },
+      httpUrl,
       port,
       server,
       state,
@@ -500,8 +505,8 @@ async function createBrowserPage(
     waitUntil: "domcontentloaded",
   });
   expect(response?.status()).toBe(200);
-  // Source-served UI startup shares CI shard CPU. Bound navigation and the
-  // first rendered interaction separately; transport assertions stay narrow.
+  // Browser startup shares CI shard CPU. Bound navigation and the first
+  // rendered interaction separately; transport assertions stay narrow.
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
   await confirmation.waitFor({ timeout: controlUiSettleTimeoutMs });
   expect(await confirmation.textContent()).toContain(gatewayUrl);
@@ -544,6 +549,29 @@ async function captureChromiumScreenshot(page: Page, fileName: string): Promise<
   } finally {
     await session.detach();
   }
+}
+
+async function verifyGatewayServedControlUiBundle(httpUrl: string): Promise<{
+  assetPath: string;
+  assetSha256: string;
+}> {
+  const distRoot = path.resolve("dist/control-ui");
+  const builtIndex = await readFile(path.join(distRoot, "index.html"), "utf8");
+  const assetPath = builtIndex.match(/<script[^>]+src="\.\/(assets\/[^"]+\.js)"/u)?.[1];
+  if (!assetPath) {
+    throw new Error("built Control UI index has no JavaScript asset path");
+  }
+  const servedIndexResponse = await fetch(httpUrl);
+  expect(servedIndexResponse.status).toBe(200);
+  expect(await servedIndexResponse.text()).toContain(`src="/${assetPath}"`);
+  const servedAssetResponse = await fetch(new URL(assetPath, httpUrl));
+  expect(servedAssetResponse.status).toBe(200);
+  const servedAsset = Buffer.from(await servedAssetResponse.arrayBuffer());
+  const builtAsset = await readFile(path.join(distRoot, assetPath));
+  const hash = (value: Buffer) => createHash("sha256").update(value).digest("hex");
+  const assetSha256 = hash(builtAsset);
+  expect(hash(servedAsset)).toBe(assetSha256);
+  return { assetPath, assetSha256 };
 }
 
 async function readConfigProofSnapshot(): Promise<{ identifier: unknown; prefix: string | null }> {
@@ -652,12 +680,21 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
   });
 
   it("preserves a 64-bit identifier through a real Gateway form save", async () => {
-    const connected = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
+    const servedBundle = await verifyGatewayServedControlUiBundle(gateway.httpUrl);
+    const connected = await createBrowserPage(gateway.httpUrl, proxy.trustedUrl);
     await connected.page
       .locator("openclaw-app-shell")
       .waitFor({ timeout: controlUiSettleTimeoutMs });
+    const servedAssetLoaded = await connected.page.evaluate(
+      (assetPath) =>
+        performance
+          .getEntriesByType("resource")
+          .some((entry) => new URL(entry.name).pathname.endsWith(`/${assetPath}`)),
+      servedBundle.assetPath,
+    );
+    expect(servedAssetLoaded).toBe(true);
 
-    const rawSettingsUrl = new URL("settings/advanced", allowedUi.baseUrl);
+    const rawSettingsUrl = new URL("settings/advanced", gateway.httpUrl);
     rawSettingsUrl.searchParams.set("section", "env");
     expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
     await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
@@ -668,7 +705,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await rawEditorBefore.scrollIntoViewIfNeeded();
     await captureChromiumScreenshot(connected.page, "01-real-config-id-before.png");
 
-    const settingsUrl = new URL("settings/communications", allowedUi.baseUrl);
+    const settingsUrl = new URL("settings/communications", gateway.httpUrl);
     settingsUrl.searchParams.set("section", "messages");
     expect((await connected.page.goto(settingsUrl.toString()))?.status()).toBe(200);
     const prefix = connected.page.getByRole("textbox", {
@@ -711,6 +748,10 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       method: "config.set",
       persistedPrefix: persisted.prefix,
       rawReadbackQuoted: true,
+      servedAssetLoaded,
+      servedAssetPath: servedBundle.assetPath,
+      servedAssetSha256: servedBundle.assetSha256,
+      uiSource: "gateway-dist-control-ui",
     };
     await writeFile(
       path.join(artifactDir, "real-gateway-config-id-proof.json"),

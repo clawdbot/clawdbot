@@ -1751,6 +1751,9 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
+      - name: Build Control UI bundle for real-Gateway tests
+        run: pnpm ui:build
+
       - name: Test MCP app conformance with a real Gateway
         run: >-
           node scripts/run-vitest.mjs run
