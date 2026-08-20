@@ -578,6 +578,17 @@ suite.define(() => {
         await page.waitForTimeout(300);
 
         await first.hover();
+        await first.locator("a.sidebar-recent-session__link").focus();
+        await card.waitFor({ state: "visible" });
+        await expect
+          .poll(() => card.locator(".session-hovercard__title").textContent())
+          .toBe("First timing row");
+        await page.keyboard.press("Escape");
+        await expect.poll(() => card.count()).toBe(0);
+        await page.mouse.move(900, 800);
+        await page.waitForTimeout(300);
+
+        await first.hover();
         expect(await card.count()).toBe(0);
         await card.waitFor({ state: "visible" });
 

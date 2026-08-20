@@ -289,6 +289,10 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
         this.hovercard.markTrigger(trigger);
         if (this.open) {
           this.showCurrent();
+        } else {
+          this.animateNextOpen = animateEntry;
+          const generation = ++this.loadGeneration;
+          this.hovercard.scheduleOpen(delay, () => void this.loadAndShow(sessionKey, generation));
         }
       }
       return;
