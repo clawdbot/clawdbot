@@ -105,6 +105,10 @@ type DistJavaScriptFileListResult =
   | { files: string[]; limitExceeded: false }
   | { files: string[]; limit: number; limitExceeded: true };
 
+type InstalledRootDistJavaScriptReadResult =
+  | { error: string; ok: false }
+  | { ok: true; relativePath: string; source: string };
+
 type PublishedInstallScenario = {
   name: string;
   installSpecs: string[];
@@ -474,7 +478,7 @@ export function collectInstalledPackageErrors(params: {
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
-  return errors;
+  return [...new Set(errors)];
 }
 
 export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
@@ -534,13 +538,7 @@ export function normalizeInstalledBinaryVersion(output: string): string {
   return versionMatch?.[0] ?? trimmed;
 }
 
-function listDistJavaScriptFiles(
-  packageRoot: string,
-  opts: {
-    maxFiles?: number;
-    skipRelativePath?: (relativePath: string) => boolean;
-  } = {},
-): DistJavaScriptFileListResult {
+function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScriptFileListResult {
   const distDir = join(packageRoot, "dist");
   if (!existsSync(distDir)) {
     return { files: [], limitExceeded: false };
@@ -563,7 +561,7 @@ function listDistJavaScriptFiles(
 
         const entryPath = join(currentDir, entry.name);
         const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
-        if (opts.skipRelativePath?.(relativePath)) {
+        if (relativePath === "extensions" || relativePath.startsWith("extensions/")) {
           continue;
         }
         if (entry.isDirectory()) {
@@ -572,10 +570,10 @@ function listDistJavaScriptFiles(
         }
         if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
           files.push(entryPath);
-          if (opts.maxFiles !== undefined && files.length > opts.maxFiles) {
+          if (files.length > MAX_INSTALLED_ROOT_DIST_JS_FILES) {
             return {
               files,
-              limit: opts.maxFiles,
+              limit: MAX_INSTALLED_ROOT_DIST_JS_FILES,
               limitExceeded: true,
             };
           }
@@ -593,25 +591,43 @@ function formatInstalledDistFileScanLimitError(scope: string, limit: number): st
   return `installed package ${scope} contains more than ${limit} JavaScript files; refusing to scan unbounded package contents.`;
 }
 
+function readInstalledRootDistJavaScriptFile(
+  packageRoot: string,
+  filePath: string,
+): InstalledRootDistJavaScriptReadResult {
+  const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
+  const maxBytes = SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath)
+    ? MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES
+    : MAX_INSTALLED_ROOT_DIST_JS_BYTES;
+  const fileStat = lstatSync(filePath);
+  if (!fileStat.isFile() || fileStat.size > maxBytes) {
+    return {
+      error: `installed package root dist file '${relativePath}' is invalid or exceeds ${maxBytes} bytes.`,
+      ok: false,
+    };
+  }
+  return { ok: true, relativePath, source: readFileSync(filePath, "utf8") };
+}
+
 export function collectInstalledContextEngineRuntimeErrors(packageRoot: string): string[] {
-  const errors: string[] = [];
-  const distFiles = listDistJavaScriptFiles(packageRoot, {
-    maxFiles: MAX_INSTALLED_ROOT_DIST_JS_FILES,
-  });
+  const distFiles = listInstalledRootDistJavaScriptFiles(packageRoot);
   if (distFiles.limitExceeded) {
-    return [formatInstalledDistFileScanLimitError("dist", distFiles.limit)];
+    return [formatInstalledDistFileScanLimitError("root dist", distFiles.limit)];
   }
 
+  // The legacy marker is a root runtime bundling contract; extension assets are plugin-owned.
   for (const filePath of distFiles.files) {
-    const contents = readFileSync(filePath, "utf8");
-    if (contents.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
-      errors.push(
+    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
+    if (!file.ok) {
+      return [file.error];
+    }
+    if (file.source.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
+      return [
         "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
-      );
-      break;
+      ];
     }
   }
-  return errors;
+  return [];
 }
 
 function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
@@ -640,14 +656,6 @@ function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string
   }
 
   return errors;
-}
-
-function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScriptFileListResult {
-  return listDistJavaScriptFiles(packageRoot, {
-    maxFiles: MAX_INSTALLED_ROOT_DIST_JS_FILES,
-    skipRelativePath: (relativePath) =>
-      relativePath === "extensions" || relativePath.startsWith("extensions/"),
-  });
 }
 
 type ParsedImportSpecifiersResult =
@@ -757,21 +765,14 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
 
   for (const filePath of distFiles.files) {
-    const fileStat = lstatSync(filePath);
-    const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
-    const maxBytes = SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath)
-      ? MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES
-      : MAX_INSTALLED_ROOT_DIST_JS_BYTES;
-    if (!fileStat.isFile() || fileStat.size > maxBytes) {
-      return [
-        `installed package root dist file '${relativePath}' is invalid or exceeds ${maxBytes} bytes.`,
-      ];
+    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
+    if (!file.ok) {
+      return [file.error];
     }
-    const source = readFileSync(filePath, "utf8");
-    const parsedSpecifiers = extractJavaScriptImportSpecifiers(source);
+    const parsedSpecifiers = extractJavaScriptImportSpecifiers(file.source);
     if (!parsedSpecifiers.ok) {
       return [
-        `installed package root dist file '${relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
+        `installed package root dist file '${file.relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
       ];
     }
     for (const specifier of parsedSpecifiers.specifiers) {
@@ -784,13 +785,13 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
         isBundledExtensionOwnedRuntimeImport({
           dependencyName,
           ownersByDependency: bundledExtensionRuntimeDependencyOwners,
-          source,
+          source: file.source,
         })
       ) {
         continue;
       }
       const importers = missingImporters.get(dependencyName) ?? new Set<string>();
-      importers.add(relativePath);
+      importers.add(file.relativePath);
       missingImporters.set(dependencyName, importers);
     }
   }
