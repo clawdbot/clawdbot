@@ -333,7 +333,7 @@ export type AgentEventHandlerOptions = {
   nodeSendToSession: NodeSendToSession;
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
-  resolveSessionKeyForRun: (runId: string) => string | undefined;
+  resolveSessionKeyForRun: (runId: string, options?: { agentId?: string }) => string | undefined;
   clearAgentRunContext: (
     runId: string,
     lifecycleGeneration?: string,
@@ -477,6 +477,19 @@ export function createAgentEventHandler({
       return;
     }
     clearAgentRunContext(evt.runId);
+  };
+  const resolveEventSession = (evt: AgentEventRuntimePayload) => {
+    const chatLink = evt.contextClaimId ? undefined : chatRunState.registry.peek(evt.runId);
+    const sessionAgentId = chatLink?.agentId ?? evt.agentId;
+    const eventSessionKey =
+      evt.deliverySessionKey ??
+      (typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined);
+    const sessionKey =
+      chatLink?.sessionKey ??
+      eventSessionKey ??
+      getAgentRunContext(evt.runId)?.sessionKey ??
+      resolveSessionKeyForRun(evt.runId, sessionAgentId ? { agentId: sessionAgentId } : undefined);
+    return { chatLink, sessionAgentId, eventSessionKey, sessionKey };
   };
 
   type TerminalLifecycleOptions = {
@@ -762,17 +775,11 @@ export function createAgentEventHandler({
     const currentLifecycleGeneration =
       activeLifecycleGeneration ?? currentRunContext?.lifecycleGeneration;
 
-    const chatLink = evt.contextClaimId ? undefined : chatRunState.registry.peek(evt.runId);
-    const sessionAgentId = chatLink?.agentId ?? evt.agentId;
-    const eventSessionKey =
-      evt.deliverySessionKey ??
-      (typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined);
+    const { chatLink, sessionAgentId, eventSessionKey, sessionKey } = resolveEventSession(evt);
     const isControlUiVisible =
       evt.controlUiVisible ?? currentRunContext?.isControlUiVisible ?? true;
     const projectSessionLifecycle =
       evt.projectSessionLifecycle ?? currentRunContext?.projectSessionLifecycle ?? true;
-    const sessionKey =
-      chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
     const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
@@ -1384,19 +1391,13 @@ export function createAgentEventHandler({
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
-    const chatLink = evt.contextClaimId ? undefined : chatRunState.registry.peek(evt.runId);
-    const sessionAgentId = chatLink?.agentId ?? evt.agentId;
-    const eventSessionKey =
-      evt.deliverySessionKey ??
-      (typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined);
+    const { chatLink, sessionAgentId, eventSessionKey, sessionKey } = resolveEventSession(evt);
     const runContext = getAgentRunContext(evt.runId);
     const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
     const isControlUiVisible = evt.controlUiVisible ?? runContext?.isControlUiVisible ?? true;
     const projectSessionLifecycle =
       evt.projectSessionLifecycle ?? runContext?.projectSessionLifecycle ?? true;
     const isHeartbeat = runContext?.isHeartbeat;
-    const sessionKey =
-      chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
     const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;

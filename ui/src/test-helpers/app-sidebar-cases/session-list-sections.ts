@@ -142,7 +142,19 @@ describe("AppSidebar session section visibility", () => {
 
     // Empty user-created groups stay visible (creation and drag targets);
     // only the bare Other header disappears while nothing lives in it.
-    expect(sidebar.querySelector('[data-session-section="category:Empty"]')).not.toBeNull();
+    const emptyCategory = sidebar.querySelector('[data-session-section="category:Empty"]');
+    const emptyCategoryHeader = emptyCategory?.querySelector(
+      ":scope > .sidebar-recent-sessions__head",
+    );
+    expect(emptyCategory).not.toBeNull();
+    expect(emptyCategoryHeader).not.toBeNull();
+    expect(emptyCategory?.querySelector(".sidebar-session-group-toggle")?.textContent).toContain(
+      "Empty",
+    );
+    expect(emptyCategory?.querySelector(".sidebar-session-empty-hint")).toBeNull();
+    expect(emptyCategory?.querySelector(".sidebar-recent-sessions__list")).toBeNull();
+    expect(emptyCategory?.children).toHaveLength(1);
+    expect(emptyCategory?.firstElementChild).toBe(emptyCategoryHeader);
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).toBeNull();
 
     sidebar.sessionOrganizer.draggingSessionKey = "agent:main:alpha";

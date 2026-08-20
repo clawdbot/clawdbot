@@ -187,7 +187,7 @@ function seekSequence(
   }
 
   const maxStart = lines.length - pattern.length;
-  const searchStart = eof && lines.length >= pattern.length ? maxStart : start;
+  const searchStart = eof ? Math.max(start, maxStart) : start;
   if (searchStart > maxStart) {
     return { kind: "missing" };
   }

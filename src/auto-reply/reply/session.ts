@@ -51,6 +51,7 @@ import {
   DEFAULT_RESET_TRIGGERS,
   SESSION_TOTAL_TOKENS_VERSION,
   type GroupKeyResolution,
+  type InternalSessionEntry,
   type SessionEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
@@ -384,7 +385,7 @@ function selectSessionModelOverride(
   };
 }
 
-function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionEntry> {
+function resolveReplySessionRolloverState(entry: SessionEntry): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
   return {
     thinkingLevel: entry.thinkingLevel,

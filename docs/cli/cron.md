@@ -114,9 +114,11 @@ Reminders created from an active chat preserve the live chat delivery target for
 
 Failure notifications resolve in this order:
 
-1. `delivery.failureDestination` on the job.
-2. The global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
+1. Route fields in the job's `failureAlert` object.
+2. `delivery.failureDestination` on the job, layered over the global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
 3. The job's primary announce target (when neither of the above resolves to a concrete destination).
+
+Jobs with one of those routes default to an execution-failure alert after 2 consecutive failures and a 1-hour cooldown. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy.
 
 <Note>
 Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
@@ -127,6 +129,8 @@ Chat failure notifications include the run start time in the agent's configured 
 Isolated automation runs treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures still increment error counters and trigger failure notifications.
 
 Command jobs do not start an isolated agent turn. A zero exit code records `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger the same failure notification path.
+
+Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. It can notify immediately only through a resolved alternate failure destination, never the primary route that just failed.
 
 If an isolated run times out before the first model request, `openclaw automations show` and `openclaw automations runs` include a phase-specific error such as `setup timed out before runner start` or a stall message naming the last-known startup phase (for example `context-engine`). For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are reported as pre-model automation failures.
 

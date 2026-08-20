@@ -1326,7 +1326,7 @@ class NodeRuntime private constructor(
   // response from publishing into a replacement socket on the same stable endpoint.
   private val gatewayMethodsLock = Any()
   private var gatewayApprovalRpcFamily = GatewayApprovalRpcFamily.Unavailable
-  private var gatewayProgressCardAdvertised: Boolean? = null
+  private var gatewayAdvertisedMethods: Set<String>? = null
   private var gatewayMethodsEpoch = 0L
 
   @Volatile internal var gatewayDataRequestOverrideForTests: GatewayDataRequestOverride? = null
@@ -1404,8 +1404,9 @@ class NodeRuntime private constructor(
         replaceGatewayMethods(hello.methods)
         val operatorScopes = normalizeOperatorScopes(hello.authScopes)
         _operatorScopes.value = operatorScopes
+        // Pairing capabilities require positive hello advertisement; an unknown catalog grants none.
         _devicePairingCapabilities.value =
-          selectGatewayDevicePairingCapabilities(hello.methods, operatorScopes)
+          selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         val mainSessionKey =
           prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
@@ -1918,7 +1919,7 @@ class NodeRuntime private constructor(
           cacheScope = ::chatCacheScope,
           currentDefaultAgentId = { gatewayDefaultAgentId.value },
           currentDefaultAgentRevision = gatewayDefaultAgentRevision::get,
-          gatewayAdvertisesProgressCard = ::gatewayAdvertisesProgressCard,
+          gatewayAdvertisesMethod = ::gatewayAdvertisesMethod,
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
@@ -1934,7 +1935,7 @@ class NodeRuntime private constructor(
           scope = scope,
           json = json,
           requestGateway = AndroidScreenshotFixture::request,
-          gatewayAdvertisesProgressCard = { true },
+          gatewayAdvertisesMethod = { _ -> true },
         )
     }.also {
       it.applyMainSessionKey(_mainSessionKey.value)
@@ -7400,8 +7401,8 @@ class NodeRuntime private constructor(
   private fun replaceGatewayMethods(methods: Set<String>?) {
     synchronized(gatewayMethodsLock) {
       val advertisedMethods = methods.orEmpty()
+      gatewayAdvertisedMethods = methods
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(advertisedMethods)
-      gatewayProgressCardAdvertised = methods?.let { GatewayMethod.ProgressCardGet.rawValue in it }
       _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(advertisedMethods)
       _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in advertisedMethods
       systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in advertisedMethods
@@ -7409,7 +7410,7 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun gatewayAdvertisesProgressCard(): Boolean? = synchronized(gatewayMethodsLock) { gatewayProgressCardAdvertised }
+  private fun gatewayAdvertisesMethod(method: String): Boolean? = synchronized(gatewayMethodsLock) { gatewayAdvertisedMethods?.let { method in it } }
 
   private fun captureGatewayMethods(): GatewayMethodsSnapshot =
     synchronized(gatewayMethodsLock) {

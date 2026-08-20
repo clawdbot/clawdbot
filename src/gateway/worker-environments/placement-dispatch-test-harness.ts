@@ -12,6 +12,7 @@ import {
   type PlacementStore,
   REQUEST,
   seedActivePlacement,
+  seedProvisioningPlacement,
   seedStartingPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
@@ -49,6 +50,7 @@ export function createHarness(
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
+    recoveryBarrierError?: Error;
     prepareAcceptedWorkspacePublication?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["prepareAcceptedWorkspacePublication"];
@@ -361,6 +363,13 @@ export function createHarness(
       }
       return placement;
     },
+    runRecoveryBarrier: async ({ run }) => {
+      log.push("recovery-barrier");
+      if (options.recoveryBarrierError) {
+        throw options.recoveryBarrierError;
+      }
+      await run(options.workspacePath ?? "/gateway/workspace");
+    },
     runActivationBarrier: async ({ authorize, activate }) => {
       authorize?.();
       fail("activation");
@@ -408,6 +417,7 @@ export function createHarness(
     reconciledManifestRef,
     placements: {
       current: () => placementStore.get(REQUEST.sessionId),
+      seedProvisioning: () => seedProvisioningPlacement(placementStore, environmentId),
       seedStarting: () => seedStartingPlacement(placementStore, environmentId),
       seedActive: (ownerEpoch: number, executionMode?: "worker-turn" | "remote-exec") =>
         seedActivePlacement(placementStore, { environmentId, ownerEpoch, executionMode }),

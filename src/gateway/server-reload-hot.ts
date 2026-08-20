@@ -164,7 +164,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         `${action} suppressed by crash-loop breaker for channels: ${[...channels].join(", ")}`,
       );
     };
-    const commitRuntime = async () => {
+    const commitRuntime = async (onCommit?: () => void) => {
       if (runtimeCommitted) {
         return;
       }
@@ -191,6 +191,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         applyGatewayLaneConcurrency(laneConcurrency);
         runtimeCommitted = true;
+        onCommit?.();
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
         if (plan.restartCron) {
           params.cronReconciliation.invalidate();
@@ -301,7 +302,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         });
         return;
       }
-      params.logReload.warn(`${surface} failed after config commit${detail}; restarting gateway`);
+      const commitState = runtimeCommitted ? "after config commit" : "before config commit";
+      params.logReload.warn(`${surface} failed ${commitState}${detail}; restarting gateway`);
       if (recoveryRestartScheduled) {
         return;
       }
@@ -503,14 +505,22 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         try {
           pluginReloadResult = await params.reloadPlugins({
             nextConfig,
+            // Without a managed publication, the direct caller's input is itself authored.
+            sourceConfig: publication ? publication.sourceConfig : nextConfig,
             changedPaths: plan.changedPaths,
             beforeReplace: stopChannelsBeforePluginReplace,
             commitRuntime,
+            onReplacementTeardownFailure: (error) =>
+              scheduleRecoveryRestart("plugin service replacement teardown", error),
             env: publication?.runtimeEnv ?? process.env,
             isAborted: isPluginReloadAborted,
           });
         } catch (err) {
           if (!runtimeCommitted) {
+            // Once replacement teardown begins, old services cannot safely be rolled back.
+            if (recoveryRestartScheduled) {
+              throw err;
+            }
             const rollbackFailures = await rollbackStoppedPluginTargets(
               "failed plugin runtime publication",
             );

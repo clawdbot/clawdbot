@@ -426,6 +426,7 @@ const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "agentName",
   "tui",
   "skipUi",
+  "suppressGatewayTokenOutput",
 ]);
 
 function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {

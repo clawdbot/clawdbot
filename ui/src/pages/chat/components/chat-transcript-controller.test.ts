@@ -5,8 +5,9 @@ import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderChatThread } from "./chat-thread.ts";
-import type { TranscriptRow } from "./chat-transcript-controller.ts";
+import { ChatTranscriptController, type TranscriptRow } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -317,6 +318,64 @@ describe("chat transcript controller", () => {
 
     expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(180px)");
     transcript.hostDisconnected();
+  });
+
+  it("remeasures every visible pane transcript while preserving hidden transcript rows", async () => {
+    const host = Object.assign(document.body.appendChild(document.createElement("div")), {
+      addController: vi.fn(),
+      removeController: vi.fn(),
+      requestUpdate: vi.fn(),
+      updateComplete: Promise.resolve(true),
+    });
+    const main = new ChatTranscriptController(host);
+    const detail = new ChatTranscriptController(host);
+    const mainPanel = host.appendChild(document.createElement("div"));
+    const detailPanel = host.appendChild(document.createElement("div"));
+    const mainProps = threadProps("pane-geometry-main", "agent:main:geometry-main");
+    const detailProps = threadProps("pane-geometry-detail", "agent:main:geometry-detail");
+    const renderTranscripts = () => {
+      render(renderChatThread(mainProps, main), mainPanel);
+      render(renderChatThread(detailProps, detail), detailPanel);
+      main.hostUpdated();
+      detail.hostUpdated();
+    };
+
+    renderTranscripts();
+    main.hostConnected();
+    detail.hostConnected();
+    await flushDeferredRowPrune();
+    renderTranscripts();
+
+    const mainScroller = expectDefined(
+      mainPanel.querySelector<HTMLElement>(".chat-thread"),
+      "main transcript scroll element",
+    );
+    const detailScroller = expectDefined(
+      detailPanel.querySelector<HTMLElement>(".chat-thread"),
+      "detail transcript scroll element",
+    );
+    mainScroller.getBoundingClientRect = () => new DOMRect(0, 0, 640, 600);
+    detailScroller.getBoundingClientRect = () =>
+      detailPanel.hidden ? new DOMRect() : new DOMRect(0, 0, 640, 600);
+
+    transcriptDomState.measuredRowHeight = 180;
+    detailPanel.dispatchEvent(new Event(SIDEBAR_GEOMETRY_COMMIT_EVENT, { bubbles: true }));
+    renderTranscripts();
+    expect(transcriptRows(mainPanel)[1]?.style.transform).toBe("translateY(180px)");
+    expect(transcriptRows(detailPanel)[1]?.style.transform).toBe("translateY(180px)");
+
+    detailPanel.hidden = true;
+    for (const row of transcriptRows(detailPanel)) {
+      Object.defineProperty(row, "offsetHeight", { configurable: true, value: 0 });
+    }
+    transcriptDomState.measuredRowHeight = 240;
+    detailPanel.dispatchEvent(new Event(SIDEBAR_GEOMETRY_COMMIT_EVENT, { bubbles: true }));
+    renderTranscripts();
+
+    expect(transcriptRows(mainPanel)[1]?.style.transform).toBe("translateY(240px)");
+    expect(transcriptRows(detailPanel)[1]?.style.transform).toBe("translateY(180px)");
+    main.hostDisconnected();
+    detail.hostDisconnected();
   });
 
   it.each([

@@ -227,10 +227,57 @@ function createClientFactory(
   const request = fixture.request;
   const client = Object.assign(fixture.client, { close: vi.fn() });
   const factory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;
-  return { factory, methods, request };
+  return {
+    factory,
+    methods,
+    request,
+    handleServerRequest: (serverRequest: Parameters<typeof fixture.handleServerRequest>[0]) =>
+      fixture.handleServerRequest(serverRequest),
+    notify: (notification: Parameters<typeof fixture.notify>[0]) => fixture.notify(notification),
+  };
 }
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it("returns an explicit unsupported decline for interactive MCP input", async () => {
+    const fake = createClientFactory({ completeTurn: false });
+    const run = runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      timeoutMs: 5_000,
+      options: { clientFactory: fake.factory },
+      taskLabel: "hosted search",
+      developerInstructions: "Search only.",
+      input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
+      requiredModalities: ["text"],
+      isolation: "private-stdio",
+    });
+    await vi.waitFor(() => expect(fake.methods).toContain("turn/start"));
+
+    await expect(
+      fake.handleServerRequest({
+        id: "bounded-elicitation",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-finalizer",
+          turnId: "turn-finalizer",
+          serverName: "forms",
+          mode: "form",
+          message: "Enter a value",
+          requestedSchema: { type: "object", properties: { value: { type: "string" } } },
+        },
+      }),
+    ).resolves.toEqual({
+      action: "decline",
+      content: null,
+      _meta: { message: "OpenClaw Codex hosted search does not support interactive input." },
+    });
+
+    await fake.notify({
+      method: "turn/completed",
+      params: { threadId: "thread-finalizer", turn: completedTurnResult().turn },
+    });
+    await expect(run).resolves.toMatchObject({ text: "The message was sent successfully." });
+  });
+
   it("reports its own timeout with the configured bound", async () => {
     const fake = createClientFactory({ completeTurn: false });
 

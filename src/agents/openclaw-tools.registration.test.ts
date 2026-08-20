@@ -1022,9 +1022,13 @@ describe("gateway client capability tool filtering", () => {
 
   it("exposes GitHub publication only from a prepared session capability", () => {
     expect(hasTool(createOpenClawTools(), "github_publish")).toBe(false);
+    expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
     ).toBe(false);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
+    ).toBe(true);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: true }), "github_publish"),
     ).toBe(true);

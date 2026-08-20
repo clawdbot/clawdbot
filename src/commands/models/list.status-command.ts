@@ -6,7 +6,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
@@ -650,13 +649,9 @@ export async function modelsStatusCommand(
         ...(probedProvider ? [normalizeProviderId(probedProvider)] : []),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
-    // Omitting agentId lets the catalog resolve its own owner, which still dead-ends on an
-    // ambiguous roster (prepared-model-catalog.ts resolveInputs). Keep the historical omission
-    // for single-agent installs and name the resolved owner only when the roster needs one.
-    const catalogAgentId = agentId ?? (listAgentIds(cfg).length > 1 ? workspaceAgentId : undefined);
     const catalog = await loadPreparedModelCatalogSnapshot({
       config: cfg,
-      ...(catalogAgentId ? { agentId: catalogAgentId } : {}),
+      agentId: workspaceAgentId,
       providerDiscoveryProviderIds,
       readOnly: true,
     });

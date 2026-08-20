@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -216,6 +217,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             rows.every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
         }}
         .selectionCount=${rows.length}
+        .compact=${isMobileNavLayout()}
         .lastActive=${batchRows ? "" : formatSidebarTimestamp(session.updatedAt)}
         .anchor=${menu}
         .trigger=${controller.sessionMenuTrigger}

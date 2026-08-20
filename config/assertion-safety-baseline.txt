@@ -11,7 +11,7 @@ extensions/acpx/src/service.ts	2
 extensions/acpx/src/state.ts	1
 extensions/active-memory/config.ts	4
 extensions/active-memory/doctor-contract-api.ts	3
-extensions/active-memory/index.ts	7
+extensions/active-memory/index.ts	6
 extensions/active-memory/query.ts	2
 extensions/active-memory/session.ts	4
 extensions/active-memory/transcript-result.ts	2
@@ -757,7 +757,7 @@ extensions/mattermost/src/setup-core.ts	2
 extensions/memory-core/index.ts	4
 extensions/memory-core/src/cli-index-search.runtime.ts	1
 extensions/memory-core/src/cli-rem.runtime.ts	1
-extensions/memory-core/src/cli-runtime-common.ts	8
+extensions/memory-core/src/cli-runtime-common.ts	2
 extensions/memory-core/src/cli-status.runtime.ts	2
 extensions/memory-core/src/cli.ts	1
 extensions/memory-core/src/concept-vocabulary.ts	1
@@ -803,7 +803,7 @@ extensions/memory-core/src/short-term-promotion-utils.ts	4
 extensions/memory-core/src/short-term-promotion.ts	1
 extensions/memory-core/src/standing-intents-tool.ts	5
 extensions/memory-core/src/standing-intents.ts	2
-extensions/memory-core/src/tools.ts	4
+extensions/memory-core/src/tools.ts	2
 extensions/memory-lancedb/config.ts	4
 extensions/memory-lancedb/doctor-contract-api.ts	1
 extensions/memory-lancedb/embeddings.ts	2
@@ -933,7 +933,6 @@ extensions/openai/embedding-batch.ts	2
 extensions/openai/image-generation-provider.ts	2
 extensions/openai/index.ts	2
 extensions/openai/native-web-search.ts	1
-extensions/openai/openai-chatgpt-auth-identity.ts	1
 extensions/openai/openai-chatgpt-device-code.ts	4
 extensions/openai/openai-chatgpt-oauth-preflight.runtime.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
@@ -1811,7 +1810,7 @@ src/agents/embedded-agent-runner/compaction-hooks.ts	1
 src/agents/embedded-agent-runner/compaction-session-agent.ts	7
 src/agents/embedded-agent-runner/context-engine-maintenance.ts	3
 src/agents/embedded-agent-runner/delivery-evidence.ts	12
-src/agents/embedded-agent-runner/direct-compaction-preparation.ts	3
+src/agents/embedded-agent-runner/direct-compaction-preparation.ts	1
 src/agents/embedded-agent-runner/empty-assistant-turn.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
 src/agents/embedded-agent-runner/extra-params.ts	12
@@ -2041,7 +2040,7 @@ src/agents/sessions/model-registry.ts	13
 src/agents/sessions/model-resolver.ts	1
 src/agents/sessions/package-manager.ts	8
 src/agents/sessions/resolve-config-value.ts	1
-src/agents/sessions/sdk.ts	4
+src/agents/sessions/sdk.ts	3
 src/agents/sessions/session-manager-branching.ts	1
 src/agents/sessions/session-manager-codec.ts	7
 src/agents/sessions/session-manager-core.ts	1
@@ -2139,7 +2138,6 @@ src/agents/tools/mobile-ui-tool.ts	5
 src/agents/tools/model-config.helpers.ts	1
 src/agents/tools/music-generate-tool.ts	2
 src/agents/tools/nodes-tool.ts	3
-src/agents/tools/nodes-utils.ts	2
 src/agents/tools/openclaw-delegate-tool.ts	1
 src/agents/tools/pdf-native-providers.ts	2
 src/agents/tools/pdf-tool.ts	3
@@ -2385,12 +2383,12 @@ src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/audio.ts	4
-src/cli/capability-cli/embedding.ts	4
-src/cli/capability-cli/image.ts	22
-src/cli/capability-cli/model.ts	5
+src/cli/capability-cli/embedding.ts	3
+src/cli/capability-cli/image.ts	21
+src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/shared.ts	6
 src/cli/capability-cli/tts.ts	6
-src/cli/capability-cli/video.ts	8
+src/cli/capability-cli/video.ts	7
 src/cli/capability-cli/web.ts	6
 src/cli/channel-auth.ts	4
 src/cli/channel-options.ts	1
@@ -2446,7 +2444,7 @@ src/cli/nodes-cli/register.pairing.ts	4
 src/cli/nodes-cli/register.push.ts	1
 src/cli/nodes-cli/register.screen.ts	1
 src/cli/nodes-cli/register.status.ts	4
-src/cli/nodes-cli/rpc.ts	3
+src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
@@ -2481,7 +2479,7 @@ src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	12
 src/cli/program/register.onboard.ts	37
 src/cli/program/register.setup.ts	10
-src/cli/program/register.status-health-sessions.ts	41
+src/cli/program/register.status-health-sessions.ts	29
 src/cli/program/route-specs.ts	1
 src/cli/run-main.ts	1
 src/cli/sandbox-cli.ts	4
@@ -3267,7 +3265,7 @@ src/infra/outbound/deliver-queue-state.ts	1
 src/infra/outbound/delivery-queue-media-spool.ts	2
 src/infra/outbound/delivery-queue-media-staging.ts	2
 src/infra/outbound/delivery-queue-preparation.ts	1
-src/infra/outbound/delivery-queue-storage.ts	11
+src/infra/outbound/delivery-queue-storage.ts	10
 src/infra/outbound/envelope.ts	2
 src/infra/outbound/format.ts	1
 src/infra/outbound/message-account-selection.ts	4
@@ -4074,7 +4072,6 @@ ui/src/components/settings-ui.ts	7
 ui/src/components/sidebar-agent-card.ts	1
 ui/src/components/sidebar-attention-dismissals.ts	1
 ui/src/components/sidebar-attention.ts	4
-ui/src/components/sidebar-update-card.ts	1
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-session-controller.ts	1

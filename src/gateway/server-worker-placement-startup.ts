@@ -15,9 +15,11 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
+import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-reconcile-guard.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import {
   resolveWorkerPlacementSessionTarget,
+  runWorkerPlacementSessionBarrier,
   WorkerDispatchTargetChangedError,
 } from "./server-worker-placement-session-target.js";
 import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
@@ -273,68 +275,51 @@ export function createGatewayWorkerPlacementRuntime(
         executionMode,
         authorize,
         activate,
-      }) => {
-        const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
-        const {
-          resolveWorkerPlacementExecutionMode,
-          resolveGatewaySessionStoreTargetWithStore,
-          resolveWorkerPlacementSessionRuntime,
-        } = sessionRuntime;
-        const target = resolveGatewaySessionStoreTargetWithStore({
-          cfg: getRuntimeConfig(),
-          key: sessionKey,
-          agentId,
-          clone: false,
-        });
-        const lifecycleIdentities = [
-          sessionKey,
-          target.canonicalKey,
-          ...target.storeKeys,
+      }) =>
+        await runWorkerPlacementSessionBarrier({
+          sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
+          getConfig: getRuntimeConfig,
           sessionId,
-        ];
-        let activePlacement: ReturnType<typeof activate> | undefined;
-        await runExclusiveSessionLifecycleMutation({
-          scope: target.storePath,
-          identities: lifecycleIdentities,
-          run: async () => {
-            const {
-              config: currentConfig,
-              target: currentTarget,
-              entry: currentEntry,
-            } = resolveWorkerPlacementSessionTarget({
-              sessionRuntime,
-              config: getRuntimeConfig(),
-              sessionId,
-              sessionKey,
-              agentId,
-              expectedTarget: target,
-              errorMessage: `Session ${sessionKey} changed before cloud worker activation. Retry.`,
-            });
-            if (currentEntry.archivedAt !== undefined) {
-              throw new WorkerDispatchTargetChangedError(
-                `Session ${sessionKey} was archived before cloud worker activation. Retry.`,
-              );
-            }
-            const currentRuntime = resolveWorkerPlacementSessionRuntime({
-              cfg: currentConfig,
-              entry: currentEntry,
-              agentId: currentTarget.agentId,
-              sessionKey: currentTarget.canonicalKey,
-            });
-            if (resolveWorkerPlacementExecutionMode(currentRuntime) !== executionMode) {
-              throw new WorkerDispatchTargetChangedError(
-                `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker activation. Retry.`,
-              );
-            }
+          sessionKey,
+          agentId,
+          executionMode,
+          action: "activation",
+          run: () => {
             authorize?.();
-            activePlacement = activate();
+            return activate();
           },
-        });
-        if (!activePlacement) {
-          throw new Error(`Session ${sessionKey} activation barrier did not complete`);
-        }
-        return activePlacement;
-      },
+        }),
+      runRecoveryBarrier: async ({
+        sessionId,
+        sessionKey,
+        agentId,
+        executionMode,
+        environmentId,
+        expectedGeneration,
+        run,
+      }) =>
+        await runWorkerPlacementSessionBarrier({
+          sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
+          getConfig: getRuntimeConfig,
+          sessionId,
+          sessionKey,
+          agentId,
+          executionMode,
+          action: "recovery",
+          run: async (worktree) => {
+            const placement = params.placements.get(sessionId);
+            if (
+              placement?.state !== "provisioning" ||
+              placement.generation !== expectedGeneration ||
+              placement.environmentId !== environmentId
+            ) {
+              throw new WorkerDispatchTargetChangedError(
+                `Session ${sessionKey} placement changed before cloud worker recovery. Retry.`,
+              );
+            }
+            await run(worktree.path);
+          },
+        }),
       onActivated: (request) => {
         if (request.deviceId) {
           void nodeWorkspaceRetention.schedule(request.deviceId);
@@ -545,6 +530,12 @@ export function createGatewayWorkerPlacementRuntime(
     const placementReconcile = { current: undefined as Promise<void> | undefined };
     const diskSpaceSweep = { current: undefined as Promise<void> | undefined };
     let stopped = false;
+    const uninstallEnvironmentReconcileGuard = installWorkerPlacementReconcileGuard({
+      placements: params.placements,
+      environments: params.environments,
+      dispatch: dispatchService,
+      isStopping: () => stopped,
+    });
     const trackOperation = (
       slot: { current: Promise<void> | undefined },
       current: Promise<void>,
@@ -614,6 +605,8 @@ export function createGatewayWorkerPlacementRuntime(
         }
         if (!stopped) {
           stopped = true;
+          // Cancel only enrollment: admitted recovery may still finish attaching before service stop.
+          params.environments.stopNodeEnrollmentWaits?.();
           clearInterval(placementReconcileInterval);
           placementReconcileInterval = undefined;
           uninstallSessionIdentityMutation();
@@ -627,6 +620,7 @@ export function createGatewayWorkerPlacementRuntime(
           );
           await nodeWorkspaceRetention.stop();
           await params.environments.stop();
+          await uninstallEnvironmentReconcileGuard();
         })();
         stopPromise = currentStop;
         void currentStop.catch(() => {

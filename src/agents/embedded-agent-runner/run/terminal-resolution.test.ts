@@ -213,6 +213,114 @@ describe("terminal resolution", () => {
     expect(activateInternalPrompt).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "an exactly settled terminal tool batch", expectedCompletion: "tool-batch" as const },
+    { label: "stale terminal metadata", metadata: { toolCallId: "stale-call" } },
+    { label: "a reused call id whose current occurrence is nonterminal", reusedCall: true },
+    {
+      label: "a partially settled batch",
+      lifecycle: { startedCount: 2, completedCount: 1, activeCount: 1 },
+    },
+    { label: "a mixed terminal and nonterminal batch", mixedBatch: true },
+    { label: "failed terminal metadata", metadata: { isError: true } },
+    {
+      label: "an asynchronously running terminal tool",
+      expectIncompleteTurn: false,
+      metadata: { asyncStarted: true },
+    },
+    { label: "a failed terminal result", result: { isError: true } },
+    { label: "a result with the wrong tool owner", result: { toolName: "another_tool" } },
+    { label: "a stale prior-turn result with the reused call id", staleResult: true },
+  ])("resolves $label from exact current-batch ownership", async (testCase) => {
+    const terminalCall = {
+      type: "toolCall" as const,
+      id: "terminal-tool-call",
+      name: "ask_user",
+      arguments: {},
+    };
+    const otherCall = { ...terminalCall, id: "nonterminal-tool-call", name: "another_tool" };
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [terminalCall, ...(testCase.mixedBatch ? [otherCall] : [])],
+    });
+    const toolResult = {
+      role: "toolResult" as const,
+      toolCallId: terminalCall.id,
+      toolName: terminalCall.name,
+      content: [{ type: "text", text: "The visible question was cancelled." }],
+      isError: false,
+      ...testCase.result,
+    };
+    const currentTurn = [
+      { role: "user", content: [{ type: "text", text: "Ask the current question." }] },
+      assistant,
+    ];
+    const messagesSnapshot = testCase.staleResult
+      ? [
+          buildEmbeddedRunnerAssistant({ stopReason: "toolUse", content: [terminalCall] }),
+          toolResult,
+          ...currentTurn,
+        ]
+      : [
+          ...currentTurn,
+          ...(testCase.expectedCompletion
+            ? [
+                buildEmbeddedRunnerAssistant({
+                  content: [{ type: "text", text: "The question was already shown." }],
+                }),
+              ]
+            : []),
+          toolResult,
+          ...(testCase.mixedBatch
+            ? [{ ...toolResult, toolCallId: otherCall.id, toolName: otherCall.name }]
+            : []),
+        ];
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      toolMetas: [
+        {
+          toolName: terminalCall.name,
+          toolCallId: terminalCall.id,
+          terminate: true,
+          ...testCase.metadata,
+        },
+        ...(testCase.reusedCall
+          ? [{ toolName: terminalCall.name, toolCallId: terminalCall.id }]
+          : []),
+        ...(testCase.mixedBatch ? [{ toolName: otherCall.name, toolCallId: otherCall.id }] : []),
+      ],
+      itemLifecycle: testCase.lifecycle ?? {
+        startedCount: testCase.mixedBatch ? 2 : 1,
+        completedCount: testCase.mixedBatch ? 2 : 1,
+        activeCount: 0,
+      },
+      messagesSnapshot: messagesSnapshot as TerminalInput["attempt"]["messagesSnapshot"],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      replayState: { hadPotentialSideEffects: true, replayInvalid: true },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action === "complete") {
+      expect(resolved.result.meta.intentionalTerminalCompletion).toBe(testCase.expectedCompletion);
+      if (testCase.expectedCompletion) {
+        expect(resolved.result.meta.error).toBeUndefined();
+        expect(resolved.result.payloads).toBeUndefined();
+        expect(resolved.result.meta.livenessState).toBe("working");
+        expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+        expect(attempt.messagesSnapshot.at(-1)).toBe(toolResult);
+      } else if (testCase.expectIncompleteTurn !== false) {
+        expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
+        expect(resolved.result.payloads?.[0]?.isError).toBe(true);
+      }
+    }
+  });
+
   it("completes a cron turn from a trailing silent tool result", async () => {
     const assistant = emptyAssistant();
     const attempt = makeEmbeddedRunnerAttempt({

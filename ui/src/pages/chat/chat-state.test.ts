@@ -18,6 +18,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
   refreshChatMetadata,
+  refreshChatModelCatalogOnDemand,
   refreshChatModelAuthStatus,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
@@ -2117,6 +2118,42 @@ describe("refreshChatMetadata", () => {
       ...overrides,
     } as unknown as ChatPageHost;
   }
+
+  it("refreshes session metadata after full model discovery completes", async () => {
+    const refreshSessions = vi.fn().mockResolvedValue(undefined);
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      expect(method).toBe("models.list");
+      expect(params).toEqual({ view: "configured", agentId: "work" });
+      return {
+        models: [
+          {
+            id: "reasoner",
+            name: "Reasoner",
+            provider: "dynamic-router",
+            reasoning: true,
+          },
+        ],
+      };
+    });
+    const state = createMetadataState(request, {
+      sessions: { refresh: refreshSessions } as never,
+    });
+
+    await refreshChatModelCatalogOnDemand(state);
+
+    expect(state.chatModelCatalog).toEqual([
+      {
+        id: "reasoner",
+        name: "Reasoner",
+        provider: "dynamic-router",
+        reasoning: true,
+      },
+    ]);
+    expect(refreshSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work", force: true }),
+    );
+    expect(state.chatModelCatalogError).toBeNull();
+  });
 
   it("applies agent-scoped metadata after a same-agent session switch", async () => {
     let resolveMetadata:

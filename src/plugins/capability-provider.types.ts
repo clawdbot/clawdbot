@@ -112,24 +112,17 @@ export type WorkerDesktopEndpoint = {
 export type WorkerExecutionMode = "worker-turn" | "remote-exec";
 
 /** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
-export type WorkerNodeEnrollment =
-  | {
-      mode: "connect";
-      setupCode: string;
-      setupId: string;
-      openclawVersion: string;
-      packageSpecs: readonly string[];
-      displayName: string;
-      waitForDeviceId: () => Promise<string>;
-    }
-  | {
-      mode: "resume";
-      deviceId: string;
-      openclawVersion: string;
-      packageSpecs: readonly string[];
-      displayName: string;
-      waitForDeviceId: () => Promise<string>;
-    };
+export type WorkerNodeEnrollment = {
+  openclawVersion: string;
+  packageSpecs: readonly string[];
+  displayName: string;
+  /** Gateway shutdown cancels enrollment without releasing its replay-owned provider lease. */
+  signal?: AbortSignal;
+  waitForDeviceId: () => Promise<string>;
+} & (
+  | { mode: "connect"; setupCode: string; setupId: string }
+  | { mode: "resume"; deviceId: string }
+);
 
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
@@ -150,6 +143,29 @@ export type WorkerLeaseStatus =
   | { status: "destroyed" }
   | { status: "unknown" };
 
+/** Provision failed after allocation and the provider could not prove cleanup completed. */
+class WorkerProvisionCleanupError extends AggregateError {
+  readonly code = "cleanup_indeterminate";
+  readonly leaseId: string;
+
+  constructor(
+    leaseId: string,
+    readonly provisionError: unknown,
+    readonly cleanupError: unknown,
+  ) {
+    super(
+      [provisionError, cleanupError],
+      "Worker provision failed after allocation and cleanup is indeterminate",
+      { cause: provisionError },
+    );
+    this.name = "WorkerProvisionCleanupError";
+    this.leaseId = leaseId.trim();
+    if (!this.leaseId) {
+      throw new TypeError("Worker provision cleanup lease id must be non-empty");
+    }
+  }
+}
+
 /** Permanent provider rejection recorded as a terminal worker failure. */
 export class WorkerProviderError extends Error {
   readonly code = "invalid_profile";
@@ -157,6 +173,18 @@ export class WorkerProviderError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WorkerProviderError";
+  }
+
+  static cleanupIndeterminate(
+    leaseId: string,
+    provisionError: unknown,
+    cleanupError: unknown,
+  ): WorkerProvisionCleanupError {
+    return new WorkerProvisionCleanupError(leaseId, provisionError, cleanupError);
+  }
+
+  static isCleanupIndeterminate(error: unknown): error is WorkerProvisionCleanupError {
+    return error instanceof WorkerProvisionCleanupError;
   }
 }
 

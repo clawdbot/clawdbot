@@ -530,7 +530,7 @@ describe("cli json stdout contract", () => {
         const memoryCoreDir = path.join(bundledPluginsDir, "memory-core");
         await fs.mkdir(memoryCoreDir, { recursive: true });
         await fs.writeFile(
-          path.join(memoryCoreDir, "api.js"),
+          path.join(memoryCoreDir, "doctor-health-api.js"),
           [
             "export function registerMemoryCoreDoctorChecks(host) {",
             "  host.registerHealthCheck({",

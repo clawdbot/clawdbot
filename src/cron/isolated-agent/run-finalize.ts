@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { resolveAuthoredModelContextTokens } from "../../agents/context-resolution.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { hasIntentionalTerminalCompletion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
@@ -441,6 +442,7 @@ export async function finalizeCronRun(params: {
     !sourceDeliveryOutcome.satisfiesSourceDelivery &&
     !hasCommittedTerminalProgress &&
     !hasIntentionalSilentReply &&
+    !hasIntentionalTerminalCompletion(finalRunResult) &&
     deliveryPayloads.length === 0 &&
     normalizeOptionalString(synthesizedText) === undefined
   ) {

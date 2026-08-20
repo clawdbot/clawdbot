@@ -28,6 +28,17 @@ let callGatewayModule: typeof import("../../../gateway/call.js");
 let agentEventsModule: typeof import("../../../infra/agent-events.js");
 let registryStateDbModule: typeof import("../../../state/openclaw-state-db.js");
 
+function activateRegistry() {
+  const recoveryRuntime = {
+    dispatchAgent: (params: Record<string, unknown>, timeoutMs?: number) =>
+      callGatewayModule.callGateway({ method: "agent", params, timeoutMs }),
+    waitForAgent: (params: Record<string, unknown>, timeoutMs?: number) =>
+      callGatewayModule.callGateway({ method: "agent.wait", params, timeoutMs }),
+    sendRecoveryNotice: vi.fn(),
+  };
+  mod.activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+}
+
 describe("subagent registry persistence resume", () => {
   let tempStateDir: string | null = null;
 
@@ -97,6 +108,7 @@ describe("subagent registry persistence resume", () => {
       });
 
       mod.initSubagentRegistry();
+      activateRegistry();
 
       await vi.waitFor(() => expect(announceSpy).toHaveBeenCalled(), {
         timeout: 1_000,
@@ -169,6 +181,7 @@ describe("subagent registry persistence resume", () => {
       });
 
       mod.initSubagentRegistry();
+      activateRegistry();
 
       await vi.waitFor(() => expect(announceSpy).toHaveBeenCalled(), {
         timeout: 1_000,
@@ -176,6 +189,170 @@ describe("subagent registry persistence resume", () => {
       });
       expect(announceSpy).toHaveBeenCalledWith(
         expect.objectContaining({ childRunId: "run-pending-delivery" }),
+      );
+    });
+  });
+
+  it("keeps restored recovery dormant until the Gateway lifecycle activates it", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    const wakeRequester = vi.fn(async () => false);
+    mod.testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps({
+        callGateway: vi.mocked(callGatewayModule.callGateway),
+        maybeWakeRequesterAfterAllChildrenSettled: wakeRequester,
+      }),
+    });
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const endedAt = Date.now();
+      const yieldedRun: SubagentRunRecord = {
+        runId: "run-hydrated-yield",
+        taskRunId: "run-hydrated-yield",
+        requesterTurnRunId: "run-requester",
+        requesterTurnYielded: true,
+        childSessionKey: "agent:main:subagent:hydrated-yield",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "wake only after lifecycle activation",
+        cleanup: "keep",
+        createdAt: endedAt - 1_000,
+        endedReason: "subagent-complete",
+        execution: {
+          status: "terminal",
+          startedAt: endedAt - 500,
+          endedAt,
+          outcome: { status: "ok" },
+        },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "done", capturedAt: endedAt },
+        delivery: { status: "delivered", deliveredAt: endedAt },
+        cleanupHandled: true,
+        cleanupCompletedAt: endedAt,
+      };
+      const queuedCollector: SubagentRunRecord = {
+        runId: "run-hydrated-collector",
+        childSessionKey: "agent:main:subagent:hydrated-collector",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "clean only after lifecycle activation",
+        cleanup: "keep",
+        createdAt: endedAt - 500,
+        collect: true,
+        swarmRequesterSessionKey: "agent:main:main",
+        groupId: "hydrated-group",
+        archiveAtMs: endedAt - 1,
+        execution: {
+          status: "terminal",
+          startedAt: endedAt - 400,
+          endedAt,
+          outcome: { status: "error", error: "launch failed" },
+        },
+        completion: { required: true },
+        delivery: { status: "pending" },
+        collectorCompletion: { status: "failed" },
+        collectorLaunchCleanupPending: true,
+      };
+      const runningRun: SubagentRunRecord = {
+        runId: "run-hydrated-running",
+        childSessionKey: "agent:main:subagent:hydrated-running",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "wait through the activated instance",
+        cleanup: "keep",
+        createdAt: endedAt,
+        execution: { status: "running", startedAt: endedAt },
+        completion: { required: false },
+        delivery: { status: "not_required" },
+      };
+      saveSubagentRegistryToSqlite(
+        new Map([
+          [yieldedRun.runId, yieldedRun],
+          [queuedCollector.runId, queuedCollector],
+          [runningRun.runId, runningRun],
+        ]),
+      );
+      await writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: yieldedRun.childSessionKey,
+        sessionId: "sess-hydrated-yield",
+        defaultSessionId: "sess-hydrated-yield",
+      });
+      await writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: queuedCollector.childSessionKey,
+        sessionId: "sess-hydrated-collector",
+        defaultSessionId: "sess-hydrated-collector",
+        lifecycleRevision: "revision-hydrated-collector",
+      });
+      await writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: runningRun.childSessionKey,
+        sessionId: "sess-hydrated-running",
+        defaultSessionId: "sess-hydrated-running",
+      });
+
+      mod.initSubagentRegistry();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(mod.getSubagentRunByRunId(yieldedRun.runId)).toBeDefined();
+      expect(mod.getSubagentRunByRunId(queuedCollector.runId)).toBeDefined();
+      expect(mod.getSubagentRunByRunId(runningRun.runId)).toBeDefined();
+      expect(wakeRequester).not.toHaveBeenCalled();
+      expect(callGatewayModule.callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
+
+      const recoveryRuntime = {
+        dispatchAgent: vi.fn(),
+        waitForAgent: vi.fn(async () => ({ status: "pending" })),
+        sendRecoveryNotice: vi.fn(),
+      };
+      let firstLifecycleOpen = true;
+      const resolveGatewayContext = vi.fn(() =>
+        firstLifecycleOpen ? ({ recoveryRuntime } as never) : undefined,
+      );
+      mod.activateSubagentRegistry(resolveGatewayContext);
+      mod.activateSubagentRegistry(resolveGatewayContext);
+
+      await vi.waitFor(() => {
+        expect(wakeRequester).toHaveBeenCalledOnce();
+        expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
+      });
+      expect(recoveryRuntime.dispatchAgent).not.toHaveBeenCalled();
+      expect(callGatewayModule.callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "agent.wait" }),
+      );
+
+      firstLifecycleOpen = false;
+      expect(resolveGatewayContext()).toBeUndefined();
+      const replacementRuntime = {
+        dispatchAgent: vi.fn(),
+        waitForAgent: vi.fn(async () => ({ status: "pending" })),
+        sendRecoveryNotice: vi.fn(),
+      };
+      const resolveReplacementContext = () => ({ recoveryRuntime: replacementRuntime }) as never;
+      mod.activateSubagentRegistry(resolveReplacementContext);
+      mod.activateSubagentRegistry(resolveReplacementContext);
+      expect(wakeRequester).toHaveBeenCalledOnce();
+      expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
+      expect(replacementRuntime.waitForAgent).not.toHaveBeenCalled();
+
+      await mod.testing.runSweeperTickForTests();
+      expect(callGatewayModule.callGateway).toHaveBeenCalledTimes(1);
+      expect(callGatewayModule.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({
+            expectedSessionId: "sess-hydrated-collector",
+            expectedLifecycleRevision: "revision-hydrated-collector",
+          }),
+        }),
       );
     });
   });
@@ -269,6 +446,7 @@ describe("subagent registry persistence resume", () => {
         });
 
         mod.initSubagentRegistry();
+        activateRegistry();
 
         const restored = mod.getSubagentRunByRunId(run.runId);
         expect(restored).toMatchObject({ runId: run.runId, taskRunId: run.taskRunId });

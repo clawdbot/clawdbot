@@ -723,6 +723,10 @@ export type ToolsCatalogResult =
   import("../../../packages/gateway-protocol/src/schema.js").ToolsCatalogResult;
 export type ToolsGitHubStatusResult =
   import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubStatusResult;
+export type ToolsGitHubAuthorizeStartResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubAuthorizeStartResult;
+export type ToolsGitHubAuthorizePollResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubAuthorizePollResult;
 export type ToolsEffectiveEntry =
   import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveEntry;
 export type ToolsEffectiveResult =

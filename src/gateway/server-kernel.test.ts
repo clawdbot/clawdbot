@@ -421,6 +421,7 @@ describe("createGatewayKernel", () => {
         "runtime.subscriptions",
         "runtime.services",
         "gateway.handlers",
+        "gateway.config-revision-key",
         "gateway.request-context",
       ]);
     } finally {

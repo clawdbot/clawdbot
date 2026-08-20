@@ -336,9 +336,17 @@ export function renderGroupedMessage(
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const standaloneToolPayload =
+    isStandaloneToolMessage &&
+    Boolean(markdown) &&
+    !jsonResult &&
+    !hasImages &&
+    singleToolCard?.outputText?.trim() === markdown?.trim();
+  const bodyMarkdown = standaloneToolPayload ? null : markdown;
   // One expanded card already closes with its own outcome line; every other
   // shape renders inline rows only, so the message body records the failure.
-  const expandsSingleToolCard = Boolean(singleToolCard) && !markdown && !hasImages;
+  const expandsSingleToolCard =
+    Boolean(singleToolCard) && (!markdown || standaloneToolPayload) && !hasImages;
   const failedToolCard = expandsSingleToolCard ? undefined : toolCards.find(isToolCardError);
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
@@ -375,15 +383,21 @@ export function renderGroupedMessage(
   const assistantViewContent =
     sourceRole === "assistant" && assistantViewBlocks.length > 0
       ? html`${assistantViewBlocks.map(
-          (block) => html`${renderToolPreview(block.preview, "chat_message", {
-            onOpenSidebar,
-            rawText: block.rawText ?? null,
-            canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-            boardProvider: opts.boardProvider,
-            embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-            sessionKey: opts.sessionKey,
-          })}
-          ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
+          (block) => html`<div class="chat-tool-card__widget-host">
+            ${renderToolPreview(block.preview, "chat_message", {
+              onOpenSidebar,
+              rawText: block.rawText ?? null,
+              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+              boardProvider: opts.boardProvider,
+              embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+              sessionKey: opts.sessionKey,
+            })}
+            ${block.rawText
+              ? html`<div class="chat-tool-card__widget-raw">
+                  ${renderRawOutputToggle(block.rawText)}
+                </div>`
+              : nothing}
+          </div>`,
         )}`
       : nothing;
 
@@ -542,9 +556,9 @@ export function renderGroupedMessage(
                             </summary>
                             <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                           </details>`
-                        : markdown
+                        : bodyMarkdown
                           ? renderMarkdownText(
-                              markdown,
+                              bodyMarkdown,
                               opts.isStreaming,
                               markdownRenderOptions,
                               duplicateSuffix,
@@ -612,10 +626,10 @@ export function renderGroupedMessage(
                   </summary>
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
-              : markdown
+              : bodyMarkdown
                 ? normalizedRole === "user"
                   ? renderUserMessageMarkdown(
-                      markdown,
+                      bodyMarkdown,
                       messageKey,
                       opts,
                       markdownRenderOptions,
@@ -623,14 +637,14 @@ export function renderGroupedMessage(
                     )
                   : normalizedRole === "assistant"
                     ? renderAssistantMessageMarkdown(
-                        markdown,
+                        bodyMarkdown,
                         opts.isStreaming,
                         opts.assistantMessageDisclosure,
                         markdownRenderOptions,
                         duplicateSuffix,
                       )
                     : renderMarkdownText(
-                        markdown,
+                        bodyMarkdown,
                         opts.isStreaming,
                         markdownRenderOptions,
                         duplicateSuffix,

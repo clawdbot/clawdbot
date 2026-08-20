@@ -52,6 +52,7 @@ export {
   isSystemCreatedSessionRow,
   resolveSessionNavigation,
   sessionMatchesArchivedFilter,
+  sessionMatchesVisibleSessionScope,
   scopedAgentIdForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,

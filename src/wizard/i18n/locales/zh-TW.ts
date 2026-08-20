@@ -125,6 +125,7 @@ export const zh_TW = {
       complete: "遷移完成。下一步執行 `openclaw doctor`。",
       continuing: "遷移完成。繼續設定。",
       importFrom: "從 {source} 匯入",
+      importFromAnotherAgent: "從其他 agent 匯入",
       includeCredentials: "也匯入支援的認證憑證？",
       previewTitle: "遷移預覽",
       setupModelSeparately: "另外設定模型",

@@ -4,6 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -16,6 +17,7 @@ import {
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
 import {
+  clearAgentRunContext as clearRegisteredAgentRunContext,
   claimAgentRunContext,
   registerAgentRunContext,
   releaseAgentRunContext,
@@ -141,7 +143,7 @@ describe("agent event handler", () => {
 
   function createHarness(params?: {
     now?: number;
-    resolveSessionKeyForRun?: (runId: string) => string | undefined;
+    resolveSessionKeyForRun?: (runId: string, options?: { agentId?: string }) => string | undefined;
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
     clearTrackedActiveRun?: AgentEventHandlerOptions["clearTrackedActiveRun"];
@@ -4250,6 +4252,116 @@ describe("agent event handler", () => {
     expect(persistEvent.runId).toBe("run-hidden");
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
   });
+
+  it.each([
+    ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],
+    ["tool", { phase: "start", name: "read", toolCallId: "owned-tool" }],
+    ["lifecycle", { phase: "end" }],
+  ] as const)(
+    "routes owner-scoped %s events after their run context disappears",
+    async (stream, data) => {
+      const hidden = stream !== "lifecycle";
+      const config = {
+        agents: { ownership: "explicit" as const, list: [{ id: "main" }, { id: "work" }] },
+      };
+      vi.mocked(getRuntimeConfig).mockReturnValue(config);
+      const runId = `run-owned-${stream}`;
+      const resolveSessionKeyForRun = vi.fn(
+        (_runId: string, options?: { agentId?: string }) =>
+          `agent:${options?.agentId ?? resolveDefaultAgentId(config)}:shared`,
+      );
+      const {
+        agentRunSeq,
+        broadcast,
+        broadcastToConnIds,
+        clearAgentRunContext: clearHandledRunContext,
+        nodeSendToSession,
+        sessionEventSubscribers,
+        sessionMessageSubscribers,
+        handler,
+      } = createHarness({ resolveSessionKeyForRun });
+      sessionMessageSubscribers.subscribe("conn-main", "agent:main:shared");
+      sessionMessageSubscribers.subscribe("conn-work", "agent:work:shared");
+      sessionEventSubscribers.subscribe("conn-session");
+
+      if (hidden) {
+        registerAgentRunContext(runId, {
+          agentId: "work",
+          sessionKey: "agent:work:shared",
+          isControlUiVisible: false,
+        });
+      }
+      let event: Parameters<typeof handler>[0] | undefined;
+      const unsubscribe = onAgentRuntimeEvent((received) => {
+        event = received;
+      });
+      emitRuntimeAgentEvent({ runId, stream, data, agentId: "work" });
+      unsubscribe();
+      if (hidden) {
+        clearRegisteredAgentRunContext(runId);
+      }
+      const received = expectDefined(event, "owner-scoped runtime event");
+      expect(received.sessionKey).toBeUndefined();
+
+      handler(received);
+
+      expect(resolveSessionKeyForRun.mock.calls).toEqual(
+        Array.from({ length: stream === "lifecycle" ? 2 : 1 }, () => [runId, { agentId: "work" }]),
+      );
+      if (hidden) {
+        expect(broadcast).not.toHaveBeenCalled();
+        expect(nodeSendToSession).not.toHaveBeenCalled();
+        const delivered = broadcastToConnIds.mock.calls.filter(
+          ([eventName]) => eventName === "agent" || eventName === "chat",
+        );
+        expect(delivered.length).toBeGreaterThan(0);
+        for (const [, payload, recipients] of delivered) {
+          expect(payload).toEqual(
+            expect.objectContaining({ agentId: "work", sessionKey: "agent:work:shared" }),
+          );
+          expect(recipients).toEqual(new Set(["conn-work"]));
+        }
+        return;
+      }
+
+      expect(chatBroadcastCalls(broadcast)).toEqual([
+        [
+          "chat",
+          expect.objectContaining({
+            agentId: "work",
+            runId,
+            sessionKey: "agent:work:shared",
+            state: "final",
+          }),
+          expect.objectContaining({ sessionKeys: ["agent:work:shared"] }),
+        ],
+      ]);
+      expect(nodeSendToSession.mock.calls.map(([sessionKey]) => sessionKey)).toEqual([
+        "agent:work:shared",
+        "agent:work:shared",
+      ]);
+      expect(clearHandledRunContext).toHaveBeenCalledWith(runId);
+      expect(agentRunSeq.has(runId)).toBe(false);
+      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
+        agentId: "work",
+        event: received,
+        sessionKey: "agent:work:shared",
+      });
+      await waitForFast(() => {
+        expect(broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({
+            agentId: "work",
+            phase: "end",
+            runId,
+            sessionKey: "agent:work:shared",
+          }),
+          new Set(["conn-session"]),
+          { dropIfSlow: true },
+        );
+      });
+    },
+  );
 
   it("does not project maintenance child lifecycle onto its parent session", () => {
     const { handler } = createHarness({

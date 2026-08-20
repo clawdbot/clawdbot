@@ -76,6 +76,7 @@ import {
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import * as userInputBridge from "./user-input-bridge.js";
 
 type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 import {
@@ -2935,19 +2936,28 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("fails closed when before_prompt_build restricts Codex tools", async () => {
+    const authorizedEnrichment = vi.fn(() => ({ prependContext: "private recalled context" }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
           hookName: "before_prompt_build",
           handler: () => ({ toolsAllow: ["message"] }),
         },
+        {
+          hookName: "before_prompt_build",
+          handler: authorizedEnrichment,
+          requiresToolAuthority: true,
+        },
       ]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolAuthorityFingerprint = "restrictive-turn-authority";
 
-    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
       "Codex app-server cannot enforce before_prompt_build toolsAllow",
     );
+    expect(authorizedEnrichment).not.toHaveBeenCalled();
   });
 
   it("releases adopted startup resources when continuity prompt rebuilding fails", async () => {
@@ -5319,13 +5329,58 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.assistantTexts).toEqual(["final completion"]);
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
+  it("routes ordinary elicitations through the per-turn input bridge after approval classification", async () => {
+    const approvalSpy = vi
+      .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
+      .mockResolvedValue({ kind: "not-mine" });
+    const ordinaryHandler = vi.fn().mockResolvedValue({
+      action: "accept",
+      content: { name: "Ada" },
+      _meta: null,
+    });
+    vi.spyOn(userInputBridge, "createCodexUserInputBridge").mockReturnValue({
+      handleRequest: vi.fn(),
+      handleElicitationRequest: ordinaryHandler,
+      handleNotification: vi.fn(),
+      cancelPending: vi.fn(),
+    });
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(createRunParams());
+    await harness.waitForMethod("turn/start");
+
+    const params = {
+      threadId: "thread-1",
+      turnId: null,
+      serverName: "forms",
+      mode: "form",
+      message: "Enter a name",
+      requestedSchema: { type: "object", properties: { name: { type: "string" } } },
+    };
+    await expect(
+      harness.handleServerRequest({
+        id: "ordinary-1",
+        method: "mcpServer/elicitation/request",
+        params,
+      }),
+    ).resolves.toEqual({ action: "accept", content: { name: "Ada" }, _meta: null });
+    expect(approvalSpy).toHaveBeenCalledWith(expect.objectContaining({ requestParams: params }));
+    expect(ordinaryHandler).toHaveBeenCalledWith({ id: "ordinary-1", params });
+    const approvalOrder = approvalSpy.mock.invocationCallOrder.at(0);
+    const ordinaryOrder = ordinaryHandler.mock.invocationCallOrder.at(0);
+    if (approvalOrder === undefined || ordinaryOrder === undefined) {
+      throw new Error("expected both elicitation handlers to run");
+    }
+    expect(approvalOrder).toBeLessThan(ordinaryOrder);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
   it("routes Computer Use MCP elicitations through the native bridge", async () => {
     const bridgeSpy = vi
-      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
+      .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
       .mockResolvedValue({
-        action: "accept",
-        content: { approve: true },
-        _meta: null,
+        kind: "handled",
+        response: { action: "accept", content: { approve: true }, _meta: null },
       });
     const request = vi.fn(async (method: string) => {
       if (method === "plugin/installed" || method === "plugin/list") {
@@ -5470,11 +5525,10 @@ describe("runCodexAppServerAttempt", () => {
       true,
     );
     const bridgeSpy = vi
-      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
+      .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
       .mockResolvedValue({
-        action: "decline",
-        content: null,
-        _meta: null,
+        kind: "handled",
+        response: { action: "decline", content: null, _meta: null },
       });
     const request = createGoogleCalendarRequest();
     const elicitation = installElicitationClient(request);

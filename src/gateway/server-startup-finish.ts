@@ -130,6 +130,7 @@ export async function finishGatewayStartup(params: {
     residentRegistry,
     getPluginMetadataSnapshot,
   } = runtime;
+  const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const unregisterGatewayLifetimeSidecar = (sidecar: GatewayPostReadySidecarHandle) => {
     kernel.setGatewayLifetimeSidecars(
       runtimeState.gatewayLifetimeSidecars.filter((registered) => registered !== sidecar),
@@ -164,6 +165,7 @@ export async function finishGatewayStartup(params: {
       nodeReapprovalCoordinator,
       preauthHandshakeTimeoutMs,
       isStartupPending: isGatewayStartupPending,
+      isPendingWorkerNodeSetup: workerEnvironmentService?.hasPendingNodeEnrollmentSetup,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
       logGateway: log,
@@ -260,12 +262,16 @@ export async function finishGatewayStartup(params: {
         activationSourceConfig: startupActivationSourceConfig,
         pluginManifestRecords,
         ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+        pluginRuntimeClaim: startupPluginRuntimeClaim,
+        getCurrentPluginRegistry: () => pluginRuntime.registry,
+        getCurrentPluginMetadataSnapshot: getPluginMetadataSnapshot,
         ambientEnvTriggers,
         pluginRegistry: pluginRuntime.registry,
         defaultWorkspaceDir,
         deps,
         startChannels,
         recoveryRuntime: gatewayInstanceRuntime.recovery,
+        resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
         logHooks,
         logChannels,
         unlockStartupMethods: kernel.unlockStartupMethods,
@@ -285,15 +291,20 @@ export async function finishGatewayStartup(params: {
             startupTrace,
             ambientEnvTriggers,
             resolveGatewayContext: resolvePluginGatewayContext,
+            pluginRuntimeClaim: startupPluginRuntimeClaim,
+            getCurrentPluginRegistry: () => pluginRuntime.registry,
           });
         },
         onStartupPluginsLoading: () => {
           startupState.pendingReason = "startup-sidecars";
         },
         onStartupPluginsLoaded: async (loaded) => {
-          replaceAttachedPluginRuntime(loaded);
+          if (!startupPluginRuntimeClaim.publish(() => replaceAttachedPluginRuntime(loaded))) {
+            loaded.retireGatewayRuntimeBindings?.();
+            return;
+          }
           startupState.pendingReason = "startup-sidecars";
-          await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
+          await refreshAttachedGatewayDiscovery(loaded.pluginRegistry, startupPluginRuntimeClaim);
         },
         getCronService: () =>
           runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
@@ -301,7 +312,7 @@ export async function finishGatewayStartup(params: {
           releaseStartupAccountStarts();
         },
         onPluginServices: (pluginServices) => {
-          kernel.setPluginServices(pluginServices);
+          kernel.pluginRuntimeGeneration.publishServices(startupPluginRuntimeClaim, pluginServices);
         },
         onPostReadySidecars: registerPostReadySidecars,
         onGatewayLifetimeSidecars: registerGatewayLifetimeSidecars,
@@ -341,7 +352,7 @@ export async function finishGatewayStartup(params: {
       }),
     ),
   );
-  kernel.setPostAttachHandles(postAttachHandles);
+  kernel.setPostAttachHandles(postAttachHandles, startupPluginRuntimeClaim);
   startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
   startupTrace.mark("ready");
   if (sidecarStartup === "defer") {
@@ -356,6 +367,7 @@ export async function finishGatewayStartup(params: {
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
   const configReloaderParams: Parameters<typeof startManagedGatewayConfigReloader>[0] = {
+    configRevisionProjector: gatewayRequestContext.configRevisionProjector,
     minimalTestGateway,
     initialConfig: cfgAtStart,
     initialCompareConfig: startupLastGoodSnapshot.sourceConfig,

@@ -59,6 +59,29 @@ function agentAttentionRow(
 }
 
 describe("AppSidebar session attention", () => {
+  it("marks Ask OpenClaw when undismissed alerts exist", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessionsHarness("main", []).sessions);
+    const attention = sidebar.querySelector<
+      HTMLElement & {
+        onSummaryChange?: (summary: {
+          count: number;
+          severity: "error" | "warning" | null;
+        }) => void;
+      }
+    >("openclaw-sidebar-attention");
+    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__custodian");
+
+    attention?.onSummaryChange?.({ count: 1, severity: "error" });
+    await sidebar.updateComplete;
+    expect(button?.getAttribute("aria-label")).toBe("Ask OpenClaw, 1 undismissed alert");
+
+    attention?.onSummaryChange?.({ count: 2, severity: "error" });
+    await sidebar.updateComplete;
+    expect(button?.getAttribute("aria-label")).toBe("Ask OpenClaw, 2 undismissed alerts");
+    expect(button?.querySelector(".sidebar-footer-bar__custodian-badge--error")).not.toBeNull();
+  });
+
   it("projects canonical attention onto Home across row refresh ordering", async () => {
     const mainKey = "agent:main:main";
     const client = {

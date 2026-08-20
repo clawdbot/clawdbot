@@ -34,7 +34,12 @@ vi.mock("./inbound.js", () => ({
 }));
 
 import { BuzzDirectoryState } from "./directory-state.js";
-import { buzzOutboundAdapter, sendBuzzTyping, startBuzzGatewayAccount } from "./gateway.js";
+import {
+  buzzOutboundAdapter,
+  getActiveBuzzBus,
+  sendBuzzTyping,
+  startBuzzGatewayAccount,
+} from "./gateway.js";
 import { BUZZ_NORMAL_MESSAGE_KIND } from "./message-event.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { resolveBuzzAccount } from "./types.js";
@@ -241,6 +246,118 @@ describe("Buzz gateway lifecycle", () => {
 
     expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
     expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
+  });
+
+  it.each(["resolves", "rejects"] as const)(
+    "retires the active bus before asynchronous shutdown %s",
+    async (closeOutcome) => {
+      let resolveClose: (() => void) | undefined;
+      let rejectClose: ((error: Error) => void) | undefined;
+      const closePending = new Promise<void>((resolve, reject) => {
+        resolveClose = resolve;
+        rejectClose = reject;
+      });
+      gatewayMocks.close.mockImplementationOnce(() => closePending);
+      const { abortController, cfg, account, lifecycle, setStatus } = startTestGateway();
+
+      try {
+        await vi.waitFor(() => expect(getActiveBuzzBus(account.accountId)).toBeDefined());
+        abortController.abort();
+        await vi.waitFor(() => expect(gatewayMocks.close).toHaveBeenCalledOnce());
+
+        expect(getActiveBuzzBus(account.accountId)).toBeUndefined();
+        expect(setStatus).not.toHaveBeenCalledWith({
+          accountId: account.accountId,
+          running: false,
+        });
+
+        const pendingResult = await buzzOutboundAdapter.sendText({
+          cfg,
+          to: `buzz:${CHANNEL_ID}`,
+          text: "while closing",
+          accountId: account.accountId,
+        });
+        await sendBuzzTyping({
+          cfg,
+          to: `buzz:${CHANNEL_ID}`,
+          accountId: account.accountId,
+        });
+
+        expect(pendingResult.messageId).toBe("standalone-event-id");
+        expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledOnce();
+        expect(gatewayMocks.busSendText).not.toHaveBeenCalled();
+        expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
+
+        if (closeOutcome === "rejects") {
+          const closeError = new Error("Buzz close failed");
+          rejectClose?.(closeError);
+          await expect(lifecycle).rejects.toBe(closeError);
+          expect(setStatus).not.toHaveBeenCalledWith({
+            accountId: account.accountId,
+            running: false,
+          });
+        } else {
+          resolveClose?.();
+          await expect(lifecycle).resolves.toBeUndefined();
+          expect(setStatus).toHaveBeenLastCalledWith({
+            accountId: account.accountId,
+            running: false,
+          });
+        }
+
+        expect(getActiveBuzzBus(account.accountId)).toBeUndefined();
+        await buzzOutboundAdapter.sendText({
+          cfg,
+          to: `buzz:${CHANNEL_ID}`,
+          text: "after closing",
+          accountId: account.accountId,
+        });
+        await sendBuzzTyping({
+          cfg,
+          to: `buzz:${CHANNEL_ID}`,
+          accountId: account.accountId,
+        });
+        expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledTimes(2);
+        expect(gatewayMocks.busSendText).not.toHaveBeenCalled();
+        expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
+      } finally {
+        abortController.abort();
+        resolveClose?.();
+        await lifecycle.catch(() => undefined);
+      }
+    },
+  );
+
+  it("does not retire a replacement bus when an earlier generation finishes closing", async () => {
+    let resolveClose: (() => void) | undefined;
+    const closePending = new Promise<void>((resolve) => {
+      resolveClose = resolve;
+    });
+    gatewayMocks.close.mockImplementationOnce(() => closePending);
+    const first = startTestGateway();
+    let replacement: ReturnType<typeof startTestGateway> | undefined;
+
+    try {
+      await vi.waitFor(() => expect(getActiveBuzzBus(first.account.accountId)).toBeDefined());
+      replacement = startTestGateway();
+      await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2));
+      const replacementBus = getActiveBuzzBus(first.account.accountId);
+      expect(replacementBus).toBeDefined();
+
+      first.abortController.abort();
+      await vi.waitFor(() => expect(gatewayMocks.close).toHaveBeenCalledOnce());
+      expect(getActiveBuzzBus(first.account.accountId)).toBe(replacementBus);
+
+      resolveClose?.();
+      await expect(first.lifecycle).resolves.toBeUndefined();
+      expect(getActiveBuzzBus(first.account.accountId)).toBe(replacementBus);
+    } finally {
+      first.abortController.abort();
+      resolveClose?.();
+      await first.lifecycle.catch(() => undefined);
+      replacement?.abortController.abort();
+      await replacement?.lifecycle.catch(() => undefined);
+    }
   });
 
   it("reuses the gateway bus for sends in the running process", async () => {

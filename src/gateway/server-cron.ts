@@ -987,7 +987,7 @@ export function buildGatewayCronService(params: {
         ssrfPolicy: webhookSsrfPolicy,
       }),
     log: getChildLogger({ module: "cron", storeKey: storePath }),
-    onEvent: (evt, context) => {
+    onEvent: (evt) => {
       // Any job/store change can alter session automation bindings, including
       // in-place enable flips during runs; run/schedule events bump too (cheap).
       bumpSessionAutomationVersion();
@@ -1074,14 +1074,12 @@ export function buildGatewayCronService(params: {
         const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
           evt,
-          failureNotificationDetail: context?.failureNotificationDetail,
           job,
           deps: params.deps,
           logger: cronLogger,
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
           ssrfPolicy: webhookSsrfPolicy,
-          globalFailureDestination: params.cfg.cron?.failureAlert,
         });
       }
     },

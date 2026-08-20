@@ -1,5 +1,17 @@
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+
+const registerChannelDelivery = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/question-gateway-runtime")>();
+  return {
+    ...actual,
+    questionGatewayRuntime: { ...actual.questionGatewayRuntime, registerChannelDelivery },
+  };
+});
+
+beforeEach(() => registerChannelDelivery.mockReset());
 import {
   describeTelegramDispatch,
   appendAssistantMirrorMessageByIdentity,
@@ -14,6 +26,7 @@ import {
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   emitTelegramMessageSentHooks,
   expectDeliveredReply,
@@ -426,28 +439,46 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expectDeliveredReply(0, { text: "Post-processing failed", isError: true });
   });
 
-  it("streams button-bearing text into the same message", async () => {
+  it("registers a streamed ask_user on its concrete message exactly once", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+    const buttons = [[{ text: "One", callback_data: "ask:one" }]];
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
-        { text: "Choose", channelData: { telegram: { buttons } } },
-        { kind: "final" },
+        {
+          text: "Pick one",
+          channelData: {
+            askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" },
+            telegram: { buttons },
+          },
+        },
+        { kind: "tool" },
       );
       return { queuedFinal: true };
     });
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), textLimit: 80 });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith(
-      "Choose",
-      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
-    );
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Pick one");
     expect(mockCallArg(editMessageTelegram)).toBe(123);
     expect(mockCallArg(editMessageTelegram, 0, 1)).toBe(2001);
-    expect(mockCallArg(editMessageTelegram, 0, 2)).toBe("Choose");
+    expect(mockCallArg(editMessageTelegram, 0, 2)).toBe("Pick one");
     expectRecordFields(mockCallArg(editMessageTelegram, 0, 3), { buttons });
     expect(deliverReplies).not.toHaveBeenCalled();
+    expect(registerChannelDelivery).toHaveBeenCalledOnce();
+    const registration = mockCallArg(registerChannelDelivery) as {
+      deliveryId: string;
+      finalize: (statusLine: string) => Promise<void>;
+    };
+    expect(registration.deliveryId).toBe("telegram:default:123:2001");
+    await registration.finalize(`Answered: ${"x".repeat(100)}`);
+    expect(editMessageReplyMarkupTelegram).toHaveBeenCalledWith(
+      123,
+      2001,
+      [],
+      expect.objectContaining({ accountId: "default" }),
+    );
+    const finalText = editMessageTelegram.mock.calls.at(-1)?.[2] as string;
+    expect(finalText.length).toBeLessThanOrEqual(80);
   });
 
   it("streams interactive buttons into the same message", async () => {
@@ -475,6 +506,36 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       buttons: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("makes streamed ask_user control failure terminal without fallback", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    const statusReactionController = createStatusReactionController();
+    const context = createContext();
+    context.statusReactionController = statusReactionController as never;
+    editMessageTelegram.mockRejectedValueOnce(new Error("400: button rejected"));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Pick one",
+          channelData: {
+            askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" },
+            telegram: { buttons: [[{ text: "One", callback_data: "ask:one" }]] },
+          },
+        },
+        { kind: "tool" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(registerChannelDelivery).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(statusReactionController.setError).toHaveBeenCalledOnce();
+    expect(emitTelegramMessageSentHooks).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, messageId: 2001 }),
+    );
   });
 
   it("streams reasoning and answer text on separate lanes", async () => {

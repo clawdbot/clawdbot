@@ -3868,25 +3868,40 @@ describe("embedded attempt harness pinning", () => {
       agentRuntimeOverride: "openclaw",
       agentHarnessId: "codex",
     });
+    const modelThinkingCapability = {
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      agentRuntime: "openclaw",
+      route: {
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      },
+      compat: {
+        thinkingFormat: "openai",
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
+    } as const;
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
     } satisfies EmbeddedAgentRunResult);
 
     await runHarnessAttempt({
-      modelOverride: "gpt-5.6-luna",
+      modelOverride: "gpt-5.6-sol",
+      modelThinkingCapability,
       sessionEntry,
       agentHarnessRuntimeOverride: "openclaw",
-      resolvedThinkLevel: "ultra",
+      resolvedThinkLevel: "max",
       runId: "run-explicit-openclaw-runtime",
       sessionHasHistory: true,
     });
 
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
-      model: "gpt-5.6-luna",
+      model: "gpt-5.6-sol",
+      modelThinkingCapability,
       agentHarnessId: "openclaw",
       agentHarnessRuntimeOverride: "openclaw",
-      thinkLevel: "ultra",
+      thinkLevel: "max",
     });
   });
 

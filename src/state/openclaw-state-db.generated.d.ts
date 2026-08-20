@@ -390,6 +390,11 @@ export interface ConfigMachineState {
   value_json: string;
 }
 
+export interface ConfigRevisionKeys {
+  hmac_key: Uint8Array;
+  id: Generated<number>;
+}
+
 export interface CronJobRuntimeAuthorities {
   authority_input_fingerprint: string | null;
   authority_json: string | null;
@@ -1840,6 +1845,7 @@ export interface DB {
   command_log_entries: CommandLogEntries;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
+  config_revision_keys: ConfigRevisionKeys;
   cron_job_runtime_authorities: CronJobRuntimeAuthorities;
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;

@@ -399,8 +399,8 @@ importers:
         specifier: 1.1.7
         version: 1.1.7
       acpx:
-        specifier: 0.13.0
-        version: 0.13.0
+        specifier: 0.13.1
+        version: 0.13.1
       smol-toml:
         specifier: 1.7.1
         version: 1.7.1
@@ -641,6 +641,9 @@ importers:
       '@openai/codex':
         specifier: 0.147.0
         version: 0.147.0
+      semver:
+        specifier: 7.8.5
+        version: 7.8.5
       smol-toml:
         specifier: 1.7.1
         version: 1.7.1
@@ -5569,8 +5572,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.13.0:
-    resolution: {integrity: sha512-EdGgMx5osY4bNpVN+7dTTT67ZXsFqx/itl4QjGYTKH/Nzm3fqGmWL3E6FjRkVrlWRpiFnRNi+J1lxUJPie4lmg==}
+  acpx@0.13.1:
+    resolution: {integrity: sha512-9zhvUrAR4XxSIgaLCiiWmrwmEWh+m6jxu2KUFC8BMOiK4sFsnrRL7H6VF54ZLTTpt0IHrZQju2V7+8wiMf9DXQ==}
     engines: {node: '>=22.13.0'}
     hasBin: true
 
@@ -12430,7 +12433,7 @@ snapshots:
 
   acorn@8.17.0: {}
 
-  acpx@0.13.0:
+  acpx@0.13.1:
     dependencies:
       '@agentclientprotocol/sdk': 1.3.0(zod@4.4.3)
       commander: 15.0.0

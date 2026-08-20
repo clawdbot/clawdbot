@@ -4623,7 +4623,6 @@ describe("package artifact reuse", () => {
       [MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW, "run_status_reactions"],
       [MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW, "run_thread_attachment"],
       [MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW, "run_slack_desktop"],
-      [MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW, "run_telegram_desktop_proof"],
       [MANTIS_TELEGRAM_LIVE_WORKFLOW, "run_telegram_live"],
     ] as const;
 

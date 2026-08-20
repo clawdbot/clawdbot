@@ -118,7 +118,7 @@ function runCodexAppServerSideQuestion(
   return runCodexAppServerSideQuestionImpl(params, { ...options, bindingStore });
 }
 
-function createFakeClient() {
+function createFakeClient(options: { completeTurn?: boolean } = {}) {
   const fixture = createFakeCodexAppServerClient();
   const client = Object.assign(fixture.client, {
     notifications: fixture.notifications,
@@ -138,10 +138,12 @@ function createFakeClient() {
       return {};
     }
     if (method === "turn/start") {
-      queueMicrotask(() => {
-        client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
-        client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
-      });
+      if (options.completeTurn !== false) {
+        queueMicrotask(() => {
+          client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        });
+      }
       return turnStartResult("turn-1");
     }
     if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -759,6 +761,40 @@ describe("runCodexAppServerSideQuestion", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("returns an explicit unsupported decline for ordinary MCP input", async () => {
+    const client = createFakeClient({ completeTurn: false });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    const run = runCodexAppServerSideQuestion(sideParams());
+    await vi.waitFor(() =>
+      expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+    );
+
+    await expect(
+      handleClientRequestWhenReady(client, {
+        id: "side-elicitation",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "side-thread",
+          turnId: "turn-1",
+          serverName: "forms",
+          mode: "form",
+          message: "Enter a value",
+          requestedSchema: { type: "object", properties: { value: { type: "string" } } },
+        },
+      }),
+    ).resolves.toEqual({
+      action: "decline",
+      content: null,
+      _meta: {
+        message: "OpenClaw Codex side questions do not support interactive MCP input.",
+      },
+    });
+
+    client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+    client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+    await expect(run).resolves.toEqual({ text: "Side answer." });
   });
 
   it("routes a remote-exec side question through the injected sandbox environment", async () => {

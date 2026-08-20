@@ -56,6 +56,7 @@ import {
   imessageSetupWizard,
 } from "./shared.js";
 import { probeIMessageStatusAccount } from "./status-core.js";
+import { isIMessagePhoneLikeHandle } from "./target-identifiers.js";
 import {
   inferIMessageTargetChatType,
   looksLikeIMessageExplicitTargetId,
@@ -220,7 +221,7 @@ function isCanonicalIMessageDirectHandle(raw: string, normalized: string): boole
   // Inbound DMs key sessions by normalized phone number or email. Names and
   // other bridge aliases can deliver, but cannot prove the reply identity.
   if (normalized.startsWith("+")) {
-    return /^[+\d\s().-]+$/.test(trimmed);
+    return isIMessagePhoneLikeHandle(trimmed);
   }
   return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(trimmed);
 }
@@ -345,9 +346,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveOutboundSessionRoute: (params) => resolveIMessageOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeIMessageExplicitTargetId,
-          hint: "<handle|chat_id:ID>",
-          resolveTarget: async ({ normalized }) => {
-            const to = normalized?.trim();
+          hint: "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
+          resolveTarget: async ({ input }) => {
+            const to = normalizeIMessageMessagingTarget(input);
             if (!to) {
               return null;
             }

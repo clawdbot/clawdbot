@@ -266,6 +266,7 @@ export async function runManagerTurn(params: {
               mode: input.mode,
               requestId: input.requestId,
               signal: combinedSignal,
+              onElicitation: input.onElicitation,
             },
             eventGate,
             onOutputEvent: (event) => {

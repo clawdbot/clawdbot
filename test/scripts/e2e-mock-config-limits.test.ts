@@ -1,7 +1,7 @@
 // E2E Mock Config Limits tests cover e2e mock config limits script behavior.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -20,6 +20,7 @@ const scrubbedEnvKeys = [
   "MOCK_PORT",
   "MOCK_REQUEST_LOG",
   "MOCK_RESPONSE_CHUNK_DELAY_MS",
+  "MOCK_RESPONSE_CONTROL",
   "MOCK_TLS_CERT",
   "MOCK_TLS_KEY",
   "OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES",
@@ -141,232 +142,6 @@ async function withMockServer(
 }
 
 describe("mock OpenAI response markers", () => {
-  const editRecoveryPath = "issue-46548-edit-recovery.txt";
-  const editRecoveryTools = [
-    { name: "write", parameters: { type: "object" }, type: "function" },
-    { name: "edit", parameters: { type: "object" }, type: "function" },
-  ];
-  const editRecoveryTranscript = {
-    seed: {
-      name: "write",
-      args: { path: editRecoveryPath, content: "before\n" },
-      output: `Successfully wrote 7 bytes to ${editRecoveryPath}`,
-    },
-    failure: {
-      name: "edit",
-      args: {
-        path: editRecoveryPath,
-        edits: [{ oldText: "absent\n", newText: "after\n" }],
-      },
-      output: JSON.stringify({
-        status: "error",
-        tool: "edit",
-        error: `Could not find the exact text in ${editRecoveryPath}. The old text must match exactly`,
-      }),
-    },
-    retry: {
-      name: "edit",
-      args: {
-        path: editRecoveryPath,
-        edits: [{ oldText: "before\n", newText: "after\n" }],
-      },
-      output: `Successfully replaced 1 block(s) in ${editRecoveryPath}.`,
-    },
-  };
-
-  async function postResponses(baseUrl: string, body: Record<string, unknown>) {
-    const response = await fetch(`${baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...body, stream: false }),
-    });
-    return { response, body: await response.json() };
-  }
-
-  function outputFor(callId: string, output: string) {
-    return { type: "function_call_output", call_id: callId, output };
-  }
-
-  function appendOutput(
-    input: Array<Record<string, unknown>>,
-    response: { body: { output?: Array<{ call_id?: unknown }> } },
-    output: string,
-  ) {
-    const callId = response.body.output?.[0]?.call_id;
-    if (typeof callId !== "string") {
-      throw new Error("edit recovery response omitted call_id");
-    }
-    input.push(outputFor(callId, output));
-  }
-
-  function createEditRecoveryConversation(baseUrl: string, marker: string) {
-    const input: Array<Record<string, unknown>> = [{ content: `Run ${marker}.`, role: "user" }];
-    const request = () =>
-      postResponses(baseUrl, {
-        input,
-        tools: editRecoveryTools,
-      });
-    return {
-      input,
-      request,
-      appendOutput: (response: Awaited<ReturnType<typeof request>>, output: string) =>
-        appendOutput(input, response, output),
-    };
-  }
-
-  function expectToolCall(
-    response: Awaited<ReturnType<ReturnType<typeof createEditRecoveryConversation>["request"]>>,
-    name: string,
-    args: Record<string, unknown>,
-  ) {
-    expect(response.body.output?.[0]).toMatchObject({
-      arguments: JSON.stringify(args),
-      name,
-      type: "function_call",
-    });
-  }
-
-  async function completeTool(
-    conversation: ReturnType<typeof createEditRecoveryConversation>,
-    name: string,
-    args: Record<string, unknown>,
-    output: string,
-  ) {
-    const response = await conversation.request();
-    expectToolCall(response, name, args);
-    conversation.appendOutput(response, output);
-    return response;
-  }
-
-  async function driveEditRecovery(
-    conversation: ReturnType<typeof createEditRecoveryConversation>,
-    options: { retry: boolean; replaySeed?: boolean },
-  ) {
-    const seed = await conversation.request();
-    expectToolCall(seed, editRecoveryTranscript.seed.name, editRecoveryTranscript.seed.args);
-    if (options.replaySeed) {
-      const replay = await conversation.request();
-      expect(replay.body.output).toEqual(seed.body.output);
-    }
-    conversation.appendOutput(seed, editRecoveryTranscript.seed.output);
-    const responses = [seed];
-    const remainingSteps = options.retry
-      ? [editRecoveryTranscript.failure, editRecoveryTranscript.retry]
-      : [editRecoveryTranscript.failure];
-    for (const step of remainingSteps) {
-      responses.push(await completeTool(conversation, step.name, step.args, step.output));
-    }
-    const final = await conversation.request();
-    expect(final.body.output?.[0]?.content?.[0]?.text).toBe(
-      options.retry
-        ? "OPENCLAW_E2E_EDIT_FAILURE_MATCHED_RETRY_FINAL"
-        : "OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED_FINAL",
-    );
-    responses.push(final);
-    return responses;
-  }
-
-  it("drives deterministic edit recovery sequencing and replay at the HTTP boundary", async () => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
-      const unresolved = createEditRecoveryConversation(
-        baseUrl,
-        "OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
-      );
-      const matchedRetry = createEditRecoveryConversation(
-        baseUrl,
-        "OPENCLAW_E2E_EDIT_FAILURE_MATCHED_RETRY",
-      );
-      expect((await driveEditRecovery(unresolved, { retry: false })).length).toBe(3);
-      expect(
-        (await driveEditRecovery(matchedRetry, { retry: true, replaySeed: true })).length,
-      ).toBe(4);
-    });
-  });
-
-  it("keeps interleaved edit recovery transcripts independent", async () => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
-      const unresolved = createEditRecoveryConversation(
-        baseUrl,
-        "OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
-      );
-      const matchedRetry = createEditRecoveryConversation(
-        baseUrl,
-        "OPENCLAW_E2E_EDIT_FAILURE_MATCHED_RETRY",
-      );
-      for (const conversation of [unresolved, matchedRetry]) {
-        await completeTool(
-          conversation,
-          editRecoveryTranscript.seed.name,
-          editRecoveryTranscript.seed.args,
-          editRecoveryTranscript.seed.output,
-        );
-      }
-      for (const conversation of [unresolved, matchedRetry]) {
-        await completeTool(
-          conversation,
-          editRecoveryTranscript.failure.name,
-          editRecoveryTranscript.failure.args,
-          editRecoveryTranscript.failure.output,
-        );
-      }
-      const unresolvedFinal = await unresolved.request();
-      expect(unresolvedFinal.body.output?.[0]?.content?.[0]?.text).toBe(
-        "OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED_FINAL",
-      );
-      await completeTool(
-        matchedRetry,
-        editRecoveryTranscript.retry.name,
-        editRecoveryTranscript.retry.args,
-        editRecoveryTranscript.retry.output,
-      );
-      expect((await matchedRetry.request()).body.output?.[0]?.content?.[0]?.text).toBe(
-        "OPENCLAW_E2E_EDIT_FAILURE_MATCHED_RETRY_FINAL",
-      );
-    });
-  });
-
-  it("returns fixture errors for missing tools, malformed outcomes, and impossible prefixes", async () => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
-      const missingTools = await postResponses(baseUrl, {
-        input: [{ content: "Run OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED.", role: "user" }],
-      });
-      expect(missingTools.body.output?.[0]?.content?.[0]?.text).toContain(
-        "OPENCLAW_E2E_EDIT_FAILURE_FIXTURE_ERROR",
-      );
-
-      const malformedPrefix = await postResponses(baseUrl, {
-        input: [
-          { content: "Run OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED.", role: "user" },
-          outputFor("wrong-call-id", "not a write result"),
-        ],
-        tools: editRecoveryTools,
-      });
-      expect(malformedPrefix.body.output?.[0]?.content?.[0]?.text).toContain(
-        "OPENCLAW_E2E_EDIT_FAILURE_FIXTURE_ERROR",
-      );
-
-      const conversation = createEditRecoveryConversation(
-        baseUrl,
-        "OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
-      );
-      const seed = await conversation.request();
-      const seedCallId = seed.body.output?.[0]?.call_id;
-      if (typeof seedCallId !== "string") {
-        throw new Error("malformed edit recovery seed response omitted call_id");
-      }
-      const malformedOutcome = await postResponses(baseUrl, {
-        input: [
-          { content: "Run OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED.", role: "user" },
-          outputFor(seedCallId, "not a write result"),
-        ],
-        tools: editRecoveryTools,
-      });
-      expect(malformedOutcome.body.output?.[0]?.content?.[0]?.text).toContain(
-        "OPENCLAW_E2E_EDIT_FAILURE_FIXTURE_ERROR",
-      );
-    });
-  });
-
   it("echoes dynamic OpenClaw E2E markers", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
       for (const marker of ["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"]) {
@@ -407,6 +182,70 @@ describe("mock OpenAI response markers", () => {
         expect(Date.now() - startedAt).toBeGreaterThanOrEqual(60);
       },
     );
+  });
+
+  it("reloads the lane-owned response control between turns", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-"));
+    const control = join(root, "response.json");
+    try {
+      await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "first response" }));
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        const request = () =>
+          fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              input: "return OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
+              stream: false,
+            }),
+          }).then((response) => response.json());
+        expect((await request()).output?.[0]?.content?.[0]?.text).toBe("first response");
+        const completion = await fetch(`${baseUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            messages: [{ content: "return OPENCLAW_E2E_DRAFTPROOF", role: "user" }],
+            stream: false,
+          }),
+        }).then((response) => response.json());
+        expect(completion.choices?.[0]?.message?.content).toBe("first response");
+        await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "second response" }));
+        expect((await request()).output?.[0]?.content?.[0]?.text).toBe("second response");
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("holds a lane response until the recorder reveals the outbound message", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-hold-"));
+    const control = join(root, "response.json");
+    try {
+      await writeFile(
+        control,
+        JSON.stringify({ chunkDelayMs: 0, hold: true, text: "visible after reveal" }),
+      );
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        let settled = false;
+        const request = fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "wait until visible", stream: false }),
+        }).then(async (response) => {
+          settled = true;
+          return await response.json();
+        });
+        await delay(75);
+        expect(settled).toBe(false);
+        await writeFile(
+          control,
+          JSON.stringify({ chunkDelayMs: 0, hold: false, text: "visible after reveal" }),
+        );
+        expect((await request).output?.[0]?.content?.[0]?.text).toBe("visible after reveal");
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it("drives the MCP App fixture tool before returning the visible marker", async () => {

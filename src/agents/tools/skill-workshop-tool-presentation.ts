@@ -1,5 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { PROPOSAL_DRAFT_FILE } from "../../skills/workshop/store-record.js";
 import type {
   SkillProposalEvaluation,
   SkillProposalManifestEntry,
@@ -125,9 +126,9 @@ export function resolveProposalInspectArtifact(
   proposal: SkillProposalReadResult,
   artifactPath?: string,
 ): SkillProposalInspectArtifact | undefined {
-  if (!artifactPath || artifactPath === proposal.record.draftFile) {
+  if (!artifactPath || artifactPath === PROPOSAL_DRAFT_FILE) {
     return {
-      path: proposal.record.draftFile,
+      path: PROPOSAL_DRAFT_FILE,
       content: proposal.content,
       sizeBytes: Buffer.byteLength(proposal.content),
     };
@@ -150,7 +151,7 @@ export function formatProposalInspect(
   const evaluation = proposal.record.evaluation;
   const evaluationLines = evaluation ? [formatProposalEvaluation(evaluation)] : [];
   const artifacts = [
-    { path: proposal.record.draftFile, sizeBytes: Buffer.byteLength(proposal.content) },
+    { path: PROPOSAL_DRAFT_FILE, sizeBytes: Buffer.byteLength(proposal.content) },
     ...(proposal.record.supportFiles ?? []).map((file) => ({
       path: file.path,
       sizeBytes: file.sizeBytes,

@@ -36,6 +36,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "agent_provenance",
   "cron_run_receipts",
   "cron_store_epochs",
+  "config_revision_keys",
   "model_catalog_remote",
   "secret_store_entries",
   "projects",

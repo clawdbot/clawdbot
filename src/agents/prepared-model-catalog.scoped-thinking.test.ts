@@ -15,6 +15,7 @@ const scopedLiveMock = vi.fn(
     routeVariants: [],
   }),
 );
+const publishedSnapshotMock = vi.fn((..._args: unknown[]) => undefined as unknown);
 
 vi.mock("./model-catalog.js", () => ({
   loadManifestModelCatalog: (...args: unknown[]) => manifestCatalogMock(...args),
@@ -24,6 +25,7 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./prepared-model-runtime.js")>();
   return {
     ...actual,
+    getPreparedModelRuntimeSnapshot: (...args: unknown[]) => publishedSnapshotMock(...args),
     // No published lifecycle owner: force the scoped read-only builders to run.
     prepareModelRuntimeSnapshot: vi.fn(async (input: { agentDir: string }) => {
       throw new actual.PreparedModelRuntimeOwnerNotPublishedError(
@@ -51,6 +53,45 @@ describe("loadProviderScopedThinkingCatalog", () => {
     manifestCatalogMock.mockReturnValue([]);
     scopedStaticMock.mockResolvedValue({ entries: [], routeVariants: [] });
     scopedLiveMock.mockResolvedValue({ entries: [], routeVariants: [] });
+    publishedSnapshotMock.mockReturnValue(undefined);
+  });
+
+  it("prefers the published prepared generation over partial manifest compatibility", async () => {
+    manifestCatalogMock.mockReturnValue([
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      },
+    ]);
+    publishedSnapshotMock.mockImplementation((input: unknown) => ({
+      config: (input as { config: unknown }).config,
+      modelCatalog: {
+        entries: [
+          {
+            provider: "openai",
+            id: "gpt-5.6-sol",
+            reasoning: true,
+            compat: {
+              supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            },
+          },
+        ],
+        routeVariants: [],
+      },
+    }));
+    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+
+    const catalog = await loadProviderScopedThinkingCatalog({
+      config: {},
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    });
+
+    expect(catalog[0]?.compat?.supportedReasoningEfforts).toContain("ultra");
+    expect(scopedStaticMock).not.toHaveBeenCalled();
+    expect(scopedLiveMock).not.toHaveBeenCalled();
   });
 
   it("resolves manifest-backed models without any scoped catalog build", async () => {

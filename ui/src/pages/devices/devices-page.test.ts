@@ -6,7 +6,6 @@ import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  approveDevicePairing,
   createInitialDevicesState,
   loadDevices,
   loadNodes,
@@ -266,12 +265,15 @@ describe("DevicesPage gateway lifecycle", () => {
     page.remove();
   });
 
-  it("coalesces a device refresh requested while an older list is loading", async () => {
+  it("refetches a changed device label after an older list response", async () => {
     const stale = deferred<{
-      paired: [];
-      pending: Array<{ requestId: string; deviceId: string }>;
+      paired: Array<{ deviceId: string; displayName: string }>;
+      pending: [];
     }>();
-    const refreshed = deferred<{ paired: []; pending: [] }>();
+    const refreshed = deferred<{
+      paired: Array<{ deviceId: string; displayName: string; operatorLabel: string }>;
+      pending: [];
+    }>();
     let listCalls = 0;
     const request = vi.fn((method: string) => {
       if (method === "device.pair.list") {
@@ -281,23 +283,55 @@ describe("DevicesPage gateway lifecycle", () => {
       return Promise.resolve({});
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const state = createInitialDevicesState({ client, connected: true });
+    const snapshot = {
+      ...gatewaySnapshot(client, true),
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.pairing"] },
+        features: { methods: ["device.pair.list"] },
+      },
+    } as ApplicationGatewaySnapshot;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, snapshot);
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    page.pageState = createInitialDevicesState({ client, connected: true });
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
 
-    const initialLoad = loadDevices(state);
+    const initialLoad = loadDevices(page.pageState);
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("device.pair.list", {}));
-    const approval = approveDevicePairing(state, "request-1");
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("device.pair.approve", { requestId: "request-1" }),
-    );
+    onEvent?.({ event: "device.pair.changed", payload: {} });
 
-    stale.resolve({ paired: [], pending: [{ requestId: "request-1", deviceId: "device-1" }] });
+    stale.resolve({
+      paired: [{ deviceId: "device-1", displayName: "Kitchen Mac" }],
+      pending: [],
+    });
     await vi.waitFor(() => expect(listCalls).toBe(2));
-    expect(state.devicesLoading).toBe(true);
+    expect(page.pageState.devicesLoading).toBe(true);
 
-    refreshed.resolve({ paired: [], pending: [] });
-    await Promise.all([initialLoad, approval]);
-    expect(state.devicesList).toEqual({ paired: [], pending: [] });
-    expect(state.devicesLoading).toBe(false);
+    refreshed.resolve({
+      paired: [{ deviceId: "device-1", displayName: "Kitchen Mac", operatorLabel: "Studio Mac" }],
+      pending: [],
+    });
+    await initialLoad;
+    expect(page.pageState.devicesList).toEqual({
+      paired: [{ deviceId: "device-1", displayName: "Kitchen Mac", operatorLabel: "Studio Mac" }],
+      pending: [],
+    });
+    expect(page.pageState.devicesLoading).toBe(false);
+    page.remove();
   });
 
   it("coalesces a node refresh requested while an older list is loading", async () => {
@@ -357,7 +391,7 @@ describe("DevicesPage gateway lifecycle", () => {
     expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
   });
 
-  it("keeps presence-driven device reloads gated on pairing access", async () => {
+  it("keeps event-driven device reloads gated on pairing access", async () => {
     const request = vi.fn(async (method: string) => (method === "node.list" ? { nodes: [] } : {}));
     const client = { request } as unknown as GatewayBrowserClient;
     const snapshot = {
@@ -397,6 +431,10 @@ describe("DevicesPage gateway lifecycle", () => {
         request.mock.calls.filter(([method]) => method === "node.list").length,
       ).toBeGreaterThan(nodeListCallsBefore.length),
     );
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+
+    onEvent?.({ event: "device.pair.changed", payload: {} });
+    await Promise.resolve();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
     page.remove();
   });

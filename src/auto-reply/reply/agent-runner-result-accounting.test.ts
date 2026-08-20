@@ -6,10 +6,11 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 const mocks = vi.hoisted(() => ({
   persistRunSessionUsage: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
+  resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
 }));
 
 vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: () => 200_000,
+  resolveContextTokensForModel: () => mocks.resolveContextTokensForModel(),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -157,7 +158,6 @@ function createParams(
     pendingToolTasks: new Set(),
     progress: {
       drain: vi.fn(async () => {}),
-      visibleToolErrorObserved: () => false,
     },
   } as FollowupExecutionResult;
   return { turn, defaults, execution };
@@ -166,6 +166,7 @@ function createParams(
 describe("accountFollowupTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveContextTokensForModel.mockReturnValue(200_000);
   });
 
   it("forwards typed runtime context provenance to session persistence", async () => {
@@ -190,6 +191,83 @@ describe("accountFollowupTurn", () => {
         agentHarnessId: "codex",
         contextTokensUsed: 1_000_000,
         contextTokensSource: "runtime",
+      }),
+    );
+  });
+
+  it("treats a source-less current-run context window as runtime provenance", async () => {
+    const params = createParams();
+    const result = params.execution.execution.outcome;
+    if (result.kind !== "settled") {
+      throw new Error("expected settled test execution");
+    }
+    result.result.meta.agentMeta = {
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "legacy-runtime",
+      contextTokens: 512_000,
+    };
+
+    await accountFollowupTurn(params);
+
+    expect(mocks.persistRunSessionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "legacy-runtime",
+        contextTokensUsed: 512_000,
+        contextTokensSource: "runtime",
+      }),
+    );
+  });
+
+  it("marks a successful current model lookup with versioned resolved provenance", async () => {
+    const params = createParams();
+
+    await accountFollowupTurn(params);
+
+    expect(mocks.persistRunSessionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextTokensUsed: 200_000,
+        contextTokensSource: "resolved-v1",
+      }),
+    );
+  });
+
+  it("does not label a prior context fallback as a current resolution after a model switch", async () => {
+    mocks.resolveContextTokensForModel.mockReturnValueOnce(undefined);
+    const params = createParams();
+    const session = params.turn.session as unknown as {
+      current: () => SessionEntry;
+      adopt: (entry: SessionEntry) => void;
+    };
+    session.adopt({
+      ...session.current(),
+      modelProvider: "anthropic",
+      model: "claude",
+      agentHarnessId: "openclaw",
+      contextTokens: 272_000,
+      contextTokensSource: "resolved",
+    });
+    const result = params.execution.execution.outcome;
+    if (result.kind !== "settled") {
+      throw new Error("expected settled test execution");
+    }
+    result.result.meta.agentMeta = {
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "codex",
+    };
+
+    await accountFollowupTurn(params);
+
+    expect(mocks.persistRunSessionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerUsed: "openai",
+        modelUsed: "gpt-4o",
+        agentHarnessId: "codex",
+        contextTokensUsed: 272_000,
+        contextTokensSource: undefined,
       }),
     );
   });

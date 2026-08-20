@@ -161,8 +161,6 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
-  /** Dynamic form used when verbose progress visibility can change mid-run. */
-  shouldSuppressToolErrorWarnings?: () => boolean | undefined;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */

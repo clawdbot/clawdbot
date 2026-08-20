@@ -215,7 +215,6 @@ export async function activateCodexAttemptTurn(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
-    claimPendingUserInput: () => userInputBridgeRef.current?.claimPendingRequest(),
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;

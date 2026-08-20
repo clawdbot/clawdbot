@@ -613,12 +613,21 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it.each([
-    ["without side effects", { meta: { agentMeta: {} } }],
-    ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }],
-  ] satisfies Array<[string, Record<string, unknown>]>)(
-    "surfaces empty interactive direct replies %s",
-    async (_label, agentResult) => {
+    ["without side effects", { meta: { agentMeta: {} } }, true],
+    ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }, true],
+    [
+      "after an intentional terminal tool batch",
+      { meta: { agentMeta: {}, intentionalTerminalCompletion: "tool-batch" } },
+      false,
+    ],
+  ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
+    "accounts for empty interactive direct replies %s",
+    async (_label, agentResult, fallback) => {
       const result = await runEmptyDirectReply(agentResult);
+      if (!fallback) {
+        expect(result).toBeUndefined();
+        return;
+      }
       const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
       expect(payload.text).toContain("did not produce a visible reply");
     },

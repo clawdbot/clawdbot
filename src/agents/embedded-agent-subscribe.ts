@@ -1,3 +1,4 @@
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 /**
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
@@ -34,6 +35,7 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
+import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -467,6 +469,42 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
   };
 
+  // Re-filter the full raw buffer. Reusing live scanner state would hide the
+  // visible prefix when timeout interrupts an open <think> or <final> block.
+  const finalizeFlushedAssistantText = (text: string) =>
+    stripDowngradedToolCallText(
+      stripBlockTags(
+        text,
+        {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        { final: true },
+      ),
+    ).trimEnd();
+
+  // Settlement calls this only for the final, failure-free run-budget terminal.
+  // Retain and re-filter the full buffer so queued suffixes keep hidden-tag
+  // context; replace live chunks instead of appending cumulative text twice.
+  const flushPartialAssistantText = () => {
+    const text = state.deltaBuffer;
+    if (!text) {
+      return;
+    }
+    if (state.deltaBufferIsCommentary) {
+      state.hasFlushedPartialText = false;
+      return;
+    }
+    const visibleText = finalizeFlushedAssistantText(text);
+    if (assistantTexts.length > state.assistantTextBaseline || state.hasFlushedPartialText) {
+      replyDelivery.replaceCurrentAssistantText(visibleText);
+    } else if (visibleText) {
+      replyDelivery.pushAssistantText(visibleText);
+    }
+    state.hasFlushedPartialText = Boolean(visibleText);
+  };
+
   const ctx: EmbeddedAgentSubscribeContext = {
     params,
     state,
@@ -660,13 +698,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       }),
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
-    getLastToolRecovery: () => (state.lastToolRecovery ? { ...state.lastToolRecovery } : undefined),
     getUsageTotals,
     getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     getAssistantTurnCount: () => state.assistantTurnCount,
     waitForPendingEvents: replyDelivery.waitForPendingEvents,
+    flushPartialAssistantText,
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,

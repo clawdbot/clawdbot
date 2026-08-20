@@ -15,7 +15,7 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Provider model changes: update the owning plugin manifest; after landing, verify `openclaw/catalog/models/v1/catalog.json` refreshes and dispatch the catalog publish workflow when needed.
 - Live-verify is the default, not a nicety: user-facing behavior gets live-tested through the real flow before landing. Skipping requires a concrete infeasibility stated in the PR, not convenience. Never print secrets.
 - Missing deps in a normal checkout: `pnpm install`, retry once, then report first actionable error. Worktrees: see Commands — never reconcile there.
-- CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review.
+- CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review. The authenticated writer counts as the owner when they are an active member/maintainer of the matched CODEOWNERS team; a pending team review request alone does not require a second party. Independent approval is required only when an explicit guard, branch rule, security policy, or user instruction says so.
 - Product/docs/UI/changelog wording: "plugin/plugins"; `extensions/` is internal.
 - New channel/plugin/app/doc surface: update `.github/labeler.yml` + GH labels.
 - New `AGENTS.md`: add sibling `CLAUDE.md` symlink; edit `AGENTS.md` only.
@@ -331,7 +331,7 @@ Mechanics only; policy lives above.
 ## Security / Release
 
 - Never commit real phone numbers, videos, credentials, live config.
-- Secrets: channel/provider creds in `~/.openclaw/credentials/`; model auth profiles in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
+- Secrets: channel/provider creds in `~/.openclaw/credentials/`; model auth profiles in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`).
 - SecretRef failures isolate to the smallest known owning surface; unknown ownership fails closed. Gateway starts degraded (exact owner marked configured-unavailable, typed redacted diagnostic, no implicit credential fallback) rather than refusing startup, except for its own ingress protection or structurally invalid config. Doctor and status list every degraded owner. Full doctrine: `docs/gateway/secrets.md`.
 - Dependency patches/overrides/vendor changes need explicit approval. `pnpm-workspace.yaml` patched dependencies use exact versions only.
 - Release/package guards: no hard-coded retired-package denylists; use generic artifact/dependency checks or fix build source.

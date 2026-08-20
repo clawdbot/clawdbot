@@ -411,6 +411,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     },
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+    runRecoveryBarrier: async ({ run }) => await run(localWorkspace),
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,

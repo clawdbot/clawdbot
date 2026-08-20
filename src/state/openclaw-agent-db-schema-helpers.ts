@@ -26,7 +26,10 @@ import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engin
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db-additive-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
-import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
+import {
+  ensureSessionEntryValidityProjection,
+  ensureSessionProjectColumn,
+} from "./openclaw-agent-db-session-migrations.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
@@ -186,6 +189,7 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     );
   }
 
+  ensureSessionProjectColumn(database);
   ensureSessionEntryValidityProjection(database);
   ensureSessionKeyContractSchemaInTransaction(database);
 

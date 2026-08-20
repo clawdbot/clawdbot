@@ -96,4 +96,43 @@ class GatewayProtocolGeneratedTest {
       )
     }
   }
+
+  @Test
+  fun githubDeviceAuthorizationResultsRoundTripAsATypedUnion() {
+    val cases =
+      listOf(
+        """{"status":"pending","retryAfterMs":5000}""" to
+          ToolsGitHubAuthorizePendingResult::class,
+        """{"status":"slow_down","retryAfterMs":10000}""" to
+          ToolsGitHubAuthorizeSlowDownResult::class,
+        """{"status":"access_denied"}""" to ToolsGitHubAuthorizeAccessDeniedResult::class,
+        """{"status":"expired"}""" to ToolsGitHubAuthorizeExpiredResult::class,
+        """{"status":"incorrect_device_code"}""" to
+          ToolsGitHubAuthorizeIncorrectDeviceCodeResult::class,
+        """{"status":"network_error","retryAfterMs":5000}""" to
+          ToolsGitHubAuthorizeNetworkErrorResult::class,
+        """{"status":"failed","reason":"identity_changed"}""" to
+          ToolsGitHubAuthorizeFailedResult::class,
+        """{"status":"success","githubStatus":{"agentId":"main","selectedScope":"system","selected":{"scope":"system","configured":true,"identity":{"source":"system-configured","credentialKind":"managed-oauth","credentialState":"available","account":{"login":"octocat"},"gitAuthor":{"name":"octocat","email":"1+octocat@users.noreply.github.com"},"evidence":"github-api","accessExpiresAtMs":1800000000000,"refreshState":"available","oauthScopes":["repo"],"repositoryGrants":"unknown"}},"effective":{"source":"system-configured","credentialKind":"managed-oauth","credentialState":"available","account":{"login":"octocat"},"gitAuthor":{"name":"octocat","email":"1+octocat@users.noreply.github.com"},"evidence":"github-api","accessExpiresAtMs":1800000000000,"refreshState":"available","oauthScopes":["repo"],"repositoryGrants":"unknown"}}}""" to
+          ToolsGitHubAuthorizeSuccessResult::class,
+      )
+
+    for ((payload, expectedType) in cases) {
+      val decoded = json.decodeFromString(ToolsGitHubAuthorizePollResult.serializer(), payload)
+      assertEquals(expectedType, decoded::class)
+      val encoded =
+        json
+          .encodeToJsonElement(ToolsGitHubAuthorizePollResult.serializer(), decoded)
+          .jsonObject
+      assertEquals(
+        json
+          .parseToJsonElement(payload)
+          .jsonObject
+          .getValue("status")
+          .jsonPrimitive
+          .content,
+        encoded.getValue("status").jsonPrimitive.content,
+      )
+    }
+  }
 }

@@ -687,11 +687,14 @@ export async function stopRemoteRecording(params: {
   });
 }
 
-export function telegramPrivatePostLink(groupId: string, messageId: string): string {
+export function telegramPrivatePostLink(groupId: string, messageId?: string): string {
   if (!/^-100\d+$/u.test(groupId)) {
     throw new Error(`Telegram privatepost links require a -100 group id, got ${groupId}.`);
   }
-  return `tg://privatepost?channel=${groupId.slice(4)}&post=${messageId}`;
+  // tdesktop's ResolvePrivatePost only requires channel; an absent post opens the chat
+  // itself, which is all the recorder needs to keep the account's chat list off screen.
+  const chatLink = `tg://privatepost?channel=${groupId.slice(4)}`;
+  return messageId ? `${chatLink}&post=${messageId}` : chatLink;
 }
 
 export function renderTelegramViewCommand(params: {
@@ -719,5 +722,7 @@ fi
 wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz,fullscreen
 wmctrl -ir "$win" -e 0,${TELEGRAM_DESKTOP_WINDOW.x},${TELEGRAM_DESKTOP_WINDOW.y},${TELEGRAM_DESKTOP_WINDOW.width},${TELEGRAM_DESKTOP_WINDOW.height}
 ${openLink}
+xdotool windowmap "$win"
+xdotool windowactivate --sync "$win"
 wmctrl -lxG | awk 'tolower($0) ~ /telegramdesktop/'`;
 }

@@ -1,5 +1,6 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
@@ -19,9 +20,37 @@ const port =
     : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
-const responseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
+const initialResponseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
   ? readPositiveIntEnv("MOCK_RESPONSE_CHUNK_DELAY_MS", undefined)
   : 0;
+const responseControl = process.env.MOCK_RESPONSE_CONTROL;
+
+function readCurrentResponse() {
+  if (!responseControl) {
+    return { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs, hold: false };
+  }
+  const value = JSON.parse(readFileSync(responseControl, "utf8"));
+  if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
+    throw new Error("mock response control text is invalid");
+  }
+  const chunkDelayMs = value.chunkDelayMs ?? 0;
+  if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 60_000) {
+    throw new Error("mock response control chunkDelayMs is invalid");
+  }
+  if (value.hold !== undefined && typeof value.hold !== "boolean") {
+    throw new Error("mock response control hold is invalid");
+  }
+  return { text: value.text, chunkDelayMs, hold: value.hold ?? false };
+}
+
+async function currentResponse() {
+  let response = readCurrentResponse();
+  while (response.hold) {
+    await delay(25);
+    response = readCurrentResponse();
+  }
+  return response;
+}
 
 function splitResponseText(text) {
   if (text.length < 2) {
@@ -95,8 +124,8 @@ function responseEvents(text, deltas = [text]) {
   ];
 }
 
-async function writeDefaultResponseEvents(res, text) {
-  if (responseChunkDelayMs === 0) {
+async function writeDefaultResponseEvents(res, text, chunkDelayMs) {
+  if (chunkDelayMs === 0) {
     writeSse(res, responseEvents(text));
     return;
   }
@@ -109,7 +138,7 @@ async function writeDefaultResponseEvents(res, text) {
   let deltaCount = 0;
   for (const event of events) {
     if (event.type === "response.output_text.delta" && deltaCount > 0) {
-      await delay(responseChunkDelayMs);
+      await delay(chunkDelayMs);
     }
     res.write(`data: ${JSON.stringify(event)}\n\n`);
     if (event.type === "response.output_text.delta") {
@@ -277,142 +306,6 @@ function toolCallEvents(name, args) {
       },
     },
   ];
-}
-
-function editRecoveryFixtureError(reason) {
-  return responseEvents(`OPENCLAW_E2E_EDIT_FAILURE_FIXTURE_ERROR reason=${reason}`);
-}
-
-function collectEditRecoveryOutputs(body) {
-  const input = Array.isArray(body?.input) ? body.input : [];
-  const outputs = new Map();
-  for (const item of input) {
-    if (item?.type !== "function_call_output") {
-      continue;
-    }
-    if (typeof item.call_id !== "string" || typeof item.output !== "string") {
-      return null;
-    }
-    const existing = outputs.get(item.call_id);
-    if (existing !== undefined && existing !== item.output) {
-      return null;
-    }
-    outputs.set(item.call_id, item.output);
-  }
-  return outputs;
-}
-
-function isEditFailureOutput(output, path) {
-  try {
-    const parsed = JSON.parse(output);
-    return (
-      parsed?.status === "error" &&
-      parsed?.tool === "edit" &&
-      typeof parsed.error === "string" &&
-      parsed.error.startsWith(`Could not find the exact text in ${path}.`)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function editRecoveryToolStep(name, args, accept, errorReason) {
-  return { kind: "tool", name, args, call: buildMockFunctionCall(name, args), accept, errorReason };
-}
-
-const editRecoveryPath = "issue-46548-edit-recovery.txt";
-const editRecoverySeedStep = editRecoveryToolStep(
-  "write",
-  { path: editRecoveryPath, content: "before\n" },
-  (output) => output === `Successfully wrote 7 bytes to ${editRecoveryPath}`,
-  "seed-result-mismatch",
-);
-const editRecoveryFailureStep = editRecoveryToolStep(
-  "edit",
-  { path: editRecoveryPath, edits: [{ oldText: "absent\n", newText: "after\n" }] },
-  (output) => isEditFailureOutput(output, editRecoveryPath),
-  "edit-result-mismatch",
-);
-const editRecoveryRetryStep = editRecoveryToolStep(
-  "edit",
-  { path: editRecoveryPath, edits: [{ oldText: "before\n", newText: "after\n" }] },
-  (output) => output === `Successfully replaced 1 block(s) in ${editRecoveryPath}.`,
-  "retry-result-mismatch",
-);
-
-const editRecoveryScenarios = Object.freeze([
-  {
-    trigger: "OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
-    steps: [
-      editRecoverySeedStep,
-      editRecoveryFailureStep,
-      { kind: "final", text: "OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED_FINAL" },
-    ],
-  },
-  {
-    trigger: "OPENCLAW_E2E_EDIT_FAILURE_MATCHED_RETRY",
-    steps: [
-      editRecoverySeedStep,
-      editRecoveryFailureStep,
-      editRecoveryRetryStep,
-      { kind: "final", text: "OPENCLAW_E2E_EDIT_FAILURE_MATCHED_RETRY_FINAL" },
-    ],
-  },
-]);
-
-function resolveEditRecoveryScenario(bodyText) {
-  const matches = editRecoveryScenarios.filter((scenario) => bodyText.includes(scenario.trigger));
-  return matches.length === 1 ? matches[0] : null;
-}
-
-function resolveEditRecoveryPrefix(scenario, outputs) {
-  const toolSteps = scenario.steps.filter((step) => step.kind === "tool");
-  const expectedCallIds = new Set(toolSteps.map((step) => step.call.item.call_id));
-  if ([...outputs.keys()].some((callId) => !expectedCallIds.has(callId))) {
-    return { kind: "error", reason: "impossible-prefix" };
-  }
-
-  let completed = 0;
-  for (const step of toolSteps) {
-    const output = outputs.get(step.call.item.call_id);
-    if (output === undefined) {
-      break;
-    }
-    if (!step.accept(output)) {
-      return { kind: "error", reason: step.errorReason };
-    }
-    completed += 1;
-  }
-  if (completed !== outputs.size) {
-    return { kind: "error", reason: "impossible-prefix" };
-  }
-
-  const next = scenario.steps[completed];
-  return next.kind === "final" ? next : { kind: "tool", name: next.name, args: next.args };
-}
-
-function editRecoveryEvents(body, bodyText) {
-  if (!bodyText.includes("OPENCLAW_E2E_EDIT_FAILURE_")) {
-    return null;
-  }
-  const scenario = resolveEditRecoveryScenario(bodyText);
-  if (!scenario) {
-    return editRecoveryFixtureError("invalid-scenario");
-  }
-  if (!hasDeclaredTool(bodyText, "write") || !hasDeclaredTool(bodyText, "edit")) {
-    return editRecoveryFixtureError("tool-not-declared");
-  }
-  const outputs = collectEditRecoveryOutputs(body);
-  if (!outputs) {
-    return editRecoveryFixtureError("malformed-tool-output");
-  }
-  const decision = resolveEditRecoveryPrefix(scenario, outputs);
-  if (decision.kind === "error") {
-    return editRecoveryFixtureError(decision.reason);
-  }
-  return decision.kind === "final"
-    ? responseEvents(decision.text)
-    : toolCallEvents(decision.name, decision.args);
 }
 
 function writeResponsesEvents(res, stream, events) {
@@ -704,32 +597,30 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
-      const agentBundleEvents = agentPluginBundleEvents(body, bodyText);
-      if (agentBundleEvents) {
-        writeResponsesEvents(res, body.stream, agentBundleEvents);
-        return;
+      if (!responseControl) {
+        const agentBundleEvents = agentPluginBundleEvents(body, bodyText);
+        if (agentBundleEvents) {
+          writeResponsesEvents(res, body.stream, agentBundleEvents);
+          return;
+        }
+        const appEvents = mcpAppConformanceEvents(body, bodyText);
+        if (appEvents) {
+          writeResponsesEvents(res, body.stream, appEvents);
+          return;
+        }
+        const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
+        if (codeModeEvents) {
+          writeResponsesEvents(res, body.stream, codeModeEvents);
+          return;
+        }
+        const draftEvents = progressDraftEvents(body, bodyText);
+        if (draftEvents) {
+          writeResponsesEvents(res, body.stream, draftEvents);
+          return;
+        }
       }
-      const appEvents = mcpAppConformanceEvents(body, bodyText);
-      if (appEvents) {
-        writeResponsesEvents(res, body.stream, appEvents);
-        return;
-      }
-      const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
-      if (codeModeEvents) {
-        writeResponsesEvents(res, body.stream, codeModeEvents);
-        return;
-      }
-      const draftEvents = progressDraftEvents(body, bodyText);
-      if (draftEvents) {
-        writeResponsesEvents(res, body.stream, draftEvents);
-        return;
-      }
-      const editRecovery = editRecoveryEvents(body, bodyText);
-      if (editRecovery) {
-        writeResponsesEvents(res, body.stream, editRecovery);
-        return;
-      }
-      const responseText = resolveResponseText(bodyText);
+      const response = await currentResponse();
+      const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       if (body.stream === false) {
         writeJson(res, 200, {
           id: "resp_e2e",
@@ -748,7 +639,7 @@ const server = http.createServer((req, res) => {
         });
         return;
       }
-      await writeDefaultResponseEvents(res, responseText);
+      await writeDefaultResponseEvents(res, responseText, response.chunkDelayMs);
       return;
     }
 
@@ -756,7 +647,7 @@ const server = http.createServer((req, res) => {
       // Progress-draft proof needs assistant content followed by a tool call in
       // one streamed turn: the completions transport tags that leading text as
       // commentary, which channels render as the draft status headline.
-      if (bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
+      if (!responseControl && bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
         const messages = Array.isArray(body.messages) ? body.messages : [];
         const toolTurnDone = messages.some((message) => message?.role === "tool");
         if (!toolTurnDone) {
@@ -776,7 +667,8 @@ const server = http.createServer((req, res) => {
         writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
         return;
       }
-      const responseText = resolveResponseText(bodyText);
+      const response = await currentResponse();
+      const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;
     }

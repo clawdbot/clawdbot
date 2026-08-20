@@ -422,7 +422,8 @@ export async function prepareGatewayKernelState(params: {
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
-  const isGatewayStartupPending = () => !startupState.sidecarsReady;
+  const isGatewayStartupPending = () =>
+    !startupState.sidecarsReady && !lifecycle.closePreludeStarted;
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
@@ -482,6 +483,7 @@ export async function prepareGatewayKernelState(params: {
     logPlugins,
     getReadiness,
     getStartup,
+    isStartupPending: isGatewayStartupPending,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     handleNodeWorkerBundleTransferRequest,

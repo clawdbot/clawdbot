@@ -182,6 +182,7 @@ describe("worker environment service", () => {
       environments: workerService,
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+      runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,

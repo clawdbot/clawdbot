@@ -282,6 +282,7 @@ vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
 }));
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   resolveExternalCliAuthProfiles: () => [],
 }));
 

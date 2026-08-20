@@ -30,6 +30,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../admitted-run-context.js";
+import {
   createTestAdmittedRunContext,
   createTestPreparedRunAdmission,
 } from "../admitted-run-context.test-support.js";
@@ -2022,6 +2026,44 @@ describe("prepareCliRunContext", () => {
     expect(promptContext?.channel).toBe("discord");
     expect(promptContext?.chatId).toBe("room-1");
     expect(promptContext?.senderId).toBe("user-789");
+  });
+
+  it("applies turn-authorized prompt enrichment after CLI tool preparation", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runAuthorizedPromptBuild: vi.fn(async () => ({
+        prependContext: "authorized memory context",
+      })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const preparedRunAdmission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef("run-test"),
+      facts: {
+        runId: "run-test",
+        agentId: "main",
+        ingress: { kind: "system", boundary: "test", state: "present" },
+      },
+    });
+
+    const context = await fixture
+      .prepare({
+        toolAuthorityFingerprint: "turn-authority",
+        preparedRunAdmission,
+      })
+      .finally(preparedRunAdmission.close);
+
+    expect(context.params.prompt).toBe("authorized memory context\n\nlatest ask");
+    expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "latest ask" }),
+      expect.any(Object),
+      {
+        toolAuthorityFingerprint: "turn-authority",
+        activeToolNames: [],
+        assertHostActive: expect.any(Function),
+      },
+    );
   });
 
   it("preserves the base prompt when prompt-build hooks fail", async () => {

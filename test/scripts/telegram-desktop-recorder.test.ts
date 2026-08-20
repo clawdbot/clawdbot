@@ -11,9 +11,13 @@ import {
   parseRecorderArgs,
   parseWindowGeometry,
   readRecorderSession,
+  recoverRecorderStartup,
+  recorderArtifacts,
+  screenshotRecorder,
   type RecorderOperations,
   type RecorderSession,
   renderGoldenImagePreflight,
+  renderHideTelegramWindow,
   renderLaunchDesktop,
   renderPrepareQr,
   renderReadQrLink,
@@ -30,6 +34,10 @@ function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-desktop-recorder-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function recorderSessionArg(root: string, sessionPath: string): string {
+  return path.relative(root, sessionPath);
 }
 
 function testSession(): RecorderSession {
@@ -115,6 +123,14 @@ describe("Telegram Desktop recorder CLI", () => {
     });
     expect(parseRecorderArgs(["status", "--session", "recorder.json"])).toEqual({
       command: "status",
+      sessionPath: "recorder.json",
+    });
+    expect(parseRecorderArgs(["recover", "--session", "recorder.json"])).toEqual({
+      command: "recover",
+      sessionPath: "recorder.json",
+    });
+    expect(parseRecorderArgs(["artifacts", "--session", "recorder.json"])).toEqual({
+      command: "artifacts",
       sessionPath: "recorder.json",
     });
   });
@@ -256,7 +272,7 @@ describe("Telegram Desktop recorder remote contract", () => {
     },
   );
 
-  it("fails before warmup when the local Telegram image is missing", async () => {
+  it("fails before warmup when docker cannot inspect the local Telegram image", async () => {
     const root = makeTempDir();
     const calls: Array<{ args: string[]; command: string }> = [];
     const mockedRun: RunCommand = async (params) => {
@@ -292,7 +308,7 @@ describe("Telegram Desktop recorder remote contract", () => {
         operations,
       ),
     ).rejects.toThrow(
-      "Local Telegram Desktop image openclaw-telegram-desktop:7.0.9 is missing. Run bash scripts/mantis/build-telegram-desktop-image.sh first.",
+      "docker image inspect openclaw-telegram-desktop:7.0.9 failed: No such image. Build it with bash scripts/mantis/build-telegram-desktop-image.sh when the image is absent.",
     );
     expect(calls).toEqual([
       {
@@ -301,6 +317,359 @@ describe("Telegram Desktop recorder remote contract", () => {
       },
     ]);
     expect(operations.inspectCrabbox).not.toHaveBeenCalled();
+  });
+
+  // A run once reported a missing image while docker held it, because this wrapper
+  // replaced docker's own failure with its guess. The daemon's text has to survive.
+  it("keeps the docker failure text in the thrown message", async () => {
+    const root = makeTempDir();
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => {
+        throw new Error("must not inspect");
+      }),
+      runCommand: (async () => {
+        throw new Error("permission denied while trying to connect to the Docker daemon socket");
+      }) satisfies RunCommand,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    await expect(
+      startRecorder(
+        root,
+        {
+          command: "start",
+          chat: "-1001234567890",
+          crabboxClass: "standard",
+          idleTimeout: "1h",
+          json: false,
+          outputDir: "out",
+          provider: "docker",
+          recordFps: 24,
+          ttl: "2h",
+          userDriver: ["python3", "driver.py"],
+        },
+        operations,
+      ),
+    ).rejects.toThrow("permission denied while trying to connect to the Docker daemon socket");
+  });
+
+  it("stops retrying one desktop after two accepted tokens leave it on the QR screen", async () => {
+    const root = makeTempDir();
+    let qrAttempt = 0;
+    const runCommand = vi.fn<RunCommand>(async () => ({
+      stderr: "",
+      stdout: JSON.stringify({ ok: true, session: { id: 91234, isPasswordPending: false } }),
+    }));
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async ({ command }: { command: string }) => {
+        if (command.includes("telegram-login-qr.png")) {
+          qrAttempt += 1;
+          return { stderr: "", stdout: `tg://login?token=attempt-${qrAttempt}` };
+        }
+        if (command.includes("Telegram Desktop did not reach the main window")) {
+          throw new Error("permission denied reading the remote Docker socket");
+        }
+        return { stderr: "", stdout: "" };
+      }),
+    } satisfies RecorderOperations;
+
+    await expect(
+      startRecorder(
+        root,
+        {
+          command: "start",
+          chat: "-1001234567890",
+          crabboxClass: "standard",
+          idleTimeout: "1h",
+          json: false,
+          leaseId: "cbx_borrowed",
+          outputDir: "out",
+          provider: "docker",
+          recordFps: 24,
+          ttl: "2h",
+          userDriver: ["python3", "driver.py"],
+        },
+        operations,
+      ),
+    ).rejects.toThrow(
+      "Telegram server accepted 2 login tokens, but Telegram Desktop stayed on the QR screen: permission denied reading the remote Docker socket",
+    );
+    expect(
+      runCommand.mock.calls.filter(([call]) => call.args.includes("terminate-session")),
+    ).toHaveLength(2);
+  });
+
+  it("reprovisions one fresh local desktop after an accepted-token wedge", async () => {
+    const root = makeTempDir();
+    let container = 0;
+    let qrAttempt = 0;
+    const runCommand = vi.fn<RunCommand>(async (call) => {
+      if (call.command === "docker") {
+        return { stderr: "", stdout: "[]" };
+      }
+      if (call.args[0] === "warmup") {
+        container += 1;
+        return {
+          stderr: "",
+          stdout: `leased ${container === 1 ? "cbx_0a1b2c" : "cbx_0a1b2d"} slug=quiet-crab`,
+        };
+      }
+      if (call.args.includes("confirm-qr")) {
+        return {
+          stderr: "",
+          stdout: JSON.stringify({
+            ok: true,
+            session: { id: `${container}${qrAttempt}`, isPasswordPending: false },
+          }),
+        };
+      }
+      if (
+        call.args.includes("terminate-session") ||
+        call.args.includes("terminate-desktop-sessions")
+      ) {
+        return { stderr: "", stdout: JSON.stringify({ ok: true }) };
+      }
+      return { stderr: "", stdout: "" };
+    });
+    const inspectCrabbox = vi.fn(async () => ({
+      sshHost: "host",
+      sshKey: "/tmp/key",
+      sshPort: "22",
+      sshUser: "user",
+    }));
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox,
+      runCommand,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async ({ command }: { command: string }) => {
+        if (command.includes("telegram-login-qr.png")) {
+          qrAttempt += 1;
+          return { stderr: "", stdout: `tg://login?token=attempt-${qrAttempt}` };
+        }
+        if (command.includes("Telegram Desktop did not reach the main window") && container === 1) {
+          throw new Error("first desktop stayed on QR");
+        }
+        if (command.includes("getwindowgeometry")) {
+          return { stderr: "", stdout: "635 40 650 1000" };
+        }
+        return { stderr: "", stdout: "" };
+      }),
+    } satisfies RecorderOperations;
+
+    const result = await startRecorder(
+      root,
+      {
+        command: "start",
+        chat: "-1001234567890",
+        crabboxClass: "standard",
+        idleTimeout: "1h",
+        json: false,
+        outputDir: "out",
+        provider: "docker",
+        recordFps: 24,
+        ttl: "2h",
+        userDriver: ["python3", "driver.py"],
+      },
+      operations,
+    );
+
+    expect(inspectCrabbox).toHaveBeenCalledTimes(2);
+    expect(runCommand.mock.calls.filter(([call]) => call.args[0] === "warmup")).toHaveLength(2);
+    expect(runCommand.mock.calls).toContainEqual([
+      expect.objectContaining({ args: ["stop", "--provider", "docker", "cbx_0a1b2c"] }),
+    ]);
+    expect(result.session).toMatchObject({ leaseId: "cbx_0a1b2d", leaseOwned: true });
+    expect(readRecorderSession(result.sessionPath)).toMatchObject({ leaseId: "cbx_0a1b2d" });
+  });
+
+  it("hides the prepared chat before recording starts", async () => {
+    const root = makeTempDir();
+    const sshRun = vi.fn(async ({ command }: { command: string }) => {
+      if (command.includes("telegram-login-qr.png")) {
+        return { stderr: "", stdout: "tg://login?token=open-target-chat" };
+      }
+      if (command.includes("getwindowgeometry")) {
+        return { stderr: "", stdout: "635 40 650 1000" };
+      }
+      return { stderr: "", stdout: "" };
+    });
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 650 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn<RunCommand>(async () => ({
+        stderr: "",
+        stdout: JSON.stringify({ ok: true, session: { id: 91234, isPasswordPending: false } }),
+      })),
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun,
+    } satisfies RecorderOperations;
+
+    await startRecorder(
+      root,
+      {
+        command: "start",
+        chat: "-1001234567890",
+        crabboxClass: "standard",
+        idleTimeout: "1h",
+        json: false,
+        leaseId: "cbx_borrowed",
+        outputDir: "out",
+        provider: "docker",
+        recordFps: 24,
+        ttl: "2h",
+        userDriver: ["python3", "driver.py"],
+      },
+      operations,
+    );
+
+    // The target opens before capture to remove the chat list. The lane clears it before
+    // recorder startup, and it stays hidden until the first session-owned outbound message.
+    const openIndex = sshRun.mock.calls.findIndex(([call]) =>
+      call.command.includes("tg://privatepost?channel=1234567890"),
+    );
+    const hideIndex = sshRun.mock.calls.findIndex(([call]) =>
+      call.command.includes("xdotool windowminimize"),
+    );
+    const captureIndex = sshRun.mock.calls.findIndex(([call]) => call.command.includes("x11grab"));
+    expect(openIndex).toBeGreaterThanOrEqual(0);
+    expect(hideIndex).toBeGreaterThan(openIndex);
+    expect(captureIndex).toBeGreaterThan(hideIndex);
+    expect(renderHideTelegramWindow()).toContain('xdotool windowminimize "$win"');
+  });
+
+  it("fetches the undecodable login screen when login attempts run out", async () => {
+    const root = makeTempDir();
+    // Without the screenshot, "Telegram never drew the QR" and "zbarimg could not read it"
+    // produce the same log line, and run 32256904298 could not be told apart from either.
+    const scpFromRemote = vi.fn(async () => undefined);
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn<RunCommand>(async () => ({
+        stderr: "",
+        stdout: JSON.stringify({ ok: true }),
+      })),
+      scpFromRemote,
+      sshRun: vi.fn(async ({ command }: { command: string }) => {
+        if (command.includes("telegram-login-qr.png")) {
+          throw new Error("zbarimg: no barcode detected");
+        }
+        return { stderr: "", stdout: "" };
+      }),
+    } satisfies RecorderOperations;
+
+    const options = {
+      command: "start" as const,
+      chat: "-1001234567890",
+      crabboxClass: "standard",
+      idleTimeout: "1h",
+      json: false,
+      leaseId: "cbx_borrowed",
+      outputDir: "out",
+      provider: "docker" as const,
+      recordFps: 24,
+      ttl: "2h",
+      userDriver: ["python3", "driver.py"],
+    };
+
+    // Exhausting the login attempts twice waits out twelve 2s backoffs, so this test alone
+    // slept for 24s of the suite. Fake timers keep the retry count honest off the wall clock.
+    vi.useFakeTimers();
+    try {
+      const exhausted = expect(startRecorder(root, options, operations)).rejects.toThrow(
+        "telegram-login-screen.png",
+      );
+      await vi.runAllTimersAsync();
+      await exhausted;
+      expect(scpFromRemote).toHaveBeenCalledWith(
+        expect.objectContaining({ remote: expect.stringContaining("telegram-login-qr.png") }),
+      );
+
+      scpFromRemote.mockRejectedValueOnce(new Error("scp: connection closed"));
+      const unfetchable = expect(startRecorder(root, options, operations)).rejects.toThrow(
+        "Login screen could not be fetched: scp: connection closed",
+      );
+      await vi.runAllTimersAsync();
+      await unfetchable;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports the blocked user when the output dir is not writable", async () => {
+    const root = makeTempDir();
+    // The agent and the recorder run as different users, so this fails in the lane and not
+    // locally. Run 32259789706 surfaced it as a bare EACCES three minutes into the session,
+    // after provisioning, with nothing naming either user.
+    const outputDir = path.join(root, "out");
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.chmodSync(outputDir, 0o500);
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn<RunCommand>(async () => ({ stderr: "", stdout: "" })),
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    try {
+      await expect(
+        startRecorder(
+          root,
+          {
+            command: "start",
+            chat: "-1001234567890",
+            crabboxClass: "standard",
+            idleTimeout: "1h",
+            json: false,
+            leaseId: "cbx_borrowed",
+            outputDir: "out",
+            provider: "docker",
+            recordFps: 24,
+            ttl: "2h",
+            userDriver: ["python3", "driver.py"],
+          },
+          operations,
+        ),
+      ).rejects.toThrow(/Cannot write recorder output to .*mode=0500/u);
+      // Failing before provisioning is the point: the old order paid for a container first.
+      expect(operations.inspectCrabbox).not.toHaveBeenCalled();
+    } finally {
+      fs.chmodSync(outputDir, 0o700);
+    }
   });
 
   it("renders only golden-image desktop operations", () => {
@@ -322,9 +691,7 @@ describe("Telegram Desktop recorder remote contract", () => {
 
     expect(scripts).toContain("Telegram Desktop recorder golden image contract");
     expect(scripts).toContain("/opt/Telegram/Telegram");
-    expect(scripts).toContain(
-      'test "$(cat /var/lib/crabbox/telegram-desktop-version 2>/dev/null)" = "7.0.9"',
-    );
+    expect(scripts).toContain('test "$(cat /var/lib/crabbox/telegram-desktop-version)" = "7.0.9"');
     expect(scripts).toContain("DISPLAY=:99 xdpyinfo");
     expect(scripts).toContain("wmctrl xdotool scrot ffmpeg zbarimg xdpyinfo");
     expect(scripts.toLowerCase()).not.toMatch(/apt-get|curl|wget|tdlib|python/u);
@@ -363,6 +730,25 @@ describe("Telegram Desktop recorder remote contract", () => {
       redactValues: [link],
     });
   });
+
+  it("publishes a confirmed session handle before rejecting 2FA", async () => {
+    const onSessionConfirmed = vi.fn();
+    const run = vi.fn<RunCommand>(async () => ({
+      stderr: "",
+      stdout: JSON.stringify({ ok: true, session: { id: 91234, isPasswordPending: true } }),
+    }));
+
+    await expect(
+      confirmQrLink({
+        cwd: "/repo",
+        link: "tg://login?token=pending-2fa",
+        onSessionConfirmed,
+        run,
+        userDriver: ["python3", "driver.py"],
+      }),
+    ).rejects.toThrow("requires a 2FA password");
+    expect(onSessionConfirmed).toHaveBeenCalledWith("91234");
+  });
 });
 
 describe("Telegram Desktop recorder window geometry", () => {
@@ -385,6 +771,7 @@ describe("Telegram Desktop recorder window geometry", () => {
       window: { height: 995, width: 648, x: 636, y: 45 },
     });
     const cropped = vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 648 }));
+    const sshRun = vi.fn<RecorderOperations["sshRun"]>(async () => ({ stderr: "", stdout: "" }));
     const operations = {
       createCroppedMotionPreview: cropped,
       createMotionPreview: vi.fn(async () => ({})),
@@ -399,19 +786,27 @@ describe("Telegram Desktop recorder window geometry", () => {
         stdout: JSON.stringify({ ok: true }),
       })) as RunCommand,
       scpFromRemote: vi.fn(async () => undefined),
-      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+      sshRun,
     } satisfies RecorderOperations;
 
     await stopRecorder(
       root,
-      { command: "stop", crop: "telegram-window", keepBox: false, sessionPath },
+      {
+        command: "stop",
+        crop: "telegram-window",
+        keepBox: false,
+        sessionPath: recorderSessionArg(root, sessionPath),
+      },
       operations,
     );
     expect(cropped).toHaveBeenCalledWith(
       expect.objectContaining({
-        crop: { cropWidth: 648, height: 995, width: 648, x: 636, y: 45 },
+        crop: { cropWidth: 648, height: 600, width: 648, x: 636, y: 440 },
       }),
     );
+    expect(
+      sshRun.mock.calls.some(([params]) => params.command.includes("scrot -o -a 636,440,648,600")),
+    ).toBe(true);
   });
 });
 
@@ -424,6 +819,126 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     expect(readRecorderSession(sessionPath)).toEqual(session);
     expect(fs.statSync(sessionPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("publishes only session-owned artifact paths across the recorder user boundary", () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    const screenshot = path.join(root, "screenshot.png");
+    fs.writeFileSync(screenshot, "proof", { mode: 0o600 });
+    writeRecorderSession(sessionPath, {
+      ...testSession(),
+      artifacts: { screenshot },
+    });
+
+    expect(
+      recorderArtifacts(root, {
+        command: "artifacts",
+        sessionPath: recorderSessionArg(root, sessionPath),
+      }),
+    ).toEqual({
+      artifacts: { screenshot },
+    });
+    expect(fs.statSync(screenshot).mode & 0o040).toBe(0o040);
+  });
+
+  it("keeps every recorder path inside its fixed working directory", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    writeRecorderSession(sessionPath, testSession());
+    expect(() =>
+      recorderArtifacts(root, { command: "artifacts", sessionPath: "../recorder.json" }),
+    ).toThrow("--session must stay inside the recorder root");
+    await expect(
+      screenshotRecorder(
+        root,
+        {
+          command: "screenshot",
+          output: path.join(root, "escape.png"),
+          sessionPath: "recorder.json",
+        },
+        {
+          createCroppedMotionPreview: vi.fn(async () => ({
+            crop: "",
+            fps: 24,
+            outputWidth: 430,
+          })),
+          createMotionPreview: vi.fn(async () => ({})),
+          inspectCrabbox: vi.fn(async () => {
+            throw new Error("must reject output before inspect");
+          }),
+          runCommand: vi.fn<RunCommand>(),
+          scpFromRemote: vi.fn(async () => undefined),
+          sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+        },
+      ),
+    ).rejects.toThrow("--output must be relative");
+  });
+
+  it("writes the default screenshot beside a relative session path", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "attempt", "recorder.json");
+    fs.mkdirSync(path.dirname(sessionPath));
+    writeRecorderSession(sessionPath, testSession());
+    const scpFromRemote = vi.fn(async () => undefined);
+
+    const output = await screenshotRecorder(
+      root,
+      { command: "screenshot", sessionPath: recorderSessionArg(root, sessionPath) },
+      {
+        createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+        createMotionPreview: vi.fn(async () => ({})),
+        inspectCrabbox: vi.fn(async () => ({
+          sshHost: "host",
+          sshKey: "/tmp/key",
+          sshPort: "22",
+          sshUser: "user",
+        })),
+        runCommand: vi.fn<RunCommand>(),
+        scpFromRemote,
+        sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+      },
+    );
+
+    expect(path.dirname(output)).toBe(path.dirname(sessionPath));
+    expect(scpFromRemote).toHaveBeenCalledWith(expect.objectContaining({ local: output }));
+  });
+
+  it("sweeps unrecorded Desktop sessions after interrupted provisioning", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    fs.writeFileSync(
+      `${sessionPath}.starting`,
+      `${JSON.stringify({
+        leaseId: "cbx_interrupted",
+        leaseOwned: true,
+        provider: "docker",
+        schemaVersion: 1,
+        userDriver: ["python3", "driver.py"],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const calls: Array<{ args: string[]; command: string }> = [];
+    const runCommand: RunCommand = async (params) => {
+      calls.push({ args: params.args, command: params.command });
+      return { stderr: "", stdout: JSON.stringify({ ok: true }) };
+    };
+
+    await expect(
+      recoverRecorderStartup(
+        root,
+        { command: "recover", sessionPath: recorderSessionArg(root, sessionPath) },
+        { runCommand },
+      ),
+    ).resolves.toEqual({ recovered: true });
+    expect(calls).toContainEqual({
+      args: ["driver.py", "terminate-desktop-sessions", "--json"],
+      command: "python3",
+    });
+    expect(
+      calls.some((call) => call.args[0] === "stop" && call.args.at(-1) === "cbx_interrupted"),
+    ).toBe(true);
+    expect(fs.existsSync(`${sessionPath}.starting`)).toBe(false);
   });
 
   it("never stops a borrowed --lease-id box, on failure or on stop", async () => {
@@ -481,7 +996,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
         sshUser: "user",
       })),
     } satisfies RecorderOperations;
-    await stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations);
+    await stopRecorder(
+      root,
+      { command: "stop", keepBox: false, sessionPath: recorderSessionArg(root, sessionPath) },
+      operations,
+    );
     expect(calls.some((call) => call.args.includes("terminate-session"))).toBe(true);
     expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
   });
@@ -511,7 +1030,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     const stopped = await stopRecorder(
       root,
-      { command: "stop", keepBox: true, sessionPath },
+      {
+        command: "stop",
+        keepBox: true,
+        sessionPath: recorderSessionArg(root, sessionPath),
+      },
       operations,
     );
     expect(stopped.keepBox).toBe(true);
@@ -538,19 +1061,34 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       sshPort: "22",
       sshUser: "user",
     }));
+    const sshCommands: string[] = [];
+    const sshRun = vi.fn(async ({ command }: { command: string }) => {
+      sshCommands.push(command);
+      return { stderr: "", stdout: "" };
+    });
     const operations = {
       createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
       createMotionPreview: vi.fn(async () => ({})),
       inspectCrabbox,
       runCommand: mockedRun,
       scpFromRemote: vi.fn(async () => undefined),
-      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+      sshRun,
     } satisfies RecorderOperations;
 
-    await viewRecorder(root, { command: "view", messageId: "42", sessionPath }, operations);
-    await stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations);
+    await viewRecorder(
+      root,
+      { command: "view", messageId: "42", sessionPath: recorderSessionArg(root, sessionPath) },
+      operations,
+    );
+    await stopRecorder(
+      root,
+      { command: "stop", keepBox: false, sessionPath: recorderSessionArg(root, sessionPath) },
+      operations,
+    );
 
     expect(inspectCrabbox).toHaveBeenCalledTimes(2);
+    expect(sshCommands[0]).toContain('xdotool windowmap "$win"');
+    expect(sshCommands[0]).toContain('xdotool windowactivate --sync "$win"');
     expect(inspectCrabbox).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ provider: "docker" }),
@@ -587,7 +1125,12 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     const stopped = await stopRecorder(
       root,
-      { command: "stop", crop: "telegram-window", keepBox: false, sessionPath },
+      {
+        command: "stop",
+        crop: "telegram-window",
+        keepBox: false,
+        sessionPath: recorderSessionArg(root, sessionPath),
+      },
       operations,
     );
     expect(stopped.cleanupErrors).toBeUndefined();
@@ -619,7 +1162,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     const stopped = await stopRecorder(
       root,
-      { command: "stop", keepBox: false, sessionPath },
+      {
+        command: "stop",
+        keepBox: false,
+        sessionPath: recorderSessionArg(root, sessionPath),
+      },
       operations,
     );
     expect(stopped.artifacts).toEqual({
@@ -655,7 +1202,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     } satisfies RecorderOperations;
 
     await expect(
-      stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations),
+      stopRecorder(
+        root,
+        { command: "stop", keepBox: false, sessionPath: recorderSessionArg(root, sessionPath) },
+        operations,
+      ),
     ).rejects.toThrow("terminate Telegram Desktop session: terminate failed");
 
     expect(calls).toContainEqual({

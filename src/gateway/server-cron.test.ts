@@ -29,7 +29,6 @@ const {
   loadConfigMock,
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
-  sendFailureNotificationAnnounceMock,
   runCronIsolatedAgentTurnMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
@@ -51,7 +50,6 @@ const {
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   sendCronAnnouncePayloadStrictMock: vi.fn(async () => {}),
-  sendFailureNotificationAnnounceMock: vi.fn(async () => {}),
   runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
     status: "ok",
     summary: "ok",
@@ -181,7 +179,6 @@ vi.mock("../cron/delivery.js", async () => {
   return {
     ...actual,
     sendCronAnnouncePayloadStrict: sendCronAnnouncePayloadStrictMock,
-    sendFailureNotificationAnnounce: sendFailureNotificationAnnounceMock,
   };
 });
 
@@ -314,7 +311,6 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();
-    sendFailureNotificationAnnounceMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
     runCronChangedMock.mockClear();
     getGlobalHookRunnerMock.mockClear();
@@ -1969,6 +1965,7 @@ describe("buildGatewayCronService", () => {
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         payload: { kind: "script", script: "return invalid" },
+        failureAlert: { after: 1 },
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -1984,15 +1981,16 @@ describe("buildGatewayCronService", () => {
       runCronChangedMock.mockClear();
 
       await state.cron.run(job.id, "force");
-      await vi.waitFor(() => expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce());
       await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce());
 
-      const announce = requireRecord(
-        callArg(sendFailureNotificationAnnounceMock, 0, 5, "script failure announce"),
-        "script failure announce",
+      const announceRequest = requireRecord(
+        callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "script failure announce request"),
+        "script failure announce request",
       );
+      const announce = requireRecord(announceRequest.payload, "script failure announce");
       expect(announce.text).toContain(
-        '⚠️ Automation "script failure detail" failed\nCause: automation script failed internally',
+        'Automation "script failure detail" failed 1 times\nCause: automation script failed internally',
       );
       expect(announce.text).not.toContain(rawError);
 

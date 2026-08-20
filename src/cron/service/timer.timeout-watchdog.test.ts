@@ -807,6 +807,7 @@ describe("cron service timer regressions", () => {
         mode: "announce",
         accountId: undefined,
         threadId: undefined,
+        inheritSessionThread: false,
       });
     } finally {
       vi.useRealTimers();
