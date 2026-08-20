@@ -25,6 +25,7 @@ import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 import {
   admitGatewayConnect,
   applyConnectionScopeCap,
+  isStartupNodeBootstrapConnect,
   rejectGatewayStartupConnect,
 } from "./connect-admission.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
@@ -123,6 +124,7 @@ async function authenticateGatewayConnectCore(
     isNativeAppUi,
     startupPending,
   } = admission;
+  const startupBootstrapConnect = startupPending && isStartupNodeBootstrapConnect(connectParams);
 
   const deviceRaw = connectParams.device;
   const hasTokenAuth = Boolean(connectParams.auth?.token);
@@ -338,6 +340,11 @@ async function authenticateGatewayConnectCore(
     close(1008, "device identity required");
     return false;
   };
+  if (startupPending && !device) {
+    await settleRejectedSharedAuthFailure();
+    await rejectGatewayStartupConnect(context);
+    return undefined;
+  }
   if (!handleMissingDeviceIdentity()) {
     await settleRejectedSharedAuthFailure();
     return undefined;
@@ -370,7 +377,7 @@ async function authenticateGatewayConnectCore(
     publicKey: device?.publicKey,
     role,
     scopes,
-    requireBootstrapToken: startupPending,
+    requireBootstrapToken: startupBootstrapConnect,
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
     async verifyBootstrapToken({
@@ -424,7 +431,7 @@ async function authenticateGatewayConnectCore(
     authMethod,
   });
   if (!authOk) {
-    if (startupPending) {
+    if (startupPending && bootstrapTokenCandidate) {
       await rejectGatewayStartupConnect(context);
       return undefined;
     }
@@ -439,7 +446,11 @@ async function authenticateGatewayConnectCore(
           publicKey: device.publicKey,
         })
       : null;
-  if (startupPending) {
+  if (startupPending && authMethod === "bootstrap-token" && !startupBootstrapConnect) {
+    await rejectGatewayStartupConnect(context);
+    return undefined;
+  }
+  if (startupBootstrapConnect) {
     const setupId = boundBootstrapContext?.setupId?.trim();
     const isCloudWorkerProfile = Boolean(
       boundBootstrapContext &&
@@ -533,6 +544,7 @@ async function authenticateGatewayConnectCore(
     isBrowserOperatorUi,
     isWebchat,
     isNativeAppUi,
+    startupPending,
     device,
     devicePublicKey: deviceProof.devicePublicKey,
     deviceAuthPayloadVersion: deviceProof.deviceAuthPayloadVersion,

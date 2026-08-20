@@ -39,7 +39,7 @@ import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
-import { isStartupNodeBootstrapConnect } from "./connect-admission.js";
+import { isStartupNodeConnect } from "./connect-admission.js";
 import { authenticateGatewayConnect } from "./connect-auth.js";
 import { authorizeGatewayConnectDevice } from "./connect-device-pairing.js";
 import { attachAuthenticatedGatewayConnect } from "./connect-session.js";
@@ -418,9 +418,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return connectParams.role !== "node" && !claimsWorkerConnectionIdentity(parsed.params);
   };
 
-  const isStartupNodeBootstrapPreauth = (data: RawData): boolean => {
+  const isStartupNodePreauth = (data: RawData): boolean => {
     const parsed = parsePreauthConnectFrame(data);
-    return parsed ? isStartupNodeBootstrapConnect(parsed.params) : false;
+    return parsed ? isStartupNodeConnect(parsed.params) : false;
   };
 
   const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
@@ -470,7 +470,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         isGatewayRestartDraining() &&
         getGatewaySuspendAdmissionPhase() === "accepting" &&
         params.isStartupPending?.() === true &&
-        isStartupNodeBootstrapPreauth(data)
+        isStartupNodePreauth(data)
       ) {
         const startupAdmission = tryBeginGatewayRestartStartupRootWorkAdmission();
         if (startupAdmission) {

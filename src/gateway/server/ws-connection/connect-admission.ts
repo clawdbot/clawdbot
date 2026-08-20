@@ -40,14 +40,17 @@ function hasCredential(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+export function isStartupNodeConnect(connectParams: ConnectParams): boolean {
+  return connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+}
+
 /** Exact first-connect shape emitted by `openclaw connect` for a setup-code node. */
 export function isStartupNodeBootstrapConnect(connectParams: ConnectParams): boolean {
   const auth = connectParams.auth;
   const device = connectParams.device;
   return (
-    connectParams.role === "node" &&
+    isStartupNodeConnect(connectParams) &&
     connectParams.client.id === GATEWAY_CLIENT_IDS.NODE_HOST &&
-    connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
     Array.isArray(connectParams.scopes) &&
     connectParams.scopes.length === 0 &&
     Boolean(device?.id.trim() && device.publicKey.trim()) &&
@@ -160,10 +163,9 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     isWebchatConnect,
   } = context;
 
-  const isNodeClient =
-    connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+  const isNodeClient = isStartupNodeConnect(connectParams);
   const startupPending = isStartupPending?.() === true;
-  if (startupPending && !isStartupNodeBootstrapConnect(connectParams)) {
+  if (startupPending && !isNodeClient) {
     await rejectGatewayStartupConnect(context);
     return undefined;
   }
