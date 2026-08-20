@@ -197,9 +197,9 @@ export class AcpTranslatorPromptStream {
       settled: createDeferredCore(),
     };
     this.pendingPromptAdmissions.set(params.sessionId, admission);
-    // Supersession keeps the predecessor's abort barrier; explicit closure alone releases it.
-    for (let previous = admission.previous; previous; previous = previous.previous) {
-      previous.closed = true;
+    // Each predecessor already closed its own predecessor; keep its abort barrier intact.
+    if (admission.previous) {
+      admission.previous.closed = true;
     }
 
     try {
@@ -222,6 +222,8 @@ export class AcpTranslatorPromptStream {
         if (!this.ownsPromptAdmission(admission)) {
           return { stopReason: "cancelled" };
         }
+        // Closure traversal no longer needs a settled predecessor or its retained ancestors.
+        admission.previous = undefined;
       }
       return await Promise.race([
         this.submitPrompt(params, session),

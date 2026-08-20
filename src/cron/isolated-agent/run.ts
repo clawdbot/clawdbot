@@ -340,7 +340,7 @@ export async function runCronIsolatedAgentTurn(params: {
     } finally {
       try {
         if (!cronRunSessionCleanupAttempted) {
-          const cleanupOutcome = await cleanupCronRunSessionAfterRun({
+          await cleanupCronRunSessionAfterRun({
             job: params.job,
             agentSessionKey: prepared.context.agentSessionKey,
             sessionId: prepared.context.currentRunSessionId(),
@@ -349,7 +349,6 @@ export async function runCronIsolatedAgentTurn(params: {
             beforeDelete: prepared.context.sessionWorkAdmission.release,
             reason: "cron-delete-after-run-finally",
           });
-          cronRunSessionCleanupAttempted = cleanupOutcome !== "not-requested";
         }
       } finally {
         // Release runtime references after the run completes (success or failure).

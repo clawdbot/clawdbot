@@ -7440,6 +7440,24 @@ public struct SessionPlacementDiskSpace: Codable, Sendable {
     }
 }
 
+public struct SessionPlacementRunner: Codable, Sendable {
+    public let kind: String
+    public let status: AnyCodable
+
+    public init(
+        kind: String,
+        status: AnyCodable)
+    {
+        self.kind = kind
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case status
+    }
+}
+
 public struct LocalSessionPlacement: Codable, Sendable {
     public let state: String
     public let generation: Int
@@ -7633,6 +7651,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
     public let lastliveeventackcursor: Int?
     public let workspaceresultconflict: [String: AnyCodable]?
     public let diskspace: SessionPlacementDiskSpace?
+    public let runner: SessionPlacementRunner?
 
     public init(
         state: String,
@@ -7648,7 +7667,8 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
         lasttranscriptackcursor: Int? = nil,
         lastliveeventackcursor: Int? = nil,
         workspaceresultconflict: [String: AnyCodable]? = nil,
-        diskspace: SessionPlacementDiskSpace? = nil)
+        diskspace: SessionPlacementDiskSpace? = nil,
+        runner: SessionPlacementRunner? = nil)
     {
         self.state = state
         self.generation = generation
@@ -7664,6 +7684,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
         self.lastliveeventackcursor = lastliveeventackcursor
         self.workspaceresultconflict = workspaceresultconflict
         self.diskspace = diskspace
+        self.runner = runner
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7681,6 +7702,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
         case lastliveeventackcursor = "lastLiveEventAckCursor"
         case workspaceresultconflict = "workspaceResultConflict"
         case diskspace = "diskSpace"
+        case runner
     }
 }
 
@@ -8258,17 +8280,20 @@ public struct SessionsMoveParams: Codable, Sendable {
     public let agentid: String?
     public let expected: SessionMoveExpectedSource
     public let target: SessionMoveTarget
+    public let abandonsource: Bool?
 
     public init(
         key: String,
         agentid: String? = nil,
         expected: SessionMoveExpectedSource,
-        target: SessionMoveTarget)
+        target: SessionMoveTarget,
+        abandonsource: Bool? = nil)
     {
         self.key = key
         self.agentid = agentid
         self.expected = expected
         self.target = target
+        self.abandonsource = abandonsource
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8276,6 +8301,7 @@ public struct SessionsMoveParams: Codable, Sendable {
         case agentid = "agentId"
         case expected
         case target
+        case abandonsource = "abandonSource"
     }
 }
 

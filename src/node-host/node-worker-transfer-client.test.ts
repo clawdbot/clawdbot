@@ -747,10 +747,12 @@ describe("node worker transfer client", () => {
       await expect(fs.readFile(path.join(workspaceDir, "tracked.txt"), "utf8")).resolves.toBe(
         changed ? "changed on gateway\n" : "tracked from gateway\n",
       );
-      expect((await fs.stat(path.join(workspaceDir, "tracked.txt"))).mode & 0o777).toBe(
-        changed ? 0o755 : 0o644,
-      );
-      expect((await fs.stat(path.join(workspaceDir, "script.sh"))).mode & 0o777).toBe(0o755);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(path.join(workspaceDir, "tracked.txt"))).mode & 0o777).toBe(
+          changed ? 0o755 : 0o644,
+        );
+        expect((await fs.stat(path.join(workspaceDir, "script.sh"))).mode & 0o777).toBe(0o755);
+      }
       await expect(fs.readlink(path.join(workspaceDir, "tracked-link"))).resolves.toBe(
         changed ? "script.sh" : "tracked.txt",
       );

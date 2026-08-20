@@ -74,11 +74,29 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
   const remoteOnlyFlags = [
     opts.remoteUrl !== undefined ? "--remote-url" : undefined,
     opts.remoteToken !== undefined ? "--remote-token" : undefined,
+    opts.remotePassword !== undefined ? "--remote-password" : undefined,
   ].filter((flag): flag is string => flag !== undefined);
   if (opts.nonInteractive && (opts.mode ?? "local") === "local" && remoteOnlyFlags.length > 0) {
     return rejectOption(
       runtime,
       `${remoteOnlyFlags.join(" and ")} ${remoteOnlyFlags.length === 1 ? "requires" : "require"} --mode remote in non-interactive setup.`,
+    );
+  }
+  for (const [flag, value] of [
+    ["--remote-token", opts.remoteToken],
+    ["--remote-password", opts.remotePassword],
+  ] as const) {
+    if (value !== undefined && !value.trim()) {
+      return rejectOption(runtime, `Invalid ${flag}: value cannot be empty.`);
+    }
+  }
+  if (opts.remoteToken !== undefined && opts.remotePassword !== undefined) {
+    return rejectOption(runtime, "Use either --remote-token or --remote-password, not both.");
+  }
+  if (opts.mode === "remote" && opts.gatewayPassword !== undefined) {
+    return rejectOption(
+      runtime,
+      "--gateway-password configures local gateway auth. Use --remote-password in remote mode.",
     );
   }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [

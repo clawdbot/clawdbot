@@ -152,6 +152,13 @@ Runtime placement is a SQLite-owned state machine keyed to the session, not a pa
 
 It persists environment id, transition generation, active owner epoch, workspace base manifest, worker bundle hash, and last ACK cursors. Turn admission atomically claims placement before either loop starts a turn, so a local message admitted against a stale snapshot can never race a worker turn — exactly one loop owns the session at any time.
 
+Device runner availability is a process-current projection, not another
+placement state. An active device placement stays active while its exact v5
+runner proof is absent. The default is to wait. Explicit Gateway continuation
+persists one abandonment bit on the move intent, force-closes the remote owner,
+and resumes from the last Gateway-synced workspace without replay; the UI warns
+that unsynced device files and in-flight work may be lost.
+
 UI:
 
 - A worker session is an ordinary session row plus placement metadata. It lives in the normal store, lists via `sessions.list`, streams via existing subscriptions — sidebar and chat need no new data path, only presentation: a worker badge and placement/environment status (`provisioning / syncing / running / idle / reconciling / reclaimed`).

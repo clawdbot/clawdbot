@@ -1,6 +1,8 @@
 // Lifecycle retry-grace e2e tests cover completion delivery retry behavior when
 // lifecycle events race gateway waits or transient announce failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionDeliveryState } from "../../../config/sessions/types.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
@@ -17,6 +19,7 @@ type LifecycleData = {
   endedAt?: number;
   aborted?: boolean;
   error?: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 type LifecycleEvent = {
   stream?: string;
@@ -28,10 +31,7 @@ type LifecycleEvent = {
 type SessionStoreEntry = {
   sessionId: string;
   updatedAt: number;
-  channel?: string;
-  lastChannel?: string;
-  to?: string;
-  accountId?: string;
+  delivery?: SessionDeliveryState;
 };
 
 type GatewayAgentInternalEvent = {
@@ -149,10 +149,12 @@ describe("subagent registry lifecycle error grace", () => {
         "agent:main:main": {
           sessionId: "sess-main",
           updatedAt: 1,
-          channel: "discord",
-          lastChannel: "discord",
-          to: "user-1",
-          accountId: "default",
+          delivery: {
+            kind: "external",
+            route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
+            context: { channel: "discord", to: "user-1", accountId: "default" },
+            origin: { provider: "discord", to: "user-1", accountId: "default" },
+          },
         },
       },
       {
@@ -305,6 +307,7 @@ describe("subagent registry lifecycle error grace", () => {
       requesterTurnRunId,
       childSessionKey: `agent:main:subagent:${childSuffix}`,
       requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+      requesterAgentId: "main",
       requesterDisplayKey: MAIN_REQUESTER_DISPLAY_KEY,
       task,
       cleanup: "keep",
@@ -394,7 +397,11 @@ describe("subagent registry lifecycle error grace", () => {
     registerCompletionRun(runId, "completed-before-yield", "finish once", requesterTurnRunId);
     setAssistantOutput(childSessionKey, "child complete");
 
-    emitLifecycleEvent(runId, { phase: "end", endedAt: Date.now() });
+    emitLifecycleEvent(runId, {
+      phase: "end",
+      endedAt: Date.now(),
+      terminalReply: { disposition: "visible", text: "child complete" },
+    });
     await waitForDeliveredCleanup(runId);
 
     const completed = mod

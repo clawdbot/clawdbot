@@ -413,6 +413,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           agentId: target.target.agentId,
           source: params.expected,
           target: params.target,
+          ...("abandonSource" in params ? { abandonSource: true } : {}),
         },
         () =>
           emitSessionsChanged(context, {

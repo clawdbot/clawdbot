@@ -269,6 +269,122 @@ suite.define(() => {
     await context.close();
   });
 
+  it("keeps attributed user avatars beside their bubbles through send reconciliation", async () => {
+    const context = await suite.browser.newContext({
+      viewport: { height: 900, width: 860 },
+    });
+    const page = await context.newPage();
+    const localSenderId = "c3e32452-0467-47e5-aafa-233cd5dae29f";
+    const peerSenderId = "315ee057-302f-45b4-829d-2c5db1bfed75";
+    const localAvatarUrl = `/api/users/${localSenderId}/avatar?v=7`;
+    const priorPrompt = "A prior attributed prompt.";
+    const peerPrompt = "A peer attributed prompt.";
+    const prompt = "A newly sent attributed prompt.";
+    await page.route(`**/api/users/${localSenderId}/avatar*`, async (route) => {
+      await route.fulfill({
+        body: `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36"><rect width="36" height="36" fill="purple"/></svg>`,
+        contentType: "image/svg+xml",
+        status: 200,
+      });
+    });
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          __openclaw: { senderId: localSenderId, senderName: "Collin Johnson" },
+          content: [{ text: priorPrompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now() - 3_000,
+        },
+        {
+          __openclaw: { senderId: peerSenderId, senderName: "Riley Chen" },
+          content: [{ text: peerPrompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now() - 2_000,
+        },
+        {
+          content: [{ text: "Ready for the next message.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now() - 1_000,
+        },
+      ],
+      presenceUsers: [
+        { self: true, id: localSenderId, name: "Collin Johnson", avatarUrl: localAvatarUrl },
+        { id: peerSenderId, name: "Riley Chen" },
+      ],
+    });
+
+    const readUserAvatarLayout = async (message: string) => {
+      const bubble = page.locator(".chat-group.user .chat-bubble", { hasText: message });
+      await bubble.waitFor();
+      return await bubble.evaluate((bubbleElement) => {
+        const group = bubbleElement.closest<HTMLElement>(".chat-group.user");
+        const avatar = group
+          ? [...group.querySelectorAll<HTMLElement>(".chat-avatar")].find(
+              (candidate) => getComputedStyle(candidate).display !== "none",
+            )
+          : null;
+        if (!group || !avatar) {
+          throw new Error("Expected a visible attributed user avatar");
+        }
+        const bubbleRect = bubbleElement.getBoundingClientRect();
+        const avatarRect = avatar.getBoundingClientRect();
+        return {
+          avatarLeft: avatarRect.left,
+          avatarRight: avatarRect.right,
+          bubbleLeft: bubbleRect.left,
+          bubbleRight: bubbleRect.right,
+          isPeer: group.classList.contains("chat-group--peer"),
+        };
+      });
+    };
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      const before = await readUserAvatarLayout(priorPrompt);
+      const peerBefore = await readUserAvatarLayout(peerPrompt);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const afterSend = await readUserAvatarLayout(prompt);
+      const priorAfterSend = await readUserAvatarLayout(priorPrompt);
+      const peerAfterSend = await readUserAvatarLayout(peerPrompt);
+
+      const params = sendRequest.params;
+      if (!params || typeof params !== "object" || !("idempotencyKey" in params)) {
+        throw new Error("Expected chat send idempotency key");
+      }
+      const runId = params.idempotencyKey;
+      if (typeof runId !== "string" || !runId.trim()) {
+        throw new Error("Expected non-empty chat send idempotency key");
+      }
+      await gateway.emitChatFinal({ runId, text: "The attributed send completed." });
+      await page
+        .locator(".chat-thread .chat-bubble", { hasText: "The attributed send completed." })
+        .waitFor();
+      const afterFinal = await readUserAvatarLayout(prompt);
+
+      for (const [phase, layout] of [
+        ["initial history", before],
+        ["optimistic send", afterSend],
+        ["prior message after send", priorAfterSend],
+        ["final response", afterFinal],
+      ] as const) {
+        expect(layout.isPeer, phase).toBe(false);
+        expect(layout.avatarLeft, phase).toBeGreaterThanOrEqual(layout.bubbleRight + 9);
+      }
+      for (const [phase, layout] of [
+        ["peer initial history", peerBefore],
+        ["peer message after send", peerAfterSend],
+      ] as const) {
+        expect(layout.isPeer, phase).toBe(true);
+        expect(layout.avatarRight, phase).toBeLessThanOrEqual(layout.bubbleLeft - 9);
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps missing local-viewer avatar initials through a live rerender", async () => {
     const artifactDir = resolveArtifactDir();
     if (artifactDir) {

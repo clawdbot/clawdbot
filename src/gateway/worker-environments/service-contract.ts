@@ -116,6 +116,7 @@ export type WorkerPlacementReclaimRequest = {
 export type WorkerPlacementMoveRequest = WorkerPlacementReclaimRequest & {
   source: WorkerPlacementMoveSource;
   target: WorkerPlacementMoveTarget;
+  abandonSource?: true;
 };
 
 /** Closure-bound request authority; in-process only and never part of durable placement intent. */

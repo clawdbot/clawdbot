@@ -511,7 +511,7 @@ type ActivityRunRenderItem = {
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming) {
+  if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
     return false;
   }
   const role = item.role.toLowerCase();
@@ -522,15 +522,15 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
 // visible outcome; they must never fold into the work rollup. Normalized
 // content passes unknown block types through (e.g. raw image blocks), so
 // anything that is not a tool block counts as visible reply content.
-function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
+function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
   return group.messages.some(({ message }) => {
-    if (extractTextCached(message)?.trim()) {
+    if (includeText && extractTextCached(message)?.trim()) {
       return true;
     }
     const content = safeNormalizeMessage(message)?.content ?? [];
     return content.some((block) => {
       if (block.type === "text") {
-        return Boolean(block.text?.trim());
+        return includeText && Boolean(block.text?.trim());
       }
       return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
     });
@@ -541,7 +541,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
-    assistantGroupHasVisibleReplyContent(group)
+    groupHasVisibleReplyContent(group)
   );
 }
 
@@ -550,11 +550,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
 // stands in for the final reply. Turns whose last content is commentary
 // merely collapse less; the visible reply is never folded away.
 function isFinalReplyGroup(item: TurnRenderItem): boolean {
-  return (
-    isCollapsibleWorkGroup(item) &&
-    item.role.toLowerCase() === "assistant" &&
-    assistantGroupHasVisibleReplyContent(item)
-  );
+  return item.kind === "group" && !item.isStreaming && assistantGroupCanOwnActiveRunStatus(item);
 }
 
 /**

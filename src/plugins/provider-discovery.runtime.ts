@@ -114,26 +114,13 @@ function hasProviderAuthEnvCredential(
 function modelDefinitionCostFromManifestRow(
   row: NormalizedModelCatalogRow,
 ): ModelDefinitionConfig["cost"] {
-  if (
-    !row.cost ||
-    row.cost.input === undefined ||
-    row.cost.output === undefined ||
-    row.cost.cacheRead === undefined ||
-    row.cost.cacheWrite === undefined
-  ) {
-    return {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    };
-  }
+  const cost = row.cost;
   return {
-    input: row.cost.input,
-    output: row.cost.output,
-    cacheRead: row.cost.cacheRead,
-    cacheWrite: row.cost.cacheWrite,
-    ...(row.cost.tieredPricing ? { tieredPricing: row.cost.tieredPricing } : {}),
+    input: cost?.input ?? 0,
+    output: cost?.output ?? 0,
+    cacheRead: cost?.cacheRead ?? 0,
+    cacheWrite: cost?.cacheWrite ?? 0,
+    ...(cost?.tieredPricing ? { tieredPricing: cost.tieredPricing } : {}),
   };
 }
 

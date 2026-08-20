@@ -758,6 +758,50 @@ describe("collapseCompletedTurnWork", () => {
   });
 
   it.each([
+    {
+      role: "assistant",
+      visualization: assistantMessage(
+        [
+          { type: "text", text: "Here is the chart." },
+          createAssistantCanvasBlock({ suffix: "completed_turn_assistant_visual" }),
+        ],
+        2_000,
+      ),
+      commentary: [],
+      workRoles: ["tool"],
+    },
+    {
+      role: "tool",
+      visualization: toolResultMessage(
+        "visualization",
+        "show_widget",
+        [createAssistantCanvasBlock({ suffix: "completed_turn_tool_visual" })],
+        2_000,
+      ),
+      commentary: [assistantMessage("Checking the details.", 2_500)],
+      workRoles: ["assistant", "tool"],
+    },
+  ])(
+    "keeps an earlier visualization visible while collapsing only tool work ($role)",
+    ({ visualization, commentary, workRoles }) => {
+      const items = collapsedItems({
+        messages: [
+          userMessage("show the result", 1_000),
+          visualization,
+          ...commentary,
+          toolResult("call-1", 3_000),
+          assistantMessage("All done.", 4_000),
+        ],
+      });
+
+      expect(items.map((item) => item.kind)).toEqual(["group", "group", "work-group", "group"]);
+      expect(canvasBlocksIn(requireGroup(items[1]))).toHaveLength(1);
+      expect(requireWorkGroup(items[2]).groups.map((group) => group.role)).toEqual(workRoles);
+      expect(messageRecord(requireGroup(items[3])).content).toBe("All done.");
+    },
+  );
+
+  it.each([
     "agent:main:main",
     "agent:main:telegram:direct:42",
     "agent:main::dashboard:malformed",

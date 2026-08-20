@@ -170,6 +170,7 @@ async function runOnboardingEntry(
       importSecrets: Boolean(options.importSecrets),
       remoteUrl: readStringValue(options.remoteUrl),
       remoteToken: readStringValue(options.remoteToken),
+      remotePassword: readStringValue(options.remotePassword),
       json: Boolean(options.json),
     },
     runtime,
@@ -259,7 +260,8 @@ export function registerSetupCommand(program: Command): void {
     .option("--import-source <path>", "Source agent home for --import-from")
     .option("--import-secrets", "Import supported secrets during onboarding migration", false)
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
-    .option("--remote-token <token>", "Remote Gateway token (optional)");
+    .option("--remote-token <token>", "Remote Gateway token (optional)")
+    .option("--remote-password <password>", "Remote Gateway password (optional)");
 
   addSystemAgentOptions(command).action(async (rawOptions, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");

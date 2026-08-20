@@ -38,6 +38,9 @@ not install or modify anything on the remote host.
     - With a configured default model, **Keep existing model config** appears
       first and becomes the default, followed by **QuickStart (recommended)**
       and **Manual setup**.
+      An explicit non-`skip` `--auth-choice` still configures that provider
+      without changing the existing default model, unless the provider requires
+      you to select a model.
     - When a migration provider is available, **Import from another agent**
       appears after those setup choices. Selecting it opens a provider list
       with entries such as **Import from Claude**, **Import from Codex**, and

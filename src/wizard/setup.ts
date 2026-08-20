@@ -364,9 +364,12 @@ async function runSetupWizardOnce(
   const storedRemoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url);
   const optionRemoteUrl = normalizeOptionalString(opts.remoteUrl);
   const optionRemoteToken = normalizeOptionalString(opts.remoteToken);
+  const optionRemotePassword = normalizeOptionalString(opts.remotePassword);
   const remoteUrlChanged = opts.remoteUrl !== undefined && optionRemoteUrl !== storedRemoteUrl;
   const remoteSeedConfig: OpenClawConfig =
-    opts.remoteUrl === undefined && opts.remoteToken === undefined
+    opts.remoteUrl === undefined &&
+    opts.remoteToken === undefined &&
+    opts.remotePassword === undefined
       ? baseConfig
       : {
           ...baseConfig,
@@ -377,10 +380,14 @@ async function runSetupWizardOnce(
               ...(opts.remoteUrl !== undefined ? { url: optionRemoteUrl } : {}),
               ...(opts.remoteToken !== undefined
                 ? { token: optionRemoteToken }
-                : remoteUrlChanged
+                : opts.remotePassword !== undefined || remoteUrlChanged
                   ? { token: undefined }
                   : {}),
-              ...(remoteUrlChanged ? { password: undefined } : {}),
+              ...(opts.remotePassword !== undefined
+                ? { password: optionRemotePassword }
+                : opts.remoteToken !== undefined || remoteUrlChanged
+                  ? { password: undefined }
+                  : {}),
             },
           },
         };
@@ -395,7 +402,7 @@ async function runSetupWizardOnce(
         cfg: remoteSeedConfig,
         env: process.env,
         mode: "remote",
-        explicitAuth: { token: optionRemoteToken },
+        explicitAuth: { token: optionRemoteToken, password: optionRemotePassword },
         ...(remoteUrlChanged
           ? { urlOverride: optionRemoteUrl, urlOverrideSource: "cli" as const }
           : {}),
@@ -507,12 +514,14 @@ async function runSetupWizardOnce(
   }
   const preModelAuthConfig = nextConfig;
   let stagedModelAuth: SetupModelAuthCandidate | undefined;
-  if (!keepExistingModelConfig) {
+  const hasExplicitAuthSetup = opts.authChoice !== undefined && opts.authChoice !== "skip";
+  if (!keepExistingModelConfig || hasExplicitAuthSetup) {
     stagedModelAuth = await runSetupModelAuthStep({
       config: nextConfig,
       opts,
       prompter,
       runtime,
+      preserveExistingModelSelection: keepExistingModelConfig,
     });
     nextConfig = stagedModelAuth.config;
   }

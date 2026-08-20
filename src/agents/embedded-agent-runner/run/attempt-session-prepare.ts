@@ -426,6 +426,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         : SessionManager.inMemory(input.effectiveCwd)),
     {
       agentId: input.sessionAgentId,
+      runId: attempt.runId,
       sessionKey: attempt.sessionKey,
       config: attempt.config,
       contextWindowTokens: attempt.contextTokenBudget,

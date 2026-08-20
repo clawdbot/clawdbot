@@ -187,6 +187,32 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
 
 describe("applyCustomApiConfig", () => {
   it.each([
+    { setAsPrimary: undefined, expectedPrimary: "custom/foo-large" },
+    { setAsPrimary: false, expectedPrimary: "anthropic/sonnet-4.6" },
+  ])(
+    "respects custom-provider primary selection ($setAsPrimary)",
+    ({ setAsPrimary, expectedPrimary }) => {
+      const result = applyCustomApiConfig({
+        config: {
+          agents: {
+            defaults: { model: { primary: "anthropic/sonnet-4.6" } },
+          },
+        },
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai",
+        providerId: "custom",
+        setAsPrimary,
+      });
+
+      expect(result.config.agents?.defaults?.model).toEqual({ primary: expectedPrimary });
+      expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
+        "foo-large",
+      ]);
+    },
+  );
+
+  it.each([
     {
       name: "uses stable default context window for newly added custom models",
       existingContextWindow: undefined,

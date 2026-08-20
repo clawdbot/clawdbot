@@ -593,6 +593,11 @@ describe("setupWizardCommand", () => {
       expectedError: "--remote-token requires --mode remote in non-interactive setup.",
     },
     {
+      label: "remote password in default local mode",
+      options: { remotePassword: "fixture-password" },
+      expectedError: "--remote-password requires --mode remote in non-interactive setup.",
+    },
+    {
       label: "unsupported daemon runtime while daemon install is skipped",
       options: { daemonRuntime: "bogus" as never, installDaemon: false },
       expectedError: "Invalid --daemon-runtime",
@@ -618,6 +623,50 @@ describe("setupWizardCommand", () => {
       expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    {
+      name: "simultaneous remote token and password credentials",
+      options: { remoteToken: "fixture-token", remotePassword: "fixture-password" },
+      message: "Use either --remote-token or --remote-password, not both.",
+    },
+    {
+      name: "an empty remote token",
+      options: { remoteToken: " " },
+      message: "Invalid --remote-token: value cannot be empty.",
+    },
+    {
+      name: "an empty remote password",
+      options: { remotePassword: " " },
+      message: "Invalid --remote-password: value cannot be empty.",
+    },
+    {
+      name: "a local gateway password in remote mode",
+      options: { gatewayPassword: "fixture-password" },
+      message:
+        "--gateway-password configures local gateway auth. Use --remote-password in remote mode.",
+    },
+  ])("rejects $name before resetting existing state", async ({ options, message }) => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        mode: "remote",
+        remoteUrl: "wss://gateway.example.invalid",
+        ...options,
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
 
   it("validates dependent gateway options before reset", async () => {
     const runtime = makeRuntime();
