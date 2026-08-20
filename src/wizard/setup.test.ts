@@ -2501,7 +2501,9 @@ describe("runSetupWizard", () => {
         entries: { main: { default: true } },
       },
     };
-    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(existingConfig));
+    readConfigFileSnapshot.mockImplementation(async () =>
+      configSnapshot(persistedWizardConfigs().at(-1) ?? existingConfig),
+    );
 
     await runSetupWizard(
       {
@@ -2532,7 +2534,7 @@ describe("runSetupWizard", () => {
     } else {
       expect(prepareAuthChoice).toHaveBeenCalledTimes(authChoice === "skip" ? 0 : 1);
     }
-    const persistedConfig = replaceConfigFile.mock.calls.at(-1)?.[0].nextConfig;
+    const persistedConfig = persistedWizardConfigs().at(-1);
     expect(persistedConfig?.agents?.defaults?.model).toEqual({
       primary: authChoice === "ollama" ? "ollama/llama3" : "anthropic/sonnet-4.6",
     });
