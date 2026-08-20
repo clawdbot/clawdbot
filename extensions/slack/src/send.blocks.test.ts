@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
+import { resolveSlackReplyBlockResolution } from "./reply-blocks.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -1514,6 +1515,50 @@ describe("sendMessageSlack blocks", () => {
       }),
     ).rejects.toThrow(error);
     expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendMessageSlack legacy interactive chunking at the delivery boundary", () => {
+  // Outbound delivery proof: the chunkSlackMrkdwnText repair must be visible at
+  // the Slack delivery boundary (chat.postMessage), not only at the compile
+  // step. A >3000-char legacy interactive text block is compiled to ordered
+  // section blocks, routed through sendMessageSlack's blocks path, and must
+  // arrive at chat.postMessage as multiple sections with the full text
+  // preserved — the tail is not silently dropped. Fails on pre-fix main, where
+  // truncateSlackText produced one 3000-char section and lost the rest.
+  it("delivers compiled long interactive text as multiple section blocks via chat.postMessage", async () => {
+    const text = "z".repeat(3100);
+    const { segments } = resolveSlackReplyBlockResolution({
+      interactive: { blocks: [{ type: "text" as const, text }] },
+    });
+    const blocks = segments.flatMap((segment) => (segment.kind === "blocks" ? segment.blocks : []));
+
+    const client = createSlackSendTestClient();
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks: blocks as never,
+    });
+
+    const posted = postedMessage(client);
+    const sections = ((posted.blocks as unknown[]) ?? []).filter(
+      (block): block is { type: "section"; text: { type: string; text: string } } =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: string }).type === "section",
+    );
+    const postedText = sections.map((section) => section.text.text).join("");
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    // Overflow was chunked into continuation sections, not one truncated section.
+    expect(sections.length).toBeGreaterThan(1);
+    // The full authored text is preserved in order at the delivery boundary.
+    expect(postedText).toBe(text);
+    // No delivered section exceeds the Slack Block Kit limit.
+    for (const section of sections) {
+      expect(section.text.text.length).toBeLessThanOrEqual(3000);
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
