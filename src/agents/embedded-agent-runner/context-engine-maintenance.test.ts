@@ -1145,6 +1145,80 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
+  it("cancels a superseded maintenance task when the owner session key is bare", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-bare-owner-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        // A non-agent-scoped session key yields no agent id on its own, so the
+        // owner-scoped cleanup fails closed unless the run forwards the resolved
+        // agent identity as callerAgentId. The legacy task carries an explicit
+        // requesterAgentId so the task side already knows its owner agent.
+        const bareSessionKey = "legacy-bare-session";
+        const legacyTask = createQueuedTaskRunCore({
+          runtime: "acp",
+          taskKind: TURN_MAINTENANCE_TASK_KIND,
+          sourceId: TURN_MAINTENANCE_TASK_KIND,
+          requesterSessionKey: bareSessionKey,
+          ownerKey: bareSessionKey,
+          requesterAgentId: "main",
+          scopeKind: "session",
+          label: "Context engine turn maintenance",
+          task: "Deferred context-engine maintenance after turn.",
+          notifyPolicy: "silent",
+          deliveryStatus: "pending",
+          preferMetadata: true,
+        });
+        expect(legacyTask.status).not.toBe("cancelled");
+
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-bare-owner",
+          sessionKey: bareSessionKey,
+          sessionFile: "/tmp/session-bare-owner.jsonl",
+          reason: "turn",
+          config: {},
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+
+        // Before the fix the cleanup silently no-op'd and the legacy task stayed
+        // non-terminal; forwarding the agent identity now reaches a terminal state.
+        const cancelledLegacyTask = requireRecord(getTaskById(legacyTask.taskId), "legacy task");
+        expectRecordFields(cancelledLegacyTask, {
+          status: "cancelled",
+          notifyPolicy: "silent",
+        });
+        expect(String(cancelledLegacyTask.terminalSummary)).toContain("Superseded");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("cancels the queued task when deferred scheduling is rejected", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();

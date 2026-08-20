@@ -23,6 +23,7 @@ import {
   GatewayDrainingError,
   isGatewayDraining,
 } from "../../process/command-queue.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   completeTaskRunByRunId,
@@ -36,6 +37,7 @@ import {
   findTaskByRunIdForOwner,
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { DeferredContextEngineMaintenanceBlockedError } from "../context-engine-maintenance-error.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
 import { SessionManager } from "../sessions/index.js";
@@ -164,6 +166,29 @@ function buildTurnMaintenanceTaskDescriptor(params: {
     deliveryStatus: params.deliveryStatus ?? "not_applicable",
     preferMetadata: true,
   });
+}
+
+/**
+ * Resolve the owner agent identity used when cancelling or superseding a
+ * deferred-maintenance task. The owner-scoped task APIs fail closed when they
+ * cannot resolve the caller's agent id, and a bare (non-agent-scoped) session
+ * key yields none on its own. Forwarding the config-resolved agent id keeps
+ * cleanup from silently no-op'ing and leaving the maintenance task non-terminal.
+ */
+function resolveDeferredMaintenanceOwnerAgentId(
+  sessionKey: string,
+  config?: OpenClawConfig,
+): string | undefined {
+  const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (parsedAgentId || !config) {
+    return parsedAgentId;
+  }
+  try {
+    return resolveSessionAgentId({ sessionKey, config });
+  } catch {
+    // Ambiguous rosters keep the pre-existing fail-closed behavior.
+    return undefined;
+  }
 }
 
 function makeTurnMaintenanceTaskVisible(params: {
@@ -355,6 +380,7 @@ class DeferredTurnMaintenanceRun {
     cancelTaskByIdForOwner({
       taskId: this.taskId,
       callerOwnerKey: this.sessionKey,
+      callerAgentId: resolveDeferredMaintenanceOwnerAgentId(this.sessionKey, this.params.config),
       endedAt: Date.now(),
       terminalSummary: `Deferred maintenance could not be scheduled: ${errorMessage}`,
     });
@@ -547,14 +573,20 @@ async function runDeferredTurnMaintenanceWorker(
     });
   } catch (err) {
     if (params.abortSignal.aborted) {
+      const callerAgentId = resolveDeferredMaintenanceOwnerAgentId(
+        params.sessionKey,
+        params.config,
+      );
       const task = findTaskByRunIdForOwner({
         runId: params.runId,
         callerOwnerKey: params.sessionKey,
+        callerAgentId,
       });
       if (task?.status === "queued" || task?.status === "running") {
         cancelTaskByIdForOwner({
           taskId: task.taskId,
           callerOwnerKey: params.sessionKey,
+          callerAgentId,
           endedAt: Date.now(),
           terminalSummary: isForegroundMaintenancePreemption(params.abortSignal)
             ? "Deferred maintenance yielded to a waiting foreground turn."
@@ -611,14 +643,17 @@ function scheduleDeferredTurnMaintenance(
   });
   const reusableTask = existingTask?.runId?.trim() ? existingTask : undefined;
   if (existingTask && !reusableTask) {
+    const callerAgentId = resolveDeferredMaintenanceOwnerAgentId(sessionKey, params.config);
     updateTaskNotifyPolicyForOwner({
       taskId: existingTask.taskId,
       callerOwnerKey: sessionKey,
+      callerAgentId,
       notifyPolicy: "silent",
     });
     cancelTaskByIdForOwner({
       taskId: existingTask.taskId,
       callerOwnerKey: sessionKey,
+      callerAgentId,
       endedAt: Date.now(),
       terminalSummary: "Superseded by refreshed deferred maintenance task.",
     });
