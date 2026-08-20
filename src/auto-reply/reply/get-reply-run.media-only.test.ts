@@ -1113,6 +1113,27 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("keeps unresolved current-turn images hydratable in the persisted transcript", async () => {
+    resolveCurrentTurnImagesMock.mockResolvedValueOnce({ unresolvedSourceIndexes: [0] });
+    const params = baseParams();
+    params.ctx.media = [{ path: "/tmp/unreadable.png", contentType: "image/png" }];
+
+    await runPreparedReply(params);
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.media).toEqual([
+      expect.objectContaining({ path: "/tmp/unreadable.png", hydrationSuppressed: true }),
+    ]);
+    const persisted = call.followupRun.userTurnTranscriptRecorder?.message?.["__openclaw"] as {
+      media?: Record<string, unknown>[];
+      mediaImageLayout?: Record<string, unknown>;
+    };
+    expect(persisted.media).toEqual([
+      { path: "/tmp/unreadable.png", contentType: "image/png", kind: "image" },
+    ]);
+    expect(persisted.mediaImageLayout).toEqual({ slots: [{ kind: "offloaded", factIndex: 0 }] });
+  });
+
   it.each([
     "discord",
     "telegram",

@@ -213,10 +213,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
   const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
-  const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
-    unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
-  );
-  const userTurnMediaForPersistence = [...persistedCtxMedia, ...(opts?.media ?? [])];
+  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
   const inboundMediaIndexes = buildInboundMediaNoteProjection(ctx).mediaIndexes ?? [];
   const promptMediaForRun = suppressUnresolvedPromptMedia({
     promptMedia: promptMedia ?? [],
