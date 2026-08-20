@@ -75,7 +75,7 @@ function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
 Creates temporary remote branches pinned to the exact Tooling SHA and Validation SHA,
-dispatches Full Release Validation with the Validation SHA branch as its ref input
+dispatches Full Release Validation with the full Validation SHA as its ref input
 and expected_sha as its immutable identity,
 watches the parent run, verifies all child workflow head SHAs match the trusted
 workflow lineage through the release evidence manifest, then deletes both
@@ -674,7 +674,7 @@ function main() {
   const targetBranch = `validation/target-${targetSha.slice(0, 12)}-${Date.now()}`;
   const remoteTargetBranchRef = `refs/heads/${targetBranch}`;
   const dispatchInputs = {
-    ref: targetBranch,
+    ref: targetSha,
     expected_sha: targetSha,
     ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
     ...args.inputs,

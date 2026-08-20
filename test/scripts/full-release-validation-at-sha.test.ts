@@ -515,7 +515,7 @@ describe("full-release-validation-at-sha", () => {
     ).toBe(false);
   });
 
-  it("pushes an exact target ref, dispatches it, prints the run URL, and cleans both refs", () => {
+  it("pushes the target transport ref, dispatches the candidate SHA, and cleans both refs", () => {
     const fixture = createDispatchFixture();
     try {
       const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
@@ -563,7 +563,7 @@ describe("full-release-validation-at-sha", () => {
         dispatchInputs[assignment.slice(0, separatorIndex)] = assignment.slice(separatorIndex + 1);
       }
       expect(dispatchInputs).toMatchObject({
-        ref: targetBranch,
+        ref: fixture.targetSha,
         expected_sha: fixture.targetSha,
         target_context_ref: fixture.releaseRef,
         allow_unreleased_changelog: "false",
