@@ -237,24 +237,38 @@ export async function readJsonFile(
     setBoundedCache(catalogJsonCache, filePath, cached, MAX_CATALOG_JSON_CACHE_ENTRIES);
     return cached.value;
   }
-  let content: string;
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    content = await fs.readFile(filePath, "utf8");
-  } catch {
-    options.onIoFailure?.();
-    return undefined;
-  }
-  try {
+    handle = await fs.open(filePath, "r");
+    const openedStat = await handle.stat();
+    if (!openedStat.isFile() || openedStat.size > MAX_CATALOG_JSON_FILE_BYTES) {
+      catalogJsonCache.delete(filePath);
+      options.onIoFailure?.();
+      return undefined;
+    }
+    const buffer = Buffer.allocUnsafe(openedStat.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length - offset, offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    const content = buffer.subarray(0, offset).toString("utf8");
     const value = JSON.parse(content) as unknown;
     setBoundedCache(
       catalogJsonCache,
       filePath,
-      { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, value },
+      { mtimeMs: openedStat.mtimeMs, size: openedStat.size, ino: openedStat.ino, value },
       MAX_CATALOG_JSON_CACHE_ENTRIES,
     );
     return value;
   } catch {
+    options.onIoFailure?.();
     return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 

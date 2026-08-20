@@ -18,7 +18,7 @@ import {
   registerClaudeSessionDiscovery,
 } from "./session-catalog-registration.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
-import { MAX_CATALOG_JSON_FILE_BYTES } from "./session-catalog-scan.js";
+import { MAX_CATALOG_JSON_FILE_BYTES, readJsonFile } from "./session-catalog-scan.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
@@ -2011,6 +2011,41 @@ describe("Claude session catalog", () => {
       listLocalClaudeSessionPage({}, home),
     ]);
     expect(concurrent).toEqual(first);
+    const readdirSpy = spies[2]!;
+    expect(
+      readdirSpy.mock.calls.filter(([target]) => target === path.join(home, ".claude", "projects")),
+    ).toHaveLength(1);
+    const homeCalls = (spy: (typeof spies)[number]) =>
+      spy.mock.calls.filter(([target]) => typeof target === "string" && target.startsWith(home));
+    const realpathSpy = spies[3]!;
+    const statSpy = spies[0]!;
+    const openSpy = spies[4]!;
+    const readFileSpy = spies[5]!;
+    expect(
+      openSpy.mock.calls.filter(
+        ([filePath]) => typeof filePath === "string" && filePath.endsWith(".jsonl"),
+      ),
+    ).toHaveLength(2);
+    // Polls re-read until the watch vouches for coverage; from then on an unchanged tree is free.
+    await expectClaudeCatalogQuiescent(home, spies, homeCalls, first);
+    for (const spy of spies) {
+      spy.mockClear();
+    }
+    const second = await listLocalClaudeSessionPage({}, home);
+    expect(second).toEqual(first);
+    const isCatalogFile = (value: unknown) =>
+      typeof value === "string" &&
+      (value.endsWith(".jsonl") ||
+        value.endsWith("sessions-index.json") ||
+        path.basename(value).startsWith("local_"));
+    expect(realpathSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
+    expect(
+      statSpy.mock.calls.some(
+        ([filePath]) => typeof filePath === "string" && filePath.endsWith(".jsonl"),
+      ),
+    ).toBe(true);
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(readFileSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
     expect(
       spies[2]?.mock.calls.filter(([target]) => target === path.join(home, ".claude", "projects")),
     ).toHaveLength(1);
@@ -2589,9 +2624,9 @@ describe("Claude session catalog", () => {
       cliSessionId: "desktop-session",
       title: "Desktop before",
     });
-    const readFileSpy = vi.spyOn(fs, "readFile");
+    const openSpy = vi.spyOn(fs, "open");
     const metadataReads = () =>
-      readFileSpy.mock.calls
+      openSpy.mock.calls
         .map(([filePath]) => filePath)
         .filter((filePath) => filePath === indexPath || filePath === desktopPath);
 
@@ -2600,7 +2635,7 @@ describe("Claude session catalog", () => {
     const readdir = vi.spyOn(fs, "readdir");
     const firstRefreshTime = new Date(Date.now() + 2_000);
     await fs.utimes(projectDir, firstRefreshTime, firstRefreshTime);
-    readFileSpy.mockClear();
+    openSpy.mockClear();
 
     await expectClaudeCatalogEventually(home, () => {
       expect(readdir).toHaveBeenCalledWith(projectDir);
@@ -2627,7 +2662,7 @@ describe("Claude session catalog", () => {
       fs.utimes(desktopPath, secondRefreshTime, secondRefreshTime),
       fs.utimes(projectDir, secondRefreshTime, secondRefreshTime),
     ]);
-    readFileSpy.mockClear();
+    openSpy.mockClear();
 
     now += 60_001;
     await expectClaudeCatalogEventually(home, (page) =>
@@ -2667,11 +2702,37 @@ describe("Claude session catalog", () => {
     expect((await fs.stat(indexPath)).size).toBeGreaterThan(MAX_CATALOG_JSON_FILE_BYTES);
     expect((await fs.stat(desktopPath)).size).toBeGreaterThan(MAX_CATALOG_JSON_FILE_BYTES);
 
-    const readFileSpy = vi.spyOn(fs, "readFile");
+    const openSpy = vi.spyOn(fs, "open");
     await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
-    expect(readFileSpy.mock.calls.map(([filePath]) => filePath)).not.toEqual(
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).not.toEqual(
       expect.arrayContaining([indexPath, desktopPath]),
     );
+  });
+
+  it("keeps the catalog JSON cap across a stat-to-open replacement race", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const filePath = path.join(projectDir, "sessions-index.json");
+    const replacementPath = path.join(projectDir, "sessions-index.replacement.json");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify({ version: 1, entries: [] }));
+    await fs.writeFile(
+      replacementPath,
+      JSON.stringify({ version: 1, entries: [], padding: "x".repeat(MAX_CATALOG_JSON_FILE_BYTES) }),
+    );
+
+    const open = fs.open.bind(fs);
+    let replaced = false;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === filePath && !replaced) {
+        await fs.rename(replacementPath, filePath);
+        replaced = true;
+      }
+      return await open(...args);
+    });
+
+    await expect(readJsonFile(filePath)).resolves.toBeUndefined();
+    expect(replaced).toBe(true);
   });
 
   it("retries transient index reads without waiting for the file metadata to change", async () => {
@@ -2691,14 +2752,14 @@ describe("Claude session catalog", () => {
       ],
       transcripts: { [sessionId]: [message(sessionId, "user", "Indexed only", 1)] },
     });
-    const readFile = fs.readFile.bind(fs);
+    const open = fs.open.bind(fs);
     let failIndexRead = true;
-    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       if (failIndexRead && args[0] === indexPath) {
         failIndexRead = false;
         throw new Error("transient index read failure");
       }
-      return await readFile(...args);
+      return await open(...args);
     });
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
