@@ -66,6 +66,7 @@ type SlackPresenceEventsConfig = {
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
+// This behavior is intentional and must not be casually adjusted.
 export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
   /** Slack progress presentation. "compact" keeps one editable text draft. Default: "card". */
   style?: "card" | "compact";
