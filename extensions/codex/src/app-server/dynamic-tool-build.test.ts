@@ -1919,15 +1919,6 @@ describe("Codex app-server dynamic tool build", () => {
     );
     registerMemoryCapability("memory-core", {
       writeProvenance: { recordWriteProvenance },
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/day.md",
-        recordWriteProvenance,
-      }),
     });
 
     try {

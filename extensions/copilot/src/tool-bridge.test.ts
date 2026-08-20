@@ -981,15 +981,7 @@ describe("createCopilotToolBridge", () => {
         async () => undefined,
       );
       registerMemoryCapability("memory-core", {
-        flushPlanResolver: () => ({
-          softThresholdTokens: 1,
-          forceFlushTranscriptBytes: 1,
-          reserveTokensFloor: 1,
-          prompt: "flush",
-          systemPrompt: "flush",
-          relativePath: "memory/day.md",
-          recordWriteProvenance,
-        }),
+        writeProvenance: { recordWriteProvenance },
       });
 
       try {

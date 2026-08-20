@@ -2486,15 +2486,7 @@ describe("createOpenClawCodingTools", () => {
       async () => rollback,
     );
     registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/2026-07-29.md",
-        recordWriteProvenance,
-      }),
+      writeProvenance: { recordWriteProvenance },
     });
     let tainted = false;
     try {
@@ -2561,20 +2553,14 @@ describe("createOpenClawCodingTools", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-recreate-"));
     let recordedOrigin: "agent" | "untrusted" | undefined;
     registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/recreated.md",
+      writeProvenance: {
         recordWriteProvenance: async (entry) => {
           recordedOrigin = entry.originClass;
         },
         clearWriteProvenance: async () => {
           recordedOrigin = undefined;
         },
-      }),
+      },
     });
     try {
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -2618,20 +2604,14 @@ describe("createOpenClawCodingTools", () => {
       },
     );
     registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/raced.md",
+      writeProvenance: {
         recordWriteProvenance,
         clearWriteProvenance: async () => {
           signalCleanupStarted();
           await cleanupRelease;
           recordedOrigin = undefined;
         },
-      }),
+      },
     });
     try {
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -2672,15 +2652,7 @@ describe("createOpenClawCodingTools", () => {
       async () => {},
     );
     registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/2026-07-29.md",
-        recordWriteProvenance,
-      }),
+      writeProvenance: { recordWriteProvenance },
     });
     try {
       const sandbox = createAgentToolsSandboxContext({
