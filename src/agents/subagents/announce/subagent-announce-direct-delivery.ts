@@ -383,7 +383,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       if (err instanceof SourceOwnerChangedError) {
         return sourceOwnerChangedResult();
       }
-      if (isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err)) {
+      if (hasAnnounceSendEvidence(err)) {
         throw err;
       }
       if (
@@ -598,12 +598,11 @@ export async function sendSubagentAnnounceDirectly(params: {
         : {}),
     };
   } catch (err) {
-    const permanent = isPermanentAnnounceDeliveryError(err);
-    const disposition = permanent
-      ? hasAnnounceSendEvidence(err)
-        ? "ambiguous"
-        : "permanent_failure"
-      : "retryable";
+    const disposition = hasAnnounceSendEvidence(err)
+      ? "ambiguous"
+      : isPermanentAnnounceDeliveryError(err)
+        ? "permanent_failure"
+        : "retryable";
     return {
       delivered: false,
       path: "direct",
