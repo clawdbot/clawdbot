@@ -86,16 +86,9 @@
         "models": [
           {
             "id": "kimi-k2.5",
-            "name": "kimi-k2.5",
             "status": "deprecated",
             "reasoning": true,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -105,15 +98,8 @@
           },
           {
             "id": "kimi-k2.6",
-            "name": "kimi-k2.6",
             "reasoning": true,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -123,15 +109,8 @@
           },
           {
             "id": "kimi-k2.7-code",
-            "name": "kimi-k2.7-code",
             "reasoning": true,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -141,7 +120,6 @@
           },
           {
             "id": "kimi-k3",
-            "name": "kimi-k3",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": {
@@ -159,15 +137,8 @@
           },
           {
             "id": "deepseek-v4-flash",
-            "name": "deepseek-v4-flash",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 1048576,
             "maxTokens": 8192,
             "compat": {
@@ -178,15 +149,8 @@
           },
           {
             "id": "deepseek-v4-flash:0731",
-            "name": "deepseek-v4-flash:0731",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 1048576,
             "maxTokens": 8192,
             "compat": {
@@ -196,15 +160,8 @@
           },
           {
             "id": "deepseek-v4-flash:preview",
-            "name": "deepseek-v4-flash:preview",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 1048576,
             "maxTokens": 8192,
             "compat": {
@@ -214,15 +171,8 @@
           },
           {
             "id": "deepseek-v4-pro",
-            "name": "deepseek-v4-pro",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 1048576,
             "maxTokens": 8192,
             "compat": {
@@ -233,15 +183,8 @@
           },
           {
             "id": "deepseek-v4-pro:0813",
-            "name": "deepseek-v4-pro:0813",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 1048576,
             "maxTokens": 8192,
             "compat": {
@@ -251,15 +194,8 @@
           },
           {
             "id": "deepseek-v4-pro:preview",
-            "name": "deepseek-v4-pro:preview",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 524288,
             "maxTokens": 8192,
             "compat": {
@@ -269,15 +205,8 @@
           },
           {
             "id": "gemma4",
-            "name": "gemma4",
             "reasoning": true,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -287,15 +216,8 @@
           },
           {
             "id": "gemma4:31b",
-            "name": "gemma4:31b",
             "reasoning": true,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -305,15 +227,8 @@
           },
           {
             "id": "glm-5.1",
-            "name": "glm-5.1",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 202752,
             "maxTokens": 8192,
             "compat": {
@@ -324,15 +239,8 @@
           },
           {
             "id": "glm-5.2",
-            "name": "glm-5.2",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 1000000,
             "maxTokens": 8192,
             "compat": {
@@ -343,15 +251,8 @@
           },
           {
             "id": "gpt-oss:120b",
-            "name": "gpt-oss:120b",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 131072,
             "maxTokens": 8192,
             "compat": {
@@ -361,15 +262,8 @@
           },
           {
             "id": "gpt-oss:20b",
-            "name": "gpt-oss:20b",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 131072,
             "maxTokens": 8192,
             "compat": {
@@ -379,15 +273,8 @@
           },
           {
             "id": "minimax-m2.7",
-            "name": "minimax-m2.7",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 196608,
             "maxTokens": 8192,
             "compat": {
@@ -397,15 +284,8 @@
           },
           {
             "id": "minimax-m3",
-            "name": "minimax-m3",
             "reasoning": true,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 524288,
             "maxTokens": 8192,
             "compat": {
@@ -415,15 +295,8 @@
           },
           {
             "id": "mistral-large-3:675b",
-            "name": "mistral-large-3:675b",
             "reasoning": false,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -433,15 +306,8 @@
           },
           {
             "id": "nemotron-3-nano:30b",
-            "name": "nemotron-3-nano:30b",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -451,15 +317,8 @@
           },
           {
             "id": "nemotron-3-super",
-            "name": "nemotron-3-super",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -469,15 +328,8 @@
           },
           {
             "id": "nemotron-3-ultra",
-            "name": "nemotron-3-ultra",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -487,15 +339,8 @@
           },
           {
             "id": "qwen3.5",
-            "name": "qwen3.5",
             "reasoning": true,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -505,15 +350,8 @@
           },
           {
             "id": "qwen3.5:397b",
-            "name": "qwen3.5:397b",
             "reasoning": true,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {

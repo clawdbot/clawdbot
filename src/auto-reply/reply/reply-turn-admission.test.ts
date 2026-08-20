@@ -47,10 +47,9 @@ vi.mock(
       ...actual,
       releaseMainSessionRecoveryOwner: async (
         lease: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[0],
-        options: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[1],
       ) => {
         await recoveryOwnerReleaseMocks.beforeRelease();
-        return await actual.releaseMainSessionRecoveryOwner(lease, options);
+        return await actual.releaseMainSessionRecoveryOwner(lease);
       },
     };
   },

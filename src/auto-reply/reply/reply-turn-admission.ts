@@ -63,9 +63,7 @@ async function releaseReplyRecoveryOwner(
     return undefined;
   }
   try {
-    return await releaseMainSessionRecoveryOwner(lease, {
-      onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
-    });
+    return await releaseMainSessionRecoveryOwner(lease);
   } catch (error) {
     log.warn(`failed to release main-session recovery reply owner: ${formatErrorMessage(error)}`);
     // The durable owner schedules exact-token retries. A completed reply must

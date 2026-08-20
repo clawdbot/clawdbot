@@ -166,15 +166,12 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       (transactionDb) => {
         const transactionEntries = new Map<string, SessionEntry>();
         for (const sessionKey of validationKeys) {
-          const transactionEntry = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
-          if (
-            readExactSessionEntryJson(transactionDb, sessionKey) !==
-            expectedEntryJson.get(sessionKey)
-          ) {
+          const transactionRow = readExactSessionEntryRow(transactionDb, sessionKey);
+          if (transactionRow?.row.entry_json !== expectedEntryJson.get(sessionKey)) {
             throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
           }
-          if (transactionEntry) {
-            transactionEntries.set(sessionKey, transactionEntry);
+          if (transactionRow) {
+            transactionEntries.set(sessionKey, transactionRow.entry);
           }
         }
         for (const replacement of applicable) {

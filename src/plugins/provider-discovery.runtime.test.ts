@@ -751,7 +751,18 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
-  it("defaults missing manifest model costs for static discovery entries", async () => {
+  it.each([
+    {
+      name: "missing",
+      cost: undefined,
+      expectedCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+    {
+      name: "partial",
+      cost: { input: 3, output: 15, cacheRead: 0.3 },
+      expectedCost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+    },
+  ])("defaults only $name manifest model cost components", async ({ cost, expectedCost }) => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["anthropic"]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       index: { plugins: [] },
@@ -772,6 +783,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
                       input: ["text"],
                       contextWindow: 200000,
                       maxTokens: 64000,
+                      ...(cost ? { cost } : {}),
                     },
                   ],
                 },
@@ -799,7 +811,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
           models: [
             expect.objectContaining({
               id: "claude-sonnet-4-6",
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              cost: expectedCost,
             }),
           ],
         }),
