@@ -50,7 +50,7 @@ type SessionActionContext = {
   agentNames: Map<string, string>;
   initialSessionInput: string;
   initialSessionAgentId: string | null;
-  resolveSessionSelection: (raw?: string) => { key: string; agentId: string };
+  resolveSessionSelection: (raw?: string, agentId?: string) => { key: string; agentId: string };
   updateHeader: () => void;
   updateFooter: () => void;
   updateAutocompleteProvider: () => void;
@@ -87,6 +87,45 @@ export function createSessionActions(context: SessionActionContext) {
     sessionKey: state.currentSessionKey,
     agentId: state.currentAgentId,
   });
+
+  const applySessionSelection = (nextSelection: { key: string; agentId: string }) => {
+    const previousSelection = captureSessionSelection();
+    const selectionChanged = !(
+      nextSelection.agentId === previousSelection.agentId &&
+      agentSessionKeysMatchByRequestKey(nextSelection.key, previousSelection.sessionKey)
+    );
+    if (selectionChanged) {
+      // Retire the previous session's runs before history can adopt a new
+      // in-flight owner; otherwise its completion can promote an old run.
+      invalidateRunOwnership?.();
+      reduceTuiSessionProjection(state, {
+        type: "sessionReset",
+        scope: readTuiSessionProjectionScope(state),
+      });
+    }
+    state.currentAgentId = nextSelection.agentId;
+    state.currentSessionKey = nextSelection.key;
+    state.activeChatRunId = null;
+    submit.clearPendingSubmit(state);
+    setActivityStatus("idle");
+    if (selectionChanged) {
+      state.currentSessionId = null;
+      clearTuiSessionModeOverrides(state.sessionInfo);
+    }
+    // Session keys can move backwards in updatedAt ordering; drop previous session freshness
+    // so refresh data for the newly selected session isn't rejected as stale.
+    state.sessionInfo.updatedAt = null;
+    state.historyLoaded = false;
+    if (selectionChanged) {
+      // Live prompt identities belong to the old selection, not its pending successor.
+      chatLog.clearAll();
+    }
+    chatLog.clearPendingUsers();
+    clearLocalRunIds?.();
+    btw.clear();
+    updateHeader();
+    updateFooter();
+  };
 
   const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
     state.currentAgentId === selection.agentId &&
@@ -134,8 +173,12 @@ export function createSessionActions(context: SessionActionContext) {
       }
       state.initialSessionApplied = true;
     } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
-      state.currentAgentId =
+      const nextAgentId =
         state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
+      if (nextAgentId !== state.currentAgentId) {
+        applySessionSelection(resolveSessionSelection(undefined, nextAgentId));
+        return;
+      }
     }
     updateHeader();
     updateFooter();
@@ -599,44 +642,7 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const setSession = async (rawKey: string) => {
-    const previousSelection = captureSessionSelection();
-    const nextSelection = resolveSessionSelection(rawKey);
-    const nextKey = nextSelection.key;
-    const selectionChanged = !(
-      nextSelection.agentId === previousSelection.agentId &&
-      agentSessionKeysMatchByRequestKey(nextKey, previousSelection.sessionKey)
-    );
-    if (selectionChanged) {
-      // Retire the previous session's runs before history can adopt a new
-      // in-flight owner; otherwise its completion can promote an old run.
-      invalidateRunOwnership?.();
-      reduceTuiSessionProjection(state, {
-        type: "sessionReset",
-        scope: readTuiSessionProjectionScope(state),
-      });
-    }
-    state.currentAgentId = nextSelection.agentId;
-    state.currentSessionKey = nextKey;
-    state.activeChatRunId = null;
-    submit.clearPendingSubmit(state);
-    setActivityStatus("idle");
-    if (selectionChanged) {
-      state.currentSessionId = null;
-      clearTuiSessionModeOverrides(state.sessionInfo);
-    }
-    // Session keys can move backwards in updatedAt ordering; drop previous session freshness
-    // so refresh data for the newly selected session isn't rejected as stale.
-    state.sessionInfo.updatedAt = null;
-    state.historyLoaded = false;
-    if (selectionChanged) {
-      // Live prompt identities belong to the old selection, not its pending successor.
-      chatLog.clearAll();
-    }
-    chatLog.clearPendingUsers();
-    clearLocalRunIds?.();
-    btw.clear();
-    updateHeader();
-    updateFooter();
+    applySessionSelection(resolveSessionSelection(rawKey));
     await loadHistory();
   };
 
