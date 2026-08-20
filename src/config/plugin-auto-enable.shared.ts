@@ -849,13 +849,14 @@ function materializeConfiguredPluginEntryAllowlist(params: {
     return next;
   }
 
+  const resolveAliasForEntries = createManifestPluginAliasResolver(params.manifestRegistry);
   for (const pluginId of Object.keys(entries).toSorted((left, right) =>
     left.localeCompare(right),
   )) {
     const entry = entries[pluginId];
     if (
       !hasMaterialPluginEntryConfig(entry) ||
-      isPluginPolicyDisabled(next, pluginId) ||
+      isPluginPolicyDisabled(next, pluginId, resolveAliasForEntries) ||
       allow.includes(pluginId) ||
       !isKnownPluginId(pluginId, params.manifestRegistry)
     ) {
@@ -949,13 +950,14 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
   }
 
   const preferOverCache = new Map<string, string[]>();
+  const resolveAliasForCandidates = createManifestPluginAliasResolver(params.manifestRegistry);
 
   for (const entry of params.candidates) {
     const builtInChannelId = resolveAutoEnableChannelId({
       entry,
       manifestRegistry: params.manifestRegistry,
     });
-    if (isPluginPolicyDisabled(next, entry.pluginId)) {
+    if (isPluginPolicyDisabled(next, entry.pluginId, resolveAliasForCandidates)) {
       continue;
     }
     if (

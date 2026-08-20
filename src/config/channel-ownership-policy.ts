@@ -1,3 +1,4 @@
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 // Assembles the channel ownership policy from operator config so config validation and the
 // operator-facing runtime schema pick the same channel owner plugin activation does.
 import { normalizeChatChannelId } from "../channels/registry.js";
@@ -32,6 +33,14 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   sourceConfig?: OpenClawConfig;
   registry: PluginManifestRegistry;
   env: NodeJS.ProcessEnv;
+  /**
+   * Must match what Gateway startup passes. `server-startup-bootstrap` defaults to `"suppress"`,
+   * so a channel seen only through inherited environment variables is deliberately left out of
+   * auto-enable. Defaulting to the helper's `"allow"` here would narrow ownership to `preferOver`
+   * candidates the running Gateway never activated, and the Control UI would offer a schema for an
+   * owner that is not loaded.
+   */
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): ChannelOwnershipPolicy {
   // Policy lists accept a plugin's channel ids and legacy ids; Gateway startup canonicalizes them
   // through the registry, so ownership has to resolve them the same way.
@@ -62,7 +71,12 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   let configuredChannelIds: Set<string> | undefined;
   const isChannelConfiguredForActivation = (channelId: string): boolean => {
     configuredChannelIds ??= new Set(
-      collectAutoEnableConfiguredChannelIds(sourceConfig, params.env),
+      collectAutoEnableConfiguredChannelIds(
+        sourceConfig,
+        params.env,
+        undefined,
+        params.ambientEnvTriggers ?? "suppress",
+      ),
     );
     return configuredChannelIds.has(channelId);
   };

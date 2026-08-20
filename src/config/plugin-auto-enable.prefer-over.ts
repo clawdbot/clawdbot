@@ -1,4 +1,3 @@
-// Resolves plugin auto-enable preference ordering across candidate plugins.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -7,6 +6,8 @@ import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registr
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
+// Resolves plugin auto-enable preference ordering across candidate plugins.
+import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
@@ -274,11 +275,15 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     return resolved;
   };
 
+  // Gateway startup canonicalizes a disablement written through a channel or legacy alias, so a
+  // raw check here leaves the preferred claimant eligible and disables its fallback: both end up
+  // off while validation selected the fallback's schema.
+  const resolveAlias = createManifestPluginAliasResolver(params.registry);
   for (const other of params.configured) {
     if (other.pluginId === params.entry.pluginId) {
       continue;
     }
-    if (isPluginPolicyDisabled(params.config, other.pluginId)) {
+    if (isPluginPolicyDisabled(params.config, other.pluginId, resolveAlias)) {
       continue;
     }
     if (getPreferredOverIds(other).includes(params.entry.pluginId)) {
