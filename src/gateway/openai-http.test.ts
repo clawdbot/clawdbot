@@ -448,6 +448,70 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             messages: [{ role: "user", content: "hi" }],
           },
           {
+            "x-openclaw-message-to": "channel:24514",
+            "x-openclaw-account-id": "acct-7",
+            "x-openclaw-thread-id": "thread-42",
+          },
+        );
+        expect(res.status).toBe(200);
+        const optsTargetHeaders = getFirstAgentCall() as
+          | {
+              to?: string;
+              accountId?: string;
+              threadId?: string | number;
+              deliver?: boolean;
+              bestEffortDeliver?: boolean;
+            }
+          | undefined;
+        expect(optsTargetHeaders?.to).toBe("channel:24514");
+        expect(optsTargetHeaders?.accountId).toBe("acct-7");
+        expect(optsTargetHeaders?.threadId).toBe("thread-42");
+        // A target is routing context only; the turn itself must stay undelivered.
+        expect(optsTargetHeaders?.deliver).toBe(false);
+        expect(optsTargetHeaders?.bestEffortDeliver).toBe(false);
+        await res.text();
+      }
+
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(res.status).toBe(200);
+        const optsNoTargetHeaders = getFirstAgentCall() as
+          | { to?: string; accountId?: string; threadId?: string | number }
+          | undefined;
+        expect(optsNoTargetHeaders?.to).toBeUndefined();
+        expect(optsNoTargetHeaders?.accountId).toBeUndefined();
+        expect(optsNoTargetHeaders?.threadId).toBeUndefined();
+        await res.text();
+      }
+
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          { "x-openclaw-message-to": "   " },
+        );
+        expect(res.status).toBe(200);
+        expect((getFirstAgentCall() as { to?: string } | undefined)?.to).toBeUndefined();
+        await res.text();
+      }
+
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          {
             "x-openclaw-model": "openai/gpt-5.4",
             "x-openclaw-scopes": "operator.admin, operator.write",
           },

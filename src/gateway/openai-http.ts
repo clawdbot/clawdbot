@@ -164,6 +164,9 @@ function buildAgentCommandInput(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
   senderIsOwner: boolean;
   abortSignal?: AbortSignal;
   streamParams?: AgentStreamParams;
@@ -178,6 +181,12 @@ function buildAgentCommandInput(params: {
     runId: params.runId,
     deliver: false as const,
     messageChannel: params.messageChannel,
+    // Routing context only: async out-of-turn deliveries (e.g. subagent
+    // completion announces) can resolve a target, while the turn's own
+    // reply is still never pushed to a channel (deliver stays false).
+    to: params.to,
+    accountId: params.accountId,
+    threadId: params.threadId,
     senderIsOwner: params.senderIsOwner,
     bestEffortDeliver: false as const,
     allowModelOverride: params.modelOverride !== undefined,
@@ -980,15 +989,20 @@ export async function handleOpenAiHttpRequest(
   let agentId: string;
   let sessionKey: string;
   let messageChannel: string;
+  let to: string | undefined;
+  let accountId: string | undefined;
+  let threadId: string | undefined;
   try {
-    ({ agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
-      req,
-      model,
-      user,
-      sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
-    }));
+    ({ agentId, sessionKey, messageChannel, to, accountId, threadId } =
+      resolveGatewayRequestContext({
+        req,
+        model,
+        user,
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+        useMessageChannelHeader: true,
+        useMessageTargetHeaders: true,
+      }));
   } catch (err) {
     if (
       isAgentSelectionRequiredError(err) ||
@@ -1087,6 +1101,9 @@ export async function handleOpenAiHttpRequest(
     sessionKey,
     runId,
     messageChannel,
+    to,
+    accountId,
+    threadId,
     senderIsOwner,
     abortSignal: abortController.signal,
     streamParams,
