@@ -95,11 +95,16 @@ function requireMessageSendMedia(
 }
 
 describe("imessagePlugin contracts", () => {
-  it("rejects unqualified provider identifiers during target resolution", async () => {
-    const resolveTarget = imessagePlugin.messaging?.targetResolver?.resolveTarget;
+  it("rejects unqualified provider identifiers and exposes qualification guidance", async () => {
+    const targetResolver = imessagePlugin.messaging?.targetResolver;
+    const resolveTarget = targetResolver?.resolveTarget;
     if (!resolveTarget) {
       throw new Error("Expected iMessage target resolver");
     }
+
+    expect(targetResolver.hint).toBe(
+      "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
+    );
 
     await expect(
       resolveTarget({
