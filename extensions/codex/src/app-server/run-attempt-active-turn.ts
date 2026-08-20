@@ -117,6 +117,16 @@ export async function activateCodexAttemptTurn(
       trajectoryRecorder,
       resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      onGuardianDeniedAction: async (pending) => {
+        const persisted = await bindingStore.mutate(bindingIdentity, {
+          kind: "patch",
+          threadId: resourceState.thread.threadId,
+          patch: { pendingGuardianDeniedAction: pending },
+        });
+        if (!persisted) {
+          throw new Error("failed to bind Codex Guardian denial to its native thread");
+        }
+      },
       ...(progressCardTool
         ? {
             onNativePlanUpdate: async (update: {

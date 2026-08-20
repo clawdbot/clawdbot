@@ -132,6 +132,7 @@ export class CodexAppServerEventProjector {
       this.toolProgressProjection,
       this.toolTranscriptProjection,
       options.onNativeToolResultRecorded,
+      options.onGuardianDeniedAction,
     );
     this.assistantProjection = new CodexAssistantProjection(
       params,
@@ -270,7 +271,7 @@ export class CodexAppServerEventProjector {
         break;
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
-        this.eventProjection.handleGuardianReview(notification.method, params);
+        await this.eventProjection.handleGuardianReview(notification.method, params);
         break;
       case "guardianWarning":
         this.eventProjection.handleGuardianWarning(params);

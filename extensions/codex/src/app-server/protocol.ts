@@ -186,6 +186,11 @@ export type CodexThreadStartParams = JsonObject & {
   ephemeral?: boolean;
 };
 
+export type CodexThreadApproveGuardianDeniedActionParams = {
+  threadId: string;
+  event: JsonObject;
+};
+
 export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
   cwd?: string | null;
@@ -649,6 +654,7 @@ type CodexAppServerRequestParamsOverride = {
   "plugin/read": CodexPluginReadParams;
   "thread/fork": CodexThreadForkParams;
   "thread/archive": CodexThreadArchiveParams;
+  "thread/approveGuardianDeniedAction": CodexThreadApproveGuardianDeniedActionParams;
   "thread/delete": CodexThreadDeleteParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/list": CodexThreadListParams;
@@ -697,6 +703,7 @@ type CodexAppServerRequestResultMap = {
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
   "thread/archive": JsonValue;
+  "thread/approveGuardianDeniedAction": JsonValue;
   "thread/delete": CodexThreadDeleteResponse;
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;

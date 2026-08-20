@@ -9,6 +9,7 @@ import {
 } from "./attempt-diagnostics.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
+import { consumePendingGuardianDeniedAction } from "./guardian-denial-approval.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
@@ -41,6 +42,8 @@ export async function prepareCodexAttemptTurnRequest(
     codexModelContentCapture,
     appServer,
     runAbortController,
+    bindingStore,
+    bindingIdentity,
   } = connection;
   const { state } = turnRuntime;
   const explicitSkillInputs = await resolveCodexExplicitSkillInputs({
@@ -98,6 +101,22 @@ export async function prepareCodexAttemptTurnRequest(
     throw error;
   };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
+    await consumePendingGuardianDeniedAction({
+      pending: resourceState.thread.pendingGuardianDeniedAction,
+      prompt: params.prompt,
+      threadId: resourceState.thread.threadId,
+      request: (method, requestParams) =>
+        resourceState.client.request(method, requestParams, {
+          timeoutMs: appServer.requestTimeoutMs,
+          signal: runAbortController.signal,
+        }),
+      clear: () =>
+        bindingStore.mutate(bindingIdentity, {
+          kind: "patch",
+          threadId: resourceState.thread.threadId,
+          patch: { pendingGuardianDeniedAction: undefined },
+        }),
+    });
     const activeTurnRoute = (await ensureCurrentThreadRoute()) as {
       armTurn(): void;
       cancelTurn(): Promise<void>;
