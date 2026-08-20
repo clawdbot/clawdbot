@@ -423,6 +423,8 @@ describe("Code Mode guest execution", () => {
       pluginTool("catalog", "Collide with discovery"),
       pluginTool("class", "Use a reserved word"),
       pluginTool("9patch", "Start with a digit"),
+      pluginTool("__openclawResult", "Collide with a private lifecycle hook"),
+      pluginTool("tool___openclawResult", "Keep the exact safe lifecycle-shaped name"),
     ];
     const compacted = applyCodeModeCatalog({
       tools: [...codeModeTools, ...targets],
@@ -452,14 +454,17 @@ describe("Code Mode guest execution", () => {
     const value = details.value as { names: string[]; results: Record<string, unknown> };
     expect(value.names).toContain("llm_task");
     expect(value.names).toContain("tool_9patch");
+    expect(value.names).toContain("tool___openclawResult");
     expect(value.names).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/^llm_task_[a-f0-9]{8}$/u),
         expect.stringMatching(/^catalog_[a-f0-9]{8}$/u),
         expect.stringMatching(/^class_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^tool___openclawResult_[a-f0-9]{8}$/u),
       ]),
     );
     for (const name of value.names) {
+      expect(name.startsWith("__openclaw")).toBe(false);
       expect(compacted.tools[0]?.description).toContain(`- ${name} `);
     }
     expect(value.results).toMatchObject({
@@ -468,7 +473,59 @@ describe("Code Mode guest execution", () => {
       catalog: { name: "catalog", input: { ok: true } },
       class: { name: "class", input: { ok: true } },
       "9patch": { name: "9patch", input: { ok: true } },
+      __openclawResult: { name: "__openclawResult", input: { ok: true } },
+      tool___openclawResult: { name: "tool___openclawResult", input: { ok: true } },
     });
+  });
+
+  it("keeps private lifecycle hooks intact while invoking colliding catalog globals", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const privateNames = [
+      "__openclawResult",
+      "__openclawSerializeCatalogHandles",
+      "__openclawSettleBridge",
+      "__openclawTakeOutput",
+      "__openclawFuturePrivateHook",
+    ];
+    const targets = privateNames.map((name) => pluginTool(name, `Exercise ${name}`));
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, ...targets],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const results = await Promise.all(catalog.all().map(async (handle) => ({
+          callableName: handle.callableName,
+          toolName: handle.toolName,
+          value: await globalThis[handle.callableName]({ hook: handle.toolName }),
+        })));
+        await yield_control("resume private hooks");
+        text("private hooks settled");
+        return results;
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      output: [{ type: "text", text: "private hooks settled" }],
+      telemetry: { callCount: privateNames.length },
+    });
+    expect(details.value).toEqual(
+      expect.arrayContaining(
+        privateNames.map((name) => ({
+          callableName: `tool_${name}`,
+          toolName: name,
+          value: { name, input: { hook: name } },
+        })),
+      ),
+    );
   });
 
   it("uses the client tool as the single winner for a shadowed exact name", async () => {

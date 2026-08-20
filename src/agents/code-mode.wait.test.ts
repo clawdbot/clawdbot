@@ -96,7 +96,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       "code-call-terminal-yield",
       {
         code: `
-          await tools.callValue("terminal_action", {});
+          await terminal_action({});
           await yield_control("pause");
           return "done";
         `,
@@ -140,7 +140,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       "code-call-terminal-yield-failure",
       {
         code: `
-          await tools.callValue("terminal_action", {});
+          await terminal_action({});
           await yield_control("pause");
           throw new Error("resumed failure");
         `,

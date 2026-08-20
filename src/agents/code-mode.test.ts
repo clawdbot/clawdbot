@@ -78,7 +78,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const result = await expectDefined(tools[0], "exec tool").execute("exec-terminal", {
-      code: 'return await tools.call("terminal_action", {});',
+      code: "return await terminal_action({});",
     });
 
     expect(result.details).toMatchObject({ status: "completed" });

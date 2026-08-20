@@ -37,11 +37,11 @@ const RESERVED_WORDS = new Set([
   "yield",
 ]);
 
-const JS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-
 function normalizedCallableBase(name: string): string {
   const normalized = name.replace(/[^A-Za-z0-9_$]/g, "_");
-  return /^[A-Za-z_$]/.test(normalized) ? normalized : `tool_${normalized}`;
+  return /^[A-Za-z_$]/.test(normalized) && !normalized.startsWith("__openclaw")
+    ? normalized
+    : `tool_${normalized}`;
 }
 
 function suffixedCallableName(base: string, id: string, used: ReadonlySet<string>): string {
@@ -79,7 +79,7 @@ export function createCodeModeCatalogProjection(
     .map((entry) => {
       const base = normalizedCallableBase(entry.name);
       const canKeepExactName =
-        JS_IDENTIFIER.test(entry.name) && !RESERVED_WORDS.has(entry.name) && !used.has(entry.name);
+        entry.name === base && !RESERVED_WORDS.has(entry.name) && !used.has(entry.name);
       return { entry, base, canKeepExactName };
     })
     .toSorted(
