@@ -2463,6 +2463,21 @@ describe("agent event handler", () => {
     },
   );
 
+  it("loads restart-recovery state only for recognized lifecycle phases", () => {
+    const { handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+    });
+
+    emitAgentEvent(handler, "run-recovery", "assistant", { text: "streaming" });
+    emitAgentEvent(handler, "run-recovery", "lifecycle", { phase: "retry" }, { seq: 2 });
+
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+
+    emitAgentEvent(handler, "run-recovery", "lifecycle", { phase: "start" }, { seq: 3 });
+
+    expect(loadSessionEntry).toHaveBeenCalledOnce();
+  });
+
   it("suppresses late interrupted pre-restart lifecycle events from live projections", () => {
     mockSessionEntry(
       {
