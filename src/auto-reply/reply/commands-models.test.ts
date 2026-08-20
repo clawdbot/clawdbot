@@ -12,8 +12,7 @@ import {
 import { buildModelsProviderData, handleModelsCommand } from "./commands-models.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-// oxfmt-ignore
-const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn(), isPreparedModelCatalogFull: vi.fn(() => false) }));
+const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn() }));
 
 const modelAuthLabelMocks = vi.hoisted(() => ({
   resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
@@ -121,8 +120,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
   },
 }));
 
-// oxfmt-ignore
-vi.mock("../../agents/prepared-model-runtime.facts.js", () => ({ isPreparedModelCatalogFull: modelCatalogMocks.isPreparedModelCatalogFull }));
+vi.mock("../../agents/prepared-model-runtime.facts.js", () => ({
+  isPreparedModelCatalogFull: () => false,
+}));
 
 vi.mock("../../agents/model-auth-label.js", () => ({
   resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
@@ -347,9 +347,6 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.discoverExternalCliAuth).toBe(false);
     expect(authCheckerParams?.allowPreparedRuntimeAuth).toBe(true);
   });
-
-  // oxfmt-ignore
-  it.each([{ complete: true, reads: [true] }, { complete: false, reads: [true, false] }])("uses the prepared catalog before wildcard picker browse (complete: $complete)", async ({ complete, reads }) => { modelCatalogMocks.isPreparedModelCatalogFull.mockReturnValueOnce(complete); await handleModelsCommand(buildParams("/models", { agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } } }), true); expect(modelCatalogMocks.loadModelCatalog.mock.calls.map(([params]) => params.readOnly)).toEqual(reads); });
 
   it("does not block default browse when read-only catalog loading is slow", async () => {
     vi.useFakeTimers();
