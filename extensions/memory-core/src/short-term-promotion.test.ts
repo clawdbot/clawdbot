@@ -591,17 +591,23 @@ describe("short-term promotion", () => {
     expect(store.entries).toEqual({});
   });
 
-  it("classifies transient diagnostics and secrets as contaminated promotion snippets", () => {
+  it("classifies non-durable promotion snippets without blocking durable guidance", () => {
     const rejected = [
       "Output Directory Path: /home/user/data/temp/feishu_project_issues/7058806450",
       "summary.md: **Not generated.** The pipeline aborted before reaching the summary step because no log files were downloaded.",
       "Worktree: **Not created.** `.monorepo_worktree.json` does not exist after step 6/9.",
       "| Method | Error | Root Cause | | drfile download | [400] incorrect username or password | password=*** placeholder |",
+      // Multiline input is normalized inside the predicate.
       "Error: boom\n    at run (/tmp/openclaw-run/index.js:1:2)",
+      // Promotion call sites pass pre-normalized single-line snippets, so the
+      // gate must also catch stack frames embedded mid-sentence.
+      "wrapper failed at run (/tmp/openclaw-run/index.js:1:2) during startup",
       "2026-08-05T03:00:00Z ERROR failed to download logs",
-      "```json\n{\"error\":\"timeout\"}\n```",
+      '```json\n{"error":"timeout"}\n```',
       "OPENAI_API_KEY=sk-proj_123456789abcdefghijklmnop",
       "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdefghijklmnopqrstuvwxyz.123456789abcd",
+      "uat-client: refresh_token expired for ou_...57cdd, clearing error: need_user_authorization",
+      "The job failed with exit code 1; attempt 3/5 failed and retries are exhausted.",
     ];
     for (const snippet of rejected) {
       expect(isContaminatedDreamingSnippet(snippet), snippet).toBe(true);
@@ -610,10 +616,66 @@ describe("short-term promotion", () => {
     const retained = [
       "User prefers concise status updates during long debugging work.",
       "Analyze each driver case by downloading trip logs, creating a release worktree, and cross-checking logs with source code.",
+      // Durable guidance that discusses credentials without embedding a value
+      // stays eligible; bare-label matching used to discard it.
+      "How to store an API key: put it in ~/.openclaw/credentials/ and never commit it.",
+      "The secret for the staging env lives in the vault; do not commit it.",
+      // Durable-intent carve-out: a standing rule mentioning transient
+      // vocabulary is guidance, not a failure artifact.
+      "Standing rule: when a job exits with exit code 1, re-run the collector before reporting failure.",
+      "Remember: scratch files for analysis always use /tmp/ so they never land in the repo.",
     ];
     for (const snippet of retained) {
       expect(isContaminatedDreamingSnippet(snippet), snippet).toBe(false);
     }
+  });
+
+  it("records durable guidance but excludes non-durable snippets through record, load, and rank", async (workspaceDir) => {
+    await recordMemoryRecalls(workspaceDir, "promotion quality", [
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        1,
+        1,
+        0.92,
+        "wrapper failed at run (/tmp/openclaw-run/index.js:1:2) during startup",
+      ),
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        2,
+        2,
+        0.91,
+        "uat-client: refresh_token expired for ou_...57cdd, clearing error: need_user_authorization",
+      ),
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        3,
+        3,
+        0.9,
+        "How to store an API key: put it in ~/.openclaw/credentials/ and never commit it.",
+      ),
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        4,
+        4,
+        0.89,
+        "Standing rule: when a job exits with exit code 1, re-run the collector before reporting failure.",
+      ),
+    ]);
+
+    const durableGuidance = [
+      "How to store an API key: put it in ~/.openclaw/credentials/ and never commit it.",
+      "Standing rule: when a job exits with exit code 1, re-run the collector before reporting failure.",
+    ];
+
+    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+    expect(
+      Object.values(store.entries)
+        .map((entry) => entry.snippet)
+        .toSorted(),
+    ).toEqual(durableGuidance);
+
+    const ranked = await rankAllCandidates(workspaceDir);
+    expect(ranked.map((candidate) => candidate.snippet).toSorted()).toEqual(durableGuidance);
   });
 
   it("ignores raw session and transcript snippets when recording short-term recalls", async (workspaceDir) => {
@@ -1649,6 +1711,27 @@ describe("short-term promotion", () => {
         },
       ],
     });
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe("contamination filter");
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
+  it("does not append non-durable promotion snippets during direct apply", async (workspaceDir) => {
+    const applied = await applyAllCandidates(
+      workspaceDir,
+      [
+        promotionCandidateFixture({
+          key: "memory:memory/2026-04-03.md:1:1",
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "wrapper failed at run (/tmp/openclaw-run/index.js:1:2) during startup",
+          conceptTags: ["assistant"],
+        }),
+      ],
+    );
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("contamination filter");
