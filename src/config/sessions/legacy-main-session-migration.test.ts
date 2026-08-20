@@ -559,6 +559,11 @@ describe("legacy main session migration", () => {
     const unresolved = createFixture({
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     });
+    seedClaim({
+      databaseAgentId: "main",
+      databasePath: databasePath(unresolved.stateDir, "main"),
+      key: "agent:main:chat",
+    });
     const perAgentPinned = createFixture({
       agents: {
         ownership: "explicit",
@@ -590,6 +595,49 @@ describe("legacy main session migration", () => {
     });
     expect(perAgentArmed).toMatchObject({ armed: true, ownerAgentId: "ops" });
     expect(notArmed.warnings[0]).toContain("agents.defaults.sessionStore.agentId");
+  });
+
+  it("proves an unresolved-owner store clean when it has no legacy rows", async () => {
+    const fixture = createFixture({
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    });
+
+    const result = await migrateLegacyMainSessionKeys({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      mode: "detect",
+    });
+
+    expect(result).toMatchObject({
+      armed: false,
+      complete: true,
+      ledgerComplete: false,
+      outcomes: [{ kind: "no-legacy-rows", detail: "no configured owner" }],
+      warnings: [],
+    });
+  });
+
+  it("keeps unresolved ownership advisory when a candidate store is unreadable", async () => {
+    const unreadablePath = path.join(tempDirs.make("unresolved-unreadable-"), "sessions.sqlite");
+    fs.symlinkSync(`${unreadablePath}.missing`, unreadablePath);
+    const fixture = createFixture({
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      session: { store: unreadablePath },
+    });
+
+    const result = await migrateLegacyMainSessionKeys({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      mode: "automatic",
+    });
+
+    expect(result).toMatchObject({
+      armed: false,
+      complete: false,
+      ledgerComplete: false,
+      outcomes: [{ kind: "not-armed", detail: "owner-unresolved" }],
+    });
+    expect(result.warnings[0]).toContain("agents.defaults.sessionStore.agentId");
   });
 
   it("uses an explicit migration owner for retired main rows in per-agent stores", async () => {
