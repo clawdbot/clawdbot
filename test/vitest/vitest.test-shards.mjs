@@ -12,6 +12,14 @@ export const autoReplyTopLevelReplyTestInclude = ["src/auto-reply/reply*.test.ts
 
 export const autoReplyReplySubtreeTestInclude = ["src/auto-reply/reply/**/*.test.ts"];
 
+export const tuiPtyTestFiles = [
+  "src/tui/tui-auth-child-pty.e2e.test.ts",
+  "src/tui/tui-pty-harness.e2e.test.ts",
+  "src/tui/tui-session-identity-pty.e2e.test.ts",
+  "src/tui/tui-reset-transition-pty.e2e.test.ts",
+  "src/tui/tui-pty-local.e2e.test.ts",
+];
+
 export const fullSuiteVitestShards = [
   {
     config: "test/vitest/vitest.full-core-unit-fast.config.ts",
