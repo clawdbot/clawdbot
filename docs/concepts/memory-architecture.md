@@ -407,7 +407,7 @@ knobs that exist:
 
 | Concern                         | Where                                                           | Reference                                                |
 | ------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------- |
-| Dreaming enable, cadence, model | `plugins.entries.<memory-slot-owner>.config.dreaming`            | [Dreaming](/concepts/dreaming)                           |
+| Dreaming enable, cadence, model | `plugins.entries.<memory-slot-owner>.config.dreaming`           | [Dreaming](/concepts/dreaming)                           |
 | Search providers, hybrid tuning | `memory.search`                                                 | [Memory config](/reference/memory-config)                |
 | Escalation lane mode, scope     | `plugins.entries.active-memory`                                 | [Active memory](/concepts/active-memory)                 |
 | Cross-conversation recall       | `agents.entries.<id>.memory.search.rememberAcrossConversations` | [Active memory](/concepts/active-memory)                 |
