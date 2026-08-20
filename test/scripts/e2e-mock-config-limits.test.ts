@@ -1,12 +1,12 @@
 // E2E Mock Config Limits tests cover e2e mock config limits script behavior.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { getFreePort } from "../../src/test-utils/ports.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const mockOpenAiPath = "scripts/e2e/mock-openai-server.mjs";
 const webSearchMockPath = "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs";
@@ -30,7 +30,6 @@ const scrubbedEnvKeys = [
   "RAW_SCHEMA_ERROR",
   "SUCCESS_MARKER",
 ];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function cleanEnv(env: Record<string, string>) {
   const childEnv = { ...process.env };
@@ -186,59 +185,67 @@ describe("mock OpenAI response markers", () => {
   });
 
   it("reloads the lane-owned response control between turns", async () => {
-    const root = tempDirs.make("openclaw-mock-response-");
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-"));
     const control = join(root, "response.json");
-    await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "first response" }));
-    await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
-      const request = () =>
-        fetch(`${baseUrl}/v1/responses`, {
+    try {
+      await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "first response" }));
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        const request = () =>
+          fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              input: "return OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
+              stream: false,
+            }),
+          }).then((response) => response.json());
+        expect((await request()).output?.[0]?.content?.[0]?.text).toBe("first response");
+        const completion = await fetch(`${baseUrl}/v1/chat/completions`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            input: "return OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
+            messages: [{ content: "return OPENCLAW_E2E_DRAFTPROOF", role: "user" }],
             stream: false,
           }),
         }).then((response) => response.json());
-      expect((await request()).output?.[0]?.content?.[0]?.text).toBe("first response");
-      const completion = await fetch(`${baseUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          messages: [{ content: "return OPENCLAW_E2E_DRAFTPROOF", role: "user" }],
-          stream: false,
-        }),
-      }).then((response) => response.json());
-      expect(completion.choices?.[0]?.message?.content).toBe("first response");
-      await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "second response" }));
-      expect((await request()).output?.[0]?.content?.[0]?.text).toBe("second response");
-    });
+        expect(completion.choices?.[0]?.message?.content).toBe("first response");
+        await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "second response" }));
+        expect((await request()).output?.[0]?.content?.[0]?.text).toBe("second response");
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it("holds a lane response until the recorder reveals the outbound message", async () => {
-    const root = tempDirs.make("openclaw-mock-response-hold-");
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-hold-"));
     const control = join(root, "response.json");
-    await writeFile(
-      control,
-      JSON.stringify({ chunkDelayMs: 0, hold: true, text: "visible after reveal" }),
-    );
-    await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
-      let settled = false;
-      const request = fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ input: "wait until visible", stream: false }),
-      }).then(async (response) => {
-        settled = true;
-        return await response.json();
-      });
-      await delay(75);
-      expect(settled).toBe(false);
+    try {
       await writeFile(
         control,
-        JSON.stringify({ chunkDelayMs: 0, hold: false, text: "visible after reveal" }),
+        JSON.stringify({ chunkDelayMs: 0, hold: true, text: "visible after reveal" }),
       );
-      expect((await request).output?.[0]?.content?.[0]?.text).toBe("visible after reveal");
-    });
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        let settled = false;
+        const request = fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "wait until visible", stream: false }),
+        }).then(async (response) => {
+          settled = true;
+          return await response.json();
+        });
+        await delay(75);
+        expect(settled).toBe(false);
+        await writeFile(
+          control,
+          JSON.stringify({ chunkDelayMs: 0, hold: false, text: "visible after reveal" }),
+        );
+        expect((await request).output?.[0]?.content?.[0]?.text).toBe("visible after reveal");
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it("drives the MCP App fixture tool before returning the visible marker", async () => {
@@ -415,54 +422,62 @@ describe("e2e mock and config helper numeric limits", () => {
   });
 
   it("returns a clear error when mock OpenAI cannot append request logs", async () => {
-    const requestLogDirectory = tempDirs.make("openclaw-mock-request-log-");
-    await withMockServer(
-      mockOpenAiPath,
-      { MOCK_REQUEST_LOG: requestLogDirectory },
-      async (baseUrl, output) => {
-        const response = await fetch(`${baseUrl}/v1/responses`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ input: "OPENCLAW_E2E_OK" }),
-        });
-        const body = await response.json();
+    const requestLogDirectory = await mkdtemp(join(tmpdir(), "openclaw-mock-request-log-"));
+    try {
+      await withMockServer(
+        mockOpenAiPath,
+        { MOCK_REQUEST_LOG: requestLogDirectory },
+        async (baseUrl, output) => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ input: "OPENCLAW_E2E_OK" }),
+          });
+          const body = await response.json();
 
-        expect(response.status).toBe(500);
-        expect(body.error.message).toContain("mock OpenAI request log write failed");
-        await expect
-          .poll(() => output.stderr(), { timeout: 1_000 })
-          .toContain("mock-openai request log write failed");
-      },
-    );
+          expect(response.status).toBe(500);
+          expect(body.error.message).toContain("mock OpenAI request log write failed");
+          await expect
+            .poll(() => output.stderr(), { timeout: 1_000 })
+            .toContain("mock-openai request log write failed");
+        },
+      );
+    } finally {
+      await rm(requestLogDirectory, { force: true, recursive: true });
+    }
   });
 
   it("returns a clear error when web-search mock cannot append request logs", async () => {
-    const requestLogDirectory = tempDirs.make("openclaw-web-search-log-");
-    await withMockServer(
-      webSearchMockPath,
-      {
-        MOCK_REQUEST_LOG: requestLogDirectory,
-        RAW_SCHEMA_ERROR: "400 schema rejected",
-        SUCCESS_MARKER: "OPENCLAW_SCHEMA_E2E_OK",
-      },
-      async (baseUrl, output) => {
-        const response = await fetch(`${baseUrl}/v1/responses`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            input: "OPENCLAW_SCHEMA_E2E_OK",
-            reasoning: { effort: "low" },
-            tools: [{ type: "web_search" }],
-          }),
-        });
-        const body = await response.json();
+    const requestLogDirectory = await mkdtemp(join(tmpdir(), "openclaw-web-search-log-"));
+    try {
+      await withMockServer(
+        webSearchMockPath,
+        {
+          MOCK_REQUEST_LOG: requestLogDirectory,
+          RAW_SCHEMA_ERROR: "400 schema rejected",
+          SUCCESS_MARKER: "OPENCLAW_SCHEMA_E2E_OK",
+        },
+        async (baseUrl, output) => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              input: "OPENCLAW_SCHEMA_E2E_OK",
+              reasoning: { effort: "low" },
+              tools: [{ type: "web_search" }],
+            }),
+          });
+          const body = await response.json();
 
-        expect(response.status).toBe(500);
-        expect(body.error.message).toContain("mock OpenAI request log write failed");
-        await expect
-          .poll(() => output.stderr(), { timeout: 1_000 })
-          .toContain("mock-openai-web-search request log write failed");
-      },
-    );
+          expect(response.status).toBe(500);
+          expect(body.error.message).toContain("mock OpenAI request log write failed");
+          await expect
+            .poll(() => output.stderr(), { timeout: 1_000 })
+            .toContain("mock-openai-web-search request log write failed");
+        },
+      );
+    } finally {
+      await rm(requestLogDirectory, { force: true, recursive: true });
+    }
   });
 });

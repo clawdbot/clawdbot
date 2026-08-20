@@ -204,7 +204,7 @@ export function writeSutConfig(params: {
         allowFrom: [params.testerId],
         apiRoot: "http://telegram-api-proxy:8080",
         botToken: { id: "TELEGRAM_BOT_TOKEN", provider: "default", source: "env" },
-        commands: { native: false, nativeSkills: false },
+        commands: { native: true, nativeSkills: false },
         dmPolicy: "allowlist",
         enabled: true,
         groupAllowFrom: [params.testerId],
@@ -288,55 +288,17 @@ function telegramResultObject(value: unknown, label: string): JsonObject {
   return value as JsonObject;
 }
 
-function updateChatId(update: unknown): unknown {
-  if (!update || typeof update !== "object" || Array.isArray(update)) {
-    return undefined;
-  }
-  const record = update as JsonObject;
-  const callback = record.callback_query;
-  const callbackMessage =
-    callback && typeof callback === "object" && !Array.isArray(callback)
-      ? (callback as JsonObject).message
-      : undefined;
-  const message =
-    record.message ??
-    record.edited_message ??
-    record.message_reaction ??
-    record.message_reaction_count ??
-    callbackMessage;
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const chat = (message as JsonObject).chat;
-  return chat && typeof chat === "object" && !Array.isArray(chat)
-    ? (chat as JsonObject).id
-    : undefined;
-}
-
-export async function drainSutUpdates(sutToken: string, groupId: string) {
+export async function drainSutUpdates(sutToken: string) {
   const before = telegramResultObject(
     await telegramBotApi(sutToken, "getWebhookInfo", {}),
     "getWebhookInfo",
   );
-  const webhookUrlSet = typeof before.url === "string" && before.url.length > 0;
-  if (webhookUrlSet) {
-    throw new Error("QA bot has a webhook configured; refusing to replace bot-wide delivery.");
-  }
   const rawUpdates = await telegramBotApi(sutToken, "getUpdates", {
-    allowed_updates: [
-      "message",
-      "edited_message",
-      "callback_query",
-      "message_reaction",
-      "message_reaction_count",
-    ],
+    allowed_updates: ["message", "edited_message"],
     timeout: 0,
   });
   if (!Array.isArray(rawUpdates)) {
     throw new Error("getUpdates returned an invalid payload.");
-  }
-  if (rawUpdates.some((update) => String(updateChatId(update)) !== groupId)) {
-    throw new Error("QA bot has pending updates outside the leased proof chat; refusing to drain.");
   }
   if (rawUpdates.length) {
     const last = rawUpdates.at(-1);
@@ -359,7 +321,7 @@ export async function drainSutUpdates(sutToken: string, groupId: string) {
       typeof after.pending_update_count === "number" ? after.pending_update_count : undefined,
     pendingBefore:
       typeof before.pending_update_count === "number" ? before.pending_update_count : undefined,
-    webhookUrlSet,
+    webhookUrlSet: typeof before.url === "string" && before.url.length > 0,
   };
 }
 
@@ -449,7 +411,6 @@ export async function waitForLog(
 export function createContainerizedSutSpawnSpec(params: {
   containerName: string;
   gatewayPort: number;
-  groupId: string;
   mockPort: number;
   mockResponseChunkDelayMs?: number;
   mockResponseText: string;
@@ -467,7 +428,6 @@ export function createContainerizedSutSpawnSpec(params: {
       gatewayPassword: params.gatewayEnv.OPENCLAW_GATEWAY_PASSWORD,
       mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
       mockResponseText: params.mockResponseText,
-      telegramChatId: params.groupId,
       telegramBotToken: params.gatewayEnv.TELEGRAM_BOT_TOKEN,
     })}\n`,
     { mode: 0o600 },
@@ -581,7 +541,7 @@ export async function startMantisSut(params: {
   onRuntimeCreated?: (runtime: MantisSutRecovery) => void;
   onRuntimeDisposed?: () => void;
 }): Promise<MantisSutRuntime> {
-  const drained = await drainSutUpdates(params.sutToken, params.groupId);
+  const drained = await drainSutUpdates(params.sutToken);
   const config = writeSutConfig(params);
   // The root wrapper relocates tempRoot into its bounded filesystem, then restores this
   // exact path as a symlink before Docker starts. Keep controller and claim paths anchored
@@ -606,7 +566,6 @@ export async function startMantisSut(params: {
     containerName,
     gatewayEnv,
     gatewayPort: params.gatewayPort,
-    groupId: params.groupId,
     mockPort: params.mockPort,
     mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
     mockResponseText: params.mockResponseText,
