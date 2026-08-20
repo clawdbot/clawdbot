@@ -21,8 +21,14 @@ import {
   wrapSensitiveControl,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
+import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
 import { resolveConfigFieldMeta as resolveFieldMeta } from "./config-form.search.ts";
-import { configFieldId, hintForPath, redactedPlaceholder } from "./config-form.shared.ts";
+import {
+  configFieldId,
+  hintForPath,
+  redactedPlaceholder,
+  schemaType,
+} from "./config-form.shared.ts";
 
 const scalarInputState = new WeakMap<
   HTMLInputElement,
@@ -89,8 +95,30 @@ function syncScalarInputIdentity(
   });
 }
 
+function coerceTextInputValue(
+  value: string,
+  schema: ConfigNodeRenderParams["schema"],
+): string | number {
+  if (isSupportedConfigValueValid(schema, value)) {
+    return value;
+  }
+  for (const variant of schema.anyOf ?? schema.oneOf ?? []) {
+    const type = schemaType(variant);
+    if (type !== "number" && type !== "integer") {
+      continue;
+    }
+    const candidate = coerceConfigFormNumberString(value, type === "integer");
+    if (typeof candidate === "number" && isSupportedConfigValueValid(schema, candidate)) {
+      return candidate;
+    }
+  }
+  return value;
+}
+
 function stringConstraintMessage(value: string, schema: ConfigNodeRenderParams["schema"]): string {
-  return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidString");
+  return isSupportedConfigValueValid(schema, coerceTextInputValue(value, schema))
+    ? ""
+    : t("configForm.invalidString");
 }
 
 function shouldClearOptionalEmpty(
@@ -279,7 +307,7 @@ export function renderTextInput(
           setControlValidity(target, "");
           commitScalarValue(target, undefined);
         } else if (setControlValidity(target, stringConstraintMessage(raw, schema))) {
-          commitScalarValue(target, raw);
+          commitScalarValue(target, coerceTextInputValue(raw, schema));
         }
       }}
       @change=${(event: Event) => {
@@ -291,7 +319,7 @@ export function renderTextInput(
         const rawMessage = stringConstraintMessage(raw, schema);
         if (!rawMessage && !isPhonePresentation) {
           setControlValidity(target, "");
-          commitScalarValue(target, raw);
+          commitScalarValue(target, coerceTextInputValue(raw, schema));
           return;
         }
         const normalized = raw.trim();
@@ -308,7 +336,7 @@ export function renderTextInput(
         }
         target.value = normalized;
         setControlValidity(target, "");
-        commitScalarValue(target, normalized);
+        commitScalarValue(target, coerceTextInputValue(normalized, schema));
       }}
     />
   `;

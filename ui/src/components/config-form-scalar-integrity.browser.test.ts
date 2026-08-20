@@ -327,6 +327,48 @@ describe("config form scalar integrity", () => {
     ).toBe("Default: balanced");
   });
 
+  it("commits the valid branch type for constrained text unions", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderTextInput({
+        schema: {
+          anyOf: [
+            { type: "string", const: "auto" },
+            { type: "integer", minimum: 0 },
+          ],
+        },
+        value: "auto",
+        path: ["mode"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        inputType: "text",
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='text']"),
+      "constrained union input",
+    );
+
+    input.value = "42";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["mode"], 42);
+    expect(input.getAttribute("aria-invalid")).toBe("false");
+
+    input.value = "auto";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["mode"], "auto");
+
+    onPatch.mockClear();
+    input.value = "invalid";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+  });
+
   it("does not commit a clear while a number input holds partial numeric text", () => {
     // Browsers report value === "" with validity.badInput while the user is
     // mid-keystroke ("0." on the way to "0.5"). Committing undefined here

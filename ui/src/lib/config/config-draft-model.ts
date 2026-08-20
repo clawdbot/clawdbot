@@ -208,8 +208,8 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       return variant ? coerceFormValues(value, variant) : value;
     }
     if (typeof value === "string") {
-      // Mixed primitive unions render through text controls when strings are
-      // allowed. Preserve the authored type; the Gateway owns constraints.
+      // Editors commit branch-validated types, and loaded values already passed
+      // Gateway validation. Preserve strings instead of guessing again here.
       if (variants.some((variant) => schemaType(variant) === "string")) {
         return value;
       }
