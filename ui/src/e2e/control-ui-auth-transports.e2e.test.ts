@@ -685,6 +685,9 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await connected.page
       .locator("openclaw-app-shell")
       .waitFor({ timeout: controlUiSettleTimeoutMs });
+    const rawSettingsUrl = new URL("settings/advanced", allowedUi.baseUrl);
+    rawSettingsUrl.searchParams.set("section", "env");
+    expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
     await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
     const rawEditor = connected.page.locator(".config-raw-field textarea");
     await rawEditor.waitFor();
