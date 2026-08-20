@@ -2735,6 +2735,35 @@ describe("Claude session catalog", () => {
     expect(replaced).toBe(true);
   });
 
+  it("preserves catalog JSON across short descriptor reads", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const filePath = path.join(projectDir, "sessions-index.json");
+    const expected = { version: 1, entries: [], padding: "short read regression" };
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(expected));
+
+    const open = fs.open.bind(fs);
+    let readCalls = 0;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === filePath) {
+        const realRead = handle.read.bind(handle);
+        Object.defineProperty(handle, "read", {
+          configurable: true,
+          value: (buffer: Buffer, offset: number, length: number, position: number) => {
+            readCalls += 1;
+            return realRead(buffer, offset, Math.min(3, length), position);
+          },
+        });
+      }
+      return handle;
+    });
+
+    await expect(readJsonFile(filePath)).resolves.toEqual(expected);
+    expect(readCalls).toBeGreaterThan(1);
+  });
+
   it("retries transient index reads without waiting for the file metadata to change", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");

@@ -249,7 +249,7 @@ export async function readJsonFile(
     const buffer = Buffer.allocUnsafe(openedStat.size);
     let offset = 0;
     while (offset < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length - offset, offset);
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
       if (bytesRead === 0) {
         break;
       }
