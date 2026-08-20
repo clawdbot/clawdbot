@@ -327,7 +327,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, target.value);
     props.onTypingChange?.(false);
   };
-  const handleSend = () => {
+  const handleSend = (submissionAction?: Event) => {
     const draft = state.composerTextarea?.value ?? props.draft;
     if (!canSubmitDraft(draft)) {
       return;
@@ -336,7 +336,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.composingDraft = null;
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
-    props.onSend();
+    props.onSend(undefined, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
   };
   const handleVoicePrimaryAction = () => {

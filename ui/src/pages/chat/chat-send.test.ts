@@ -5684,6 +5684,26 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toStrictEqual([]);
   });
 
+  it("queues identical messages from distinct user actions while coalescing re-entry", async () => {
+    const sent = createDeferred<unknown>();
+    const host = makeChatHost({
+      requestHandlers: { "chat.send": () => sent.promise },
+    });
+    const firstAction = new Event("submit");
+    const secondAction = new Event("submit");
+
+    const first = handleSendChat(host, "same prompt", undefined, firstAction);
+    const reentry = handleSendChat(host, "same prompt", undefined, firstAction);
+    const second = handleSendChat(host, "same prompt", undefined, secondAction);
+
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatQueue).toHaveLength(2);
+    expect(host.chatQueue.map((item) => item.text)).toEqual(["same prompt", "same prompt"]);
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await Promise.all([first, reentry, second]);
+  });
+
   it("keeps an acknowledged live send pending while durable history is briefly stale", async () => {
     let historyRequests = 0;
     let runId: string | undefined;
