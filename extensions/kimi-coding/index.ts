@@ -91,6 +91,7 @@ export default defineSingleProviderPluginEntry({
     resolveThinkingProfile,
     resolveUsageAuth: async (ctx) => {
       const explicitProvider = findExplicitProviderConfig(
+        // SAFETY: provider configuration is an object map at the plugin contract boundary.
         ctx.config.models?.providers as Record<string, unknown> | undefined,
         PROVIDER_ID,
       );
@@ -106,6 +107,7 @@ export default defineSingleProviderPluginEntry({
     },
     fetchUsageSnapshot: async (ctx) => {
       const explicitProvider = findExplicitProviderConfig(
+        // SAFETY: provider configuration is an object map at the plugin contract boundary.
         ctx.config.models?.providers as Record<string, unknown> | undefined,
         PROVIDER_ID,
       );

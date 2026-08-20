@@ -103,6 +103,7 @@ function isFiveHourLimit(item: KimiUsageLimit): boolean {
 }
 
 function parseKimiUsageWindows(payload: unknown): UsageWindow[] {
+  // SAFETY: isRecord establishes the response object's string-keyed shape before field access.
   const data = isRecord(payload) ? (payload as KimiUsageResponse) : undefined;
   if (!data) {
     return [];
