@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
+import {
+  isPluginExplicitlySelectedByAlias,
+  isPluginPolicyDisabled,
+} from "./plugin-replacement-eligibility.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 describe("isPluginPolicyDisabled", () => {
@@ -84,5 +87,57 @@ describe("isPluginPolicyDisabled", () => {
     } as OpenClawConfig;
 
     expect(isPluginPolicyDisabled(config, "modern")).toBe(false);
+  });
+});
+
+describe("isPluginExplicitlySelectedByAlias", () => {
+  const registry = {
+    diagnostics: [],
+    plugins: [
+      {
+        id: "clickclack-plus",
+        origin: "workspace",
+        channels: ["clickclack"],
+        legacyPluginIds: ["clickclack-legacy"],
+      },
+    ],
+  } as unknown as PluginManifestRegistry;
+  const canonicalId = createManifestPluginAliasResolver(registry);
+
+  // Codex review P1 on #123209: schema ownership canonicalized aliases while auto-enable's
+  // preservation check still read the raw config, so an alias-selected fallback kept its strict
+  // schema for validation and was written `enabled: false` for startup.
+  it.each([
+    { label: "a channel id in allow", config: { plugins: { allow: ["clickclack"] } } },
+    { label: "a legacy id in allow", config: { plugins: { allow: ["clickclack-legacy"] } } },
+    {
+      label: "a legacy id entry",
+      config: { plugins: { entries: { "clickclack-legacy": { enabled: true } } } },
+    },
+  ])("sees selection written as $label", ({ config }) => {
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config as unknown as OpenClawConfig,
+        "clickclack-plus",
+        canonicalId,
+      ),
+    ).toBe(true);
+  });
+
+  // ClawSweeper P1 on #123209: folding alias spellings into one map by assignment let a later
+  // empty alias overwrite an earlier material entry. Startup field-merges those collisions, so
+  // every spelling has to be considered rather than the last one written.
+  it("keeps a material entry when a later colliding alias entry is empty", () => {
+    const config = {
+      plugins: { entries: { "clickclack-plus": { enabled: true }, "clickclack-legacy": {} } },
+    } as unknown as OpenClawConfig;
+
+    expect(isPluginExplicitlySelectedByAlias(config, "clickclack-plus", canonicalId)).toBe(true);
+  });
+
+  it("reports no selection when the operator wrote neither", () => {
+    expect(
+      isPluginExplicitlySelectedByAlias({} as OpenClawConfig, "clickclack-plus", canonicalId),
+    ).toBe(false);
   });
 });

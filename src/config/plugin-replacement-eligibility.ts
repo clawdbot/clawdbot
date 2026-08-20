@@ -90,10 +90,32 @@ function hasMaterialPluginEntryConfig(entry: unknown): boolean {
  * (see `disableImplicitPreferredOverPlugin`), so both stay active and channel ownership falls back
  * to registration order.
  */
-export function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
+/**
+ * Whether the operator hand-picked this plugin, matching however they spelled it.
+ *
+ * `plugins.allow` and `plugins.entries` are written by hand, so the same plugin can appear under a
+ * legacy or channel alias. Comparing a canonical id against those raw spellings misses the
+ * selection, and callers then disagree about whether the operator hand-picked the plugin.
+ *
+ * Entries are checked by scanning every spelling that canonicalizes onto the plugin rather than by
+ * folding them into one map: startup field-merges alias collisions, so a later empty alias must not
+ * be able to mask an earlier material entry.
+ */
+export function isPluginExplicitlySelectedByAlias(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  canonicalId: (id: string) => string,
+): boolean {
+  const target = canonicalId(pluginId);
   const allow = cfg.plugins?.allow;
-  if (Array.isArray(allow) && allow.includes(pluginId)) {
+  if (
+    Array.isArray(allow) &&
+    allow.some((id) => typeof id === "string" && canonicalId(id) === target)
+  ) {
     return true;
   }
-  return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
+  return Object.entries(cfg.plugins?.entries ?? {}).some(
+    ([writtenId, entry]) =>
+      canonicalId(writtenId) === target && hasMaterialPluginEntryConfig(entry),
+  );
 }

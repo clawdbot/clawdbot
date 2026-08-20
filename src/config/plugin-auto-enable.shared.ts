@@ -13,11 +13,12 @@ import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtime
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-speech-providers.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isOfficialExternalPluginId } from "../plugins/official-external-plugin-catalog.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -36,7 +37,7 @@ import type {
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
 import {
-  isPluginExplicitlySelected,
+  isPluginExplicitlySelectedByAlias,
   isPluginPolicyDisabled,
 } from "./plugin-replacement-eligibility.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
@@ -698,7 +699,12 @@ function disableImplicitPreferredOverPlugin(params: {
   pluginId: string;
   manifestRegistry: PluginManifestRegistry;
 }): OpenClawConfig {
-  if (isPluginExplicitlySelected(params.originalConfig, params.pluginId)) {
+  // Match ownership policy's view of "hand-picked": both must canonicalize aliases, or validation
+  // can retain a fallback's strict schema while this writes `enabled: false` for it and startup
+  // runs the farther preferred replacement instead.
+  const canonicalId = (id: string) =>
+    createManifestPluginAliasResolver(params.manifestRegistry)(normalizePluginId(id));
+  if (isPluginExplicitlySelectedByAlias(params.originalConfig, params.pluginId, canonicalId)) {
     return params.config;
   }
   // A built-in channel id can remain in the static channel catalog after its
