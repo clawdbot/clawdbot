@@ -21,7 +21,7 @@ import {
 } from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
-import { healthCommand } from "../commands/health.js";
+import { healthCommandNonExiting } from "../commands/health.js";
 import {
   probeGatewayReachable,
   waitForGatewayReachable,
@@ -45,7 +45,7 @@ import {
   isGatewayExternallySupervised,
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
@@ -587,7 +587,7 @@ export async function finalizeSetupWizard(
                   },
                 }
               : nextConfig;
-          await healthCommand(
+          await healthCommandNonExiting(
             {
               json: false,
               timeoutMs: 10_000,
@@ -598,7 +598,11 @@ export async function finalizeSetupWizard(
             runtime,
           );
         } catch (err) {
-          runtime.error(formatHealthCheckFailure(err));
+          // A trapped ExitError means healthCommand already printed its own
+          // reachable-gateway diagnostic; re-formatting it would only add noise.
+          if (!(err instanceof ExitError)) {
+            runtime.error(formatHealthCheckFailure(err));
+          }
           await prompter.note(
             [
               t("common.docs"),
