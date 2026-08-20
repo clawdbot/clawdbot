@@ -20,16 +20,20 @@ export function resolveModelAgentOption(
   );
 }
 
-export function rejectAgentScopedModelWrite(
+export function rejectAgentScopedModelCommand(
   command: Command,
-  commandName: "set" | "set-image",
+  commandName: string,
+  scope = "only updates global model defaults",
 ): void {
-  // Write commands update global defaults; accepting --agent here would imply per-agent mutation.
+  // Global-only model subcommands (set/set-image writes, aliases list/add/remove,
+  // scan) have no per-agent code path; accepting --agent would imply agent scoping
+  // that does not exist. Reject the flag outright instead of silently accepting a
+  // no-op (an unvalidated/invalid agent id otherwise passes through unchecked).
   const agent = resolveOptionFromCommand<string>(command, "agent");
   if (!agent) {
     return;
   }
   throw new Error(
-    `openclaw models ${commandName} does not support --agent; it only updates global model defaults. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
+    `openclaw models ${commandName} does not support --agent; it ${scope}. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
   );
 }

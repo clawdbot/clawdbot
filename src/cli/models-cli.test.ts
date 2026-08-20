@@ -447,6 +447,24 @@ describe("models cli", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
+  // aliases/scan are global-only (no agent-scoped code path downstream), so like
+  // set/set-image they reject a parent-positioned --agent instead of silently
+  // accepting a no-op flag — including an unvalidated/invalid agent id.
+  it.each([
+    { label: "aliases list", args: ["models", "--agent", "poe", "aliases", "list"] },
+    {
+      label: "aliases add",
+      args: ["models", "--agent", "poe", "aliases", "add", "zzz-test-alias", "soraka/grok-4.6"],
+    },
+    {
+      label: "aliases remove",
+      args: ["models", "--agent", "poe", "aliases", "remove", "zzz-test-alias"],
+    },
+    { label: "scan", args: ["models", "--agent", "poe", "scan", "--no-probe", "--no-input"] },
+  ])("rejects parent --agent for models $label", async ({ args }) => {
+    await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
+  });
+
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();
