@@ -155,9 +155,17 @@ class PublicWorkerHarness {
   readonly handlePluginUpgrade = vi.fn(async () => false);
   readonly httpServer: ReturnType<typeof createGatewayHttpServer>;
   readonly admitWorker: ReturnType<typeof vi.fn<WorkerConnectionService["admitWorker"]>>;
+  readonly startupPending: boolean;
   port = 0;
 
-  constructor(options: { preauthLimit?: number; rateLimitMaxAttempts?: number } = {}) {
+  constructor(
+    options: {
+      preauthLimit?: number;
+      rateLimitMaxAttempts?: number;
+      startupPending?: boolean;
+    } = {},
+  ) {
+    this.startupPending = options.startupPending === true;
     const nowMs = Date.now();
     this.environment = {
       environmentId: "worker-public",
@@ -225,6 +233,7 @@ class PublicWorkerHarness {
       port: 0,
       getResolvedAuth: () => RESOLVED_AUTH,
       preauthHandshakeTimeoutMs: 5_000,
+      isStartupPending: () => this.startupPending,
       gatewayMethods: [],
       events: [],
       refreshHealthSnapshot: vi.fn(async () => ({}) as never),
@@ -295,27 +304,38 @@ afterEach(async () => {
 });
 
 describe("public worker ingress", () => {
-  it("admits a store-backed worker on the reserved public path", async () => {
-    await withHarness({}, async (harness) => {
-      const response = new Promise<unknown>((resolve) => {
-        const ws = new WebSocket(harness.url());
-        ws.once("open", () =>
-          ws.send(JSON.stringify(connectFrame(workerConnect(harness.credential)))),
-        );
-        ws.once("message", (data) => {
-          resolve(JSON.parse(rawDataToString(data)));
-          ws.close();
+  it.each([
+    { name: "normally", startupPending: false },
+    { name: "while Gateway startup is pending", startupPending: true },
+  ])(
+    "admits a store-backed worker on the reserved public path $name",
+    async ({ startupPending }) => {
+      await withHarness({ startupPending }, async (harness) => {
+        const response = new Promise<unknown>((resolve) => {
+          const ws = new WebSocket(harness.url());
+          ws.once("open", () =>
+            ws.send(JSON.stringify(connectFrame(workerConnect(harness.credential)))),
+          );
+          ws.once("message", (data) => {
+            resolve(JSON.parse(rawDataToString(data)));
+            ws.close();
+          });
         });
-      });
 
-      await expect(response).resolves.toMatchObject({
-        ok: true,
-        payload: { type: "worker-hello-ok", environmentId: "worker-public" },
+        await expect(response).resolves.not.toMatchObject({
+          ok: false,
+          error: { details: { reason: "gateway-unavailable" } },
+        });
+        await expect(response).resolves.toMatchObject({
+          ok: true,
+          payload: { type: "worker-hello-ok", environmentId: "worker-public" },
+        });
+        expect(harness.handlePluginUpgrade).not.toHaveBeenCalled();
+        expect(harness.publicRateLimiter.size()).toBe(0);
+        expect(harness.admitWorker).toHaveBeenCalledOnce();
       });
-      expect(harness.handlePluginUpgrade).not.toHaveBeenCalled();
-      expect(harness.publicRateLimiter.size()).toBe(0);
-    });
-  });
+    },
+  );
 
   it("returns one opaque failure while retaining precise server reasons", async () => {
     await withHarness({}, async (harness) => {
