@@ -305,6 +305,7 @@ export function assertNoForeignKeyViolationsAfterMigration(
   db: DatabaseSync,
   pathname: string,
 ): void {
+  // SAFETY: PRAGMA foreign_key_check returns rows with { table, rowid, parent, fkid } columns.
   const violations = db.prepare("PRAGMA foreign_key_check;").all() as Array<{
     table?: string;
   }>;
