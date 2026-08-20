@@ -720,15 +720,11 @@ function ensureAgentSchema(
           ),
       );
       assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion });
+      assertNoForeignKeyViolationsAfterMigration(db, pathname);
     });
   } finally {
     db.exec("PRAGMA foreign_keys = ON;");
   }
-  // Post-migration integrity check: catch any foreign key violations that
-  // may have been introduced while FK enforcement was intentionally off during
-  // the schema transaction. This surfaces migration bugs early instead of
-  // crashing the gateway on the next startup foreign_key_check.
-  assertNoForeignKeyViolationsAfterMigration(db, pathname);
 }
 
 /** Initialize agent schema/ownership metadata on an independently managed connection. */

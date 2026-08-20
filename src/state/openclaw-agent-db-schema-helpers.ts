@@ -7,6 +7,7 @@ import {
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import { runSqliteForeignKeyCheck } from "../infra/sqlite-integrity.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
@@ -298,18 +299,12 @@ export function assertExistingAgentSchemaOwner(
  * The migration transaction intentionally disables FK enforcement so legacy
  * table rebuilds don't cascade-delete children. While FK enforcement is off,
  * ON DELETE CASCADE constraints don't fire, so orphaned rows can accumulate.
- * This check runs after FK enforcement is restored to catch migration bugs
- * early instead of crashing the gateway on the next startup foreign_key_check.
+ * This check runs inside the migration transaction so a detected violation
+ * rolls back the migration instead of persisting orphaned rows.
  */
 export function assertNoForeignKeyViolationsAfterMigration(
   db: DatabaseSync,
   pathname: string,
 ): void {
-  const violations = db.prepare("PRAGMA foreign_key_check;").all();
-  if (violations.length > 0) {
-    const firstTable = violations[0]?.table;
-    throw new Error(
-      `Agent database schema migration completed with ${violations.length} foreign key violation(s) in ${pathname}; first table: ${String(firstTable ?? "?")}`,
-    );
-  }
+  runSqliteForeignKeyCheck(db, pathname);
 }

@@ -199,7 +199,7 @@ function runSqliteCheck(
   throw createSqliteIntegrityError(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
 }
 
-function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
+export function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
   let violationCount = 0;
   const violations: SqliteForeignKeyViolation[] = [];
   try {
