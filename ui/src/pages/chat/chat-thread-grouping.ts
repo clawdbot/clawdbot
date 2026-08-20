@@ -510,8 +510,16 @@ type ActivityRunRenderItem = {
 
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
+function groupHasPersistentVisibleOutcome(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) =>
+    safeNormalizeMessage(message)?.content.some(
+      (block) => block.type === "attachment" || block.type === "canvas",
+    ),
+  );
+}
+
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming) {
+  if (item.kind !== "group" || item.isStreaming || groupHasPersistentVisibleOutcome(item)) {
     return false;
   }
   const role = item.role.toLowerCase();
@@ -550,11 +558,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
 // stands in for the final reply. Turns whose last content is commentary
 // merely collapse less; the visible reply is never folded away.
 function isFinalReplyGroup(item: TurnRenderItem): boolean {
-  return (
-    isCollapsibleWorkGroup(item) &&
-    item.role.toLowerCase() === "assistant" &&
-    assistantGroupHasVisibleReplyContent(item)
-  );
+  return item.kind === "group" && !item.isStreaming && assistantGroupCanOwnActiveRunStatus(item);
 }
 
 /**
