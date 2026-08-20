@@ -6,6 +6,7 @@ export {
   resolveConfiguredBindingRoute,
   type ConfiguredBindingRouteResult,
   resolveRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteWithFallback,
   type RuntimeConversationBindingRouteResult,
 } from "../channels/plugins/binding-routing.js";
 export {

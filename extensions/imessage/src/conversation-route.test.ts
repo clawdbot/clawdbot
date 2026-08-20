@@ -4,7 +4,7 @@ import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageConversationRoute } from "./conversation-route.js";
 
 const baseCfg = {
@@ -12,7 +12,13 @@ const baseCfg = {
   agents: {
     list: [{ id: "main" }, { id: "codex" }],
   },
-  bindings: [{ agentId: "main", match: { channel: "imessage", accountId: "default" } }],
+  bindings: [
+    {
+      agentId: "main",
+      match: { channel: "imessage", accountId: "default" },
+      session: { dmScope: "per-peer" },
+    },
+  ],
 } satisfies OpenClawConfig;
 
 describe("resolveIMessageConversationRoute", () => {
@@ -20,7 +26,14 @@ describe("resolveIMessageConversationRoute", () => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
-  it("lets runtime iMessage conversation bindings override default routing", () => {
+  afterEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  });
+
+  it.each([
+    ["ambiguous routing", { ...baseCfg, bindings: [] }],
+    ["a conflicting configured route", { ...baseCfg, agents: { list: [{ id: "main" }] } }],
+  ])("lets runtime bindings override %s", (_name, cfg) => {
     const touch = vi.fn();
     registerSessionBindingAdapter({
       channel: "imessage",
@@ -46,7 +59,7 @@ describe("resolveIMessageConversationRoute", () => {
     });
 
     const route = resolveIMessageConversationRoute({
-      cfg: baseCfg,
+      cfg,
       accountId: "default",
       isGroup: false,
       peerId: "+15555550123",
@@ -54,6 +67,7 @@ describe("resolveIMessageConversationRoute", () => {
     });
 
     expect(route.agentId).toBe("codex");
+    expect(route.dmScope).toBe("main");
     expect(route.sessionKey).toBe("agent:codex:acp:bound-1");
     expect(route.matchedBy).toBe("binding.channel");
     expect(touch).toHaveBeenCalledWith("default:+15555550123", undefined);

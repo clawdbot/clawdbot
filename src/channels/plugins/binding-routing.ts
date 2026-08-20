@@ -20,9 +20,6 @@ import { resolveConfiguredBinding } from "./configured-binding-registry.js";
 
 const CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS = 30_000;
 
-/**
- * Route resolution after applying a configured channel binding.
- */
 export type ConfiguredBindingRouteResult = {
   bindingResolution: ConfiguredBindingResolution | null;
   route: ResolvedAgentRoute;
@@ -30,9 +27,6 @@ export type ConfiguredBindingRouteResult = {
   boundAgentId?: string;
 };
 
-/**
- * Route resolution after applying a runtime conversation binding record.
- */
 export type RuntimeConversationBindingRouteResult = {
   bindingRecord: SessionBindingRecord | null;
   route: ResolvedAgentRoute;
@@ -75,6 +69,48 @@ function isPluginOwnedRuntimeBindingRecord(record: SessionBindingRecord | null):
     typeof metadata.pluginId === "string" &&
     typeof metadata.pluginRoot === "string"
   );
+}
+
+export function resolveRuntimeConversationBindingRouteWithFallback(params: {
+  conversation: ConversationRef;
+  resolveFallbackRoute: () => ResolvedAgentRoute;
+  resolveBoundRoute: (agentId: string) => ResolvedAgentRoute;
+}): RuntimeConversationBindingRouteResult {
+  const bindingRecord = getSessionBindingService().resolveByConversation(params.conversation);
+  const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
+  if (!bindingRecord || !boundSessionKey) {
+    return { bindingRecord: null, route: params.resolveFallbackRoute() };
+  }
+  if (isCronRunSessionKey(boundSessionKey)) {
+    // Cron run sessions are isolated and short-lived; never refresh or route live traffic to them.
+    logVerbose(
+      `ignored runtime conversation binding ${bindingRecord.bindingId} to isolated cron run session ${boundSessionKey}`,
+    );
+    return { bindingRecord: null, route: params.resolveFallbackRoute() };
+  }
+
+  getSessionBindingService().touch(bindingRecord.bindingId);
+  if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
+    return { bindingRecord, route: params.resolveFallbackRoute() };
+  }
+
+  const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey);
+  const route = params.resolveBoundRoute(boundAgentId);
+  return {
+    bindingRecord,
+    boundSessionKey,
+    boundAgentId,
+    route: {
+      ...route,
+      agentId: boundAgentId,
+      sessionKey: boundSessionKey,
+      lastRoutePolicy: deriveLastRoutePolicy({
+        sessionKey: boundSessionKey,
+        mainSessionKey: route.mainSessionKey,
+      }),
+      matchedBy: "binding.channel",
+    },
+  };
 }
 
 /**
@@ -126,62 +162,16 @@ export function resolveConfiguredBindingRoute(
   };
 }
 
-/**
- * Rewrites an agent route using a persisted runtime conversation binding, when applicable.
- */
 export function resolveRuntimeConversationBindingRoute(
   params: {
     route: ResolvedAgentRoute;
   } & ConfiguredBindingRouteConversationInput,
 ): RuntimeConversationBindingRouteResult {
-  const bindingRecord = getSessionBindingService().resolveByConversation(
-    resolveConfiguredBindingConversationRef(params),
-  );
-  const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
-  if (!bindingRecord || !boundSessionKey) {
-    return {
-      bindingRecord: null,
-      route: params.route,
-    };
-  }
-
-  if (isCronRunSessionKey(boundSessionKey)) {
-    // Cron run sessions are isolated and short-lived; never route live channel traffic into them.
-    logVerbose(
-      `ignored runtime conversation binding ${bindingRecord.bindingId} to isolated cron run session ${boundSessionKey}`,
-    );
-    return {
-      bindingRecord: null,
-      route: params.route,
-    };
-  }
-
-  getSessionBindingService().touch(bindingRecord.bindingId);
-  if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
-    // Plugin-owned binding records are observed but not route-rewritten by core; the owning
-    // plugin is responsible for its runtime target handoff.
-    return {
-      bindingRecord,
-      route: params.route,
-    };
-  }
-
-  const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || params.route.agentId;
-  return {
-    bindingRecord,
-    boundSessionKey,
-    boundAgentId,
-    route: {
-      ...params.route,
-      sessionKey: boundSessionKey,
-      agentId: boundAgentId,
-      lastRoutePolicy: deriveLastRoutePolicy({
-        sessionKey: boundSessionKey,
-        mainSessionKey: params.route.mainSessionKey,
-      }),
-      matchedBy: "binding.channel",
-    },
-  };
+  return resolveRuntimeConversationBindingRouteWithFallback({
+    conversation: resolveConfiguredBindingConversationRef(params),
+    resolveFallbackRoute: () => params.route,
+    resolveBoundRoute: () => params.route,
+  });
 }
 
 /**

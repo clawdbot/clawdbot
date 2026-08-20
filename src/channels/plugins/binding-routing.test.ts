@@ -10,6 +10,7 @@ import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import {
   ensureConfiguredBindingRouteReady,
   resolveRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteWithFallback,
 } from "./binding-routing.js";
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
@@ -94,52 +95,81 @@ describe("runtime conversation binding route", () => {
     });
   });
 
-  it("touches plugin-owned bindings without rewriting the channel route", () => {
-    const route = createRoute();
-    const binding = createBinding({
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "demo-plugin",
-        pluginRoot: "/tmp/demo-plugin",
-      },
-    });
-    const { touch } = registerAdapter(binding);
+  it("resolves a core binding before fallback and preserves route scope", () => {
+    const { touch } = registerAdapter(createBinding());
+    const fallback = vi.fn(createRoute);
+    const boundRoute = {
+      ...createRoute(),
+      agentId: "review",
+      dmScope: "per-account-channel-peer" as const,
+      groupScope: "main" as const,
+      mainSessionKey: "agent:review:home",
+    };
+    const resolveBoundRoute = vi.fn(() => boundRoute);
 
-    const result = resolveRuntimeConversationBindingRoute({
-      route,
-      conversation: {
-        channel: "demo",
-        accountId: "default",
-        conversationId: "room-1",
-      },
+    const result = resolveRuntimeConversationBindingRouteWithFallback({
+      conversation: { channel: "demo", accountId: "default", conversationId: "room-1" },
+      resolveFallbackRoute: fallback,
+      resolveBoundRoute,
     });
 
+    expect(fallback).not.toHaveBeenCalled();
+    expect(resolveBoundRoute).toHaveBeenCalledWith("review");
     expect(touch).toHaveBeenCalledWith("binding-1", undefined);
-    expect(result.bindingRecord).toBe(binding);
-    expect(result.boundSessionKey).toBeUndefined();
+    expect(result.route).toEqual({
+      ...boundRoute,
+      sessionKey: "agent:review:acp:session-1",
+      lastRoutePolicy: "session",
+      matchedBy: "binding.channel",
+    });
+  });
+
+  it.each([
+    ["absent", null, false, false],
+    ["empty", createBinding({ targetSessionKey: " " }), false, false],
+    [
+      "plugin-owned",
+      createBinding({
+        metadata: { pluginBindingOwner: "plugin", pluginId: "demo", pluginRoot: "/plugin" },
+      }),
+      true,
+      true,
+    ],
+    ["cron", createBinding({ targetSessionKey: "agent:review:cron:job:run:1" }), false, false],
+  ] as const)("falls back once for %s bindings", (_name, binding, shouldTouch, retainsRecord) => {
+    const route = createRoute();
+    const { touch } = registerAdapter(binding);
+    const fallback = vi.fn(() => route);
+    const resolveBoundRoute = vi.fn(() => route);
+
+    const result = resolveRuntimeConversationBindingRouteWithFallback({
+      conversation: { channel: "demo", accountId: "default", conversationId: "room-1" },
+      resolveFallbackRoute: fallback,
+      resolveBoundRoute,
+    });
+
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(resolveBoundRoute).not.toHaveBeenCalled();
+    expect(touch).toHaveBeenCalledTimes(shouldTouch ? 1 : 0);
+    expect(result.bindingRecord).toBe(retainsRecord ? binding : null);
     expect(result.route).toBe(route);
   });
 
-  it("ignores runtime bindings that target isolated cron run sessions", () => {
-    const route = createRoute();
-    const binding = createBinding({
-      targetSessionKey: "agent:youtube:cron:monthly-report:run:closed-run-1",
-    });
-    const { touch } = registerAdapter(binding);
+  it("rejects malformed bound session keys before resolving either route", () => {
+    const { touch } = registerAdapter(createBinding({ targetSessionKey: "agent:" }));
+    const fallback = vi.fn(createRoute);
+    const resolveBoundRoute = vi.fn(createRoute);
 
-    const result = resolveRuntimeConversationBindingRoute({
-      route,
-      conversation: {
-        channel: "demo",
-        accountId: "default",
-        conversationId: "room-1",
-      },
-    });
-
-    expect(touch).not.toHaveBeenCalled();
-    expect(result.bindingRecord).toBeNull();
-    expect(result.boundSessionKey).toBeUndefined();
-    expect(result.route).toBe(route);
+    expect(() =>
+      resolveRuntimeConversationBindingRouteWithFallback({
+        conversation: { channel: "demo", accountId: "default", conversationId: "room-1" },
+        resolveFallbackRoute: fallback,
+        resolveBoundRoute,
+      }),
+    ).toThrow("Malformed agent session key");
+    expect(touch).toHaveBeenCalledWith("binding-1", undefined);
+    expect(fallback).not.toHaveBeenCalled();
+    expect(resolveBoundRoute).not.toHaveBeenCalled();
   });
 });
 
