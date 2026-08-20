@@ -1,6 +1,13 @@
 /** Type contracts for plugin-contributed embedding providers. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import type { EmbeddingProviderRuntime } from "./embedding-provider-runtime-types.js";
+
+export type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
+  EmbeddingProviderRuntime,
+} from "./embedding-provider-runtime-types.js";
 
 /** Input accepted by embedding providers, including multimodal inline-data parts. */
 export type EmbeddingInput =
@@ -16,19 +23,6 @@ export type EmbeddingInput =
 export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
-};
-
-/** Runtime metadata returned with a created embedding provider. */
-export type EmbeddingProviderRuntime = {
-  id: string;
-  cacheKeyData?: Record<string, unknown>;
-  /** Prior persisted model/cache identities that are equivalent to the current identity. */
-  indexIdentityAliases?: Array<{
-    model: string;
-    cacheKeyData: Record<string, unknown>;
-  }>;
-  inlineQueryTimeoutMs?: number;
-  inlineBatchTimeoutMs?: number;
 };
 
 /** Provider-owned canonical identity and exact aliases for persisted indexes. */
