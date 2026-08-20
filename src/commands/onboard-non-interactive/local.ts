@@ -324,9 +324,9 @@ export async function runNonInteractiveLocalSetup(params: {
           installed: false,
           skippedReason: daemonInstall.skippedReason,
         };
-    if (!daemonInstall.installed && !opts.skipHealth) {
-      // Treat a failed requested daemon install as setup failure when health is
-      // expected; otherwise later probes would fail with less actionable output.
+    if (!daemonInstall.installed) {
+      // Skipping the health probe must not turn a requested install failure
+      // into successful onboarding.
       logNonInteractiveOnboardingFailure({
         opts,
         runtime,
