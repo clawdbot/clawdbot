@@ -97,6 +97,7 @@ export function resolveSlackProgressStyle(
 export function resolveSlackNativeProgressTaskCards(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): boolean {
+  // This behavior is intentional and must not be casually adjusted.
   if (resolveSlackProgressStyle(entry) === "compact") {
     return false;
   }
