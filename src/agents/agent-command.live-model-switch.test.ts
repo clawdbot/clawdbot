@@ -2715,6 +2715,84 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.loadFullModelCatalogMock).not.toHaveBeenCalled();
   });
 
+  it("keeps later provider capability metadata after hydrating a Codex primary", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "gmn/gpt-5.4": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "GPT 5.6 Sol",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["max"] },
+      },
+      {
+        provider: "gmn",
+        id: "gpt-5.4",
+        name: "GPT 5.4 via GMN",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+    ]);
+    state.loadProviderScopedThinkingCatalogMock.mockImplementation(async (params: unknown) => {
+      const { provider } = params as { provider?: string };
+      if (provider !== "openai") {
+        throw new Error(`unexpected scoped thinking hydration for ${provider}`);
+      }
+      return [
+        {
+          provider: "openai",
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["max", "ultra"] },
+        },
+      ];
+    });
+    state.resolveThinkingDefaultMock.mockImplementation((args: unknown) => {
+      const { provider, catalog } = args as {
+        provider?: string;
+        catalog?: Array<{ provider: string; id: string }>;
+      };
+      if (provider === "gmn") {
+        expect(catalog).toContainEqual(expect.objectContaining({ provider: "gmn", id: "gpt-5.4" }));
+        return "xhigh";
+      }
+      return "ultra";
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.run(params.provider, params.model);
+      const result = await params.run("gmn", "gpt-5.4");
+      return { result, provider: "gmn", model: "gpt-5.4", attempts: [] };
+    });
+    state.runAgentAttemptMock.mockImplementation(
+      async (params: { providerOverride: string; modelOverride: string }) =>
+        makeSuccessResult(params.providerOverride, params.modelOverride),
+    );
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      modelOverride: "gpt-5.6-sol",
+      resolvedThinkLevel: "ultra",
+    });
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      providerOverride: "gmn",
+      modelOverride: "gpt-5.4",
+      resolvedThinkLevel: "xhigh",
+    });
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledTimes(1);
+  });
+
   it("persists and clears current run delivery context for restart recovery", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
