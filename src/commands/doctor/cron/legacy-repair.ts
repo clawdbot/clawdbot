@@ -242,6 +242,12 @@ export async function applyLegacyCronStoreRepair(params: {
       shouldMigrateCodexRuntimePolicyTarget: (target) =>
         !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
     });
+  warnings.push(
+    ...normalized.unsupportedLegacyTriggerScriptJobs.map(
+      (job) =>
+        `Cron trigger script for ${job} uses legacy Code Mode APIs that cannot be safely converted; inspect the automation and update its trigger script manually to use direct tool calls.`,
+    ),
+  );
   const legacyWebhook = normalizeOptionalString(
     (params.cfg.cron as Record<string, unknown> | undefined)?.webhook,
   );
@@ -375,6 +381,11 @@ export async function applyLegacyCronStoreRepair(params: {
   if (dreamingMigration.rewrittenCount > 0) {
     changes.push(
       `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
+    );
+  }
+  if (normalized.legacyTriggerScriptJobs.length > 0) {
+    changes.push(
+      `Rewrote ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} to canonical direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}.`,
     );
   }
 
