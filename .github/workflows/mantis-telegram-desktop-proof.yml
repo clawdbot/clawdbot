@@ -1237,17 +1237,25 @@ jobs:
               issue_number: issueNumber,
               per_page: 100,
             });
-            const existing = comments.find((comment) => comment.body?.includes(marker));
+            const existing = comments.findLast(
+              (comment) =>
+                comment.user?.login === "openclaw-mantis[bot]" &&
+                comment.body?.includes(marker),
+            );
             if (existing) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body });
+              try {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id,
+                  body,
+                });
+                return;
+              } catch {
+                core.warning(`Could not update Mantis comment ${existing.id}; creating a new one.`);
+              }
             }
+            await github.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body });
 
   publish_existing_telegram_desktop_proof:
     name: Publish existing native Telegram proof

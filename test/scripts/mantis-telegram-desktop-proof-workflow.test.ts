@@ -387,6 +387,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       "There was nothing visible to test in this PR at all.",
     );
     expect(noVisibleComment?.with?.script).toContain("mantis-telegram-desktop-proof");
+    expect(noVisibleComment?.with?.script).toContain(
+      'comment.user?.login === "openclaw-mantis[bot]"',
+    );
+    expect(noVisibleComment?.with?.script).toContain("Could not update Mantis comment");
+    expect(noVisibleComment?.with?.script).toContain("issues.createComment");
     expect(workflowStep("Upload Mantis Telegram desktop artifacts").if).toContain(
       "steps.trusted_evidence.outcome == 'success'",
     );
