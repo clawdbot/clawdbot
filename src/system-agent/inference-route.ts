@@ -1,12 +1,10 @@
 // Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   listAgentEntries,
-  resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
   toAgentEntriesRecord,
-  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
@@ -32,25 +30,6 @@ export type SystemAgentConfiguredRoute = {
       agentHarnessRuntimeOverride?: string;
     }
 );
-
-export function resolveSystemAgentTargetAgentId(
-  config: OpenClawConfig,
-  requestedAgentId?: string,
-): string {
-  const configuredAgentId =
-    normalizeOptionalString(requestedAgentId) ??
-    normalizeOptionalString(config.agents?.defaults?.systemAgent?.agentId);
-  if (configuredAgentId) {
-    return normalizeAgentId(configuredAgentId);
-  }
-  return normalizeAgentId(
-    tryResolveLegacyCompatibilityAgentId(config) ??
-      resolveDefaultAgentId(config, {
-        surface: "system-agent consult routing",
-        hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
-      }),
-  );
-}
 
 export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
@@ -116,7 +95,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       import("../agents/simple-completion-runtime.js"),
       import("../agents/harness/policy.js"),
     ]);
-  const modelOwnerAgentId = resolveSystemAgentTargetAgentId(runConfig, requestedAgentId);
+  const modelOwnerAgentId = resolveAmbientOwnerAgentId(runConfig, requestedAgentId);
   if (!agentScope.resolveAgentEffectiveModelPrimary(runConfig, modelOwnerAgentId)) {
     return null;
   }
@@ -233,7 +212,7 @@ export async function projectInferenceRoute(
   deps: SystemAgentRouteProjectionDeps = {},
 ): Promise<DefaultInferenceRouteProjection> {
   const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
-  const routeAgentId = resolveSystemAgentTargetAgentId(config, requestedAgentId);
+  const routeAgentId = resolveAmbientOwnerAgentId(config, requestedAgentId);
   const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId, deps);
   const list = listAgentEntries(config);
   const agent = list.find((entry) => normalizeAgentId(entry.id) === routeAgentId);

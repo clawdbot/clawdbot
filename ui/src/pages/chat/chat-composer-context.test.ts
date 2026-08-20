@@ -1,46 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 
-type ComposerProps = Parameters<typeof renderChatComposer>[0];
+type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
 
-function renderComposer(overrides: Partial<ComposerProps> = {}) {
-  const container = document.createElement("div");
-  render(
-    renderChatComposer({
-      paneId: crypto.randomUUID(),
-      sessionKey: "main",
-      currentAgentId: "main",
-      connected: true,
-      canSend: true,
-      disabledReason: null,
-      sending: false,
-      messages: [],
-      stream: null,
-      queue: [],
-      draft: "",
-      sessions: null,
-      assistantName: "OpenClaw",
-      onDraftChange: vi.fn(),
-      onSend: vi.fn(),
-      onQueueRemove: vi.fn(),
-      onNewSession: vi.fn(),
-      ...overrides,
-    }),
-    container,
-  );
-  return container;
+function renderComposer(overrides: ComposerOverrides = {}) {
+  return renderComposerFixture(overrides).container;
 }
 
 afterEach(async () => {
-  resetChatComposerState();
-  document.body.replaceChildren();
-  vi.useRealTimers();
-  await i18n.setLocale("en");
-  vi.restoreAllMocks();
+  await resetComposerFixture();
 });
 
 describe("renderChatComposer context usage", () => {

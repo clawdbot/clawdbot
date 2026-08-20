@@ -1,9 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  resolveDefaultPluginNpmDir,
+  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmProjectDir,
+} from "./install-paths.js";
+
+const compensationTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
   clawhubInstall: vi.fn(),
   installRecords: vi.fn(),
+  npmInstall: vi.fn(),
   pathInstall: vi.fn(),
   persistInstall: vi.fn(),
   planUninstall: vi.fn(),
@@ -15,6 +26,7 @@ vi.mock("./clawhub.js", () => ({
 
 vi.mock("./install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./install.js")>()),
+  installPluginFromNpmSpec: (...args: unknown[]) => mocks.npmInstall(...args),
   installPluginFromPath: (...args: unknown[]) => mocks.pathInstall(...args),
 }));
 
@@ -35,6 +47,7 @@ vi.mock("./uninstall.js", async (importOriginal) => ({
 }));
 
 const { installManagedPluginSource } = await import("./management-service.js");
+const actualUninstall = await vi.importActual<typeof import("./uninstall.js")>("./uninstall.js");
 
 function installPersistSnapshot() {
   return {
@@ -96,6 +109,64 @@ describe("managed plugin install compensation", () => {
     expect(mocks.installRecords).toHaveBeenCalledWith({ env });
     expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
   });
+
+  it.each([
+    { name: "ordinary", generationKey: undefined },
+    { name: "generation", generationKey: "demo-v2" },
+  ])(
+    "removes a planner-validated $name npm project after persistence conflicts",
+    async (fixture) => {
+      const home = compensationTempDirs.make("openclaw-managed-npm-conflict-");
+      const env = { HOME: home };
+      const packageName = "@openclaw/demo";
+      const npmDir = resolveDefaultPluginNpmDir(env);
+      const npmRoot = fixture.generationKey
+        ? resolvePluginNpmGenerationProjectDir({
+            npmDir,
+            packageName,
+            generationKey: fixture.generationKey,
+          })
+        : resolvePluginNpmProjectDir({ npmDir, packageName });
+      const targetDir = path.join(npmRoot, "node_modules", "@openclaw", "demo");
+      const packArchive = path.join(npmRoot, "_openclaw-pack-archives", "demo.tgz");
+      const conflict = new Error("config changed during npm plugin install");
+
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.mkdir(path.dirname(packArchive), { recursive: true });
+      await fs.writeFile(packArchive, "packed plugin");
+      mocks.npmInstall.mockResolvedValue({
+        ok: true,
+        pluginId: "demo",
+        targetDir,
+        extensions: ["index.js"],
+        manifestName: packageName,
+      });
+      mocks.persistInstall.mockRejectedValue(conflict);
+      mocks.planUninstall.mockImplementation((params) =>
+        actualUninstall.planPluginUninstall(
+          params as Parameters<typeof actualUninstall.planPluginUninstall>[0],
+        ),
+      );
+      mocks.applyUninstall.mockImplementation(async (removal: { target: string }) => {
+        await fs.rm(removal.target, { recursive: true, force: true });
+        return { directoryRemoved: true, warnings: [] };
+      });
+
+      await expect(
+        installManagedPluginSource({
+          request: { source: "npm", spec: packageName, mode: "install" },
+          snapshot: installPersistSnapshot(),
+          env,
+        }),
+      ).rejects.toBe(conflict);
+
+      expect(mocks.applyUninstall).toHaveBeenCalledWith({
+        target: npmRoot,
+        cleanup: { kind: "npm", npmRoot, packageName, rootKind: "isolated-project" },
+      });
+      await expect(fs.access(npmRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("never deletes an operator-owned source when link persistence fails", async () => {
     const env = { HOME: "/tmp/openclaw-managed-link-conflict-home" };

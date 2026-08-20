@@ -85,12 +85,15 @@ describe("resolveSystemRunExecArgv", () => {
       raw: "safe --version",
       argv: ["safe", "--version"],
       resolution: {
+        kind: "command",
         execution: {
+          kind: "executable",
           rawExecutable: "safe",
           resolvedPath: trustedExecutable,
           executableName: "safe.exe",
         },
         policy: {
+          kind: "executable",
           rawExecutable: "safe",
           resolvedPath: trustedExecutable,
           executableName: "safe.exe",
@@ -135,12 +138,15 @@ describe("resolveSystemRunExecArgv", () => {
           raw: "safe-tool arg",
           argv: ["safe-tool", "arg"],
           resolution: {
+            kind: "command",
             execution: {
+              kind: "executable",
               rawExecutable: "safe-tool",
               resolvedPath: trustedExecutable,
               executableName: "safe-tool.exe",
             },
             policy: {
+              kind: "executable",
               rawExecutable: "safe-tool",
               resolvedPath: trustedExecutable,
               executableName: "safe-tool.exe",
@@ -162,12 +168,15 @@ describe("resolveSystemRunExecArgv", () => {
       raw: "safe --version",
       argv: ["safe", "--version"],
       resolution: {
+        kind: "command",
         policyBlocked: true,
         execution: {
+          kind: "executable",
           rawExecutable: "safe",
           executableName: "safe",
         },
         policy: {
+          kind: "executable",
           rawExecutable: "safe",
           executableName: "safe",
         },

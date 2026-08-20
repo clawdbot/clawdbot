@@ -24,9 +24,9 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { exportWidget } from "./widget-export.ts";
-import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
 
 export { WIDGET_PROMPT_EVENT };
 export type { WidgetPromptEventDetail };
@@ -54,10 +54,12 @@ async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> 
     const pinnedLabel = t("chat.toolCards.pinnedToDashboard");
     button.title = button.ariaLabel = pinnedLabel;
     button.dataset.pinned = "true";
-  } catch (error) {
+  } catch {
     button.disabled = false;
     button.ariaLabel = t("chat.toolCards.pinToDashboard");
-    button.title = error instanceof Error ? error.message : String(error);
+    const failureLabel = t("chat.toolCards.pinToDashboardFailed");
+    button.title = failureLabel;
+    showToast({ message: failureLabel });
   }
 }
 
@@ -198,7 +200,7 @@ const adoptedWidgetPromptFrames = new WeakSet<HTMLIFrameElement>();
 const widgetPromptOfferListenerWindows = new WeakSet<Window>();
 
 function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
-  const source = frame.contentWindow as unknown as object | null;
+  const source = frame.contentWindow;
   if (adoptedWidgetPromptFrames.has(frame) || !promptEligibleFrames.has(frame) || !source) {
     return;
   }
@@ -234,14 +236,14 @@ function installWidgetPromptOfferListener() {
     if (!source || !port || event.origin !== "null") {
       return;
     }
-    if (offeredWidgetPromptSources.has(source as unknown as object)) {
+    if (offeredWidgetPromptSources.has(source)) {
       // Only the first offer per content window can win; a replacement
       // document's offer must never displace the genuine bridge's.
       port.close();
       return;
     }
-    offeredWidgetPromptSources.add(source as unknown as object);
-    pendingWidgetPromptPorts.set(source as unknown as object, port);
+    offeredWidgetPromptSources.add(source);
+    pendingWidgetPromptPorts.set(source, port);
     // Posted-message and iframe-load tasks have no guaranteed cross-source
     // ordering, so the offer may arrive after the eligible frame's load;
     // adopt for it now instead of stranding the widget without a channel.
@@ -307,7 +309,7 @@ function renderPreviewFrame(params: {
   promptCapable?: boolean;
 }) {
   installWidgetSizeListener();
-  installWidgetThemeObserver(() => widgetFrameRegistry);
+  installWidgetThemeObserver();
   const sandbox = params.sandbox ?? "";
   const src = params.src ?? "";
   const heightKey = params.frameKey || src;
@@ -492,7 +494,6 @@ function renderWidgetCard(
   if (preview.surface !== "assistant_message") {
     return nothing;
   }
-  const label = preview.title?.trim() || t("chat.toolCards.canvas");
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
   const provider = options?.boardProvider;
   const mcpAppViewId = preview.mcpApp?.viewId?.trim();
@@ -506,9 +507,6 @@ function renderWidgetCard(
     : undefined;
   const pinned = Boolean(pinnedWidget);
   const pinLabel = t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard");
-  // Chat keeps its labeled card shell, but the inner inset follows the pinned
-  // widget's presentation so authored edge-to-edge content matches the board.
-  const bleed = pinned && (pinnedWidget?.presentation ?? "card") !== "card";
   const pinAction =
     provider &&
     (contentKind === "mcp-app" ? provider.canPinMcpApps : provider.canPinWidgets) &&
@@ -533,21 +531,23 @@ function renderWidgetCard(
           ${icons.pin}
         </button>`
       : nothing;
+  const widgetActions = renderWidgetActions(preview);
+  const actions =
+    pinAction === nothing && widgetActions === nothing
+      ? nothing
+      : html`<div class="chat-tool-card__preview-actions" data-widget-actions>
+          ${pinAction} ${widgetActions}
+        </div>`;
   return html`
     <div
       class="chat-tool-card__preview"
       data-content-kind=${contentKind}
+      ?data-has-widget-actions=${actions !== nothing}
       data-kind="canvas"
       data-surface=${surface}
     >
-      <div class="chat-tool-card__preview-header">
-        <span class="chat-tool-card__preview-label">${label}</span>
-        <div class="chat-tool-card__preview-actions">
-          <div data-widget-actions ?hidden=${pinAction === nothing}>${pinAction}</div>
-          ${renderWidgetActions(preview)}
-        </div>
-      </div>
-      <div class="chat-tool-card__preview-panel" data-side="canvas" ?data-bleed=${bleed}>
+      ${actions}
+      <div class="chat-tool-card__preview-panel" data-side="canvas">
         ${renderWidgetContent(contentKind, preview, options)}
       </div>
     </div>

@@ -59,7 +59,6 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("layoutMode: self.isSidebarDrawerLayout ? .drawer : .split"))
         #expect(componentSource.contains("OpenClawSidebarHeaderLeadingSlot"))
         #expect(componentSource.contains(".frame(width: 44, height: 44)"))
-        #expect(source.contains(".safeAreaPadding(.top, 8)"))
         #expect(source.contains("Self.sidebarShowButtonAccessibilityIdentifier"))
         #expect(source.contains("Self.sidebarHideButtonAccessibilityIdentifier"))
         #expect(source.contains("accessibilityLabel: .localized(\"Hide Sidebar\")"))
@@ -161,7 +160,8 @@ struct RootTabsSourceGuardTests {
 
         #expect(rootSource.contains("RootSidebar("))
         #expect(source.contains("ForEach(self.pinnedPages)"))
-        #expect(source.contains("ForEach(RootTabs.pinnableSidebarPages)"))
+        #expect(source.contains("destinations: RootTabs.pinnableSidebarPages.filter(self.isDestinationAvailable)"))
+        #expect(source.contains("ForEach(self.destinations)"))
         #expect(source.contains("private var brandHeader: some View"))
         #expect(source.contains("private var agentsSection: some View"))
         #expect(source.contains("static func shownAgentCount(configured: Int, total: Int) -> Int"))
@@ -662,25 +662,6 @@ extension RootTabsSourceGuardTests {
         #expect(source.contains("private func proposals(forLaneStatus status: String)"))
     }
 
-    @Test func `routed feature screens reuse shared pro components`() throws {
-        let source = try Self.iPadTaskFeatureScreensSource()
-        let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
-        let channelsSource = try String(contentsOf: Self.channelsSourceURL(), encoding: .utf8)
-
-        #expect(source.contains("ProMetricGrid(metrics: self.metrics)"))
-        #expect(source.contains("ProPanelHeader("))
-        #expect(source.contains("ProStatusRow("))
-        #expect(!source.contains("private struct ProMetricGrid"))
-        #expect(!source.contains("private struct ProMetric"))
-        #expect(!source.contains("private struct ProPanelHeader"))
-        #expect(!source.contains("private struct ProStatusRow"))
-        #expect(!channelsSource.contains("private struct SettingsChannelPanelHeader"))
-        #expect(!channelsSource.contains("private struct SettingsChannelInfoRow"))
-        #expect(componentsSource.contains("struct ProMetricGrid"))
-        #expect(componentsSource.contains("struct ProPanelHeader"))
-        #expect(componentsSource.contains("struct ProStatusRow"))
-    }
-
     @Test func `activity screen stays split from task feature screens`() throws {
         let taskSource = try Self.iPadTaskFeatureScreensSource()
         let activitySource = try String(contentsOf: Self.iPadActivityScreenSourceURL(), encoding: .utf8)
@@ -696,18 +677,6 @@ extension RootTabsSourceGuardTests {
         #expect(!taskSource.contains("struct IPadActivityScreen"))
         #expect(!taskSource.contains("import OpenClawChatUI"))
         #expect(projectSource.contains("IPadActivityScreen.swift in Sources"))
-    }
-
-    @Test func `routed feature chrome stays split from task feature screens`() throws {
-        let taskSource = try Self.iPadTaskFeatureScreensSource()
-        let chromeSource = try String(contentsOf: Self.iPadSidebarScreenChromeSourceURL(), encoding: .utf8)
-        let projectSource = try String(contentsOf: Self.xcodeProjectSourceURL(), encoding: .utf8)
-
-        #expect(chromeSource.contains("struct IPadSidebarScreenChrome<Content: View>: View"))
-        #expect(chromeSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)"))
-        #expect(chromeSource.contains("OpenClawGatewayCompactPill()"))
-        #expect(!taskSource.contains("struct IPadSidebarScreenChrome"))
-        #expect(projectSource.contains("IPadSidebarScreenChrome.swift in Sources"))
     }
 
     @Test func `routed feature chrome keeps gateway pill actionable`() throws {
@@ -770,7 +739,7 @@ extension RootTabsSourceGuardTests {
 
         #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
         #expect(!rootSource.contains("openVoiceSettings:"))
-        #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 2)
+        #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 3)
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
         #expect(overviewSource.contains("Button(action: self.openSettings)"))

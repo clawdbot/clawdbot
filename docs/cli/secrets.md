@@ -82,6 +82,18 @@ openclaw secrets store set TLS_PRIVATE_KEY \
 
 `set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. A successful write reminds you to run `openclaw secrets reload` before a config-referenced value can take effect.
 
+Secret egress substitution fails closed until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags; this policy-only form does not ask for or replace an existing secret value:
+
+```bash
+openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
+openclaw secrets store set SERVICE_TOKEN \
+  --allow-host api.example.com \
+  --allow-host uploads.example.com
+openclaw secrets store set SERVICE_TOKEN --clear-allowed-hosts
+```
+
+Hosts are normalized to lowercase ASCII/punycode. Schemes, paths, ports, and wildcards are rejected. `store list` shows allowed hosts because they are policy metadata, not secret material.
+
 ### Read values
 
 ```bash
@@ -92,10 +104,10 @@ openclaw secrets store get LOG_LEVEL
 
 Secret values never appear in human, `--json`, or `--plain` output. `store get` refuses a `secret` entry as write-only by design and exits `2`; it exits `3` when the name does not exist. Environment-kind values are readable.
 
-Team-scoped `env` entries also reach commands run by OpenClaw's own exec tool, including Code Mode, sandboxed exec, and `node`-hosted exec. Explicit per-call env wins over store values, and host/sandbox security filters can reject protected or credential-shaped names with a warning. `secret` entries are never exposed as subprocess env; use them through `store` SecretRefs instead.
+Team-scoped `env` entries reach Gateway-hosted commands run by OpenClaw's own exec tool, including OpenClaw Code Mode calls into `openclaw:core:exec` and Codex `gateway_exec`. Explicit per-call env wins over store values. Sandbox, remote `node`, ACP, and Codex-native shell execution do not receive them. `secret` entries stay out of subprocesses by default. With `secrets.egressProxy.enabled: true`, Gateway-hosted exec receives only authenticated sentinels and the Gateway replaces them at HTTPS egress; see [Secret egress proxy](/gateway/secrets#secret-egress-proxy).
 
 <Warning>
-Store entries do not reach commands run inside an external agent harness. The Codex app-server and its sandbox exec-server, and ACP children such as Claude Code, build their own child environment and never pass through OpenClaw's exec preparation. If an agent run is delegated to one of those harnesses, set the variable in that harness's own configuration instead.
+Store entries do not reach commands run inside an external agent harness. The Codex app-server and its sandbox exec-server, and ACP children such as Claude Code, build their own child environment and never pass through OpenClaw's exec preparation. In eligible Codex turns, use `gateway_exec` to enter the OpenClaw-managed Gateway environment path instead.
 </Warning>
 
 ### Remove values

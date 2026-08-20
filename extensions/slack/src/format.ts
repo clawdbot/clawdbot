@@ -8,8 +8,8 @@ import {
   type MarkdownIR,
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
+  renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
-import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-chunking";
 
 // Escape special characters for Slack mrkdwn format.
 // Preserve Slack's angle-bracket tokens so mentions and links stay intact.
@@ -404,22 +404,6 @@ function protectSlackAssistantTranscriptRoleHeaders(text: string): string {
   return `${SLACK_ASSISTANT_TRANSCRIPT_PREFIX}${text}`;
 }
 
-function hardSliceSlackToken(token: string, limit: number): string[] {
-  const chunks: string[] = [];
-  let chunk = "";
-  for (const character of token) {
-    if (chunk && chunk.length + character.length > limit) {
-      chunks.push(chunk);
-      chunk = "";
-    }
-    chunk += character;
-  }
-  if (chunk) {
-    chunks.push(chunk);
-  }
-  return chunks;
-}
-
 function buildSlackRenderOptions() {
   return {
     annotationMarkers: {
@@ -505,12 +489,20 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
       if (activeMarker && isAllowedSlackAngleToken(token)) {
         if (marker) {
           chunks.push(
-            ...hardSliceSlackToken(token, contentLimit).map(
-              (fragment) => `${marker}${fragment}${marker}`,
-            ),
+            ...chunkTextForOutbound(token, Math.max(1, Math.floor(contentLimit)), {
+              preserveWhitespace: true,
+            }).map((fragment) => `${marker}${fragment}${marker}`),
           );
         } else {
-          chunks.push(...hardSliceSlackToken(escapeSlackMrkdwnSegment(token), limit));
+          chunks.push(
+            ...chunkTextForOutbound(
+              escapeSlackMrkdwnSegment(token),
+              Math.max(1, Math.floor(limit)),
+              {
+                preserveWhitespace: true,
+              },
+            ),
+          );
         }
         continue;
       }

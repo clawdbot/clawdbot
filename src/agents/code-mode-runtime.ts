@@ -3,7 +3,6 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { boundCodeModeResult } from "./code-mode-json.js";
@@ -16,6 +15,7 @@ import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
+import { loadCodeModeTypeScriptRuntime } from "./code-mode-typescript-runtime.js";
 import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
@@ -95,14 +95,6 @@ export type CodeModeWorkerResult =
       bridgeDispatchStarted: boolean;
       output: unknown[];
     };
-
-const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
-  cacheRejections: true,
-});
-let typescriptRuntimeForTest:
-  | typeof import("typescript")
-  | Promise<typeof import("typescript")>
-  | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -526,13 +518,6 @@ function rejectsModuleAccess(
   return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
 }
 
-async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
-  if (typescriptRuntimeForTest) {
-    return await typescriptRuntimeForTest;
-  }
-  return await typescriptRuntimeLoader.load();
-}
-
 export async function prepareSource(input: {
   code: string;
   language?: CodeModeLanguage;
@@ -551,7 +536,7 @@ export async function prepareSource(input: {
     }
     return input.code;
   }
-  const ts = await loadTypeScriptRuntime();
+  const ts = await loadCodeModeTypeScriptRuntime();
   if (rejectsModuleAccess(input.code, ts)) {
     throw new ToolInputError("code mode module access is disabled.");
   }
@@ -599,13 +584,3 @@ export function enforceSnapshotPayloadLimits(params: {
     throw new CodeModeLimitError("code mode snapshot limit exceeded");
   }
 }
-
-export const codeModeRuntimeTesting = {
-  getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
-    typescriptRuntimeLoader.peek() ?? null,
-  setTypescriptRuntimeForTest: (
-    runtime: typeof import("typescript") | Promise<typeof import("typescript")> | null,
-  ) => {
-    typescriptRuntimeForTest = runtime;
-  },
-};

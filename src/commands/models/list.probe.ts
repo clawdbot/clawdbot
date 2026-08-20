@@ -7,6 +7,11 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import pMap from "p-map";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
+  type AgentRunResultView,
+  agentRunHasVisibleReply,
+  extractAgentRunTerminalError,
+} from "../../agents/agent-run-result.js";
+import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -30,7 +35,9 @@ import {
   prepareInternalSessionEffectsSession,
   removeInternalSessionEffectsSession,
 } from "../../agents/internal-session-effects.js";
+import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
+  hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
   resolveEnvApiKey,
   resolveProviderEntryApiKeyBinding,
@@ -363,6 +370,10 @@ export async function buildProbeTargets(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
+    // A provider probe only needs candidate selection. Keep it request-scoped so it cannot
+    // supersede or be superseded by the Gateway's concurrent full-catalog materialization.
+    readOnly: true,
+    providerDiscoveryProviderIds: providers,
   });
   const candidates = buildProbeCandidateMap(modelCandidates);
   const targets: AuthProbeTarget[] = [];
@@ -438,6 +449,12 @@ export async function buildProbeTargets(params: {
       : null;
     const environmentValue =
       resolvedEnvironmentValue?.apiKey === configuredValue ? null : resolvedEnvironmentValue;
+    const configuredTargetLabel =
+      configuredReference.kind === "marker" &&
+      configuredValue &&
+      isNonSecretApiKeyMarker(configuredValue, { includeEnvVarName: false })
+        ? "provider"
+        : "config";
 
     const appendDirectTargets = () => {
       if (includeConfigKey) {
@@ -498,7 +515,7 @@ export async function buildProbeTargets(params: {
           targets.push({
             provider: providerKey,
             model,
-            label: "config",
+            label: configuredTargetLabel,
             source: "models.json",
             mode: configuredMode,
             boundValue: configuredValue,
@@ -511,7 +528,7 @@ export async function buildProbeTargets(params: {
           results.push({
             provider: providerKey,
             model: undefined,
-            label: "config",
+            label: configuredTargetLabel,
             source: "models.json",
             mode: configuredMode,
             status: "no_model",
@@ -676,7 +693,11 @@ export async function buildProbeTargets(params: {
       continue;
     }
     const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
-    if (orderResolution.hasExplicitOrder && !hasUsableModelsJsonKey) {
+    const hasSyntheticLocalAuth = hasSyntheticLocalProviderAuthConfig({
+      cfg,
+      provider: providerKey,
+    });
+    if (orderResolution.hasExplicitOrder && !hasUsableModelsJsonKey && !hasSyntheticLocalAuth) {
       continue;
     }
 
@@ -686,7 +707,7 @@ export async function buildProbeTargets(params: {
           config: cfg,
           workspaceDir,
         });
-    if (!envKey && !hasUsableModelsJsonKey) {
+    if (!envKey && !hasUsableModelsJsonKey && !hasSyntheticLocalAuth) {
       continue;
     }
 
@@ -714,6 +735,9 @@ export async function buildProbeTargets(params: {
       label,
       source,
       mode,
+      ...(hasSyntheticLocalAuth && !envKey && !hasUsableModelsJsonKey
+        ? { useRuntimeAuth: true }
+        : {}),
     });
   }
 
@@ -736,10 +760,10 @@ async function probeTarget(params: {
   // "config" probe must reflect only that credential — empty the provider auth
   // order and isolate the agent dir so stored profiles cannot satisfy it via
   // failover. Direct bound values instead pin an isolated synthetic profile.
-  const probeConfig = !target.boundValue
-    ? cfg
-    : target.useRuntimeAuth
-      ? withoutProfileFallback(cfg, target.provider)
+  const probeConfig = target.useRuntimeAuth
+    ? withoutProfileFallback(cfg, target.provider)
+    : !target.boundValue
+      ? cfg
       : withDirectCredential(cfg, target.provider, target.boundValue, target.mode);
   if (!target.model) {
     return {
@@ -785,7 +809,7 @@ async function probeTarget(params: {
     // absent and cannot satisfy the probe via failover. Direct values pin a
     // synthetic profile; marker values are resolved by the runtime from the
     // profile-order-cleared config.
-    if (target.boundValue) {
+    if (target.boundValue || target.useRuntimeAuth) {
       // Canonicalize so the isolated agent DB registers and unregisters under
       // one path. os.tmpdir() is a symlink on macOS (/var -> /private/var), and
       // disposeOpenClawAgentDatabaseByPath's exact-path guard would otherwise
@@ -825,7 +849,7 @@ async function probeTarget(params: {
       agentId,
       "models.auth-probe",
     );
-    await runEmbeddedAgent({
+    const runResult = (await runEmbeddedAgent({
       preparedRunAdmission,
       sessionId: sessionTarget.sessionId,
       sessionKey: sessionTarget.sessionKey,
@@ -837,6 +861,7 @@ async function probeTarget(params: {
       prompt: PROBE_PROMPT,
       provider: target.model.provider,
       model: target.model.model,
+      modelFallbacksOverride: [],
       authProfileId: isolatedProfileId ?? target.profileId,
       authProfileIdSource: isolatedProfileId || target.profileId ? "user" : undefined,
       timeoutMs,
@@ -851,7 +876,18 @@ async function probeTarget(params: {
       modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
-    });
+    })) as AgentRunResultView;
+    const terminalError = extractAgentRunTerminalError(runResult);
+    if (terminalError) {
+      const described = describeFailoverError(new Error(terminalError));
+      return buildResult(
+        mapFailoverReasonToProbeStatus(described.reason),
+        redactAuthProbeError(described.message),
+      );
+    }
+    if (!agentRunHasVisibleReply(runResult)) {
+      return buildResult("format", "The model did not return a visible probe response.");
+    }
     return buildResult("ok");
   } catch (err) {
     const described = describeFailoverError(err);

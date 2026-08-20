@@ -31,6 +31,7 @@ import {
   mocks,
   noAbortResult,
   parseGenericThreadSessionInfo,
+  placementContextMocks,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -70,8 +71,6 @@ export const automaticDirectReplyConfig = {
 } as const satisfies OpenClawConfig;
 
 export let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
-
-export let dispatchFromConfigTesting: typeof import("./dispatch-from-config.test-support.js").testing;
 
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
@@ -369,7 +368,6 @@ export function messageAuditEvents(): Array<Record<string, unknown>> {
 
 export const globalBeforeAll0 = async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-  ({ testing: dispatchFromConfigTesting } = await import("./dispatch-from-config.test-support.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
@@ -622,6 +620,10 @@ export const describe2BeforeEach0 = () => {
   mocks.routeReply.mockReset();
   mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
   sessionStoreMocks.currentEntry = undefined;
+  placementContextMocks.getMany.mockReset().mockReturnValue(new Map());
+  placementContextMocks.resolveSessionWorkerPlacementContext
+    .mockReset()
+    .mockReturnValue(placementContextMocks.context);
   sessionBindingMocks.resolveByConversation.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();

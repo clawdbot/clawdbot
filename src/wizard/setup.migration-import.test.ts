@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSetupMigrationOptions } from "./setup.migration-import.js";
 import {
   assertFreshSetupMigrationTarget,
+  buildSetupMigrationTargetSnapshot,
   inspectSetupMigrationFreshness,
   preserveSetupMigrationSecurityAcknowledgement,
 } from "./setup.migration-snapshot.js";
@@ -42,6 +43,42 @@ describe("setup migration import freshness", () => {
     expect(result).toEqual({ fresh: true, reasons: [] });
   });
 
+  it("allows runtime-only state scaffolding before import", async () => {
+    const root = tempRoots.make("openclaw-setup-migration-");
+    const stateDir = path.join(root, "state");
+    await writeFile(path.join(stateDir, "state", "openclaw.sqlite"), "runtime database\n");
+    await writeFile(path.join(stateDir, "tmp", "startup"), "runtime scratch\n");
+
+    const result = await inspectSetupMigrationFreshness({
+      baseConfig: {},
+      stateDir,
+      workspaceDir: path.join(root, "workspace"),
+    });
+
+    expect(result).toEqual({ fresh: true, reasons: [] });
+  });
+
+  it("ignores runtime state churn while still detecting workspace changes", async () => {
+    const root = tempRoots.make("openclaw-setup-migration-");
+    const stateDir = path.join(root, "state");
+    const workspaceDir = path.join(root, "workspace");
+    const initial = await buildSetupMigrationTargetSnapshot({
+      config: {},
+      stateDir,
+      workspaceDir,
+    });
+
+    await writeFile(path.join(stateDir, "state", "openclaw.sqlite"), "runtime database\n");
+    expect(await buildSetupMigrationTargetSnapshot({ config: {}, stateDir, workspaceDir })).toBe(
+      initial,
+    );
+
+    await writeFile(path.join(workspaceDir, "external.txt"), "concurrent write\n");
+    expect(
+      await buildSetupMigrationTargetSnapshot({ config: {}, stateDir, workspaceDir }),
+    ).not.toBe(initial);
+  });
+
   it("preserves the first-launch acknowledgement across the lock-time config reread", () => {
     expect(
       preserveSetupMigrationSecurityAcknowledgement(
@@ -68,11 +105,13 @@ describe("setup migration import freshness", () => {
     expect(result.reasons).toEqual(["existing config values are loaded"]);
   });
 
-  it("rejects existing config, workspace files, and state", async () => {
+  it("rejects existing config, workspace files, credentials, sessions, and agents", async () => {
     const root = tempRoots.make("openclaw-setup-migration-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     await writeFile(path.join(workspaceDir, "MEMORY.md"), "existing memory\n");
+    await writeFile(path.join(stateDir, "credentials", "provider.json"), "{}\n");
+    await writeFile(path.join(stateDir, "sessions", "session.json"), "{}\n");
     await writeFile(path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"), "{}\n");
 
     const result = await inspectSetupMigrationFreshness({
@@ -85,6 +124,8 @@ describe("setup migration import freshness", () => {
     expect(result.reasons).toEqual([
       "existing config values are loaded",
       "workspace MEMORY.md exists",
+      "state credentials/ exists",
+      "state sessions/ exists",
       "state agents/ exists",
     ]);
     expect(() => assertFreshSetupMigrationTarget(result)).toThrow(
@@ -103,12 +144,12 @@ describe("setup migration import options", () => {
     });
   });
 
-  it("offers bundled manifest migration providers before plugin activation", () => {
+  it("lists bundled providers for the nested migration source picker", () => {
     expect(initialOptions).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ providerId: "codex", label: "Codex" }),
-        expect.objectContaining({ providerId: "claude", label: "Claude" }),
-        expect.objectContaining({ providerId: "hermes", label: "Hermes" }),
+        expect.objectContaining({ providerId: "codex", label: "Import from Codex" }),
+        expect.objectContaining({ providerId: "claude", label: "Import from Claude" }),
+        expect.objectContaining({ providerId: "hermes", label: "Import from Hermes" }),
       ]),
     );
   });

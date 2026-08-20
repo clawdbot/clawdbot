@@ -5,7 +5,6 @@ import fs from "node:fs";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
@@ -29,7 +28,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
-import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   summarizeTokenConfig,
   type ChannelAccountTokenSummaryRow,
@@ -257,17 +255,9 @@ export async function buildChannelsTable(
   const sourceConfig = opts?.sourceConfig ?? cfg;
   const includeSetupFallbackPlugins = opts?.includeSetupFallbackPlugins ?? true;
   const credentialResolutionSkipped = opts?.credentialResolutionSkipped === true;
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const metadataSnapshot = resolvePluginMetadataSnapshot({
-    config: cfg,
-    ...(workspaceDir ? { workspaceDir } : {}),
-    env: process.env,
-    allowWorkspaceScopedCurrent: true,
-  });
   const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins,
-    metadataSnapshot,
   });
   for (const plugin of readOnlyPlugins.plugins) {
     // Use the plugin's default account even when no accounts are configured so setup guidance is concrete.
@@ -530,7 +520,7 @@ export async function buildChannelsTable(
       config: cfg,
       activationSourceConfig: sourceConfig,
       channelIds: missingCandidateChannelIds,
-      manifestRecords: metadataSnapshot.plugins,
+      manifestRecords: readOnlyPlugins.manifestRecords,
     }).map((hint) => [hint.channelId, hint]),
   );
   for (const channelId of missingCandidateChannelIds) {

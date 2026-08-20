@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeOptionalAgentId } from "../../../routing/session-key.js";
+import { normalizeAgentIdStrict, normalizeOptionalAgentId } from "../../../routing/session-key.js";
 import { listAgentEntries } from "../../agent-scope-config.js";
 import { listAgentIds } from "../../agent-scope.js";
 
@@ -7,7 +7,12 @@ export function resolveTargetAcpAgentId(params: {
   requestedAgentId?: string;
   cfg: OpenClawConfig;
 }): { ok: true; agentId: string; configAgentId?: string } | { ok: false; error: string } {
-  const requested = normalizeOptionalAgentId(params.requestedAgentId);
+  const normalizedRequest =
+    params.requestedAgentId === undefined ? null : normalizeAgentIdStrict(params.requestedAgentId);
+  if (normalizedRequest && !normalizedRequest.ok) {
+    return { ok: false, error: `agentId "${params.requestedAgentId}" was not found` };
+  }
+  const requested = normalizedRequest?.value;
   if (requested) {
     const configuredAgent = listAgentEntries(params.cfg).find(
       (agent) => normalizeOptionalAgentId(agent.id) === requested,

@@ -6,9 +6,9 @@ import {
   type ThinkLevel,
 } from "../../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
-import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../sessions/agent-harness-session-key.js";
@@ -18,6 +18,7 @@ import {
   isModelSelectionLocked,
   repairProviderWrappedModelOverride,
 } from "../../sessions/model-overrides.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -54,6 +55,7 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
+import { updateSessionThinkingLevelSelection } from "../session-thinking-level-selection.js";
 import {
   hasResolvedThinkingCatalogEntry,
   normalizeThinkingCatalogProviders,
@@ -83,9 +85,7 @@ export async function resolveEmbeddedModelSelection(params: {
   sessionAgentId: string;
   workspaceDir: string;
   pluginsEnabled: boolean;
-  manifestMetadataSnapshot?: NonNullable<
-    Parameters<typeof resolveProviderIdForAuth>[1]
-  >["metadataSnapshot"];
+  manifestMetadataSnapshot?: PluginMetadataSnapshot;
   modelManifestContext: ModelManifestNormalizationContext;
   configuredThinkingCatalog: ReturnType<typeof loadManifestModelCatalog>;
   requestedThinkLevel?: ThinkLevel;
@@ -116,9 +116,6 @@ export async function resolveEmbeddedModelSelection(params: {
   let sessionEntry = params.sessionEntry;
   const hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
   let storedModelOverrideSource = hasStoredOverride ? sessionEntry?.modelOverrideSource : undefined;
-  let storedModelOverrideRouteResolution = hasStoredOverride
-    ? resolveSessionModelOverrideRouteResolution(sessionEntry)
-    : undefined;
   let hasStoredAutoFallbackProvenance =
     hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
   let hasLegacyAutoFallbackOverrideWithoutOrigin =
@@ -158,7 +155,11 @@ export async function resolveEmbeddedModelSelection(params: {
     Object.keys(agentModels ?? {}).length > 0;
   if (hasAllowlist || hasConfiguredModels) {
     modelCatalog = params.pluginsEnabled
-      ? loadManifestModelCatalog({ config: params.cfg, workspaceDir: params.workspaceDir })
+      ? loadManifestModelCatalog({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          metadataSnapshot: params.manifestMetadataSnapshot,
+        })
       : [];
     visibilityPolicy = createModelVisibilityPolicy({
       cfg: params.cfg,
@@ -232,9 +233,6 @@ export async function resolveEmbeddedModelSelection(params: {
       storedModelOverrideSource = adoptedHasStoredOverride
         ? sessionEntry?.modelOverrideSource
         : undefined;
-      storedModelOverrideRouteResolution = adoptedHasStoredOverride
-        ? resolveSessionModelOverrideRouteResolution(sessionEntry)
-        : undefined;
       hasStoredAutoFallbackProvenance =
         adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
       hasLegacyAutoFallbackOverrideWithoutOrigin =
@@ -246,12 +244,26 @@ export async function resolveEmbeddedModelSelection(params: {
     hasLegacyAutoFallbackOverrideWithoutOrigin = false;
   }
 
+  const effectiveStoredOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+    ? null
+    : resolveStoredModelOverride({
+        sessionEntry,
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        parentSessionKey: sessionEntry?.parentSessionKey,
+        defaultProvider,
+      });
+  if (effectiveStoredOverride?.source === "parent") {
+    storedModelOverrideSource = undefined;
+    hasStoredAutoFallbackProvenance = false;
+  }
   const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? undefined
-    : sessionEntry?.providerOverride?.trim();
+    : (effectiveStoredOverride?.provider ?? sessionEntry?.providerOverride?.trim());
   const storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? undefined
-    : sessionEntry?.modelOverride?.trim();
+    : (effectiveStoredOverride?.model ?? sessionEntry?.modelOverride?.trim());
+  const storedModelOverrideRouteResolution = effectiveStoredOverride?.routeResolution;
   const currentRunModelChannel = [
     params.runContext.messageChannel,
     params.opts.replyChannel,
@@ -280,6 +292,7 @@ export async function resolveEmbeddedModelSelection(params: {
   const normalizedChannelOverride = channelModelOverride
     ? parseAgentCommandModelRef(
         params.cfg,
+        params.sessionAgentId,
         channelModelOverride.model,
         defaultProvider,
         params.modelManifestContext,
@@ -303,6 +316,7 @@ export async function resolveEmbeddedModelSelection(params: {
       storedModelOverrideRouteResolution === "raw" && !storedRouteCataloged
         ? resolveModelAliasFromPair({
             cfg: params.cfg,
+            agentId: params.sessionAgentId,
             provider: candidateProvider,
             model: storedModelOverride,
             defaultProvider,
@@ -358,6 +372,7 @@ export async function resolveEmbeddedModelSelection(params: {
           )
         : parseAgentCommandModelRef(
             params.cfg,
+            params.sessionAgentId,
             explicitModelOverride,
             provider,
             params.modelManifestContext,
@@ -595,6 +610,12 @@ export async function resolveEmbeddedModelSelection(params: {
       lastInteractionAt: now,
       thinkingLevel: params.thinkOverride,
     };
+    updateSessionThinkingLevelSelection(next, {
+      provider,
+      model,
+      agentRuntime: thinkingRuntime,
+      level: params.thinkOverride,
+    });
     sessionEntry =
       (await persistAgentSession({
         sessionStore: params.sessionStore,

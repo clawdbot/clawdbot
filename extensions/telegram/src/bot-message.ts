@@ -17,8 +17,10 @@ import {
   type BuildTelegramMessageContextParams,
   type TelegramMediaRef,
 } from "./bot-message-context.js";
-import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
-import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
+import type {
+  TelegramMessageContextOptions,
+  TelegramPromptContextEntry,
+} from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import {
   createTelegramSpooledReplayParticipant,
@@ -67,7 +69,11 @@ type TelegramMessageProcessorDeps = Omit<
 > & {
   runtime: RuntimeEnv;
   telegramDeps: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "allowFrom" | "groupAllowFrom" | "replyToMode">;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "ownerAgentId" | "allowFrom" | "groupAllowFrom" | "replyToMode"
+  >;
 };
 
 export function resolveTelegramMessageTurnSettings(params: {
@@ -122,11 +128,15 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     sendChatActionHandler,
     runtime,
     telegramDeps,
+    buildContext,
     opts,
   } = deps;
   const sessionRuntime = {
-    ...(telegramDeps.buildChannelInboundEventContext
-      ? { buildChannelInboundEventContext: telegramDeps.buildChannelInboundEventContext }
+    ...((buildContext ?? telegramDeps.buildChannelInboundEventContext)
+      ? {
+          buildChannelInboundEventContext:
+            buildContext ?? telegramDeps.buildChannelInboundEventContext,
+        }
       : {}),
     ...(telegramDeps.readSessionUpdatedAt
       ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
@@ -197,6 +207,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       bot,
       cfg: turnCfg,
       account,
+      ownerAgentId: opts.ownerAgentId,
       historyLimit: turnSettings.historyLimit,
       dmHistoryLimit: turnSettings.dmHistoryLimit,
       groupHistories,
@@ -422,7 +433,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
             },
             onAbandoned: () => {
               if (!adopted) {
-                void settle({ kind: "skipped" }, "terminal");
+                void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
               }
               // Generic reply abandonment is synchronous; Telegram has no
               // owner-local resource teardown gated on core claim release.

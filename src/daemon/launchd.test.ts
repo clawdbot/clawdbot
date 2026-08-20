@@ -4,7 +4,7 @@ import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortListener } from "../infra/ports-types.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
@@ -66,6 +66,7 @@ const state = vi.hoisted(() => ({
   fileModes: new Map<string, number>(),
   fileWrites: [] as Array<{ path: string; data: string }>,
   cleanupProtectedPids: [] as Array<number | undefined>,
+  realExecFile: false,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdMaintenancePark: vi.fn<
@@ -444,9 +445,16 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-vi.mock("./exec-file.js", () => ({
-  execFileUtf8: vi.fn(async (file: string, args: string[]) => executeLaunchctlMock(file, args)),
-}));
+vi.mock("./exec-file.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./exec-file.js")>();
+  return {
+    execFileUtf8: vi.fn(async (...args: Parameters<typeof actual.execFileUtf8>) =>
+      state.realExecFile
+        ? await actual.execFileUtf8(...args)
+        : executeLaunchctlMock(args[0], args[1]),
+    ),
+  };
+});
 
 vi.mock("./launchd-restart-handoff.js", () => ({
   scheduleDetachedLaunchdMaintenancePark: (params: unknown) =>
@@ -625,6 +633,7 @@ beforeEach(() => {
   state.fileModes.clear();
   state.fileWrites.length = 0;
   state.cleanupProtectedPids.length = 0;
+  state.realExecFile = false;
   state.serviceStates.clear();
   launchdConstantsState.legacyGatewayLabels.length = 0;
   launchctlSpawnSync.mockReset();
@@ -752,15 +761,40 @@ describe("launchd runtime parsing", () => {
 });
 
 describe("launchd runtime state", () => {
-  it("marks installed plist split-brain when launchd no longer has the job", async () => {
+  it.runIf(process.platform === "darwin")(
+    "fails soft within the supplied deadline when launchctl blocks",
+    async () => {
+      const realFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const tempDir = await realFs.mkdtemp(`${process.env.TMPDIR ?? "/tmp"}/openclaw-launchd-`);
+      await realFs.writeFile(`${tempDir}/launchctl`, "#!/bin/sh\nsleep 2\n", { mode: 0o755 });
+      state.realExecFile = true;
+
+      try {
+        await withEnvAsync({ PATH: `${tempDir}:${process.env.PATH ?? ""}` }, async () => {
+          const startedAt = Date.now();
+          const runtime = await readLaunchAgentRuntime({ HOME: tempDir }, { timeoutMs: 100 });
+          expect(Date.now() - startedAt).toBeLessThan(1_000);
+          expect(runtime.status).toBe("unknown");
+        });
+      } finally {
+        state.realExecFile = false;
+        await realFs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("reports an installed but unloaded LaunchAgent as stopped", async () => {
     const env = createDefaultLaunchdEnv();
     state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
-    state.serviceLoaded = false;
+    state.printError = [
+      "Bad request.",
+      'Could not find service "ai.openclaw.gateway" in domain for user gui: 501',
+    ].join("\n");
+    state.printFailuresRemaining = 1;
 
     const runtime = await readLaunchAgentRuntime(env);
-    expect(runtime.status).toBe("unknown");
-    expect(runtime.missingSupervision).toBe(true);
-    expect(runtime.detail).toBe("Could not find service");
+
+    expect(runtime).toEqual({ status: "stopped" });
   });
 
   it.each([
@@ -775,9 +809,22 @@ describe("launchd runtime state", () => {
     const runtime = await readLaunchAgentRuntime(env);
 
     expect(runtime.status).toBe("unknown");
-    expect(runtime.missingSupervision).toBe(true);
     expect(runtime.missingGuiSession).toBe(true);
     expect(runtime.detail).toBe(detail);
+  });
+
+  it("keeps unexpected launchctl failures visible without claiming missing supervision", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
+    state.printError = "Operation not permitted\nwhile reading launchd state";
+    state.printFailuresRemaining = 1;
+
+    const runtime = await readLaunchAgentRuntime(env);
+
+    expect(runtime).toEqual({
+      status: "unknown",
+      detail: "Operation not permitted while reading launchd state",
+    });
   });
 
   it("marks a missing unit when launchd has no job and no plist exists", async () => {
@@ -1572,6 +1619,18 @@ describe("launchd uninstall", () => {
     const env = createDefaultLaunchdEnv();
 
     await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
+  });
+
+  it("uninstalls an already stopped LaunchAgent without booting it out again", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    state.serviceLoaded = false;
+    state.bootoutError = "Boot-out failed: 5: Input/output error";
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
+    expect(state.files.has(plistPath)).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
   });
 
   it("removes dangling LaunchAgent symlinks instead of treating their targets as missing", async () => {

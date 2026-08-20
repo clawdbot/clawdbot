@@ -30,3 +30,37 @@ it("keeps secret-store first use from installing later additive schema", () => {
     database.close();
   }
 });
+
+it("lazily adds allowed_hosts to a v6 secret store without changing user_version", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec(`
+      PRAGMA user_version = 6;
+      CREATE TABLE secret_store_entries (
+        scope_kind TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL,
+        updated_by TEXT,
+        deleted_at_ms INTEGER,
+        PRIMARY KEY (scope_kind, scope_id, name)
+      ) STRICT;
+    `);
+
+    ensureSecretStoreSchema(database);
+
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    expect(
+      database
+        .prepare(
+          'SELECT name, type, "notnull", dflt_value FROM pragma_table_info(?) WHERE name = ?',
+        )
+        .get("secret_store_entries", "allowed_hosts"),
+    ).toEqual({ name: "allowed_hosts", type: "TEXT", notnull: 0, dflt_value: null });
+  } finally {
+    database.close();
+  }
+});

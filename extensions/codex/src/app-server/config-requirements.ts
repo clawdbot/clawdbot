@@ -11,24 +11,6 @@ import { readNonEmptyString } from "./config-utils.js";
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 
-export function isCodexAppServerApprovalPolicyAllowedByRequirements(
-  policy: CodexAppServerApprovalPolicy,
-  params: {
-    env?: NodeJS.ProcessEnv;
-    requirementsToml?: string | null;
-    requirementsPath?: string;
-    readRequirementsFile?: (path: string) => string | undefined;
-    platform?: NodeJS.Platform;
-  } = {},
-): boolean {
-  const content = readCodexRequirementsToml(params);
-  if (content === undefined) {
-    return true;
-  }
-  const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
-  return allowedApprovalPolicies === undefined || allowedApprovalPolicies.has(policy);
-}
-
 export function readCodexRequirementsToml(params: {
   env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;

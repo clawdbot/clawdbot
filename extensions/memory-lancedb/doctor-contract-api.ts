@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -19,6 +20,19 @@ type LanceDbConnection = Awaited<ReturnType<LanceDbModule["connect"]>>;
 type LanceDbTable = Awaited<ReturnType<LanceDbConnection["openTable"]>>;
 
 const LEGACY_ENVELOPE_DELETE_BATCH_SIZE = 500;
+
+function resolveLegacyMemoryOwner(config: OpenClawConfig): {
+  agentId: string;
+  label: "default" | "system";
+} {
+  const explicitSystemAgentId =
+    config.agents?.ownership === "explicit"
+      ? config.agents.defaults?.systemAgent?.agentId?.trim()
+      : undefined;
+  return explicitSystemAgentId
+    ? { agentId: normalizeAgentId(explicitSystemAgentId), label: "system" }
+    : { agentId: resolveDefaultAgentId(config), label: "default" };
+}
 
 // Doctor deletes rows containing a complete known legacy sentinel line, a legacy
 // label followed by a fenced JSON body, or the complete legacy external-content
@@ -172,11 +186,11 @@ export function createMemoryLanceDbStateMigrations(
           if (!opened.table || hasAgentScopeColumn(await opened.table.schema())) {
             return null;
           }
-          const defaultAgentId = resolveDefaultAgentId(params.config);
+          const owner = resolveLegacyMemoryOwner(params.config);
           const count = await opened.table.countRows();
           return {
             preview: [
-              `- Memory LanceDB: assign ${count} legacy ${count === 1 ? "row" : "rows"} at ${opened.dbPath} to default agent ${defaultAgentId}`,
+              `- Memory LanceDB: assign ${count} legacy ${count === 1 ? "row" : "rows"} at ${opened.dbPath} to ${owner.label} agent ${owner.agentId}`,
             ],
           };
         } finally {
@@ -190,23 +204,23 @@ export function createMemoryLanceDbStateMigrations(
           if (!opened.table || hasAgentScopeColumn(await opened.table.schema())) {
             return { changes: [], warnings: [] };
           }
-          const defaultAgentId = resolveDefaultAgentId(params.config);
+          const owner = resolveLegacyMemoryOwner(params.config);
           const rowCount = await opened.table.countRows();
           await opened.table.addColumns([
             {
               name: MEMORY_AGENT_ID_COLUMN,
-              valueSql: quoteLanceSqlString(defaultAgentId),
+              valueSql: quoteLanceSqlString(owner.agentId),
             },
           ]);
           if (
             !hasAgentScopeColumn(await opened.table.schema()) ||
-            (await opened.table.countRows(memoryAgentPredicate(defaultAgentId))) !== rowCount
+            (await opened.table.countRows(memoryAgentPredicate(owner.agentId))) !== rowCount
           ) {
             throw new Error("LanceDB agent-scope migration verification failed");
           }
           return {
             changes: [
-              `Assigned ${rowCount} legacy Memory LanceDB ${rowCount === 1 ? "row" : "rows"} to default agent ${defaultAgentId}`,
+              `Assigned ${rowCount} legacy Memory LanceDB ${rowCount === 1 ? "row" : "rows"} to ${owner.label} agent ${owner.agentId}`,
             ],
             warnings: [],
           };

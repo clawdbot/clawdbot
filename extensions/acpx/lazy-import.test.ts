@@ -25,9 +25,9 @@ describe("acpx Pi session catalog lazy imports", () => {
           checkUpstreamActivity: async () => [],
           openTerminal: async () => ({ kind: "local", argv: ["pi"] }),
         }),
-        listPiSessions: async () => "[]",
-        readPiSession: async () => "{}",
-        resumePiSession: async () => "{}",
+        listPiSessions: async () => ({ sessions: [] }),
+        readPiSession: async () => ({ hostId: "gateway", threadId: "", items: [] }),
+        requireLocalPiSession: async () => ({ threadId: "test", cwd: "/tmp" }),
       };
     });
 
@@ -53,10 +53,10 @@ describe("acpx Pi session catalog lazy imports", () => {
     expect(nodeCommands).toHaveLength(3);
     expect(nodePolicies).toHaveLength(1);
 
-    await expect(catalogs[0]?.list({})).resolves.toEqual([]);
-    await expect(catalogs[0]?.list({})).resolves.toEqual([]);
-    await expect(nodeCommands[0]?.handle()).resolves.toBe("[]");
-    await expect(nodeCommands[0]?.handle()).resolves.toBe("[]");
+    await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);
+    await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);
+    await expect(nodeCommands[0]?.handle()).resolves.toBe('{"sessions":[]}');
+    await expect(nodeCommands[0]?.handle()).resolves.toBe('{"sessions":[]}');
     expect(runtimeImports).toBe(1);
   });
 });

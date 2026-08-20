@@ -13,6 +13,7 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
@@ -420,6 +421,24 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
       "Prepared Codex API-key route is missing its resolved API key.",
+    );
+    expect(harness.seenClientOptions).toHaveLength(0);
+  });
+
+  it("rejects ambient auth before a remote-exec attempt starts", async () => {
+    const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const params = createParams(sessionFile, tmpDir);
+    vi.stubEnv("CODEX_API_KEY", "ambient-codex-key");
+    vi.stubEnv("OPENAI_API_KEY", "ambient-openai-key");
+    params.authProfileStore = { version: 1, profiles: {} };
+    params.sandbox = {
+      ...createSandboxContext({}),
+      placementExecutionMode: "remote-exec",
+    } as NonNullable<typeof params.sandbox> & { placementExecutionMode: "remote-exec" };
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "Codex remote-exec cloud placement requires prepared OpenAI auth",
     );
     expect(harness.seenClientOptions).toHaveLength(0);
   });

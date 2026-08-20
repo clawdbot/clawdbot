@@ -4,6 +4,11 @@ import {
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
 import {
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+} from "./openclaw-state-db-additive-columns.js";
+import {
   FIRST_USE_STATE_INDEXES,
   FIRST_USE_STATE_TABLES,
   LAZY_ADDITIVE_STATE_INDEXES,
@@ -13,23 +18,21 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 // Same-version databases may lack additive columns that only a writable open
 // can ensure, while read-only planning must keep accepting the older shape.
-const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
-  "claw_installs.bootstrap_content_digest",
-  "claw_installs.bootstrap_source_path",
-  "worker_environments.desktop_json",
-  "claw_package_refs.extension_adapter_identity",
-  "claw_package_refs.extension_detected_format",
-  "claw_package_refs.extension_format",
-  "claw_package_refs.extension_id",
-  "claw_package_refs.extension_mapped_json",
-  "claw_package_refs.extension_unavailable_json",
-  "worker_environments.shared_host",
-  "worker_session_placements.terminal_reason",
-  "worker_session_placements.terminal_at_ms",
-  "worktrees.run_end_cleanup_json",
-] as const;
+const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+  ({ columnName, tableName }) => `${tableName}.${columnName}`,
+);
 
-const CLAW_LAZY_ADDITIVE_STATE_COLUMN_SET = new Set<string>(CLAW_LAZY_ADDITIVE_STATE_COLUMNS);
+const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS = CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+  ({ columnName, tableName }) => `${tableName}.${columnName}`,
+);
+const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
+);
+const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+    ({ columnName, tableName }) => `${tableName}.${columnName}`,
+  ),
+);
 const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",
@@ -68,7 +71,9 @@ export function getOpenClawStateRuntimeSchema(options: {
     schema = `${schema.slice(0, start)}${schema.slice(end + endMarker.length)}`;
   }
   for (const indexName of omittedIndexes) {
-    const start = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
+    const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
+    const uniqueStart = schema.indexOf(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`);
+    const start = plainStart >= 0 ? plainStart : uniqueStart;
     const end = start >= 0 ? schema.indexOf(";", start) : -1;
     if (start < 0 || end < 0) {
       throw new Error(`lazy additive state schema index is missing for ${indexName}`);
@@ -80,6 +85,7 @@ export function getOpenClawStateRuntimeSchema(options: {
 
 export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   allowCompatibleAdditiveColumns: true,
+  allowedMissingColumns: CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
     "claw_package_refs.package_integrity": [
@@ -101,7 +107,10 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
     ],
     "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
     "worker_environments.desktop_json": ["desktop_json TEXT"],
+    "worker_environments.bootstrap_install_kind": ["bootstrap_install_kind TEXT"],
     "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
+    "worker_environments.node_setup_id": ["node_setup_id TEXT"],
+    "worker_environments.node_device_id": ["node_device_id TEXT"],
     "worker_session_placements.terminal_reason": ["terminal_reason TEXT"],
     "worker_session_placements.terminal_at_ms": ["terminal_at_ms INTEGER"],
   },
@@ -120,10 +129,18 @@ export function isOpenClawStateStartupRepairableSchemaIssue(issue: SqliteSchemaI
     return CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET.has(issue.objectName);
   }
   if (issue.code === "missing-column") {
-    return CLAW_LAZY_ADDITIVE_STATE_COLUMN_SET.has(issue.objectName);
+    return CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET.has(issue.objectName);
   }
   return (
     issue.code === "missing-or-drifted-index" &&
     getOpenClawStateCanonicalNamedIndexSet().has(issue.objectName)
+  );
+}
+
+/** Identify compatible schema differences repaired only by their feature owner. */
+export function isOpenClawStateFirstUseSchemaIssue(issue: SqliteSchemaIssue): boolean {
+  return (
+    issue.code === "missing-column" &&
+    CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_SET.has(issue.objectName)
   );
 }

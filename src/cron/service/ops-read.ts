@@ -22,7 +22,6 @@ import type {
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import { updateLoadedJob } from "./ops-mutations.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import {
   ensureLoadedForRead,
@@ -30,8 +29,9 @@ import {
   resolveCurrentDefaultAgentId,
   resolveEffectiveJobAgentId,
 } from "./ops-shared.js";
+import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult, armTimer } from "./timer.js";
 
 /** Returns cron service status after a read-only maintenance pass. */
@@ -121,42 +121,55 @@ export async function recordExternalFailure(
     if (source && !ownsStreamSource(job, source.scheduleKey, source.identity)) {
       return;
     }
-    const snapshot = snapshotStoreForRollback(state);
     const postPersistNotifications: DeferredCronNotifications = [];
     const now = state.deps.nowMs();
-    const sourceIdentity = job.state.streamSourceIdentity;
     assertCronJobStateTimestamps(statePatch);
-    Object.assign(job.state, statePatch);
-    job.state.streamSourceIdentity = sourceIdentity;
-    // Source restarts are counted separately, but terminal exhaustion should
-    // enter the same alert/history path as a fifth consecutive payload error.
-    job.state.consecutiveErrors = Math.max(job.state.consecutiveErrors ?? 0, 4);
-    applyJobResult(
+    const committedJob = commitCronRuntimeRows({
       state,
-      job,
-      {
-        status: "error",
-        error,
-        executionStarted: false,
-        startedAt: now,
-        endedAt: now,
+      jobIds: [id],
+      operationLabel: "cron.external-failure",
+      mutate: ({ jobs }) => {
+        const current = jobs.get(id);
+        if (
+          !current ||
+          (source && !ownsStreamSource(current, source.scheduleKey, source.identity))
+        ) {
+          return { value: undefined };
+        }
+        const sourceIdentity = current.state.streamSourceIdentity;
+        Object.assign(current.state, statePatch);
+        current.state.streamSourceIdentity = sourceIdentity;
+        current.state.consecutiveErrors = Math.max(current.state.consecutiveErrors ?? 0, 4);
+        applyJobResult(
+          state,
+          current,
+          {
+            status: "error",
+            error,
+            executionStarted: false,
+            startedAt: now,
+            endedAt: now,
+          },
+          { deferredNotifications: postPersistNotifications },
+        );
+        current.state.nextRunAtMs = undefined;
+        emitCronRunFinished(state, {
+          jobId: current.id,
+          action: "finished",
+          job: current,
+          status: "error",
+          error,
+          runAtMs: now,
+          durationMs: 0,
+          failureNotificationDelivery: failureNotificationDeliveryFromJobState(current),
+        });
+        return { upsertJobIds: [current.id], value: current };
       },
-      { deferredNotifications: postPersistNotifications },
-    );
-    // Stream schedules are event-driven; applyJobResult's generic recurring
-    // backoff must never turn source failure into a time-due payload run.
-    job.state.nextRunAtMs = undefined;
-    emitCronRunFinished(state, {
-      jobId: job.id,
-      action: "finished",
-      job,
-      status: "error",
-      error,
-      runAtMs: now,
-      durationMs: 0,
-      failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
     });
-    await persistOrRestore(state, snapshot, { postPersistNotifications });
+    runPostPersistCronNotifications(state, postPersistNotifications);
+    if (committedJob) {
+      applyCronRuntimeRowsToState(state, [committedJob]);
+    }
     armTimer(state);
   });
 }
@@ -171,12 +184,26 @@ export async function updateExternalState(
 ): Promise<boolean> {
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
-    const job = state.store?.jobs.find((entry) => entry.id === id);
-    if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
-      return false;
+    assertCronJobStateTimestamps(statePatch);
+    const committedJob = commitCronRuntimeRows({
+      state,
+      jobIds: [id],
+      operationLabel: "cron.external-state",
+      mutate: ({ jobs }) => {
+        const job = jobs.get(id);
+        if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
+          return { value: undefined };
+        }
+        const sourceIdentity = job.state.streamSourceIdentity;
+        Object.assign(job.state, statePatch);
+        job.state.streamSourceIdentity = sourceIdentity;
+        return { upsertJobIds: [job.id], value: job };
+      },
+    });
+    if (committedJob) {
+      applyCronRuntimeRowsToState(state, [committedJob]);
     }
-    await updateLoadedJob({ state, id, patch: { state: statePatch } });
-    return true;
+    return committedJob !== undefined;
   });
 }
 
@@ -189,14 +216,24 @@ export async function retireExternalStreamSource(
 ): Promise<string | undefined> {
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
-    const job = state.store?.jobs.find((entry) => entry.id === id);
-    if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
+    const nextIdentity = createCronStreamSourceIdentity();
+    const committedJob = commitCronRuntimeRows({
+      state,
+      jobIds: [id],
+      operationLabel: "cron.retire-stream-source",
+      mutate: ({ jobs }) => {
+        const job = jobs.get(id);
+        if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
+          return { value: undefined };
+        }
+        job.state.streamSourceIdentity = nextIdentity;
+        return { upsertJobIds: [job.id], value: job };
+      },
+    });
+    if (!committedJob) {
       return undefined;
     }
-    const snapshot = snapshotStoreForRollback(state);
-    const nextIdentity = createCronStreamSourceIdentity();
-    job.state.streamSourceIdentity = nextIdentity;
-    await persistOrRestore(state, snapshot);
+    applyCronRuntimeRowsToState(state, [committedJob]);
     return nextIdentity;
   });
 }
@@ -209,30 +246,29 @@ export async function updateExternalCounters(
 ): Promise<void> {
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
-    const job = state.store?.jobs.find((entry) => entry.id === id);
-    // A retired owner's counter write can land after the job is converted to a
-    // non-stream schedule; only persist while the schedule is still stream so
-    // stream counters never bleed onto a time/cron job (applyJobPatch cleared
-    // them on conversion). Stream-to-stream replacements keep carrying counters.
-    if (!job || job.schedule.kind !== "stream") {
-      return;
-    }
-    await updateLoadedJob({
+    const committedJob = commitCronRuntimeRows({
       state,
-      id,
-      patch: {
-        state: {
-          streamDroppedBatches: Math.max(
-            job.state.streamDroppedBatches ?? 0,
-            counters.streamDroppedBatches ?? 0,
-          ),
-          streamCoalescedBatches: Math.max(
-            job.state.streamCoalescedBatches ?? 0,
-            counters.streamCoalescedBatches ?? 0,
-          ),
-        },
+      jobIds: [id],
+      operationLabel: "cron.external-counters",
+      mutate: ({ jobs }) => {
+        const job = jobs.get(id);
+        if (!job || job.schedule.kind !== "stream") {
+          return { value: undefined };
+        }
+        job.state.streamDroppedBatches = Math.max(
+          job.state.streamDroppedBatches ?? 0,
+          counters.streamDroppedBatches ?? 0,
+        );
+        job.state.streamCoalescedBatches = Math.max(
+          job.state.streamCoalescedBatches ?? 0,
+          counters.streamCoalescedBatches ?? 0,
+        );
+        return { upsertJobIds: [job.id], value: job };
       },
     });
+    if (committedJob) {
+      applyCronRuntimeRowsToState(state, [committedJob]);
+    }
   });
 }
 

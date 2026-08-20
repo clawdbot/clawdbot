@@ -7,8 +7,9 @@ import {
   buildAllowedModelSetWithFallbacks,
   isModelKeyAllowedBySet,
 } from "../../agents/model-selection-shared.js";
+import { clearSessionThinkingLevelSelection } from "../../agents/session-thinking-level-selection.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -148,6 +149,8 @@ async function applySelectionToSession(params: {
       params.defaultProvider,
     selection,
   });
+  // Reset model hints do not resolve thinking capability; the next owner must revalidate it.
+  clearSessionThinkingLevelSelection(nextSessionEntry);
   let appliedEntry = nextSessionEntry;
   let selectionApplied = true;
   if (storePath) {

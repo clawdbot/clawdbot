@@ -8,7 +8,11 @@ import {
   movePendingDeliveryQueueEntryNamespace,
   replacePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite-namespace.js";
-import { failPendingDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
+import {
+  loadDeliveryQueueEntries,
+  loadDeliveryQueueEntry,
+  terminalizePendingDeliveryQueueEntry,
+} from "../delivery-queue-sqlite.js";
 import {
   collectPayloadMediaSources,
   resolveOutboundMediaAccessForSend,
@@ -21,7 +25,7 @@ import {
   stageQueuePayloadMedia,
 } from "./delivery-queue-media-spool.js";
 import {
-  cancelDeliveryQueueMediaStage,
+  cancelDeliveryQueueMediaRetention,
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
@@ -44,9 +48,51 @@ import {
   mapPreparedOutboundAcceptedPayloads,
   projectPreparedOutboundBatchForStorage,
 } from "./prepared-batch.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const LEGACY_PREPARATION_LEASE_MS = 5 * 60_000;
 const LEGACY_PREPARATION_LEASE_RENEW_MS = 30_000;
+
+type LegacyPreparedQueuedDelivery = QueuedDelivery &
+  Parameters<typeof normalizeOutboundReplyFacts>[0];
+
+function hasLegacyReplyFields(entry: LegacyPreparedQueuedDelivery): boolean {
+  return Object.hasOwn(entry, "replyToId") || Object.hasOwn(entry, "replyToMode");
+}
+
+function canonicalizePreparedReplyFields(entry: LegacyPreparedQueuedDelivery): QueuedDelivery {
+  const { replyToId, replyToMode, reply: storedReply, ...canonical } = entry;
+  const reply = normalizeOutboundReplyFacts({ reply: storedReply, replyToId, replyToMode });
+  return { ...canonical, ...(reply ? { reply } : {}) };
+}
+
+function migratePreparedReplyFields(queueName: string, stateDir?: string): void {
+  const entries = loadDeliveryQueueEntries(queueName, stateDir) as LegacyPreparedQueuedDelivery[]; // SAFETY: callers pass prepared namespaces; beta rows add only legacy reply fields.
+  for (const entry of entries) {
+    if (!hasLegacyReplyFields(entry)) {
+      continue;
+    }
+    const migrated = canonicalizePreparedReplyFields(entry);
+    if (
+      replacePendingDeliveryQueueEntry({
+        queueName,
+        expectedEntry: entry,
+        replacementEntry: migrated,
+        stateDir,
+      })
+    ) {
+      continue;
+    }
+    const current = loadDeliveryQueueEntry(
+      queueName,
+      entry.id,
+      stateDir,
+    ) as LegacyPreparedQueuedDelivery | null; // SAFETY: same prepared namespace/id; replacement keeps shape or removes row.
+    if (current && hasLegacyReplyFields(current)) {
+      throw new Error(`Prepared delivery ${entry.id} changed during reply migration`);
+    }
+  }
+}
 
 function withLegacyPreparationLease(
   entry: LegacyQueuedDeliveryPreparation,
@@ -55,6 +101,7 @@ function withLegacyPreparationLease(
 ): LegacyQueuedDeliveryPreparation {
   return {
     ...entry,
+    retainOnFailure: true,
     legacyPreparationOwnerId: ownerId,
     legacyPreparationLeaseExpiresAt: now + LEGACY_PREPARATION_LEASE_MS,
   };
@@ -72,6 +119,11 @@ function hasActiveLegacyPreparationLease(
 }
 
 function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClawConfig) {
+  const reply = normalizeOutboundReplyFacts({
+    reply: entry.reply,
+    replyToId: entry.replyToId,
+    replyToMode: entry.replyToMode,
+  });
   return {
     cfg,
     channel: entry.channel,
@@ -82,8 +134,7 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
     payloads: entry.payloads,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
-    replyToId: entry.replyToId,
-    replyToMode: entry.replyToMode,
+    reply,
     formatting: entry.formatting,
     identity: entry.identity,
     bestEffort: entry.bestEffort,
@@ -109,12 +160,13 @@ async function prepareLegacyEntryCheckpoint(params: {
   stateDir?: string;
 }): Promise<"checkpointed" | "skipped"> {
   const preparationParams = buildLegacyPreparationParams(params.entry, params.cfg);
+  const reply = preparationParams.reply;
   const needsUnknownReconciliation =
     params.entry.recoveryState === "send_attempt_started" ||
     params.entry.recoveryState === "unknown_after_send";
   const legacyUnknownSendReconciliation = needsUnknownReconciliation
     ? await reconcileUnknownQueuedDelivery({
-        entry: params.entry,
+        entry: { ...params.entry, reply },
         payloads: params.entry.payloads,
         cfg: params.cfg,
         warn: (message) => params.log.warn(message),
@@ -125,19 +177,11 @@ async function prepareLegacyEntryCheckpoint(params: {
     (legacyUnknownSendReconciliation == null ||
       legacyUnknownSendReconciliation.status === "unresolved")
   ) {
-    const reconciliationError =
-      legacyUnknownSendReconciliation?.status === "unresolved"
-        ? legacyUnknownSendReconciliation.error
-        : undefined;
-    const error = reconciliationError
-      ? `legacy unknown-send reconciliation did not settle: ${reconciliationError}`
-      : "legacy unknown-send reconciliation is unavailable";
     // The migration owner has no safe canonical payload to publish and startup
     // recovery does not scan this private namespace. Settle payload-free instead
     // of retaining raw content in a permanently hidden pending row.
     await failInterruptedLegacyPreparation({
       entry: params.entry,
-      error,
       log: params.log,
       stateDir: params.stateDir,
     });
@@ -218,7 +262,6 @@ async function prepareLegacyEntryCheckpoint(params: {
       if (modifiersStarted) {
         await failInterruptedLegacyPreparation({
           entry: sourceEntry,
-          error: "legacy modifier preparation failed after policy entry",
           log: params.log,
           stateDir: params.stateDir,
         });
@@ -247,6 +290,8 @@ async function prepareLegacyEntryCheckpoint(params: {
   const {
     payloads: _legacyPayloads,
     replyPayloadSendingHook: _legacyReplyHook,
+    replyToId: _legacyReplyToId,
+    replyToMode: _legacyReplyToMode,
     legacyPreparationState: _legacyPreparationState,
     legacyPreparationOwnerId: _legacyPreparationOwnerId,
     legacyPreparationLeaseExpiresAt: _legacyPreparationLeaseExpiresAt,
@@ -269,8 +314,10 @@ async function prepareLegacyEntryCheckpoint(params: {
   }
   const checkpoint: QueuedDelivery = {
     ...canonicalRetained,
+    retainOnFailure: true,
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatch),
     renderedBatchPlan: createRenderedMessageBatchPlan(acceptedPayloads),
+    ...(reply ? { reply } : {}),
     ...(!prepareForReplay &&
     (legacyUnknownSendReconciliation?.status === "sent" ||
       legacyUnknownSendReconciliation?.status === "not_sent")
@@ -294,27 +341,16 @@ async function prepareLegacyEntryCheckpoint(params: {
 
 async function failInterruptedLegacyPreparation(params: {
   entry: LegacyQueuedDeliveryPreparation;
-  error: string;
   log: RecoveryLogger;
   stateDir?: string;
 }): Promise<void> {
-  const failed = failPendingDeliveryQueueEntry({
+  const failed = terminalizePendingDeliveryQueueEntry({
     queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
     id: params.entry.id,
-    expectedStatus: "pending",
-    lastError: params.error,
     entry: params.entry,
-    // Once modifier execution has started, neither its raw input nor hook
-    // context is safe to retain. Keep only a payload-free failure fence.
-    failedEntry: {
-      id: params.entry.id,
-      enqueuedAt: params.entry.enqueuedAt,
-      retryCount: params.entry.retryCount,
-      attemptCount: params.entry.attemptCount,
-    },
     stateDir: params.stateDir,
   });
-  if (failed.status !== "failed") {
+  if (failed.status !== "terminalized") {
     params.log.warn(`Legacy delivery ${params.entry.id} preparation owner was already settled`);
     return;
   }
@@ -466,7 +502,7 @@ async function finalizePreparedMigration(params: {
     return "moved";
   } finally {
     if (!stagedArtifactsTransferred) {
-      cancelDeliveryQueueMediaStage(mediaStageId, params.stateDir);
+      cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
       await releaseSpoolArtifacts(stagedArtifacts, params.stateDir);
     }
   }
@@ -494,6 +530,10 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   log: RecoveryLogger;
   stateDir?: string;
 }): Promise<{ moved: number; skipped: number }> {
+  // Beta rows can exist in either prepared namespace. Canonicalize them before
+  // any recovery owner sees the row; interrupted migrations then resume normally.
+  migratePreparedReplyFields(OUTBOUND_DELIVERY_QUEUE_NAME, params.stateDir);
+  migratePreparedReplyFields(OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME, params.stateDir);
   let moved = 0;
   let skipped = 0;
   const ownerId = randomUUID();
@@ -508,7 +548,6 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
       await failInterruptedLegacyPreparation({
         ...params,
         entry,
-        error: "legacy modifier preparation was interrupted before publication",
       });
       skipped += 1;
       continue;

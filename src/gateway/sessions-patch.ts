@@ -11,6 +11,10 @@ import {
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  normalizeSessionIconValue,
+  SESSION_ICON_GLYPH_IDS,
+} from "../../packages/gateway-protocol/src/session-agent-status.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -20,6 +24,10 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import {
+  readSessionThinkingLevelSelection,
+  updateSessionThinkingLevelSelection,
+} from "../agents/session-thinking-level-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -32,7 +40,10 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
-import type { SessionEntry, SessionToolOverrides } from "../config/sessions.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionToolOverrides,
+} from "../config/sessions.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -69,6 +80,7 @@ import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session
 import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
+  updateAgentModelFallbackThinking,
 } from "./session-model-patch-origin.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
@@ -238,7 +250,7 @@ export async function projectSessionsPatchEntry(params: {
   };
 
   const existing = params.existingEntry
-    ? projectCanonicalSessionEntryShape(params.existingEntry as unknown as Record<string, unknown>)
+    ? projectCanonicalSessionEntryShape({ ...params.existingEntry })
     : undefined;
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
@@ -280,6 +292,21 @@ export async function projectSessionsPatchEntry(params: {
         return invalid(`label already in use: ${parsed.label}`);
       }
       next.label = parsed.label;
+    }
+  }
+
+  if ("icon" in patch) {
+    const raw = patch.icon;
+    if (raw === null || raw === "") {
+      delete next.icon;
+    } else if (raw !== undefined) {
+      const icon = normalizeSessionIconValue(raw);
+      if (!icon) {
+        return invalid(
+          `icon must be a single emoji or one of: ${SESSION_ICON_GLYPH_IDS.join(", ")}`,
+        );
+      }
+      next.icon = icon;
     }
   }
 
@@ -546,6 +573,13 @@ export async function projectSessionsPatchEntry(params: {
       next.execNode = trimmed;
     }
   }
+  if ("permissionMode" in patch) {
+    if (patch.permissionMode === null) {
+      delete next.permissionMode;
+    } else if (patch.permissionMode !== undefined) {
+      next.permissionMode = patch.permissionMode;
+    }
+  }
   if ("model" in patch) {
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"
@@ -578,14 +612,20 @@ export async function projectSessionsPatchEntry(params: {
       if (!params.loadGatewayModelCatalog) {
         return {
           ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "model catalog is still loading; retry in a few seconds",
+          ),
         };
       }
       const catalog = await loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "model catalog is still loading; retry in a few seconds",
+          ),
         };
       }
       const resolved = resolveSessionPatchModelSelection({
@@ -621,15 +661,16 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
+  if ("thinkingLevel" in patch || "model" in patch) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+    let thinkingRuntime: string | undefined;
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {
-      const thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
+      const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+      thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
       if (
         !isThinkingLevelSupported({
           provider: effectiveProvider,
@@ -653,6 +694,12 @@ export async function projectSessionsPatchEntry(params: {
         });
       }
     }
+    updateSessionThinkingLevelSelection(next, {
+      provider: effectiveProvider,
+      model: effectiveModel,
+      agentRuntime: thinkingRuntime,
+      level: next.thinkingLevel,
+    });
   }
 
   // A thinkingLevel change made on its own (no model switch) never touches the
@@ -663,9 +710,10 @@ export async function projectSessionsPatchEntry(params: {
     !("model" in patch) &&
     next.modelFallback?.source === "agent-patch"
   ) {
-    next.modelFallback = next.thinkingLevel
-      ? { ...next.modelFallback, prevThinkingLevel: next.thinkingLevel }
-      : { ...next.modelFallback, prevThinkingLevel: undefined };
+    updateAgentModelFallbackThinking(next.modelFallback, {
+      thinkingLevel: next.thinkingLevel,
+      thinkingLevelSelection: readSessionThinkingLevelSelection(next),
+    });
   }
 
   if ("sendPolicy" in patch) {

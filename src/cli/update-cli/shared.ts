@@ -6,6 +6,7 @@ import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { hasErrnoCode } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
@@ -26,6 +27,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
+import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -50,6 +52,8 @@ export type UpdateFinalizeOptions = {
   yes?: boolean;
   restart?: boolean;
   acknowledgeClawHubRisk?: boolean;
+  /** Internal external-supervisor handshake; public repair always leaves this false. */
+  deferCompletionCache?: boolean;
 };
 
 export type UpdateWizardOptions = {
@@ -67,6 +71,9 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
   const trimmed = timeout.trim();
   const seconds = parseStrictPositiveInteger(trimmed);
   if (seconds === undefined || seconds > MAX_SAFE_TIMEOUT_SECONDS) {
+    if (isJsonOutputModeActive(process.argv)) {
+      throw new Error(INVALID_TIMEOUT_ERROR);
+    }
     defaultRuntime.error(INVALID_TIMEOUT_ERROR);
     defaultRuntime.exit(1);
     return null;
@@ -241,20 +248,117 @@ export async function runUpdateStep(params: {
   };
 }
 
+type GitCheckoutResult = {
+  checkoutDir: string;
+  step: UpdateStepResult | null;
+};
+
+async function cloneGitCheckoutTransactionally(params: {
+  dir: string;
+  timeoutMs: number;
+  progress?: UpdateStepProgress;
+  env?: NodeJS.ProcessEnv;
+}): Promise<GitCheckoutResult> {
+  const parentDir = path.dirname(params.dir);
+  await fs.mkdir(parentDir, { recursive: true });
+  const canonicalParentDir = await fs.realpath(parentDir);
+  const preserveDir = (await pathExists(params.dir)) && (await isEmptyDir(params.dir));
+  const targetDir = preserveDir
+    ? await fs.realpath(params.dir)
+    : path.join(canonicalParentDir, path.basename(params.dir));
+  const stagingParent = preserveDir ? targetDir : canonicalParentDir;
+  const stagingDir = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  let cleanupStaging = true;
+
+  try {
+    const result = await runUpdateStep({
+      name: "git clone",
+      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, stagingDir],
+      env: params.env,
+      timeoutMs: params.timeoutMs,
+      progress: params.progress,
+    });
+    if (result.exitCode !== 0) {
+      return { checkoutDir: targetDir, step: result };
+    }
+
+    if (!preserveDir) {
+      try {
+        await fs.lstat(targetDir);
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+        await fs.rename(stagingDir, targetDir);
+        return { checkoutDir: targetDir, step: result };
+      }
+    }
+
+    if (!preserveDir) {
+      throw new Error(
+        `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+      );
+    }
+
+    const expectedEntries = preserveDir ? [path.basename(stagingDir)] : [];
+    const destinationEntries = await fs.readdir(targetDir);
+    if (destinationEntries.toSorted().join("\0") !== expectedEntries.toSorted().join("\0")) {
+      throw new Error(
+        `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+      );
+    }
+
+    const entries = (await fs.readdir(stagingDir)).toSorted((a, b) =>
+      a === ".git" ? 1 : b === ".git" ? -1 : 0,
+    );
+    const moved: string[] = [];
+    let publishError: { value: unknown } | undefined;
+    try {
+      for (const entry of entries) {
+        await fs.rename(path.join(stagingDir, entry), path.join(targetDir, entry));
+        moved.push(entry);
+      }
+    } catch (error) {
+      publishError = { value: error };
+    }
+    if (publishError) {
+      const rollbackErrors: unknown[] = [];
+      for (const entry of moved.toReversed()) {
+        try {
+          await fs.rename(path.join(targetDir, entry), path.join(stagingDir, entry));
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (rollbackErrors.length > 0) {
+        cleanupStaging = false;
+        throw new AggregateError(
+          [publishError.value, ...rollbackErrors],
+          `Could not publish or fully roll back the cloned checkout at ${targetDir}; recovery files remain at ${stagingDir}`,
+        );
+      }
+      throw publishError.value;
+    }
+    return { checkoutDir: targetDir, step: result };
+  } finally {
+    if (cleanupStaging) {
+      await fs.rm(stagingDir, { recursive: true, force: true });
+    }
+  }
+}
+
 /** Ensure the configured source-update directory exists and points at an OpenClaw checkout. */
 export async function ensureGitCheckout(params: {
   dir: string;
   timeoutMs: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
-}): Promise<UpdateStepResult | null> {
+}): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
   if (!dirExists) {
-    await fs.mkdir(path.dirname(params.dir), { recursive: true });
-    return await runUpdateStep({
-      name: "git clone",
-      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, params.dir],
+    return await cloneGitCheckoutTransactionally({
+      dir: params.dir,
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -269,10 +373,8 @@ export async function ensureGitCheckout(params: {
       );
     }
 
-    return await runUpdateStep({
-      name: "git clone",
-      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, params.dir],
-      cwd: params.dir,
+    return await cloneGitCheckoutTransactionally({
+      dir: params.dir,
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -283,7 +385,7 @@ export async function ensureGitCheckout(params: {
     throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
   }
 
-  return null;
+  return { checkoutDir: await fs.realpath(params.dir), step: null };
 }
 
 /** Detect the package manager that owns a global/package OpenClaw install. */
@@ -314,10 +416,13 @@ const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
   "Shell tab-completion may be stale; refresh manually with: openclaw completion --write-state";
 
 /** Best-effort refresh of shell completion state after a successful update. */
-export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
+export async function tryWriteCompletionCache(
+  root: string,
+  jsonMode: boolean,
+): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
-    return;
+    return "skipped";
   }
 
   const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
@@ -343,18 +448,22 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
         ),
       );
     }
-    return;
+    return "failed";
   }
 
-  if (result.status !== 0 && !jsonMode) {
-    const stderr = (result.stderr ?? "").trim();
-    const detail = stderr ? ` (${stderr})` : "";
-    defaultRuntime.log(
-      theme.warn(
-        `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-      ),
-    );
+  if (result.status !== 0) {
+    if (!jsonMode) {
+      const stderr = (result.stderr ?? "").trim();
+      const detail = stderr ? ` (${stderr})` : "";
+      defaultRuntime.log(
+        theme.warn(
+          `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+        ),
+      );
+    }
+    return "failed";
   }
+  return "completed";
 }
 
 /** Adapter used by global-install detection helpers to execute bounded subprocess probes. */

@@ -1,5 +1,8 @@
 // Delivery queue runtime helpers persist and replay outbound plugin delivery work.
-import { drainPendingDeliveriesCore, type DeliverFn } from "../infra/outbound/delivery-queue.js";
+import {
+  drainPendingDeliveriesCore,
+  type DeliverFn,
+} from "../infra/outbound/delivery-queue-recovery.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 

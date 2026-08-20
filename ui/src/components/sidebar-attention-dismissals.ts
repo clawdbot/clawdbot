@@ -5,6 +5,7 @@ import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 const SIDEBAR_ATTENTION_KINDS = [
+  "updateAvailable",
   "cronFailed",
   "cronOverdue",
   "modelAuthExpired",

@@ -91,7 +91,7 @@ export async function prepareCompactionSessionAgent(params: {
     workspaceDir: params.effectiveWorkspace,
     model: params.effectiveModel,
   });
-  return applyExtraParamsToAgent(
+  const extraParams = applyExtraParamsToAgent(
     params.session.agent as never,
     params.config,
     params.provider,
@@ -125,4 +125,5 @@ export async function prepareCompactionSessionAgent(params: {
       },
     },
   );
+  return { ...extraParams, transportApiKey };
 }

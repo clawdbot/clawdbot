@@ -91,12 +91,12 @@ afterEach(() => {
 
 describe("session typing handler", () => {
   it.each([
-    { agentId: "main", expected: ["agent:main:global", "global"] },
+    { agentId: "main", expected: ["agent:main:global"] },
     { agentId: "work", expected: ["agent:work:global"] },
   ])("uses the canonical global subscription keys for $agentId", async ({ agentId, expected }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { list: [{ id: "main" }, { id: "work" }] },
       } satisfies OpenClawConfig;
       await upsertSessionEntryCore(
         { agentId, sessionKey: "global" },

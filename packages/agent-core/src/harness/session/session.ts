@@ -1,4 +1,4 @@
-import { stripOpenAIResponsesCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import type { AgentMessage } from "../../types.js";
 import {
   asAgentMessage,
@@ -44,9 +44,7 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
 }
 
 function stripStalePrefixReplay(message: AgentMessage): AgentMessage {
-  return message.role === "assistant"
-    ? stripOpenAIResponsesCompactionReplayCheckpoint(message)
-    : message;
+  return message.role === "assistant" ? stripCompactionReplayCheckpoint(message) : message;
 }
 
 function appendContextMessage(

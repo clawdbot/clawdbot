@@ -8,12 +8,12 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { readPersistedAuthProfileStateRaw } from "./sqlite.js";
+import { readPersistedAuthProfileStateRaw, type AuthProfileDatabase } from "./sqlite.js";
 import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
+  AuthProfileCooldownClassification,
   AuthProfileFailureReason,
   AuthProfileState,
   AuthProfileStateStore,
@@ -34,6 +34,10 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
   "no_error_details",
   "unclassified",
   "unknown",
+]);
+const AUTH_COOLDOWN_CLASSIFICATIONS = new Set<AuthProfileCooldownClassification>([
+  "wham_token_expired",
+  "wham_account_dead",
 ]);
 const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
 const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham"]);
@@ -106,6 +110,11 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
   if (!isRecord(raw)) {
     return undefined;
   }
+  const cooldownReason = normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS);
+  const cooldownClassification = normalizeEnumValue(
+    raw.cooldownClassification,
+    AUTH_COOLDOWN_CLASSIFICATIONS,
+  );
   const stats: ProfileUsageStats = {
     lastUsed: asFiniteNumber(raw.lastUsed),
     blockedUntil: asFiniteNumber(raw.blockedUntil),
@@ -114,7 +123,12 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     blockedModel: normalizeOptionalString(raw.blockedModel),
     blockedScope: raw.blockedScope === "model" ? "model" : undefined,
     cooldownUntil: asFiniteNumber(raw.cooldownUntil),
-    cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
+    cooldownReason,
+    cooldownClassification:
+      (cooldownClassification === "wham_token_expired" && cooldownReason === "auth") ||
+      (cooldownClassification === "wham_account_dead" && cooldownReason === "auth_permanent")
+        ? cooldownClassification
+        : undefined,
     cooldownModel: normalizeOptionalString(raw.cooldownModel),
     disabledUntil: asFiniteNumber(raw.disabledUntil),
     disabledReason: normalizeEnumValue(raw.disabledReason, AUTH_FAILURE_REASONS),
@@ -187,7 +201,7 @@ export function mergeAuthProfileState(
 /** Loads persisted auth profile runtime state from SQLite. */
 export function loadPersistedAuthProfileState(
   agentDir?: string,
-  database?: OpenClawAgentDatabase,
+  database?: AuthProfileDatabase,
 ): AuthProfileState {
   return coerceAuthProfileState(readPersistedAuthProfileStateRaw(agentDir, database));
 }

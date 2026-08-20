@@ -1578,7 +1578,7 @@ export function markdownToIRWithMeta(
     assistantTranscriptRolePreserveLinks: options.assistantTranscriptRoleHeaders === true,
   };
   const md = createMarkdownIt(options);
-  const tokens = md.parse(source, env as unknown as object);
+  const tokens = md.parse(source, env);
 
   const tableMode = options.tableMode ?? "off";
 

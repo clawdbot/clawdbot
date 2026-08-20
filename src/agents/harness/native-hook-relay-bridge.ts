@@ -176,13 +176,18 @@ export function renewNativeHookRelayBridgeRecord(
 
 export function unregisterNativeHookRelayBridge(
   relayId: string,
-  options?: { deferBridgeRecordRemovalMs?: number },
+  options?: {
+    deferBridgeRecordRemovalMs?: number;
+    expectedBridge?: NativeHookRelayBridgeRegistration;
+  },
 ): void {
-  const bridge = relayBridges.get(relayId);
+  const bridge = options?.expectedBridge ?? relayBridges.get(relayId);
   if (!bridge) {
     return;
   }
-  relayBridges.delete(relayId);
+  if (relayBridges.get(relayId) === bridge) {
+    relayBridges.delete(relayId);
+  }
   bridge.server.close();
   const removeRecord = () => {
     try {

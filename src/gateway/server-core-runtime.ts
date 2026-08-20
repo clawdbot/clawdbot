@@ -147,13 +147,29 @@ export async function startGatewayCoreRuntime(input: {
     baseMethods,
     pluginWorkspaceDir,
     ambientEnvTriggers,
+    resolvePluginGatewayContext,
     workerEnvironmentStartup,
     broadcastPluginEvent,
     activateRuntimeSecrets,
     residentRegistry,
+    shutdownRuntime,
   } = runtime;
+  let currentPluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
   if (desktopSessionRegistry) {
     kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
+  }
+  const secretEgressProxy =
+    cfgAtStart.secrets?.egressProxy?.enabled === true
+      ? await import("../secrets/egress-proxy/runtime.js").then((egressRuntime) =>
+          egressRuntime.startGatewaySecretEgressProxy(
+            cfgAtStart.secrets?.egressProxy?.bypassHosts
+              ? { bypassHosts: cfgAtStart.secrets.egressProxy.bypassHosts }
+              : {},
+          ),
+        )
+      : undefined;
+  if (secretEgressProxy) {
+    kernel.addGatewayLifetimeSidecar(secretEgressProxy);
   }
   let earlyRuntimePromise: ReturnType<
     Awaited<ReturnType<typeof loadGatewayStartupEarlyModule>>["startGatewayEarlyRuntime"]
@@ -220,9 +236,8 @@ export async function startGatewayCoreRuntime(input: {
     start: async () => await discoveryResident.start(),
     stop: async () => {
       const earlyRuntime = await startEarlyRuntime();
-      earlyRuntime.skillsChangeUnsub();
-      const { stopTaskRegistryMaintenance } = await import("../tasks/task-registry.maintenance.js");
-      stopTaskRegistryMaintenance();
+      await earlyRuntime.skillsChangeUnsub();
+      shutdownRuntime.stopTaskRegistryMaintenance();
     },
   });
   const earlyRuntime = await startupTrace.measure("runtime.early", () =>
@@ -339,6 +354,9 @@ export async function startGatewayCoreRuntime(input: {
             delegatedAuthority: authority,
           }),
         onApprovalLifecycle: approvalSessionEvents.publish,
+        onAgentRunAuthorityClosed: (authority) => {
+          secretEgressProxy?.revokeRun(authority.operationalRunInstance);
+        },
       }),
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
@@ -356,14 +374,16 @@ export async function startGatewayCoreRuntime(input: {
     for (const sessionKey of keys) {
       revokeAttachGrantsForSession(sessionKey);
     }
-    for (const record of execApprovalManager.listPendingRecords()) {
-      if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-        execApprovalManager.expire(record.id, "worker-dispatch");
-      }
-    }
-    for (const record of pluginApprovalManager.listPendingRecords()) {
-      if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-        pluginApprovalManager.expire(record.id, "worker-dispatch");
+    // Dispatch fencing closes approval authority deliberately: record it as a
+    // run-aborted cancellation, not a timeout, so ask-fallback replay cannot
+    // re-admit through the fenced record (consumeAskFallback admits only
+    // expired/no-route terminals).
+    const fenceResolver = { kind: "system", id: "worker-dispatch" } as const;
+    for (const manager of [execApprovalManager, pluginApprovalManager]) {
+      for (const record of manager.listPendingRecords()) {
+        if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
+          manager.forceDenyDetailed(record.id, "run-aborted", fenceResolver, "cancelled");
+        }
       }
     }
   };
@@ -392,7 +412,8 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy")) &&
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim") &&
+        (workerPlacementControlAvailable ||
+          (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
         (desktopObserveAvailable || descriptor.name !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (descriptor.name !== "desktop.launch" &&
@@ -413,6 +434,10 @@ export async function startGatewayCoreRuntime(input: {
     );
   };
   let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
+  let retireAttachedPluginRuntimeBindings = () => {};
+  kernel.addGatewayLifetimeSidecar({
+    stop: async () => retireAttachedPluginRuntimeBindings(),
+  });
   const listAttachedGatewayMethods = () => {
     const methods = attachedGatewayMethodRegistry.listAdvertisedMethods();
     methods.push(...listStartupChannelGatewayMethods());
@@ -422,7 +447,11 @@ export async function startGatewayCoreRuntime(input: {
   const replaceAttachedPluginRuntime = (loaded: {
     pluginRegistry: typeof pluginRuntime.registry;
     gatewayMethods: string[];
+    retireGatewayRuntimeBindings?: () => void;
   }) => {
+    const retirePreviousBindings = retireAttachedPluginRuntimeBindings;
+    retireAttachedPluginRuntimeBindings = loaded.retireGatewayRuntimeBindings ?? (() => {});
+    retirePreviousBindings();
     pluginRuntime.registry = loaded.pluginRegistry;
     pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
     for (const key of attachedPluginGatewayHandlerKeys) {
@@ -581,6 +610,7 @@ export async function startGatewayCoreRuntime(input: {
       baseMethods,
       pluginLookUpTable: nextPluginLookUpTable,
       ambientEnvTriggers,
+      resolveGatewayContext: resolvePluginGatewayContext,
     });
     const nextPluginMetadataSnapshot = completePluginMetadataSnapshot({
       snapshot: nextPluginLookUpTable,
@@ -593,6 +623,7 @@ export async function startGatewayCoreRuntime(input: {
       env: params.env,
       workspaceDir: pluginWorkspaceDir,
     });
+    currentPluginMetadataSnapshot = nextPluginMetadataSnapshot;
     replaceAttachedPluginRuntime(loaded);
     kernel.setPluginServices(null);
     if (previousPluginServices) {
@@ -654,5 +685,6 @@ export async function startGatewayCoreRuntime(input: {
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
+    getPluginMetadataSnapshot: () => currentPluginMetadataSnapshot,
   };
 }

@@ -3,6 +3,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
@@ -11,24 +12,36 @@ afterEach(() => {
 });
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
-  it("forwards a per-turn tool restriction to native harness adapters", async () => {
+  it("runs a lazy builder with hook tool policy while preserving replacement order", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
           hookName: "before_prompt_build",
-          handler: () => ({ toolsAllow: [] }),
+          handler: () => ({
+            appendSystemContext: "after replacement",
+            prependSystemContext: "before replacement",
+            systemPrompt: "hook replacement",
+            toolsAllow: ["read"],
+          }),
         },
       ]),
     );
+    const build = vi.fn(() => "policy-filtered base");
 
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: "answer directly",
-      developerInstructions: "base instructions",
+      developerInstructions: { build },
       messages: [],
       ctx: {},
     });
 
-    expect(result.toolsAllow).toEqual([]);
+    expect(build).toHaveBeenCalledWith({ toolsAllow: ["read"] });
+    expect(result).toMatchObject({
+      toolsAllow: ["read"],
+      developerInstructions:
+        "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
+    });
+    expect(result.developerInstructions).not.toContain("policy-filtered base");
   });
 
   it("retains an empty prompt range without hooks", async () => {
@@ -98,6 +111,54 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
 
     expect(calls).toEqual(["heartbeat", "before_prompt_build"]);
     expect(result.prompt).toBe("heartbeat context\n\nprompt context\n\nhello");
+  });
+
+  it("runs authorized enrichment after restrictive hooks finalize the tool surface", async () => {
+    const calls: string[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => {
+            calls.push("restrict");
+            return { prependContext: "regular context", toolsAllow: ["message"] };
+          },
+        },
+        {
+          hookName: "before_prompt_build",
+          requiresToolAuthority: true,
+          handler: (_event, ctx) => {
+            calls.push("enrich");
+            expect((ctx as PluginHookAgentContext).toolAuthority?.allows("memory_search")).toBe(
+              false,
+            );
+            return { prependContext: "authorized context" };
+          },
+        },
+      ]),
+    );
+    let activeToolNames: string[] = [];
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "hello",
+      developerInstructions: {
+        build: ({ toolsAllow }) => {
+          calls.push("build");
+          activeToolNames = toolsAllow ?? [];
+          return "base instructions";
+        },
+      },
+      messages: [],
+      ctx: {},
+      toolAuthority: {
+        fingerprint: "turn-authority",
+        activeToolNames: () => activeToolNames,
+        assertActive: () => undefined,
+      },
+    });
+
+    expect(calls).toEqual(["restrict", "build", "enrich"]);
+    expect(result.prompt).toBe("regular context\n\nauthorized context\n\nhello");
   });
 
   it("skips heartbeat_prompt_contribution off a heartbeat turn", async () => {

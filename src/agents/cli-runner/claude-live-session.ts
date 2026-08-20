@@ -536,7 +536,12 @@ async function runSerializedClaudeTurn(
   const abort = () =>
     abortClaudeTurn(session, createAbortError(params.context.params.abortSignal?.reason));
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.params.replyOperation
-    ? { kind: "cli", runId: params.context.params.runId, cancel: abort }
+    ? {
+        kind: "cli",
+        runId: params.context.params.runId,
+        toolAuthorityFingerprint: params.context.params.toolAuthorityFingerprint,
+        cancel: abort,
+      }
     : undefined;
   params.context.params.abortSignal?.addEventListener("abort", abort, { once: true });
   if (replyBackendHandle) {

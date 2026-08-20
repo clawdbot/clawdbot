@@ -47,13 +47,15 @@ the transport callback instead of dispatching an event that was not made
 durable. At claim time it decodes the versioned payload, re-runs `inspect`, and
 rejects an id or lane mismatch before delivery.
 
-`deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`,
-`onAbandoned`, and `abortSignal`. Returning without an explicit handoff marks a
-terminal no-dispatch event adopted. `admission` is always `exclusive`. A
-deferred handoff keeps the claim held, while shutdown or abort leaves unadopted
-work retryable. The monitor tracks delivery independently from claim settlement
-because adoption can tombstone a row before the channel's delivery promise
-returns.
+`deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
+`onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
+errors, `onCancelled` for explicit pre-adoption cancellation that must preserve
+retry accounting, and `onAbandoned` when a non-adopted turn should consume a
+retry attempt. Returning without an explicit handoff marks a terminal
+no-dispatch event adopted. `admission` is always `exclusive`. A deferred handoff
+keeps the claim held, while shutdown or abort leaves unadopted work retryable.
+The monitor tracks delivery independently from claim settlement because
+adoption can tombstone a row before the channel's delivery promise returns.
 
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
@@ -146,9 +148,14 @@ the channel boundary instead of rewriting marker text after sanitization.
 A `MessageReceipt` records the result returned by a channel adapter. Concrete
 platform message identifiers show that the platform send path accepted the
 message; they do not prove that a recipient's device displayed or read it.
-Receipts without platform message identifiers are local receipt metadata only.
-Channels with read receipts or device-delivery state should track those facts
-through a separate channel-specific path.
+Destination and routing identifiers such as chat, channel, room, conversation,
+or recipient JID are metadata, never `platformMessageIds`. Receipts without
+platform message identifiers are local receipt metadata only. A
+provider-observed receipt thread overrides the requested route thread. If a
+batch contains conflicting provider threads, each part retains its thread and
+the aggregate receipt omits `threadId`. Channels with read receipts or
+device-delivery state should track those facts through a separate
+channel-specific path.
 
 If a channel adapter can prove that retrying a failure cannot duplicate a
 recipient-visible send and no finalization-capable call began, throw

@@ -5,19 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { defaultRuntime } from "../runtime.js";
 import { NodeRegistry } from "./node-registry.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
@@ -88,12 +95,6 @@ const runtimeMocks = vi.hoisted(() => ({
       this.name = "ApnsRegistrationPairingChangedError";
     }
   },
-  buildOutboundSessionContext: vi.fn(({ sessionKey }: { sessionKey: string }) => ({
-    key: sessionKey,
-    agentId: "main",
-  })),
-  createOutboundSendDeps: vi.fn((deps: unknown) => deps),
-  defaultRuntime: {},
   deleteMediaBuffer: vi.fn(async () => {}),
   deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
@@ -106,10 +107,13 @@ const runtimeMocks = vi.hoisted(() => ({
   upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
-  normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeat: vi.fn(),
+  resolveSystemMainSessionTarget: vi.fn(() => ({
+    agentId: "ops",
+    sessionKey: "agent:ops:main",
+  })),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
     async ({
@@ -133,8 +137,13 @@ const runtimeMocks = vi.hoisted(() => ({
       return modelEntry ? (modelEntry.input?.includes("image") ?? false) : true;
     },
   ),
-  resolveOutboundTarget: vi.fn(({ to }: { to: string }) => ({ ok: true, to })),
-  sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
+  sendDurableMessageBatch: vi.fn(
+    async (): Promise<DurableMessageBatchSendResult> => ({
+      status: "sent",
+      results: [],
+      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+    }),
+  ),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(
     (_cfg: OpenClawConfig, entry?: { model?: string; modelProvider?: string }) => ({
@@ -151,17 +160,41 @@ const runtimeMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./server-node-events.runtime.js", () => ({
-  ...runtimeMocks,
-  sendDurableMessageBatchCore: runtimeMocks.sendDurableMessageBatch,
-}));
-vi.mock("../infra/device-pairing.js", () => ({
-  updatePairedDevicePresence: updatePairedDevicePresenceMock,
-}));
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "./health/types.js";
-import type { NodeEventContext } from "./server-node-events-types.js";
-import { handleNodeEvent } from "./server-node-events.js";
+import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
+import { handleNodeEvent as handleNodeEventWithDependencies } from "./server-node-events.js";
+
+type ServerNodeEventDependencies = NonNullable<
+  Parameters<typeof handleNodeEventWithDependencies>[4]
+>;
+
+const serverNodeEventDependencies: ServerNodeEventDependencies = {
+  ...runtimeMocks,
+  buildOutboundSessionContext,
+  createOutboundSendDeps,
+  defaultRuntime,
+  normalizeRpcAttachmentsToChatAttachments,
+  resolveOutboundTarget,
+  withSystemEventOwner,
+  sendDurableMessageBatchCore: runtimeMocks.sendDurableMessageBatch,
+  updatePairedDevicePresence: updatePairedDevicePresenceMock,
+};
+
+const sentDurableMessageBatchResult: Extract<DurableMessageBatchSendResult, { status: "sent" }> = {
+  status: "sent",
+  results: [],
+  receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+};
+
+function handleNodeEvent(
+  ctx: NodeEventContext,
+  nodeId: string,
+  event: NodeEvent,
+  options?: Parameters<typeof handleNodeEventWithDependencies>[3],
+) {
+  return handleNodeEventWithDependencies(ctx, nodeId, event, options, serverNodeEventDependencies);
+}
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -929,6 +962,7 @@ describe("voice transcript events", () => {
     upsertSessionEntryMock.mockClear();
     loadSessionEntryMock.mockClear();
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+    runtimeMocks.resolveSystemMainSessionTarget.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     upsertSessionEntryMock.mockImplementation(async (_scope, patch) => patch);
   });
@@ -1456,16 +1490,17 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
-      {
-        sessionKey: "node-node-n1",
+      expect.objectContaining({
+        sessionKey: "agent:ops:main",
         contextKey: "notification:notif-1",
-      },
+      }),
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
       source: "notifications-event",
       intent: "event",
       reason: "notifications-event",
-      sessionKey: "node-node-n1",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
     });
   });
 
@@ -1482,17 +1517,36 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
-      {
-        sessionKey: "node-node-n2",
+      expect.objectContaining({
+        sessionKey: "agent:ops:main",
         contextKey: "notification:notif-2",
-      },
+      }),
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
       source: "notifications-event",
       intent: "event",
       reason: "notifications-event",
-      sessionKey: "node-node-n2",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
     });
+  });
+
+  it("records non-delivery when a targetless notification has no system owner", async () => {
+    const warn = vi.fn();
+    runtimeMocks.resolveSystemMainSessionTarget.mockImplementationOnce(() => {
+      throw new Error("Set agents.defaults.systemAgent.agentId");
+    });
+
+    await handleNodeEvent({ ...buildCtx(), logGateway: { warn } }, "node-unowned", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({ change: "posted", key: "notif-unowned" }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "notification event not delivered node=node-unowned: Set agents.defaults.systemAgent.agentId",
+    );
   });
 
   it("wakes heartbeat on payload sessionKey when provided", async () => {
@@ -1525,6 +1579,7 @@ describe("notifications changed events", () => {
       payloadJSON: JSON.stringify({
         change: "posted",
         key: "notif-5",
+        sessionKey: "node-node-n5",
       }),
     });
 
@@ -1649,7 +1704,7 @@ describe("agent request events", () => {
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sendDurableMessageBatchMock.mockReset();
-    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent" });
+    sendDurableMessageBatchMock.mockResolvedValue(sentDurableMessageBatchResult);
     parseMessageWithAttachmentsMock.mockResolvedValue({
       message: "parsed message",
       images: [],
@@ -1716,7 +1771,7 @@ describe("agent request events", () => {
   });
 
   it("keeps an accepted detached receipt delivery visible to suspension", async () => {
-    const receipt = createDeferred<{ status: "sent" }>();
+    const receipt = createDeferred<DurableMessageBatchSendResult>();
     sendDurableMessageBatchMock.mockImplementationOnce(() => receipt.promise);
 
     await runAdmittedNodeEvent(buildCtx(), "node-receipt-suspend", {
@@ -1733,7 +1788,7 @@ describe("agent request events", () => {
 
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
     expectSuspendBusyWithRootWork("receipt-delivery-busy");
-    receipt.resolve({ status: "sent" });
+    receipt.resolve(sentDurableMessageBatchResult);
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expectSuspendReady("receipt-delivery-ready");
   });

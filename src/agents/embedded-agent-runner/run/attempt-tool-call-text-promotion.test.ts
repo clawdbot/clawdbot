@@ -40,6 +40,37 @@ async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unkn
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
+  it("supports writable non-configurable stream iterators", async () => {
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "plain response" }],
+      stopReason: "stop",
+    };
+    const baseStream = createFakeStream({
+      events: [{ type: "done", reason: "stop", message: resultMessage }],
+      resultMessage,
+    });
+    const iterator = baseStream[Symbol.asyncIterator];
+    Object.defineProperty(baseStream, Symbol.asyncIterator, {
+      configurable: false,
+      value: iterator,
+      writable: true,
+    });
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(
+      (() => baseStream) as never,
+      new Set(["exec"]),
+    );
+
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    await expect(collectStreamEvents(stream)).resolves.toEqual([
+      { type: "done", reason: "stop", message: resultMessage },
+    ]);
+    await expect(stream.result()).resolves.toEqual(resultMessage);
+  });
+
   it("preserves a fenced allowed-tool example in live and terminal output", async () => {
     const parts = ["`", "``json\n", "[re", 'ad]\n{"path":"example.txt"}\n[/read]\n', "```"];
     const rawText = parts.join("");

@@ -1,9 +1,12 @@
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   assertSqliteSchemaContains,
+  collectSqliteNamedIndexContract,
   collectSqliteSchemaIssues,
+  getCanonicalSqliteNamedIndexContracts,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
@@ -27,6 +30,11 @@ import {
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
+import {
+  resolveOpenClawAgentDatabaseStoredPath,
+  resolveOpenClawStateDirForDatabasePath,
+} from "./openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function dropLegacyStateTables(db: DatabaseSync): void {
   // Unreleased transient history; drop, do not migrate.
@@ -81,7 +89,7 @@ CREATE INDEX idx_commitments_agent_sent
   ON commitments(agent_id, status, sent_at_ms, session_key);
 `;
 
-const ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_SQL = `
+const SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL = `
 CREATE TABLE commitments (
   id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
@@ -91,22 +99,22 @@ CREATE TABLE commitments (
   recipient_id TEXT,
   thread_id TEXT,
   sender_id TEXT,
-  kind TEXT NOT NULL DEFAULT 'followup',
-  sensitivity TEXT NOT NULL DEFAULT 'normal',
-  source TEXT NOT NULL DEFAULT 'unknown',
+  kind TEXT NOT NULL,
+  sensitivity TEXT NOT NULL,
+  source TEXT NOT NULL,
   status TEXT NOT NULL,
-  reason TEXT NOT NULL DEFAULT '',
-  suggested_text TEXT NOT NULL DEFAULT '',
-  dedupe_key TEXT NOT NULL DEFAULT '',
-  confidence REAL NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL,
+  suggested_text TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  confidence REAL NOT NULL,
   due_earliest_ms INTEGER NOT NULL,
   due_latest_ms INTEGER NOT NULL,
-  due_timezone TEXT NOT NULL DEFAULT 'UTC',
+  due_timezone TEXT NOT NULL,
   source_message_id TEXT,
   source_run_id TEXT,
-  created_at_ms INTEGER NOT NULL DEFAULT 0,
+  created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL,
   last_attempt_at_ms INTEGER,
   sent_at_ms INTEGER,
   dismissed_at_ms INTEGER,
@@ -118,21 +126,16 @@ CREATE INDEX idx_commitments_scope_due
   ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
 CREATE INDEX idx_commitments_status_due
   ON commitments(status, due_earliest_ms, due_latest_ms);
-CREATE INDEX idx_commitments_agent_due
-  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
 CREATE INDEX idx_commitments_scope_dedupe
   ON commitments(agent_id, session_key, channel, dedupe_key, status);
-CREATE INDEX idx_commitments_agent_sent
-  ON commitments(agent_id, status, sent_at_ms, session_key);
 `;
 
-const RETIRED_COMMITMENTS_INDEX_NAMES = [
-  "idx_commitments_agent_due",
-  "idx_commitments_agent_sent",
-  "idx_commitments_scope_dedupe",
-  "idx_commitments_scope_due",
-  "idx_commitments_status_due",
-] as const;
+const RETIRED_COMMITMENTS_INDEX_FINGERPRINTS = new Map(
+  getCanonicalSqliteNamedIndexContracts(RETIRED_COMMITMENTS_SCHEMA_SQL).map(
+    ({ fingerprint, name }) => [name, JSON.stringify(fingerprint)],
+  ),
+);
+const RETIRED_COMMITMENTS_INDEX_NAMES = [...RETIRED_COMMITMENTS_INDEX_FINGERPRINTS.keys()];
 
 const RETIRED_COMMITMENTS_ADDITIVE_COLUMNS = [
   "commitments.account_id",
@@ -178,16 +181,10 @@ const RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   allowedMissingIndexes: RETIRED_COMMITMENTS_INDEX_NAMES,
 };
 
-const ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
-  allowedMissingColumns: RETIRED_COMMITMENTS_ADDITIVE_COLUMNS,
-  allowedMissingIndexes: RETIRED_COMMITMENTS_INDEX_NAMES,
-};
-
 function hasSupportedRetiredCommitmentsSchema(
   db: DatabaseSync,
   schemaSql: string,
-  expectedIndexNames: readonly string[],
-  compatibility: SqliteSchemaCompatibility = {},
+  compatibility: SqliteSchemaCompatibility,
 ): boolean {
   if (collectSqliteSchemaIssues(db, schemaSql, compatibility).length > 0) {
     return false;
@@ -202,9 +199,11 @@ function hasSupportedRetiredCommitmentsSchema(
           ORDER BY type, name`,
     )
     .all() as Array<{ name: string; type: string }>;
-  const expectedIndexes = new Set(expectedIndexNames);
   return attachedObjects.every(
-    (object) => object.type === "index" && expectedIndexes.has(object.name),
+    (object) =>
+      object.type === "index" &&
+      JSON.stringify(collectSqliteNamedIndexContract(db, object.name)) ===
+        RETIRED_COMMITMENTS_INDEX_FINGERPRINTS.get(object.name),
   );
 }
 
@@ -228,14 +227,12 @@ function hasRecognizedRetiredCommitmentsSchema(db: DatabaseSync): boolean {
     hasSupportedRetiredCommitmentsSchema(
       db,
       RETIRED_COMMITMENTS_SCHEMA_SQL,
-      RETIRED_COMMITMENTS_INDEX_NAMES,
       RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
     ) ||
     hasSupportedRetiredCommitmentsSchema(
       db,
-      ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_SQL,
-      RETIRED_COMMITMENTS_INDEX_NAMES,
-      ADDITIVE_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
+      SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL,
+      RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
     )
   );
 }
@@ -365,6 +362,194 @@ export function migrateRetiredCommitmentsSchema(
     db.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint};`);
     throw error;
   }
+}
+
+export function migrateWorkerPlacementExecutionModeSchema(
+  db: DatabaseSync,
+  previousVersion: number,
+): boolean {
+  if (previousVersion >= 8 || !tableExists(db, "worker_session_placements")) {
+    return false;
+  }
+  for (const definition of [
+    "execution_mode TEXT",
+    "terminal_reason TEXT",
+    "terminal_at_ms INTEGER",
+  ]) {
+    const column = definition.split(" ", 1)[0]!;
+    if (!tableHasColumn(db, "worker_session_placements", column)) {
+      db.exec(`ALTER TABLE worker_session_placements ADD COLUMN ${definition};`);
+    }
+  }
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS worker_session_placements (",
+  );
+  const endMarker = "\n) STRICT;";
+  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+  if (start < 0 || end < 0) {
+    throw new Error("Canonical worker placement schema block is missing");
+  }
+  const placementSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length);
+  const canonical = openNodeSqliteDatabase(":memory:");
+  let canonicalColumns: string[];
+  try {
+    canonical.exec(placementSchema);
+    canonicalColumns = (
+      canonical.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
+        hidden: number;
+        name: string;
+      }>
+    )
+      .filter((column) => column.hidden === 0)
+      .map((column) => column.name);
+  } finally {
+    canonical.close();
+  }
+  const currentColumns = (
+    db.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
+      hidden: number;
+      name: string;
+    }>
+  )
+    .filter((column) => column.hidden === 0)
+    .map((column) => column.name);
+  const expected = new Set(canonicalColumns);
+  if (
+    currentColumns.length !== canonicalColumns.length ||
+    currentColumns.some((column) => !expected.has(column))
+  ) {
+    throw new Error("OpenClaw v7 worker placement columns are not canonical");
+  }
+  const unexpectedObjects = db
+    .prepare(
+      `SELECT type, name
+         FROM sqlite_schema
+        WHERE tbl_name = 'worker_session_placements'
+          AND type IN ('index', 'trigger')
+          AND sql IS NOT NULL
+          AND name NOT IN (
+            'idx_worker_session_placements_session_key',
+            'idx_worker_session_placements_reconcile'
+          )`,
+    )
+    .all();
+  if (unexpectedObjects.length > 0) {
+    throw new Error("OpenClaw v7 worker placement schema has unsupported attached objects");
+  }
+  const migrationTable = "worker_session_placements_migration_v8";
+  if (tableExists(db, migrationTable)) {
+    throw new Error(`OpenClaw worker placement migration table already exists: ${migrationTable}`);
+  }
+  const migrationSchema = placementSchema.replace(
+    "CREATE TABLE IF NOT EXISTS worker_session_placements",
+    `CREATE TABLE ${migrationTable}`,
+  );
+  const columns = canonicalColumns.map(quoteSqliteIdentifier).join(", ");
+  db.exec(migrationSchema);
+  db.exec(
+    `INSERT INTO ${migrationTable} (${columns}) SELECT ${columns} FROM worker_session_placements;`,
+  );
+  db.exec("DROP TABLE worker_session_placements;");
+  db.exec(`ALTER TABLE ${migrationTable} RENAME TO worker_session_placements;`);
+  return true;
+}
+
+function isDefaultAgentDatabasePath(pathname: string, agentId: string): boolean {
+  const agentDir = path.dirname(pathname);
+  const agentIdDir = path.dirname(agentDir);
+  return (
+    path.basename(pathname) === "openclaw-agent.sqlite" &&
+    path.basename(agentDir) === "agent" &&
+    path.basename(agentIdDir) === agentId &&
+    path.basename(path.dirname(agentIdDir)) === "agents"
+  );
+}
+
+export type AgentDatabasePathMigrationSummary = {
+  relativized: number;
+  reanchored: string[];
+  deleted: string[];
+  preserved: number;
+};
+
+export function migrateAgentDatabaseRelativePaths(
+  db: DatabaseSync,
+  previousVersion: number,
+  databasePath: string,
+): AgentDatabasePathMigrationSummary {
+  if (previousVersion >= 9 || !tableExists(db, "agent_databases")) {
+    return { relativized: 0, reanchored: [], deleted: [], preserved: 0 };
+  }
+  const rows = db.prepare("SELECT agent_id, path FROM agent_databases").all();
+  const updatePath = db.prepare(
+    "UPDATE agent_databases SET path = ? WHERE agent_id = ? AND path = ?",
+  );
+  const deletePath = db.prepare("DELETE FROM agent_databases WHERE agent_id = ? AND path = ?");
+  const hasPath = db.prepare(
+    "SELECT 1 FROM agent_databases WHERE agent_id = ? AND path = ? LIMIT 1",
+  );
+  let relativized = 0;
+  const reanchored: string[] = [];
+  const deleted: string[] = [];
+  for (const row of rows) {
+    const agentId = row.agent_id;
+    const registeredPath = row.path;
+    if (typeof agentId !== "string" || typeof registeredPath !== "string") {
+      throw new Error("OpenClaw v8 agent database registry paths are not canonical");
+    }
+    if (!path.isAbsolute(registeredPath)) {
+      continue;
+    }
+    const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath);
+    if (!path.isAbsolute(storedPath)) {
+      updatePath.run(storedPath, agentId, registeredPath);
+      relativized += 1;
+    }
+  }
+  const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
+  for (const row of rows) {
+    const agentId = row.agent_id;
+    const registeredPath = row.path;
+    if (
+      typeof agentId !== "string" ||
+      typeof registeredPath !== "string" ||
+      !path.isAbsolute(registeredPath) ||
+      !path.isAbsolute(resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath))
+    ) {
+      continue;
+    }
+    const absolutePath = path.resolve(registeredPath);
+    if (isDefaultAgentDatabasePath(absolutePath, agentId)) {
+      const counterpartAbsolute = path.join(
+        stateDir,
+        "agents",
+        agentId,
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      const counterpartStored = resolveOpenClawAgentDatabaseStoredPath(
+        databasePath,
+        counterpartAbsolute,
+      );
+      if (hasPath.get(agentId, counterpartStored)) {
+        // The same agent already owns its in-root canonical registration. Keeping a second
+        // default-layout registration guarantees duplicate canonical session keys on every list.
+        deletePath.run(agentId, registeredPath);
+        deleted.push(registeredPath);
+      } else if (existsSync(counterpartAbsolute)) {
+        // Re-anchor a copied or moved state directory onto its copied database instead of
+        // deleting the registration or leaving it dangling at the source root.
+        updatePath.run(counterpartStored, agentId, registeredPath);
+        reanchored.push(registeredPath);
+      }
+    }
+  }
+  return {
+    relativized,
+    reanchored,
+    deleted,
+    preserved: rows.length - relativized - reanchored.length - deleted.length,
+  };
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
@@ -537,6 +722,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     hasRecognizedRetiredCommitmentsSchema(db)
   ) {
     migrations.push({ kind: "commitments-retirement-v7", path: pathname });
+  }
+  if (userVersion === 7 && tableExists(db, "worker_session_placements")) {
+    migrations.push({ kind: "worker-placement-execution-mode-v8", path: pathname });
+  }
+  if (userVersion === 8 && tableExists(db, "agent_databases")) {
+    migrations.push({ kind: "agent-databases-relative-paths-v9", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

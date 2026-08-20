@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
 import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -1330,6 +1330,12 @@ describe("gateway sessions patch", () => {
     );
 
     expect(entry.thinkingLevel).toBe("ultra");
+    expect((entry as InternalSessionEntry).thinkingLevelSelection).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntime: "openclaw",
+      level: "ultra",
+    });
   });
 
   test("remaps stored Ultra to Max when a model patch selects Codex Luna", async () => {
@@ -1352,6 +1358,12 @@ describe("gateway sessions patch", () => {
     );
 
     expect(entry.thinkingLevel).toBe("max");
+    expect((entry as InternalSessionEntry).thinkingLevelSelection).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntime: "codex",
+      level: "max",
+    });
   });
 
   test("honors an explicit OpenClaw session runtime override for Luna Ultra", async () => {
@@ -1560,6 +1572,26 @@ describe("gateway sessions patch", () => {
     expect(entry.execNode).toBe("worker-1");
     expect(entry.sendPolicy).toBe("deny");
     expect(entry.groupActivation).toBe("always");
+  });
+
+  test("stores and clears the session permission mode", async () => {
+    const stored = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ sessionRoot: "/workspace/project" }),
+        patch: { key: MAIN_SESSION_KEY, permissionMode: "workspace" },
+      }),
+    );
+    expect(stored.permissionMode).toBe("workspace");
+    expect(stored.sessionRoot).toBe("/workspace/project");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: { [MAIN_SESSION_KEY]: stored },
+        patch: { key: MAIN_SESSION_KEY, permissionMode: null },
+      }),
+    );
+    expect(cleared.permissionMode).toBeUndefined();
+    expect(cleared.sessionRoot).toBe("/workspace/project");
   });
 
   test("clears a node cwd when changing or clearing the node binding", async () => {

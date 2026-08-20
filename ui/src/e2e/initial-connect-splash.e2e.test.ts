@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -34,7 +35,7 @@ async function createPage(): Promise<Page> {
   });
   openContexts.add(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   return page;
 }
 
@@ -226,6 +227,38 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     });
     await page.locator("openclaw-login-gate").waitFor();
     expect(await page.locator(".connect-splash").count()).toBe(0);
+  });
+
+  it("keeps retryable Gateway startup on the progress splash", async () => {
+    const page = await createPage();
+    const loginGateMounted = await traceLoginGateMounts(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
+    await gateway.waitForRequest("connect");
+    const initialConnectCount = (await gateway.getRequests("connect")).length;
+    await gateway.deferNext("connect");
+    await gateway.rejectDeferred("connect", {
+      code: "UNAVAILABLE",
+      message: "gateway starting; retry shortly",
+      details: { reason: "startup-sidecars" },
+      retryable: true,
+    });
+
+    const splash = page.locator(".connect-splash");
+    await splash.getByText("Gateway starting…", { exact: true }).waitFor();
+    expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+    expect(await loginGateMounted()).toBe(false);
+    await expect
+      .poll(async () => await splash.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("1");
+    await captureProof(page, "06-gateway-starting-progress");
+
+    await expect
+      .poll(async () => (await gateway.getRequests("connect")).length)
+      .toBeGreaterThan(initialConnectCount);
+    await gateway.resolveDeferred("connect");
+    await page.locator("openclaw-app-shell").waitFor();
   });
 
   it("uses the splash for a stored device token on reload", async () => {

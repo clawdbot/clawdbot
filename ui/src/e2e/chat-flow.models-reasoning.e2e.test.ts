@@ -11,6 +11,199 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("patches the session permission mode and reflects sessions.changed", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const session = {
+      key: "agent:main:session-a",
+      kind: "direct",
+      label: "Session A",
+      permissionMode: "guarded",
+      sessionRoot: "/workspace/projects/openclaw",
+      updatedAt: 2,
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([session]),
+      },
+      sessionKey: session.key,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const trigger = pane.locator('[data-chat-permission-select="true"]');
+      await trigger.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+      expect(
+        await trigger.evaluate((element) => element.closest(".agent-chat__composer-meta") != null),
+      ).toBe(true);
+      expect(
+        await trigger.evaluate(
+          (element) => element.closest(".chat-composer-model-control") != null,
+        ),
+      ).toBe(false);
+
+      const firstListCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.deferNext("sessions.list");
+      await trigger.click();
+      const firstOption = pane.locator('[data-chat-permission-option="default"]');
+      await firstOption.waitFor({ state: "visible" });
+      const [triggerBox, firstOptionBox] = await Promise.all([
+        trigger.boundingBox(),
+        firstOption.boundingBox(),
+      ]);
+      expect(triggerBox).not.toBeNull();
+      expect(firstOptionBox).not.toBeNull();
+      if (!triggerBox || !firstOptionBox) {
+        throw new Error("expected permission picker geometry");
+      }
+      expect(firstOptionBox.y + firstOptionBox.height).toBeLessThanOrEqual(triggerBox.y - 1);
+      expect(firstOptionBox.x).toBeGreaterThanOrEqual(triggerBox.x);
+      expect(firstOptionBox.x - triggerBox.x).toBeLessThanOrEqual(32);
+      await pane.locator('[data-chat-permission-option="workspace"]').click();
+      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(patchRequest.params)).toMatchObject({
+        key: session.key,
+        permissionMode: "workspace",
+      });
+      await waitForRequests(gateway, "sessions.list", firstListCount + 1);
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...session,
+        permissionMode: "workspace",
+        reason: "patch",
+        sessionKey: session.key,
+        updatedAt: 3,
+      });
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+      expect(await trigger.textContent()).toContain("Workspace");
+      await gateway.resolveDeferred(
+        "sessions.list",
+        chatSessionListResponse([{ ...session, permissionMode: "workspace", updatedAt: 3 }]),
+      );
+
+      const secondListCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.deferNext("sessions.list");
+      await trigger.click();
+      await pane.locator('[data-chat-permission-option="default"]').click();
+      const patchRequests = await waitForRequests(gateway, "sessions.patch", 2);
+      expect(requireRecord(patchRequests[1]?.params)).toMatchObject({
+        key: session.key,
+        permissionMode: null,
+      });
+      await waitForRequests(gateway, "sessions.list", secondListCount + 1);
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...session,
+        permissionMode: null,
+        reason: "patch",
+        sessionKey: session.key,
+        updatedAt: 4,
+      });
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
+      expect(await trigger.textContent()).toContain("Default");
+      await gateway.resolveDeferred(
+        "sessions.list",
+        chatSessionListResponse([{ ...session, permissionMode: undefined, updatedAt: 4 }]),
+      );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps picker menus in the viewport while preferring the space above", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      models: Array.from({ length: 12 }, (_, index) => ({
+        id: `model-${index + 1}`,
+        name: `Model ${index + 1}`,
+        provider: "openai",
+      })),
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const control = page.locator(".chat-composer-model-control");
+      for (const picker of [
+        {
+          menu: ".chat-controls__model-menu",
+          trigger: '[data-chat-model-select="true"]',
+        },
+        {
+          menu: ".chat-controls__effort-menu",
+          trigger: '[data-chat-thinking-select="true"]',
+        },
+      ]) {
+        await page.setViewportSize({ height: 900, width: 1280 });
+        await control.evaluate((element) => {
+          Object.assign((element as HTMLElement).style, {
+            position: "fixed",
+            right: "80px",
+            top: "640px",
+          });
+        });
+        const trigger = control.locator(picker.trigger);
+        const menu = control.locator(picker.menu);
+        await trigger.click();
+        await expect
+          .poll(async () => {
+            const [menuBox, triggerBox] = await Promise.all([
+              menu.boundingBox(),
+              trigger.boundingBox(),
+            ]);
+            return {
+              aboveTrigger:
+                menuBox !== null &&
+                triggerBox !== null &&
+                menuBox.y + menuBox.height <= triggerBox.y - 5,
+              withinViewport:
+                menuBox !== null && menuBox.y >= 8 && menuBox.y + menuBox.height <= 892,
+            };
+          })
+          .toEqual({ aboveTrigger: true, withinViewport: true });
+
+        await page.setViewportSize({ height: 320, width: 1280 });
+        await control.evaluate((element) => {
+          (element as HTMLElement).style.top = "24px";
+        });
+        await expect
+          .poll(async () => {
+            const [menuBox, triggerBox] = await Promise.all([
+              menu.boundingBox(),
+              trigger.boundingBox(),
+            ]);
+            return {
+              belowTrigger:
+                menuBox !== null &&
+                triggerBox !== null &&
+                menuBox.y >= triggerBox.y + triggerBox.height + 5,
+              withinViewport:
+                menuBox !== null && menuBox.y >= 8 && menuBox.y + menuBox.height <= 312,
+            };
+          })
+          .toEqual({ belowTrigger: true, withinViewport: true });
+        await trigger.click();
+        await expect.poll(() => menu.isVisible()).toBe(false);
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("routes runtime-aware model commands through the server directive path", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -63,21 +256,32 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      const modelScroller = main.locator(".chat-controls__model-options");
+      await main.locator(".chat-composer-model-control").evaluate((element) => {
+        Object.assign((element as HTMLElement).style, {
+          position: "fixed",
+          right: "80px",
+          top: "640px",
+        });
+      });
       await page.evaluate(() => {
         document.documentElement.style.overflowY = "auto";
         document.body.style.height = "1800px";
         window.scrollTo(0, 300);
       });
       expect(await page.evaluate(() => window.scrollY)).toBe(300);
+
+      await main.locator('[data-chat-model-select="true"]').click();
+      const modelScroller = main.locator(".chat-controls__model-options");
+      await expect.poll(() => modelScroller.isVisible()).toBe(true);
+      await modelScroller.evaluate((element) => {
+        element.scrollTop = 0;
+      });
       await modelScroller.hover();
-      const outerScrollBeforeFling = await page.evaluate(() => window.scrollY);
-      expect(outerScrollBeforeFling).toBeGreaterThan(0);
+      expect(await page.evaluate(() => window.scrollY)).toBe(300);
       await page.mouse.wheel(0, -5_000);
       await page.waitForTimeout(100);
 
-      expect(await page.evaluate(() => window.scrollY)).toBe(outerScrollBeforeFling);
+      expect(await page.evaluate(() => window.scrollY)).toBe(300);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -721,7 +925,9 @@ suite.define(() => {
       const main = page.getByRole("main");
       await main.locator('[data-chat-thinking-select="true"]').click();
       await gateway.deferNext("sessions.patch");
-      await main.locator('[data-chat-thinking-slider="true"]').press("ArrowLeft");
+      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
+      await thinkingSlider.press("ArrowLeft");
       const firstPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(firstPatch.params).thinkingLevel).toBe("medium");
 

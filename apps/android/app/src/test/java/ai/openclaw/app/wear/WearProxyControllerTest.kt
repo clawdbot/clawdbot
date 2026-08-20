@@ -99,6 +99,53 @@ class WearProxyControllerTest {
     }
 
   @Test
+  fun agentPulseAcceptsOnlyTheSelectedSessionAndCallsItsLoaderOnce() =
+    runTest {
+      var loaderCalls = 0
+      var requestedSessionKey: String? = null
+      val projected =
+        buildJsonObject {
+          put("tasks", buildJsonObject { put("state", "unavailable") })
+          put("swarm", buildJsonObject { put("state", "idle") })
+          put("approvals", buildJsonObject { put("state", "unavailable") })
+        }
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> error("Agent Pulse must stay on the Phone runtime boundary") },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          loadAgentPulse = { sessionKey ->
+            loaderCalls += 1
+            requestedSessionKey = sessionKey
+            projected
+          },
+        )
+
+      val response =
+        controller.handle(
+          request(
+            WearRpcMethod.AgentPulse,
+            buildJsonObject { put("sessionKey", "agent:main:thread-7") },
+          ),
+        )
+      val rejected =
+        controller.handle(
+          request(
+            WearRpcMethod.AgentPulse,
+            buildJsonObject { put("detail", true) },
+          ),
+        )
+
+      assertTrue(response.ok)
+      assertEquals(projected, response.result)
+      assertEquals("agent:main:thread-7", requestedSessionKey)
+      assertEquals(1, loaderCalls)
+      assertFalse(rejected.ok)
+      assertEquals("invalid_request", rejected.error?.code)
+      assertEquals(1, loaderCalls)
+    }
+
+  @Test
   fun agentsAndGatewayControlsStayOnThePhoneRuntimeBoundary() =
     runTest {
       var gatewayRequests = 0

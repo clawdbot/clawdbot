@@ -10,7 +10,6 @@ import {
   type SessionSharingIdentity,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   addSessionSuggestion,
   claimSessionSuggestionDispatch,
@@ -34,7 +33,6 @@ import {
 import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { appendSessionAudit } from "./session-audit.js";
 import {
   broadcastTypingThrottled,
@@ -166,38 +164,6 @@ async function dispatchSuggestion(params: {
   suggestion: StoredSessionSuggestion;
   resolution: "send" | "queue";
 }): Promise<{ ok: true } | { ok: false; error: Parameters<RespondFn>[2] }> {
-  const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
-    params.context.getRuntimeConfig(),
-    params.target.storeKey,
-  );
-  const activeRunState =
-    params.resolution === "send"
-      ? resolveVisibleActiveSessionRunState({
-          context: params.context,
-          requestedKey: params.target.canonicalKey,
-          canonicalKey: params.target.storeKey,
-          sessionId: params.target.entry.sessionId,
-          agentId: params.target.agentId,
-          defaultAgentId: compatibilityOwnerAgentId,
-        })
-      : undefined;
-  if (activeRunState?.active && activeRunState.runIds.length !== 1) {
-    const message =
-      activeRunState.runIds.length === 0
-        ? "active session run has no exact dispatch identity; refresh and retry"
-        : "session has multiple active runs; choose the target run before sending the suggestion";
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, message, {
-        retryable: false,
-        details: {
-          code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
-          sessionKey: params.target.canonicalKey,
-        },
-      }),
-    };
-  }
-  const activeRunId = activeRunState?.active ? activeRunState.runIds[0] : undefined;
   let response: Parameters<RespondFn> | undefined;
   const chatParams = {
     sessionKey: params.target.canonicalKey,
@@ -206,9 +172,7 @@ async function dispatchSuggestion(params: {
     message: params.suggestion.text,
     ...(params.resolution === "queue"
       ? { queueMode: "followup" as const }
-      : activeRunId
-        ? { queueMode: "steer" as const, expectedRunId: activeRunId }
-        : {}),
+      : { queueMode: "steer" as const }),
     idempotencyKey: `session-suggestion:${params.suggestion.id}`,
   };
   await handleChatSend({
@@ -649,7 +613,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         if (liveIdentities.size < 2 || !liveIdentities.has(actor.id)) {
           return false;
         }
-        const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
         const event: SessionTypingEvent = {
           sessionKey: target.canonicalKey,
           sessionId: current.entry.sessionId,
@@ -659,7 +622,16 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {
-          sessionKeys: subscriptionKeys(current.canonicalKey, current.agentId, defaultAgentId),
+          sessionKeys: subscriptionKeys(
+            current.canonicalKey,
+            current.agentId,
+            current.canonicalKey === "global"
+              ? tryResolveSessionCompatibilityOwnerAgentId(
+                  context.getRuntimeConfig(),
+                  current.canonicalKey,
+                )
+              : undefined,
+          ),
           agentId: target.agentId,
           dropIfSlow: true,
         });

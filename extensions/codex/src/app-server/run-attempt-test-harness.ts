@@ -1,11 +1,13 @@
 // Codex plugin module implements run attempt test harness behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   abortAndDrainAgentHarnessRun,
   nativeHookRelayTesting,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
+  runBeforeToolCallHook,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
@@ -51,13 +53,36 @@ const execApprovalsRuntimeMocks = vi.hoisted(() => ({
   loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
 }));
 
-function createHarnessHostCapabilities(): EmbeddedRunAttemptParams["hostCapabilities"] {
+function createHarnessHostCapabilities(
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams["hostCapabilities"] {
   return Object.freeze({
     kind: "agent-harness-host-capability",
     version: 1,
     assertActive: () => {},
     bindToolSurface: (tools) => tools,
-    runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
+    createToolSurface: (options) => createOpenClawCodingTools(options),
+    runBeforeToolCall: async ({ nativeOperation: _nativeOperation, approvalMode, ...request }) =>
+      await runBeforeToolCallHook({
+        ...request,
+        approvalMode: approvalMode === "defer" ? "defer" : "request",
+        ctx: Object.freeze({
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.config ? { config: params.config } : {}),
+          ...(params.workspaceDir
+            ? { cwd: params.workspaceDir, workspaceDir: params.workspaceDir }
+            : {}),
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          runId: params.runId,
+          trigger: params.trigger,
+          approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+          turnSourceChannel: params.messageChannel ?? params.messageProvider,
+          turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+          turnSourceAccountId: params.agentAccountId,
+          turnSourceThreadId: params.currentThreadTs,
+        }),
+      }),
     requestApproval: async () => undefined,
     waitForApproval: async () => undefined,
   });
@@ -237,8 +262,7 @@ export function createParams(
   const sessionKey = identity.sessionKey ?? "agent:main:session-1";
   const provider = identity.provider ?? "codex";
   const model = createCodexTestModel(provider);
-  return {
-    hostCapabilities: createHarnessHostCapabilities(),
+  const params = {
     prompt: identity.prompt ?? "hello",
     sessionId,
     sessionKey,
@@ -265,7 +289,9 @@ export function createParams(
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     observeToolTerminal: createCodexTestToolTerminalObserver(),
-  } as EmbeddedRunAttemptParams;
+  } as unknown as EmbeddedRunAttemptParams;
+  params.hostCapabilities = createHarnessHostCapabilities(params);
+  return params;
 }
 
 export function createTestParams(): EmbeddedRunAttemptParams {

@@ -91,12 +91,12 @@ can affect bundled plugins and third-party plugins.
   - `scripts/lib/plugin-sdk-entrypoints.json`
   - `scripts/lib/plugin-sdk-entries.mts`
   - `package.json` exports
-  - API baseline and export checks
+  - API diff and export checks
 - If a bundled channel/helper need crosses package boundaries, first ask
   whether the need is truly generic. If yes, add a narrow generic subpath. If
   not, keep it plugin-local through `api.ts` / `runtime-api.ts`.
 - When expanding provider-facing seams, update or add the matching narrow tests
-  that lock the contract: Plugin SDK baseline/export checks for public subpaths
+  that lock the contract: Plugin SDK diff/export checks for public subpaths
   and the most direct provider/plugin tests for the behavior you are
   centralizing.
 - Breaking removals or renames are major-version work, not drive-by cleanup.

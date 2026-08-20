@@ -48,8 +48,8 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
     curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
     apt install -y nodejs
 
-    # Install OpenClaw
-    curl -fsSL https://openclaw.ai/install.sh | bash
+    # Install OpenClaw; run onboarding later as the non-root owner.
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
 
     # Create the non-root user that will own OpenClaw state and services.
     adduser openclaw
@@ -75,11 +75,11 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
   <Step title="Add swap (recommended for 1 GB Droplets)">
     ```bash
-    fallocate -l 2G /swapfile
-    chmod 600 /swapfile
-    mkswap /swapfile
-    swapon /swapfile
-    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    sudo fallocate -l 2G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
     ```
   </Step>
 
@@ -130,9 +130,13 @@ These survive Droplet reboots. To take a portable snapshot:
 
 ```bash
 openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
-DigitalOcean snapshots back up the whole Droplet; `openclaw backup create` is portable across hosts.
+DigitalOcean snapshots back up the whole Droplet; `openclaw backup create` is
+portable across hosts. Restore verifies and extracts into a fresh staging
+directory; activation is a separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
 
 ## 1 GB RAM tips
 

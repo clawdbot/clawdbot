@@ -15,11 +15,25 @@ import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/e
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClientOptions, GatewayClientRequestOptions } from "./client.js";
 import {
-  loadConfigMock as getRuntimeConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
-  resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
+
+const TLS_FINGERPRINT = "ab".repeat(32);
+
+const gatewayConfigMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+  loadGatewayTlsRuntime: vi.fn(),
+  resolveConfigPath: vi.fn(
+    (env: NodeJS.ProcessEnv, stateDir: string) =>
+      env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
+  ),
+  resolveGatewayPort: vi.fn(),
+  resolveStateDir: vi.fn((env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw"),
+  useActualDispatchConfig: false,
+}));
+const getRuntimeConfig = gatewayConfigMocks.getRuntimeConfig;
+const resolveGatewayPort = gatewayConfigMocks.resolveGatewayPort;
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -36,10 +50,18 @@ const deviceIdentityState = vi.hoisted(() => ({
   } satisfies DeviceIdentity,
   throwOnLoad: false,
 }));
+const loadOrCreateDeviceIdentityMock = vi.hoisted(() => vi.fn());
+const loadDeviceIdentityIfPresentMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
 );
+const loadDeviceAuthTokenReadOnlyMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
 const loadOriginDeviceTokenMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
+const loadOriginDeviceTokenReadOnlyMock = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
 );
 
@@ -75,6 +97,71 @@ const connectAssemblyErrorState = vi.hoisted(() => {
   };
 });
 
+vi.mock("../config/gateway-dispatch-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/gateway-dispatch-config.js")>();
+  return {
+    ...actual,
+    readGatewayDispatchConfig: () =>
+      gatewayConfigMocks.useActualDispatchConfig
+        ? actual.readGatewayDispatchConfig()
+        : gatewayConfigMocks.getRuntimeConfig(),
+    readGatewayDispatchConfigWithShellEnvFallback: async () =>
+      gatewayConfigMocks.useActualDispatchConfig
+        ? await actual.readGatewayDispatchConfigWithShellEnvFallback()
+        : gatewayConfigMocks.getRuntimeConfig(),
+  };
+});
+
+vi.mock("../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
+    resolveConfigPath: gatewayConfigMocks.resolveConfigPath,
+    resolveGatewayPort: gatewayConfigMocks.resolveGatewayPort,
+    resolveStateDir: gatewayConfigMocks.resolveStateDir,
+  };
+});
+
+vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-auth-store.js")>();
+  return {
+    ...actual,
+    loadDeviceAuthToken: loadDeviceAuthTokenMock,
+    loadDeviceAuthTokenReadOnly: loadDeviceAuthTokenReadOnlyMock,
+    loadOriginDeviceToken: loadOriginDeviceTokenMock,
+    loadOriginDeviceTokenReadOnly: loadOriginDeviceTokenReadOnlyMock,
+  };
+});
+
+vi.mock("../infra/device-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-identity.js")>();
+  return {
+    ...actual,
+    loadOrCreateDeviceIdentity: () => {
+      loadOrCreateDeviceIdentityMock();
+      if (deviceIdentityState.throwOnLoad) {
+        throw new Error("read-only identity dir");
+      }
+      return deviceIdentityState.value;
+    },
+    loadDeviceIdentityIfPresent: () => {
+      loadDeviceIdentityIfPresentMock();
+      if (deviceIdentityState.throwOnLoad) {
+        throw new Error("read-only identity dir");
+      }
+      return deviceIdentityState.value;
+    },
+  };
+});
+
+vi.mock("../infra/tls/gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/tls/gateway.js")>();
+  return {
+    ...actual,
+    loadGatewayTlsRuntime: gatewayConfigMocks.loadGatewayTlsRuntime,
+  };
+});
+
 let lastClientOptions: GatewayClientOptions | null = null;
 let lastRequestOptions: {
   method?: string;
@@ -94,6 +181,7 @@ let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
 let closeReason = "";
+let helloCapabilities: string[] | undefined = [];
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
 let connectError: Error | null = null;
 
@@ -102,7 +190,7 @@ function makeStubGatewayHello(): HelloOk {
     type: "hello-ok",
     protocol: 1,
     server: { version: "test", connId: "test-connection" },
-    features: { methods: helloMethods ?? [], events: [] },
+    features: { capabilities: helloCapabilities ?? [], methods: helloMethods ?? [], events: [] },
     snapshot: {
       presence: [],
       health: {},
@@ -163,6 +251,18 @@ function startStubGatewayClient() {
   }
 }
 
+type GatewayClientRequestImpl = (
+  method: string,
+  params: unknown,
+  opts?: GatewayClientRequestOptions,
+) => Promise<unknown>;
+let gatewayClientRequest: GatewayClientRequestImpl = async (method, params, opts) => {
+  lastRequestOptions = { method, params, opts };
+  return { ok: true };
+};
+let gatewayClientStart = startStubGatewayClient;
+let gatewayClientStopAndWait = async () => {};
+
 vi.mock("./client.js", () => ({
   isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
@@ -170,13 +270,15 @@ vi.mock("./client.js", () => ({
       lastClientOptions = opts;
     }
     async request(method: string, params: unknown, opts?: GatewayClientRequestOptions) {
-      lastRequestOptions = { method, params, opts };
-      return { ok: true };
+      return await gatewayClientRequest(method, params, opts);
     }
     start() {
-      startStubGatewayClient();
+      gatewayClientStart();
     }
     stop() {}
+    async stopAndWait() {
+      await gatewayClientStopAndWait();
+    }
   },
 }));
 
@@ -191,7 +293,6 @@ vi.mock("./event-loop-ready.js", () => ({
 }));
 
 const {
-  testing,
   buildGatewayConnectionDetails,
   buildGatewayProbeConnectionDetails,
   callGateway,
@@ -206,24 +307,15 @@ const {
 } = await import("./call.js");
 const { GatewaySecretRefUnavailableError } = await import("./credentials.js");
 
-class StubGatewayClient {
-  constructor(opts: GatewayClientOptions) {
-    lastClientOptions = opts;
-  }
-  async request(method: string, params: unknown, opts?: GatewayClientRequestOptions) {
-    lastRequestOptions = { method, params, opts };
-    return { ok: true };
-  }
-  start() {
-    startStubGatewayClient();
-  }
-  stop() {}
-  async stopAndWait() {}
-}
-
 function resetGatewayCallMocks() {
-  getRuntimeConfig.mockClear();
-  resolveGatewayPort.mockClear();
+  getRuntimeConfig.mockReset().mockReturnValue({});
+  resolveGatewayPort.mockReset().mockReturnValue(18789);
+  gatewayConfigMocks.resolveConfigPath.mockClear();
+  gatewayConfigMocks.resolveStateDir.mockClear();
+  gatewayConfigMocks.loadGatewayTlsRuntime
+    .mockReset()
+    .mockResolvedValue({ enabled: false, required: false });
+  gatewayConfigMocks.useActualDispatchConfig = false;
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
@@ -241,27 +333,18 @@ function resetGatewayCallMocks() {
   startCalls = 0;
   closeCode = 1006;
   closeReason = "";
+  helloCapabilities = [];
   helloMethods = ["health", "secrets.resolve"];
   connectError = null;
-  const loadConfigForTests = getRuntimeConfig as unknown as () => OpenClawConfig;
-  const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
-    cfg?: OpenClawConfig,
-    env?: NodeJS.ProcessEnv,
-  ) => number;
-  testing.setDepsForTests({
-    createGatewayClient: (opts) => new StubGatewayClient(opts) as never,
-    getRuntimeConfig: loadConfigForTests,
-    loadOrCreateDeviceIdentity: () => {
-      if (deviceIdentityState.throwOnLoad) {
-        throw new Error("read-only identity dir");
-      }
-      return deviceIdentityState.value;
-    },
-    loadDeviceAuthToken: loadDeviceAuthTokenMock,
-    loadOriginDeviceToken: loadOriginDeviceTokenMock,
-    resolveGatewayPort: resolveGatewayPortForTests,
-  });
+  gatewayClientRequest = async (method, params, opts) => {
+    lastRequestOptions = { method, params, opts };
+    return { ok: true };
+  };
+  gatewayClientStart = startStubGatewayClient;
+  gatewayClientStopAndWait = async () => {};
   deviceIdentityState.throwOnLoad = false;
+  loadOrCreateDeviceIdentityMock.mockReset();
+  loadDeviceIdentityIfPresentMock.mockReset();
   loadDeviceAuthTokenMock.mockReset();
   loadDeviceAuthTokenMock.mockReturnValue({
     token: "paired-device-token",
@@ -269,8 +352,17 @@ function resetGatewayCallMocks() {
     scopes: ["operator.read"],
     updatedAtMs: 123,
   });
+  loadDeviceAuthTokenReadOnlyMock.mockReset();
+  loadDeviceAuthTokenReadOnlyMock.mockReturnValue({
+    token: "paired-device-token",
+    role: "operator",
+    scopes: ["operator.read"],
+    updatedAtMs: 123,
+  });
   loadOriginDeviceTokenMock.mockReset();
   loadOriginDeviceTokenMock.mockReturnValue(null);
+  loadOriginDeviceTokenReadOnlyMock.mockReset();
+  loadOriginDeviceTokenReadOnlyMock.mockReturnValue(null);
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -333,6 +425,7 @@ describe("callGateway url resolution", () => {
 
     setGatewayConfig({ mode: "remote", remote: { url: "wss://gateway.example/ws" } });
     await expect(isImplicitLocalGatewayTarget({})).resolves.toBe(false);
+    await expect(isImplicitLocalGatewayTarget({ localPortOverride: 19082 })).resolves.toBe(true);
 
     setLocalLoopbackGatewayConfig();
     await expect(isImplicitLocalGatewayTarget({ url: "ws://127.0.0.1:18789" })).resolves.toBe(
@@ -346,7 +439,6 @@ describe("callGateway url resolution", () => {
   afterEach(() => {
     resetConfigRuntimeState();
     envSnapshot.restore();
-    testing.resetDepsForTests();
   });
 
   it.each([
@@ -446,6 +538,55 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
+  it("still connects to an explicit secure url when config cannot be loaded", async () => {
+    // A secure target reads config only for gateway.remote.edgeAuth, so an invalid
+    // config must not block a connection the flags already fully describe.
+    getRuntimeConfig.mockImplementation(() => {
+      throw new Error("invalid config");
+    });
+
+    await callGatewayCli({
+      method: "health",
+      url: "wss://override.example/ws",
+      token: "test-token",
+    });
+
+    expect(getRuntimeConfig).toHaveBeenCalled();
+    expect(lastClientOptions?.url).toBe("wss://override.example/ws");
+    expect(lastClientOptions?.token).toBe("test-token");
+    expect(lastClientOptions?.edgeAuthHeaders).toBeUndefined();
+  });
+
+  it("reconnects with admin only after sessions.create cwd returns structured escalation", async () => {
+    const scopeAttempts: Array<readonly string[] | undefined> = [];
+    gatewayClientRequest = async () => {
+      scopeAttempts.push(lastClientOptions?.scopes);
+      if (scopeAttempts.length === 1) {
+        throw Object.assign(new Error("missing scope: operator.admin"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+          retryable: false,
+        });
+      }
+      return { key: "agent:main:dashboard:created" };
+    };
+    setLocalLoopbackGatewayConfig();
+
+    await expect(
+      callGatewayCli({
+        method: "sessions.create",
+        params: { cwd: "/outside/configured/workspaces" },
+      }),
+    ).resolves.toEqual({ key: "agent:main:dashboard:created" });
+
+    expect(scopeAttempts).toEqual([["operator.write"], ["operator.admin"]]);
+  });
+
   it("keeps direct-local backend shared-token auth independent of paired device state", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -478,6 +619,31 @@ describe("callGateway url resolution", () => {
       env: process.env,
     });
   });
+
+  it.each(["token", "password"] as const)(
+    "keeps %s auth preflight reads off writable shared state in read-only mode",
+    async (authMode) => {
+      setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: authMode } });
+      setGatewayNetworkDefaults();
+      loadDeviceAuthTokenReadOnlyMock.mockReturnValue({
+        token: "paired-device-token",
+        role: "operator",
+        scopes: ["operator.read"],
+        updatedAtMs: 123,
+      });
+      loadDeviceAuthTokenMock.mockReturnValue(null);
+
+      await callGateway({ method: "sessions.list", sharedStateMode: "read-only" });
+
+      expect(loadDeviceAuthTokenReadOnlyMock).toHaveBeenCalledWith({
+        deviceId: "test-device-identity",
+        role: "operator",
+        env: process.env,
+      });
+      expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
+      expect(lastClientOptions?.sharedStateMode).toBe("read-only");
+    },
+  );
 
   it("fails before opening a websocket when default token auth has no shared or paired credential", async () => {
     setGatewayConfig({ mode: "local", bind: "loopback" });
@@ -648,6 +814,25 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("explicit-token");
   });
 
+  it("lets an explicit local port override bypass the configured remote URL", async () => {
+    setGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      remote: { url: "wss://gateway.example/ws", token: "remote-token" },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      localPortOverride: 19082,
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:19082");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
   it("uses env URL override credentials without resolving local password SecretRefs", async () => {
     setEnvSecretGatewayConfig({
       mode: "local",
@@ -675,7 +860,7 @@ describe("callGateway url resolution", () => {
       mode: "remote",
       remote: {
         url: "wss://remote.example:9443/ws",
-        tlsFingerprint: "remote-fingerprint",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
       },
     });
     setGatewayNetworkDefaults(18789);
@@ -687,7 +872,7 @@ describe("callGateway url resolution", () => {
       method: "health",
     });
 
-    expect(lastClientOptions?.tlsFingerprint).toBe("remote-fingerprint");
+    expect(lastClientOptions?.tlsFingerprint).toBe(TLS_FINGERPRINT);
   });
 
   it("does not apply remote tlsFingerprint for CLI url override", async () => {
@@ -695,7 +880,7 @@ describe("callGateway url resolution", () => {
       mode: "remote",
       remote: {
         url: "wss://remote.example:9443/ws",
-        tlsFingerprint: "remote-fingerprint",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT}`,
       },
     });
     setGatewayNetworkDefaults(18789);
@@ -726,6 +911,60 @@ describe("callGateway url resolution", () => {
     await call();
     expect(lastClientOptions?.scopes).toEqual(expectedScopes);
   });
+
+  it.each([
+    [
+      "device dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", deviceId: "device-1" },
+      ["operator.write"],
+    ],
+    [
+      "profile dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", profileId: "development" },
+      ["operator.admin"],
+    ],
+    [
+      "gateway move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+      ["operator.write"],
+    ],
+    [
+      "device move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "device", deviceId: "device-1" },
+      },
+      ["operator.write"],
+    ],
+    [
+      "profile move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "profile", profileId: "development" },
+      },
+      ["operator.admin"],
+    ],
+  ] as const)(
+    "selects least-privilege CLI scopes for %s",
+    async (_name, method, params, scopes) => {
+      setLocalLoopbackGatewayConfig();
+
+      await callGatewayCli({ method, params });
+
+      expect(lastClientOptions?.scopes).toEqual(scopes);
+    },
+  );
 
   it("keeps legacy broad scopes for unclassified explicit CLI methods", async () => {
     setLocalLoopbackGatewayConfig();
@@ -791,6 +1030,12 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
     expect(lastClientOptions?.scopes).toBeUndefined();
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastClientOptions?.preparedDeviceAuth).toEqual({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read", "operator.pairing"],
+      updatedAtMs: 123,
+    });
   });
 
   it("keeps explicit credentials and diagnostic scopes ahead of stored device auth", async () => {
@@ -880,6 +1125,59 @@ describe("callGateway url resolution", () => {
       role: "operator",
       env: process.env,
     });
+  });
+
+  it("keeps remote CLI identity and stored auth reads off writable shared state", async () => {
+    getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+    loadOriginDeviceTokenReadOnlyMock.mockReturnValue({
+      token: "remote-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await callGatewayCli({
+      method: "node.list",
+      useStoredDeviceAuth: true,
+      sharedStateMode: "read-only",
+    });
+
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastClientOptions?.sharedStateMode).toBe("read-only");
+    expect(loadDeviceIdentityIfPresentMock).toHaveBeenCalledOnce();
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+    expect(loadOriginDeviceTokenReadOnlyMock).toHaveBeenCalledWith({
+      gatewayScope: "wss://remote.example:18789",
+      deviceId: deviceIdentityState.value.deviceId,
+      role: "operator",
+      env: process.env,
+    });
+    expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("isolates the accepted-hello observer from the RPC", async () => {
+    let observedHello: HelloOk | undefined;
+    const onHelloOk = vi.fn((hello: HelloOk) => {
+      observedHello = hello;
+      throw new Error("observer failed");
+    });
+
+    await expect(
+      callGateway({
+        method: "status",
+        scopes: ["operator.read"],
+        sharedStateMode: "read-only",
+        preauthHandshakeTimeoutMs: 2_345,
+        onHelloOk,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(onHelloOk).toHaveBeenCalledOnce();
+    expect(observedHello).toEqual(makeStubGatewayHello());
+    expect(lastRequestOptions?.method).toBe("status");
+    expect(lastClientOptions?.sharedStateMode).toBe("read-only");
+    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(2_345);
   });
 
   it("uses stored device auth for the exact normalized url override origin", async () => {
@@ -1206,20 +1504,16 @@ describe("buildGatewayConnectionDetails", () => {
       },
     } satisfies OpenClawConfig;
     resolveGatewayPort.mockReturnValue(18800);
-    testing.setDepsForTests({
-      getRuntimeConfig: () => config,
-      resolveGatewayPort: () => 18800,
-      loadGatewayTlsRuntime: async () => ({
-        enabled: true,
-        fingerprintSha256: "sha256:test-local-gateway-fingerprint",
-        required: true,
-      }),
+    gatewayConfigMocks.loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      fingerprintSha256: TLS_FINGERPRINT,
+      required: true,
     });
 
     const details = await buildGatewayProbeConnectionDetails({ config });
 
     expect(details.url).toBe("wss://127.0.0.1:18800");
-    expect(details.tlsFingerprint).toBe("sha256:test-local-gateway-fingerprint");
+    expect(details.tlsFingerprint).toBe(TLS_FINGERPRINT);
     expect(details.preauthHandshakeTimeoutMs).toBeUndefined();
   });
 
@@ -1233,11 +1527,6 @@ describe("buildGatewayConnectionDetails", () => {
     resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
       const candidateEnv = env as NodeJS.ProcessEnv | undefined;
       return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
-    });
-    testing.setDepsForTests({
-      getRuntimeConfig: () => config,
-      resolveGatewayPort: (_config?: unknown, env?: NodeJS.ProcessEnv) =>
-        Number(env?.OPENCLAW_GATEWAY_PORT ?? 18789),
     });
     const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
     const prevPort = process.env.OPENCLAW_GATEWAY_PORT;
@@ -1419,27 +1708,6 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
-  it("falls back to the default config loader when test deps drift", () => {
-    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(tempStateDir, "missing-config.json"));
-    try {
-      setGatewayConfig({ mode: "local", bind: "loopback" });
-      resolveGatewayPort.mockReturnValue(18800);
-      testing.setDepsForTests({
-        getRuntimeConfig: {} as never,
-        resolveGatewayPort: () => 18789,
-      });
-
-      const details = buildGatewayConnectionDetails();
-
-      expect(details.url).toBe("ws://127.0.0.1:18789");
-      expect(details.urlSource).toBe("local loopback");
-    } finally {
-      fs.rmSync(tempStateDir, { recursive: true, force: true });
-    }
-  });
-
   it("uses the reduced dispatch config for default RPC loading", async () => {
     resetConfigRuntimeState();
     const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
@@ -1454,17 +1722,10 @@ describe("buildGatewayConnectionDetails", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
     try {
-      testing.setDepsForTests({
-        createGatewayClient: (opts) =>
-          new StubGatewayClient(
-            opts as ConstructorParameters<typeof StubGatewayClient>[0],
-          ) as never,
-        loadOrCreateDeviceIdentity: () => {
-          throw new Error("auth mode none should not load a device identity");
-        },
-        loadDeviceAuthToken: () => null,
-        resolveGatewayPort: (config) => config?.gateway?.port ?? 18789,
-      });
+      gatewayConfigMocks.useActualDispatchConfig = true;
+      deviceIdentityState.throwOnLoad = true;
+      loadDeviceAuthTokenMock.mockReturnValue(null);
+      resolveGatewayPort.mockImplementation((config) => config?.gateway?.port ?? 18789);
 
       await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
 
@@ -1492,17 +1753,10 @@ describe("buildGatewayConnectionDetails", () => {
       gateway: { mode: "local", bind: "loopback", port: 18801, auth: { mode: "none" } },
     });
     try {
-      testing.setDepsForTests({
-        createGatewayClient: (opts) =>
-          new StubGatewayClient(
-            opts as ConstructorParameters<typeof StubGatewayClient>[0],
-          ) as never,
-        loadOrCreateDeviceIdentity: () => {
-          throw new Error("auth mode none should not load a device identity");
-        },
-        loadDeviceAuthToken: () => null,
-        resolveGatewayPort: (config) => config?.gateway?.port ?? 18789,
-      });
+      gatewayConfigMocks.useActualDispatchConfig = true;
+      deviceIdentityState.throwOnLoad = true;
+      loadDeviceAuthTokenMock.mockReturnValue(null);
+      resolveGatewayPort.mockImplementation((config) => config?.gateway?.port ?? 18789);
 
       await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
 
@@ -1750,6 +2004,37 @@ describe("callGateway error details", () => {
 
     await expect(request).rejects.toBe(upgradeError);
   });
+
+  it.each(["ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ETIMEDOUT"])(
+    "renders %s connect failures as an actionable gateway-unreachable message",
+    async (code) => {
+      startMode = "silent";
+      setLocalLoopbackGatewayConfig();
+      const socketError = Object.assign(new Error(`connect ${code} 127.0.0.1:18789`), { code });
+
+      const request = callGateway({ method: "health" });
+      await waitForFast(() => expect(lastClientOptions).not.toBeNull());
+      lastClientOptions?.onClose?.(1006, "", {
+        phase: "pre-hello",
+        socketOpened: false,
+        transportValidated: false,
+        transientPreHelloCleanClose: false,
+        connectError: socketError,
+      });
+
+      let error: unknown;
+      await request.catch((caught: unknown) => {
+        error = caught;
+      });
+      expect(isGatewayTransportError(error)).toBe(true);
+      const message = (error as Error).message;
+      expect(message).toContain(`Gateway not reachable at ws://127.0.0.1:18789 (${code}).`);
+      expect(message).toContain(
+        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      );
+      expect(message).not.toContain(`connect ${code}`);
+    },
+  );
 
   it.each([
     {
@@ -2152,39 +2437,13 @@ describe("callGateway error details", () => {
     vi.useFakeTimers();
     let releaseRequest: (() => void) | undefined;
 
-    testing.setDepsForTests({
-      createGatewayClient: (opts) =>
-        ({
-          async request(
-            method: string,
-            params: unknown,
-            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
-          ) {
-            lastRequestOptions = { method, params, opts: requestOpts };
-            await new Promise<void>((resolve) => {
-              releaseRequest = resolve;
-            });
-            return { ok: true };
-          },
-          start() {
-            opts.onHelloOk?.({
-              features: {
-                methods: helloMethods ?? [],
-                events: [],
-              },
-            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
-          },
-          stop() {},
-          async stopAndWait() {},
-        }) as never,
-      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
-      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
-      loadDeviceAuthToken: loadDeviceAuthTokenMock,
-      resolveGatewayPort: resolveGatewayPort as unknown as (
-        cfg?: OpenClawConfig,
-        env?: NodeJS.ProcessEnv,
-      ) => number,
-    });
+    gatewayClientRequest = async (method, params, requestOpts) => {
+      lastRequestOptions = { method, params, opts: requestOpts };
+      await new Promise<void>((resolve) => {
+        releaseRequest = resolve;
+      });
+      return { ok: true };
+    };
 
     let settled = false;
     const promise = callGateway({ method: "health", timeoutMs: null }).then((result) => {
@@ -2233,56 +2492,27 @@ describe("callGateway error details", () => {
     }> = [];
     let stopStarted = false;
 
-    testing.setDepsForTests({
-      createGatewayClient: (opts) =>
-        ({
-          async request(
-            method: string,
-            params: unknown,
-            requestOpts?: {
-              expectFinal?: boolean;
-              timeoutMs?: number | null;
-              signal?: AbortSignal;
+    gatewayClientRequest = async (method, params, requestOpts) => {
+      lastRequestOptions = { method, params, opts: requestOpts };
+      if (method === "agent") {
+        return await new Promise((_, reject) => {
+          requestOpts?.signal?.addEventListener(
+            "abort",
+            () => {
+              const err = new Error("gateway request aborted for agent");
+              err.name = "AbortError";
+              reject(err);
             },
-          ) {
-            lastRequestOptions = { method, params, opts: requestOpts };
-            if (method === "agent") {
-              return await new Promise((_, reject) => {
-                requestOpts?.signal?.addEventListener(
-                  "abort",
-                  () => {
-                    const err = new Error("gateway request aborted for agent");
-                    err.name = "AbortError";
-                    reject(err);
-                  },
-                  { once: true },
-                );
-              });
-            }
-            abortRequests.push({ method, params, opts: requestOpts });
-            return { ok: true };
-          },
-          start() {
-            opts.onHelloOk?.({
-              features: {
-                methods: helloMethods ?? [],
-                events: [],
-              },
-            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
-          },
-          stop() {},
-          async stopAndWait() {
-            stopStarted = true;
-          },
-        }) as never,
-      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
-      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
-      loadDeviceAuthToken: loadDeviceAuthTokenMock,
-      resolveGatewayPort: resolveGatewayPort as unknown as (
-        cfg?: OpenClawConfig,
-        env?: NodeJS.ProcessEnv,
-      ) => number,
-    });
+            { once: true },
+          );
+        });
+      }
+      abortRequests.push({ method, params, opts: requestOpts });
+      return { ok: true };
+    };
+    gatewayClientStopAndWait = async () => {
+      stopStarted = true;
+    };
 
     const promise = callGateway({
       method: "agent",
@@ -2317,37 +2547,12 @@ describe("callGateway error details", () => {
     let startCalled = false;
     let stopStarted = false;
 
-    testing.setDepsForTests({
-      createGatewayClient: () =>
-        ({
-          async request(
-            method: string,
-            params: unknown,
-            requestOpts?: {
-              expectFinal?: boolean;
-              timeoutMs?: number | null;
-              signal?: AbortSignal;
-            },
-          ) {
-            lastRequestOptions = { method, params, opts: requestOpts };
-            return { ok: true };
-          },
-          start() {
-            startCalled = true;
-          },
-          stop() {},
-          async stopAndWait() {
-            stopStarted = true;
-          },
-        }) as never,
-      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
-      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
-      loadDeviceAuthToken: loadDeviceAuthTokenMock,
-      resolveGatewayPort: resolveGatewayPort as unknown as (
-        cfg?: OpenClawConfig,
-        env?: NodeJS.ProcessEnv,
-      ) => number,
-    });
+    gatewayClientStart = () => {
+      startCalled = true;
+    };
+    gatewayClientStopAndWait = async () => {
+      stopStarted = true;
+    };
 
     const promise = callGateway({
       method: "agent",
@@ -2385,44 +2590,15 @@ describe("callGateway error details", () => {
     let stopFinished = false;
     let callResolved = false;
 
-    testing.setDepsForTests({
-      createGatewayClient: (opts) =>
-        ({
-          async request(
-            method: string,
-            params: unknown,
-            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
-          ) {
-            lastRequestOptions = { method, params, opts: requestOpts };
-            return { ok: true };
-          },
-          start() {
-            opts.onHelloOk?.({
-              features: {
-                methods: helloMethods ?? [],
-                events: [],
-              },
-            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
-          },
-          stop() {},
-          async stopAndWait() {
-            stopStarted = true;
-            await new Promise<void>((resolve) => {
-              releaseStop = () => {
-                stopFinished = true;
-                resolve();
-              };
-            });
-          },
-        }) as never,
-      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
-      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
-      loadDeviceAuthToken: loadDeviceAuthTokenMock,
-      resolveGatewayPort: resolveGatewayPort as unknown as (
-        cfg?: OpenClawConfig,
-        env?: NodeJS.ProcessEnv,
-      ) => number,
-    });
+    gatewayClientStopAndWait = async () => {
+      stopStarted = true;
+      await new Promise<void>((resolve) => {
+        releaseStop = () => {
+          stopFinished = true;
+          resolve();
+        };
+      });
+    };
 
     const promise = callGateway({ method: "health" }).then(() => {
       callResolved = true;
@@ -2450,41 +2626,12 @@ describe("callGateway error details", () => {
     let releaseStop: (() => void) | undefined;
     let stopStarted = false;
 
-    testing.setDepsForTests({
-      createGatewayClient: (opts) =>
-        ({
-          async request(
-            method: string,
-            params: unknown,
-            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
-          ) {
-            lastRequestOptions = { method, params, opts: requestOpts };
-            return { ok: true };
-          },
-          start() {
-            opts.onHelloOk?.({
-              features: {
-                methods: helloMethods ?? [],
-                events: [],
-              },
-            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
-          },
-          stop() {},
-          async stopAndWait() {
-            stopStarted = true;
-            await new Promise<void>((resolve) => {
-              releaseStop = resolve;
-            });
-          },
-        }) as never,
-      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
-      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
-      loadDeviceAuthToken: loadDeviceAuthTokenMock,
-      resolveGatewayPort: resolveGatewayPort as unknown as (
-        cfg?: OpenClawConfig,
-        env?: NodeJS.ProcessEnv,
-      ) => number,
-    });
+    gatewayClientStopAndWait = async () => {
+      stopStarted = true;
+      await new Promise<void>((resolve) => {
+        releaseStop = resolve;
+      });
+    };
 
     const promise = callGateway<{ ok: true }>({ method: "health", timeoutMs: 5 });
 
@@ -2522,6 +2669,19 @@ describe("callGateway error details", () => {
       }),
     ).rejects.toThrow(
       /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
+    );
+  });
+
+  it("fails before request when a required gateway capability is missing", async () => {
+    setLocalLoopbackGatewayConfig();
+    helloCapabilities = [];
+    await expect(
+      callGateway({
+        method: "gateway.restart.request",
+        requiredCapabilities: ["gateway-restart-target-safe-v1"],
+      }),
+    ).rejects.toThrow(
+      /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
     );
   });
 });

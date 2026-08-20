@@ -19,8 +19,11 @@ function catalogEntry(overrides: Partial<ModelCatalogEntry> & { provider: string
   } satisfies ModelCatalogEntry;
 }
 
-function authStatus(providers: ModelAuthStatusResult["providers"]): ModelAuthStatusResult {
-  return { ts: 1, providers };
+function authStatus(
+  providers: ModelAuthStatusResult["providers"],
+  providerCapabilities?: ModelAuthStatusResult["providerCapabilities"],
+): ModelAuthStatusResult {
+  return { ts: 1, providers, ...(providerCapabilities ? { providerCapabilities } : {}) };
 }
 
 function firstCard(cards: ReturnType<typeof buildModelProviderCards>) {
@@ -75,7 +78,10 @@ describe("buildModelProviderCards", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
       models: [catalogEntry({ provider: "github-copilot", available: true })],
-      catalogModels: [catalogEntry({ provider: "github-copilot", apiKeySupported: false })],
+      authStatus: authStatus(
+        [],
+        [{ provider: "github-copilot", apiKeySupported: false, quickApiKeySetup: false }],
+      ),
     });
     expect(firstCard(cards).apiKeySupported).toBe(false);
   });
@@ -166,6 +172,51 @@ describe("buildModelProviderCards", () => {
       { provider: "anthropic", profileIds: ["p1"] },
       { provider: "claude-cli", profileIds: ["p2"] },
     ]);
+  });
+
+  it("keeps a credential-less missing route visible beside CLI OAuth", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          status: "missing",
+          profiles: [],
+        },
+        {
+          provider: "claude-cli",
+          displayName: "Claude",
+          status: "expiring",
+          profiles: [{ profileId: "anthropic:claude-cli", type: "oauth", status: "expiring" }],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 1 });
+  });
+
+  it("preserves missing MiniMax OAuth beside a separate API key", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "minimax",
+          displayName: "MiniMax",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "MINIMAX_API_KEY" },
+        },
+        {
+          provider: "minimax-portal",
+          displayName: "MiniMax",
+          status: "missing",
+          profiles: [],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 0 });
   });
 
   it("prefers usage.status snapshots over the auth-status embed", () => {
@@ -365,10 +416,9 @@ describe("model provider configuration data", () => {
   it("lists known providers that are not configured", () => {
     const options = buildUnconfiguredProviderOptions(
       [
-        catalogEntry({ provider: "openai", apiKeySupported: true }),
-        catalogEntry({ provider: "anthropic", apiKeySupported: true }),
-        catalogEntry({ provider: "anthropic", id: "anthropic/other", apiKeySupported: true }),
-        catalogEntry({ provider: "github-copilot", apiKeySupported: false }),
+        { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+        { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+        { provider: "github-copilot", apiKeySupported: true, quickApiKeySetup: false },
       ],
       ["openai"],
     );

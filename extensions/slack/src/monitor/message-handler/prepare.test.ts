@@ -1,5 +1,6 @@
 // Slack tests cover prepare plugin behavior.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { App } from "@slack/bolt";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
@@ -10,8 +11,7 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -23,7 +23,6 @@ import {
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
-import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
@@ -85,7 +84,11 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
   return {
     ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueRoutedSystemEvent: (
+      text: unknown,
+      route: { sessionKey: unknown },
+      options: Record<string, unknown>,
+    ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
   };
 });
 
@@ -97,7 +100,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   beforeEach(() => {
-    resetSlackThreadStarterCacheForTest();
     clearSlackThreadParticipationCache();
     enqueueSystemEventMock.mockClear();
     logVerboseMock.mockClear();
@@ -458,6 +460,32 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared, "open-policy Slack DM");
     expect(prepared.ctxPayload.RawBody).toContain("hello");
     expect(prepared.ctxPayload.From).toBe("slack:U123");
+  });
+
+  it("projects cached sender avatars for DMs only", async () => {
+    const ctx = createDefaultSlackCtx();
+    const resolveUserAvatar = vi.fn(() => "/media/inbound/slack-avatar.png");
+    ctx.resolveUserAvatar = resolveUserAvatar;
+
+    const direct = await prepareSlackMessage({
+      ctx,
+      account: defaultAccount,
+      message: createSlackMessage({ channel: "D123", channel_type: "im", user: "U1" }),
+      opts: { source: "message" },
+    });
+    const channel = await prepareSlackMessage({
+      ctx,
+      account: defaultAccount,
+      message: createSlackMessage({ channel: "C123", channel_type: "channel", user: "U1" }),
+      opts: { source: "app_mention", wasMentioned: true },
+    });
+
+    assertPrepared(direct, "Slack DM avatar");
+    assertPrepared(channel, "Slack channel without avatar");
+    expect(direct.ctxPayload.ConversationAvatar).toBe("/media/inbound/slack-avatar.png");
+    expect(channel.ctxPayload.ConversationAvatar).toBeUndefined();
+    expect(resolveUserAvatar).toHaveBeenCalledOnce();
+    expect(resolveUserAvatar).toHaveBeenCalledWith("U1", undefined);
   });
 
   it("carries the validated event workspace through reusable DM routing", async () => {
@@ -1230,8 +1258,13 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
-  function createThreadSlackCtx(params: { cfg: OpenClawConfig; replies: unknown }) {
+  function createThreadSlackCtx(params: {
+    accountId?: string;
+    cfg: OpenClawConfig;
+    replies: unknown;
+  }) {
     return createInboundSlackCtx({
+      accountId: params.accountId,
       cfg: params.cfg,
       appClient: { conversations: { replies: params.replies } } as App["client"],
       defaultRequireMention: false,
@@ -1239,9 +1272,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   }
 
-  function createThreadAccount(): ResolvedSlackAccount {
+  function createThreadAccount(accountId = "default"): ResolvedSlackAccount {
     return {
-      accountId: "default",
+      accountId,
       enabled: true,
       identity: "bot",
       botTokenSource: "config",
@@ -1278,11 +1311,16 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expectFollowUpMentioned?: boolean;
   };
 
+  let threadRouteScenarioSequence = 0;
+
   async function runThreadRouteScenario(scenario: ThreadRouteScenario) {
     const implicit = scenario.mentionType === "implicit";
     const channelId = implicit ? "C0AGG76CP1S" : "C0AHZFCAS1K";
     const userId = implicit ? "U_TRAJCHE" : "U_BEK";
-    const rootTs = implicit ? "1778073105.769279" : "1777244692.409919";
+    threadRouteScenarioSequence += 1;
+    const rootTs = `${implicit ? "1778073105" : "1777244692"}.${String(
+      700_000 + threadRouteScenarioSequence,
+    ).padStart(6, "0")}`;
     const replyToMode = implicit ? "first" : "all";
     const rootText = implicit
       ? "What day is it?"
@@ -3047,6 +3085,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
     const prepared = await prepareThreadMessage(slackCtx, {
+      channel: "CFIRSTTHREADTURN1",
       text: "current message",
       ts: "101.000",
     });
@@ -3177,7 +3216,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
   it("uses room users allowlist for thread context filtering", async () => {
     const { prepared, replies } = await prepareThreadContextAllowlistCase({
-      channel: "C123",
+      channel: "CROOMALLOWLIST1",
       channelType: "channel",
       user: "U1",
       userName: "Alice",
@@ -3188,7 +3227,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       followUpTs: "100.800",
       currentTs: "101.000",
       channelsConfig: {
-        C123: {
+        CROOMALLOWLIST1: {
           users: ["U1"],
           requireMention: false,
         },
@@ -3880,6 +3919,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
       const prepared = await prepareThreadMessage(slackCtx, {
+        channel: "C123",
         text: "bound reply",
         ts: "101.000",
         thread_ts: "100.000",
@@ -3900,6 +3940,50 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     } finally {
       unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
     }
+  });
+
+  it("keeps account-bound thread freshness on the routed agent", async () => {
+    const { dir } = storeFixture.makeTmpStorePath();
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    const expectedStorePath = path.join(dir, "foundation", "sessions.json");
+    const cfg = {
+      agents: { entries: { main: {}, foundation: {} } },
+      bindings: [
+        {
+          agentId: "foundation",
+          match: { channel: "slack", accountId: "foundation" },
+        },
+        { agentId: "main", match: { channel: "slack", accountId: "*" } },
+      ],
+      session: { store: storeTemplate },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const replies = vi.fn().mockResolvedValue({
+      messages: [{ text: "starter", user: "U2", ts: "100.000" }],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createThreadSlackCtx({
+      accountId: "foundation",
+      cfg,
+      replies,
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createThreadAccount("foundation"),
+      createThreadReplyMessage({
+        channel: "CFOUNDATIONTHREAD1",
+        text: "bound thread reply",
+        ts: "101.000",
+        thread_ts: "100.000",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.route.agentId).toBe("foundation");
+    expect(prepared.turn.storePath).toBe(expectedStorePath);
   });
 
   const threadRouteScenarios = [
@@ -4805,7 +4889,10 @@ describe("prepareSlackMessage sender prefix", () => {
       mediaMaxBytes: 1000,
       logger: { info: vi.fn(), warn: vi.fn() },
       shouldDropMismatchedSlackEvent: () => false,
-      resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
+      resolveSlackSystemEventRoute: () => ({
+        agentId: "main",
+        sessionKey: "agent:main:slack:channel:c1",
+      }),
       isChannelAllowed: () => true,
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
       resolveUserName: async () => ({ name: "Alice" }),

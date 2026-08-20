@@ -241,6 +241,35 @@ describe("telegram ingress supersede policy", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      name: "does not supersede an identityless foreign targeted command",
+      text: "/queue@OtherBot",
+      entityText: "/queue@OtherBot",
+      expected: false,
+    },
+    {
+      name: "keeps identityless targeted aborts pessimistic",
+      text: "/stop@OtherBot!",
+      entityText: "/stop@OtherBot",
+      expected: true,
+    },
+  ])("$name", async ({ text, entityText, expected }) => {
+    const update = messageUpdate({
+      updateId: 2,
+      text,
+      senderId: OWNER_ID,
+      entities: [{ type: "bot_command", offset: 0, length: entityText.length }],
+    });
+
+    expect(
+      await shouldSupersede(
+        record("2", update),
+        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
+      ),
+    ).toBe(expected);
+  });
+
   it("does not supersede when a bot_command entity appears inside ordinary text", async () => {
     const ourBotAuth = {
       ...auth,

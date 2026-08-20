@@ -10,7 +10,6 @@ import { OLLAMA_DEFAULT_API_KEY } from "./src/discovery-shared.js";
 
 const promptAndConfigureOllamaMock = vi.hoisted(() =>
   vi.fn(async () => ({
-    credential: "ollama-local",
     defaultModel: "ollama/qwen-tool",
     config: {
       models: {
@@ -18,7 +17,8 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
           ollama: {
             baseUrl: "http://127.0.0.1:11434",
             api: "ollama",
-            models: [],
+            apiKey: "ollama-local",
+            models: [{ id: "qwen-tool", name: "qwen-tool" }],
           },
         },
       },
@@ -526,12 +526,15 @@ describe("ollama plugin", () => {
           ollama: {
             baseUrl: "http://127.0.0.1:11434",
             api: "ollama",
-            models: [],
+            apiKey: "ollama-local",
+            models: [{ id: "qwen-tool", name: "qwen-tool" }],
           },
         },
       },
     });
+    expect(result.profiles).toEqual([]);
     expect(result.defaultModel).toBe("ollama/qwen-tool");
+    expect(result.configPatch?.models?.providers?.ollama?.apiKey).toBe("ollama-local");
   });
 
   it("discovers and prepares a loaded tool-capable model without pulling it", async () => {

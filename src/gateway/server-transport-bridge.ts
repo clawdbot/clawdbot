@@ -11,7 +11,8 @@ export function createGatewayTransportBridge() {
       current = transport;
     },
     current: () => current,
-    getWorkerIngressEndpoint: () => current?.getWorkerIngressEndpoint(),
+    getPortalService: () => current?.portalService,
+    getTailscaleIngressEndpoint: () => current?.getTailscaleIngressEndpoint(),
     getMcpAppSandboxPort: () => current?.getMcpAppSandboxPort(),
     ensureSandboxHostPort: async () => {
       if (!current) {

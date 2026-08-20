@@ -1,5 +1,8 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -80,7 +83,7 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
-import type { GroupKeyResolution, SessionEntry } from "./types.js";
+import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
@@ -186,13 +189,17 @@ export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEn
     : undefined;
 }
 
-/** Lists persisted session keys from the data-version-validated entry snapshot. */
+/** Lists persisted session keys without materializing their entry JSON. */
 export function listSessionEntryKeysReadOnly(
   scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
 ): string[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    return [...readSessionEntrySnapshot(database, resolved, scope.readConsistency).keys];
+    const db = getSessionKysely(database.db);
+    return executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("session_nodes").select("session_key").orderBy("session_key"),
+    ).rows.map((row) => row.session_key);
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];
 }
@@ -675,12 +682,12 @@ export async function recordInboundSessionMeta(params: {
       if (context.existingEntry) {
         return metadataPatch;
       }
-      const senderId = params.ctx.From?.trim();
+      const senderId = params.ctx.SenderId?.trim();
       return {
         ...buildSessionCreationStamp(
           params.ctx.SessionCreation ?? {
             via: "channel",
-            actor: { type: "human", ...(senderId ? { id: senderId } : {}) },
+            ...(senderId ? { actor: { type: "human", id: senderId } } : {}),
           },
         ),
         ...metadataPatch,
@@ -728,14 +735,12 @@ export async function updateSessionLastRoute(params: {
       if (context.existingEntry) {
         return routePatch;
       }
-      const senderId = params.ctx?.From?.trim();
+      const senderId = params.ctx?.SenderId?.trim();
       return {
         ...buildSessionCreationStamp(
           params.ctx?.SessionCreation ?? {
             via: "channel",
-            ...(params.ctx
-              ? { actor: { type: "human" as const, ...(senderId ? { id: senderId } : {}) } }
-              : {}),
+            ...(senderId ? { actor: { type: "human" as const, id: senderId } } : {}),
           },
         ),
         ...routePatch,

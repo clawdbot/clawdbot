@@ -47,6 +47,7 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
+let resolvePluginSkillDirsFromMetadata: typeof import("./plugin-skills.js").resolvePluginSkillDirsFromMetadata;
 
 const tempDirs = createTrackedTempDirs();
 
@@ -136,6 +137,20 @@ async function setupAcpxAndHelperRegistry() {
   return { workspaceDir, acpxRoot, helperRoot };
 }
 
+function useStableMetadataSnapshot(manifestRegistry: PluginManifestRegistry): void {
+  const snapshot = {
+    manifestRegistry,
+    plugins: manifestRegistry.plugins,
+    normalizePluginId: (pluginId: string) =>
+      manifestRegistry.plugins.find((plugin) => plugin.legacyPluginIds?.includes(pluginId))?.id ??
+      pluginId,
+  };
+  hoisted.loadPluginMetadataSnapshot
+    .mockReturnValueOnce(snapshot)
+    .mockReturnValueOnce(snapshot)
+    .mockReturnValueOnce(snapshot);
+}
+
 async function setupPluginOutsideSkills() {
   const workspaceDir = await tempDirs.make("openclaw-");
   const pluginRoot = await tempDirs.make("openclaw-plugin-");
@@ -174,7 +189,29 @@ afterEach(async () => {
 
 describe("resolvePluginSkillDirs", () => {
   beforeAll(async () => {
-    ({ resolvePluginSkillDirs } = await import("./plugin-skills.js"));
+    ({ resolvePluginSkillDirs, resolvePluginSkillDirsFromMetadata } =
+      await import("./plugin-skills.js"));
+  });
+
+  it("uses supplied lifecycle metadata without a cold load", async () => {
+    const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+    registerHealthyAcpBackend();
+    const manifestRegistry = buildRegistry({ acpxRoot, helperRoot });
+
+    const dirs = resolvePluginSkillDirsFromMetadata({
+      workspaceDir,
+      config: {
+        acp: { enabled: true },
+        plugins: { entries: { acpx: { enabled: true }, helper: { enabled: true } } },
+      } as OpenClawConfig,
+      metadataSnapshot: {
+        manifestRegistry,
+        normalizePluginId: (pluginId: string) => pluginId,
+      } as never,
+    });
+
+    expect(dirs).toEqual([path.resolve(acpxRoot, "skills"), path.resolve(helperRoot, "skills")]);
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {
@@ -235,6 +272,57 @@ describe("resolvePluginSkillDirs", () => {
 
     expect(dirs).toEqual(expectedDirs({ acpxRoot, helperRoot }));
   });
+
+  it.each([
+    {
+      name: "unavailable to available",
+      initiallyAvailable: false,
+      firstIncludesAcpx: false,
+      secondIncludesAcpx: true,
+    },
+    {
+      name: "available to unavailable",
+      initiallyAvailable: true,
+      firstIncludesAcpx: true,
+      secondIncludesAcpx: false,
+    },
+  ])(
+    "invalidates the memo when ACP changes from $name with stable inputs",
+    async ({ initiallyAvailable, firstIncludesAcpx, secondIncludesAcpx }) => {
+      const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+      const manifestRegistry = buildRegistry({ acpxRoot, helperRoot });
+      useStableMetadataSnapshot(manifestRegistry);
+      const config = {
+        acp: { enabled: true },
+        plugins: {
+          entries: {
+            acpx: { enabled: true },
+            helper: { enabled: true },
+          },
+        },
+      } as OpenClawConfig;
+      if (initiallyAvailable) {
+        registerHealthyAcpBackend();
+      }
+
+      const first = resolvePluginSkillDirs({ workspaceDir, config });
+
+      if (initiallyAvailable) {
+        acpRuntimeTesting.resetAcpRuntimeBackendsForTests();
+      } else {
+        registerHealthyAcpBackend();
+      }
+      const second = resolvePluginSkillDirs({ workspaceDir, config });
+
+      const dirsForState = (includeAcpx: boolean) => [
+        ...(includeAcpx ? [path.resolve(acpxRoot, "skills")] : []),
+        path.resolve(helperRoot, "skills"),
+      ];
+      expect(first).toEqual(dirsForState(firstIncludesAcpx));
+      expect(second).toEqual(dirsForState(secondIncludesAcpx));
+      expect(resolvePluginSkillDirs({ workspaceDir, config })).toBe(second);
+    },
+  );
 
   it("rejects plugin skill paths that escape the plugin root", async () => {
     const { workspaceDir, pluginRoot, outsideSkills } = await setupPluginOutsideSkills();

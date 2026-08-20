@@ -9,9 +9,9 @@ import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js"
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { isValidAttachmentBase64, type ChatAttachment } from "./chat-attachments.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 
@@ -29,8 +29,10 @@ type DashboardSessionTitleModelEntry = Pick<
 
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
+const WORKTREE_SESSION_TITLE_TIMEOUT_MS = 8_000;
+const WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS = 4_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
-  "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message. No emoji. Return only the title.";
+  "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
 
 // One title request per session generation. Concurrent triggers cannot race duplicate model
 // calls or metadata writes; late callers receive the in-flight promise so they
@@ -69,7 +71,7 @@ export function buildDashboardSessionTitleSource(params: {
   message: string;
   attachments?: readonly ChatAttachment[];
 }): string {
-  const visibleMessage = stripInlineDirectiveTagsForDisplay(params.message).text.trim();
+  const visibleMessage = params.message.trim();
   const slashCommand = visibleMessage.startsWith("/");
   let source = slashCommand ? "" : visibleMessage;
   for (const attachment of params.attachments ?? []) {
@@ -160,6 +162,7 @@ async function generateDashboardSessionTitle(params: {
   entry?: DashboardSessionTitleModelEntry;
   userMessage: string;
   attachments?: readonly ChatAttachment[];
+  timeoutMs?: number;
 }): Promise<string | null> {
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
@@ -200,8 +203,68 @@ async function generateDashboardSessionTitle(params: {
     ...(preferredProfile ? { preferredProfile } : {}),
     normalizeLabel: normalizeDashboardSessionTitle,
     maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
+    ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
   });
   return generated ? normalizeDashboardSessionTitle(generated) : null;
+}
+
+export function prepareWorktreeSessionTitle(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry?: DashboardSessionTitleModelEntry | null;
+  userMessage: string;
+  attachments?: readonly ChatAttachment[];
+  onError: (error: unknown) => void;
+}) {
+  if (params.entry === null) {
+    return undefined;
+  }
+  const source = buildDashboardSessionTitleSource({
+    message: params.userMessage,
+    attachments: params.attachments,
+  });
+  if (!source) {
+    return undefined;
+  }
+  const generated = withTimeout(
+    generateDashboardSessionTitle({
+      ...params,
+      entry: params.entry ?? undefined,
+      timeoutMs: WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS,
+    }),
+    WORKTREE_SESSION_TITLE_TIMEOUT_MS,
+    "worktree title generation",
+  ).catch((error: unknown) => {
+    params.onError(error);
+    return null;
+  });
+  return {
+    source,
+    generated,
+    persist: async (
+      agentId: string,
+      entry: SessionEntry,
+      sessionKey: string,
+      storePath: string,
+    ) => {
+      try {
+        const attempt = await maybeGenerateSessionTitle({
+          cfg: params.cfg,
+          agentId,
+          entry,
+          sessionId: entry.sessionId,
+          sessionKey,
+          storePath,
+          userMessage: source,
+          titleGeneration: generated,
+        });
+        return attempt.kind === "persisted";
+      } catch (error) {
+        params.onError(error);
+        return false;
+      }
+    },
+  };
 }
 
 export async function maybeGenerateDashboardSessionTitle(params: {
@@ -238,6 +301,7 @@ export async function maybeGenerateSessionTitle(params: {
   storePath: string;
   currentUserMessage?: string;
   userMessage: string;
+  titleGeneration?: Promise<string | null>;
 }): Promise<SessionTitleAttempt> {
   if (hasExplicitSessionName(params.entry) || params.entry?.sessionId !== params.sessionId) {
     return { kind: "skipped" };
@@ -258,12 +322,8 @@ export async function maybeGenerateSessionTitle(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   }).firstUserMessage;
-  const transcriptText = transcriptSource
-    ? stripInlineDirectiveTagsForDisplay(stripInboundMetadata(transcriptSource)).text.trim()
-    : "";
-  const currentText = params.currentUserMessage
-    ? stripInlineDirectiveTagsForDisplay(params.currentUserMessage).text.trim()
-    : "";
+  const transcriptText = transcriptSource ? stripInboundMetadata(transcriptSource).trim() : "";
+  const currentText = params.currentUserMessage?.trim() ?? "";
   // A first-turn transcript may win the persistence race before title work starts.
   // When it is the current turn, retain the supplied attachment-enriched source.
   const sourceText =
@@ -278,12 +338,13 @@ export async function maybeGenerateSessionTitle(params: {
     sessionTitleRequests,
     requestKey,
     async () => {
-      const displayName = await generateDashboardSessionTitle({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        entry: params.entry,
-        userMessage: sourceText,
-      });
+      const displayName = await (params.titleGeneration ??
+        generateDashboardSessionTitle({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          entry: params.entry,
+          userMessage: sourceText,
+        }));
       if (!displayName) {
         return false;
       }

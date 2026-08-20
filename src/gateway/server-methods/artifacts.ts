@@ -3,7 +3,10 @@
 import { createHash } from "node:crypto";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString as asNonEmptyString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -247,13 +250,13 @@ function resolveBlockDownload(
   mimeType?: string;
   sizeBytes?: number;
 } {
-  const data = asNonEmptyString(block.data);
-  const content = asNonEmptyString(block.content);
+  const data = readStringValue(block.data)?.trim();
+  const content = readStringValue(block.content)?.trim();
   const url = asNonEmptyString(block.url) ?? asNonEmptyString(block.openUrl);
   const imageUrl = mediaUrlValue(block.image_url);
   const audioUrl = asNonEmptyString(block.audio_url);
   const source = asOptionalRecord(block.source);
-  const sourceData = asNonEmptyString(source?.data);
+  const sourceData = readStringValue(source?.data)?.trim();
   const sourceUrl = asNonEmptyString(source?.url);
   const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
     (value) => typeof value === "string" && /^data:/i.test(value),
@@ -282,12 +285,7 @@ function resolveBlockDownload(
       ? Math.floor(explicitSize)
       : base64?.sizeBytes;
   if (base64) {
-    return {
-      mode: "bytes",
-      ...(base64.data ? { data: base64.data } : {}),
-      mimeType,
-      sizeBytes,
-    };
+    return { mode: "bytes", data: base64.data, mimeType, sizeBytes };
   }
   if (remoteUrl) {
     return { mode: "url", url: remoteUrl, mimeType, sizeBytes };
@@ -310,8 +308,9 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
   ) {
     return true;
   }
-  return Boolean(
-    block.url || block.openUrl || block.data || block.source || block.image_url || block.audio_url,
+  return (
+    typeof block.data === "string" ||
+    Boolean(block.url || block.openUrl || block.source || block.image_url || block.audio_url)
   );
 }
 
@@ -378,7 +377,7 @@ function collectArtifactsFromMessage(params: {
       messageSeq,
       source: "session-transcript",
       download: { mode: download.mode },
-      ...(download.data ? { data: download.data } : {}),
+      ...(download.data !== undefined ? { data: download.data } : {}),
       ...(download.url ? { url: download.url } : {}),
     };
     params.artifacts.push(summary);
@@ -530,6 +529,16 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
   return false;
 }
 
+function respondArtifactNotFound(respond: RespondFn, requestedArtifactId: string): void {
+  respond(
+    false,
+    undefined,
+    artifactError("artifact_not_found", "artifact not found", {
+      artifactId: requestedArtifactId,
+    }),
+  );
+}
+
 async function runArtifactSessionOperation<T>(
   respond: RespondFn,
   operation: () => Promise<T> | T,
@@ -620,13 +629,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const { artifact } = found.value;
     if (!artifact) {
-      respond(
-        false,
-        undefined,
-        artifactError("artifact_not_found", "artifact not found", {
-          artifactId: params.artifactId,
-        }),
-      );
+      respondArtifactNotFound(respond, params.artifactId);
       return;
     }
     respond(true, { artifact: toSummary(artifact) });
@@ -686,6 +689,8 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         });
         return;
       }
+      respondArtifactNotFound(respond, params.artifactId);
+      return;
     }
     const found = await runArtifactSessionOperation(respond, () =>
       findArtifact(admittedQuery, cfg, { downloadArtifactId: params.artifactId }),
@@ -695,13 +700,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const { artifact } = found.value;
     if (!artifact) {
-      respond(
-        false,
-        undefined,
-        artifactError("artifact_not_found", "artifact not found", {
-          artifactId: params.artifactId,
-        }),
-      );
+      respondArtifactNotFound(respond, params.artifactId);
       return;
     }
     if (artifact.download.mode === "unsupported") {

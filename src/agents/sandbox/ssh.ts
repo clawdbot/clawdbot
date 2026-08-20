@@ -635,15 +635,15 @@ export async function createSshSandboxSessionFromSettings(
         lines.push(`  User ${parsed.user}`);
       }
       if (knownHostsFile) {
-        lines.push(`  UserKnownHostsFile ${knownHostsFile}`);
+        lines.push(`  UserKnownHostsFile ${quoteSshConfigPath(knownHostsFile)}`);
       } else if (!settings.strictHostKeyChecking) {
         lines.push("  UserKnownHostsFile /dev/null");
       }
       if (identityFile) {
-        lines.push(`  IdentityFile ${identityFile}`);
+        lines.push(`  IdentityFile ${quoteSshConfigPath(identityFile)}`);
       }
       if (certificateFile) {
-        lines.push(`  CertificateFile ${certificateFile}`);
+        lines.push(`  CertificateFile ${quoteSshConfigPath(certificateFile)}`);
       }
       if (identityFile || certificateFile) {
         lines.push("  IdentitiesOnly yes");
@@ -917,9 +917,15 @@ async function createSshSandboxSession(
 }
 
 function assertSshConfigLineValue(value: string | undefined, field: string): void {
-  if (value && /[\r\n]/.test(value)) {
-    throw new Error(`SSH sandbox ${field} must not contain line breaks.`);
+  if (value && /[\r\n"]/.test(value)) {
+    throw new Error(`SSH sandbox ${field} must not contain line breaks or double quotes.`);
   }
+}
+
+// ssh_config tokenizes unquoted arguments on whitespace; default macOS key
+// locations ("Application Support") would otherwise parse as extra arguments.
+function quoteSshConfigPath(value: string): string {
+  return /\s/.test(value) ? `"${value}"` : value;
 }
 
 function resolveOptionalLocalPath(value: string | undefined): string | undefined {

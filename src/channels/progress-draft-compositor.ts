@@ -34,7 +34,7 @@ import {
   type StreamingMode,
 } from "./streaming.js";
 
-export { createChannelProgressReceiptTracker } from "./progress-receipt-tracker.js";
+export { createChannelProgressWorkCounter } from "./progress-work-counter.js";
 
 // A recent model preamble remains the primary status; utility narration fills
 // the slot only after the model has been quiet for this interval. Exported for

@@ -19,7 +19,6 @@ type SlackDraftStream = {
   clear: () => Promise<void>;
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
-  stop: () => void;
   forceNewMessage: () => void;
   dropDetachedMessages: () => Promise<void>;
   finalizeMessage: (messageId: string, editFinal: () => Promise<void>) => Promise<boolean>;
@@ -46,7 +45,6 @@ export function createSlackDraftStream(params: {
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
   metadata?: MessageMetadata;
-  onMessageSent?: () => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
   send?: typeof sendMessageSlack;
@@ -147,7 +145,6 @@ export function createSlackDraftStream(params: {
         });
         untrackConversationBoundary = tracker.stop;
       }
-      params.onMessageSent?.();
     } catch (err) {
       stopTrackingConversationBoundary();
       streamState.stopped = true;
@@ -166,12 +163,6 @@ export function createSlackDraftStream(params: {
   const stopTrackingConversationBoundary = () => {
     untrackConversationBoundary?.();
     untrackConversationBoundary = undefined;
-  };
-
-  const stop = () => {
-    stopTrackingConversationBoundary();
-    streamState.stopped = true;
-    loop.stop();
   };
 
   const removeMessage = async (channelId: string, messageId: string) => {
@@ -273,7 +264,6 @@ export function createSlackDraftStream(params: {
     clear,
     discardPending: discardPendingAndStopTracking,
     seal,
-    stop,
     forceNewMessage,
     dropDetachedMessages,
     finalizeMessage,

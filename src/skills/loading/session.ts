@@ -13,7 +13,8 @@ import {
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { formatSkillsForPromptCore } from "./skill-contract.js";
+import { resolveSkillDisplayName } from "./skill-contract.js";
+import { formatSkillsForPromptBounded } from "./skill-prompt-limits.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
 /** Max name length per spec */
@@ -24,6 +25,8 @@ const MAX_DESCRIPTION_LENGTH = 1024;
 
 export interface Skill {
   name: string;
+  /** Human-readable title from the first Markdown H1, falling back to the identifier. */
+  displayName?: string;
   description: string;
   filePath: string;
   baseDir: string;
@@ -247,6 +250,7 @@ function loadSkillFromFile(
     return {
       skill: {
         name,
+        displayName: resolveSkillDisplayName(rawContent, name),
         description: frontmatter.description,
         filePath,
         baseDir: skillDir,
@@ -274,7 +278,7 @@ function loadSkillFromFile(
  */
 export function formatSkillsForPrompt(skills: Skill[]): string {
   const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  return formatSkillsForPromptCore(visibleSkills);
+  return formatSkillsForPromptBounded({ skills: visibleSkills });
 }
 
 interface LoadSkillsOptions {

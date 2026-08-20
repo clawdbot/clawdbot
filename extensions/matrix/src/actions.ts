@@ -129,6 +129,7 @@ function resolveMatrixActionAccount(params: { cfg: CoreConfig; accountId?: strin
 }
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
+  providerOwnedReadGates: true,
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     const resolvedCfg = cfg as CoreConfig;
     const account = resolveMatrixActionAccount({ cfg: resolvedCfg, accountId });

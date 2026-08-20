@@ -3,11 +3,12 @@
  *
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
-import type { Usage } from "@openclaw/llm-core";
+import type { AssistantMessage, Usage } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
 type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
@@ -21,16 +22,14 @@ type TransportUsage = {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };
 
-export type WritableTransportStream = {
-  push(event: unknown): void;
-  end(): void;
-};
-
-type TransportOutputShape = Partial<Omit<ProviderErrorProjection, "stopReason">> & {
-  stopReason: string;
-};
+export type WritableTransportStream = Pick<
+  ReturnType<typeof createAssistantMessageEventStream>,
+  "push" | "end"
+>;
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+const MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE =
+  "Provider completed tool call with malformed JSON arguments";
 export function sanitizeTransportPayloadText(text: string): string {
   if (typeof text !== "string") {
     return "";
@@ -60,6 +59,32 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
     }
   }
   return {};
+}
+
+/** Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only. */
+export function parseTerminalToolCallArguments(
+  value: unknown,
+  errorMessage = MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE,
+): Record<string, unknown> {
+  const parsed = parseJsonObjectPreservingUnsafeIntegers(value);
+  if (!parsed) {
+    throw new Error(errorMessage);
+  }
+  return parsed;
+}
+
+/** Validate a complete sibling set before mutating any call into executable state. */
+export function finalizeTerminalToolCallArguments<T extends { arguments: Record<string, unknown> }>(
+  calls: readonly T[],
+  readArguments: (call: T) => unknown,
+  errorMessage?: string,
+): void {
+  const validated = calls.map(
+    (call) => [call, parseTerminalToolCallArguments(readArguments(call), errorMessage)] as const,
+  );
+  for (const [call, argumentsValue] of validated) {
+    call.arguments = argumentsValue;
+  }
 }
 
 export function mergeTransportHeaders(
@@ -106,7 +131,7 @@ export function createWritableTransportEventStream() {
   const eventStream = createAssistantMessageEventStream();
   return {
     eventStream,
-    stream: eventStream as unknown as WritableTransportStream,
+    stream: eventStream,
   };
 }
 
@@ -172,7 +197,7 @@ export function withProviderResponseHook<T = never>(params: {
 
 export function finalizeTransportStream(params: {
   stream: WritableTransportStream;
-  output: TransportOutputShape;
+  output: AssistantMessage;
   signal?: AbortSignal;
 }): void {
   const { stream, output, signal } = params;
@@ -182,29 +207,31 @@ export function finalizeTransportStream(params: {
   if (output.stopReason === "aborted" || output.stopReason === "error") {
     throw new Error(output.errorMessage ?? "An unknown error occurred");
   }
-  stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
+  stream.push({ type: "done", reason: output.stopReason, message: output });
   stream.end();
 }
 
 /** @deprecated Use projectProviderError. v2026.7.2-beta.5 compatibility; remove after 2026.10. */
 export function assignTransportErrorDetails(
-  output: TransportOutputShape,
+  output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
-): void {
-  Object.assign(output, projectProviderError(error, signal));
+): ProviderErrorProjection {
+  const projection = projectProviderError(error, signal);
+  Object.assign(output, projection);
+  return projection;
 }
 
 export function failTransportStream(params: {
   stream: WritableTransportStream;
-  output: TransportOutputShape;
+  output: AssistantMessage;
   signal?: AbortSignal;
   error: unknown;
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
   cleanup?.();
-  assignTransportErrorDetails(output, error, signal);
-  stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
+  const projection = assignTransportErrorDetails(output, error, signal);
+  stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();
 }

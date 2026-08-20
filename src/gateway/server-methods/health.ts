@@ -2,9 +2,9 @@
 // detecting stale channel runtime state against live gateway snapshots.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -106,29 +106,16 @@ function mergeCachedHealthRuntimeState(params: {
     deliveryQueues: _cachedDeliveryQueues,
     ...cached
   } = params.cached;
-  // Dead-letter counts are cheap SQLite reads; recompute them like context
-  // engines so a delivery that failed after the cache was filled is not hidden
-  // for a refresh interval.
-  const deliveryQueues = buildDeliveryQueueHealthSummary();
-  const quarantinedContextEngines: NonNullable<HealthSummary["contextEngines"]>["quarantined"] = [];
-  for (const entry of listContextEngineQuarantines()) {
-    const summary: NonNullable<HealthSummary["contextEngines"]>["quarantined"][number] = {
-      engineId: entry.engineId,
-      operation: entry.operation,
-      reason: entry.reason,
-      failedAt: entry.failedAt.getTime(),
-    };
-    if (entry.owner) {
-      summary.owner = entry.owner;
-    }
-    quarantinedContextEngines.push(summary);
-  }
+  // Dead-letter counts are cheap live reads. Preserve the grouped pressure
+  // aggregate for the cache interval so routine health RPCs do not amplify it.
+  const deliveryQueues = buildDeliveryQueueHealthSummary(
+    _cachedDeliveryQueues?.ingressPressure ?? [],
+  );
+  const contextEngines = buildContextEngineHealthSummary();
   return {
     ...cached,
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
-    ...(quarantinedContextEngines.length > 0
-      ? { contextEngines: { quarantined: quarantinedContextEngines } }
-      : {}),
+    ...(contextEngines ? { contextEngines } : {}),
     ...(deliveryQueues ? { deliveryQueues } : {}),
     ...(params.configReloadHotReloadStatus
       ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }

@@ -21,6 +21,8 @@ export type GatewayReloadPlan = {
   restartReasons: string[];
   hotReasons: string[];
   reloadHooks: boolean;
+  /** Refresh the hook target-policy snapshot without invalidating transform modules. */
+  refreshHooksPolicy?: boolean;
   restartGmailWatcher: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
@@ -38,6 +40,7 @@ export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartGateway &&
     plan.hotReasons.length === 0 &&
     !plan.reloadHooks &&
+    !plan.refreshHooksPolicy &&
     !plan.restartGmailWatcher &&
     !plan.restartCron &&
     !plan.restartHeartbeat &&
@@ -62,6 +65,7 @@ type ConfigReloadMetadata = {
 
 type ReloadAction =
   | "reload-hooks"
+  | "refresh-hooks-policy"
   | "restart-gmail-watcher"
   | "restart-cron"
   | "restart-heartbeat"
@@ -95,6 +99,11 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  {
+    prefix: "agents.defaults.sessionStore",
+    kind: "hot",
+    actions: ["refresh-hooks-policy"],
+  },
   { prefix: "agents.defaults", kind: "hot" },
   {
     prefix: "agents.defaults.models",
@@ -119,14 +128,17 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   {
     prefix: "agents.entries",
     kind: "hot",
-    actions: ["restart-heartbeat"],
+    actions: ["restart-heartbeat", "refresh-hooks-policy"],
   },
+  { prefix: "agents.ownership", kind: "hot", actions: ["refresh-hooks-policy"] },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   // The dedicated Apps listener and origin are created once during Gateway
   // startup; disposing MCP runtimes cannot move or create that HTTP server.
   { prefix: "mcp.apps", kind: "restart" },
   { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
+  // The proxy listener, per-start CA, and run-token registry are Gateway-owned.
+  { prefix: "secrets.egressProxy", kind: "restart" },
   { prefix: "plugins.load", kind: "restart" },
   { prefix: "plugins.installs", kind: "restart" },
 ];
@@ -147,6 +159,8 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "talk", kind: "none" },
   { prefix: "skills", kind: "none" },
   { prefix: "secrets", kind: "none" },
+  { prefix: "session.scope", kind: "hot", actions: ["refresh-hooks-policy"] },
+  { prefix: "session.store", kind: "hot", actions: ["refresh-hooks-policy"] },
   { prefix: "plugins", kind: "hot", actions: ["reload-plugins", "dispose-mcp-runtimes"] },
   { prefix: "tui", kind: "none" },
   { prefix: "ui", kind: "none" },
@@ -442,6 +456,9 @@ export function buildGatewayReloadPlan(
     switch (action) {
       case "reload-hooks":
         plan.reloadHooks = true;
+        break;
+      case "refresh-hooks-policy":
+        plan.refreshHooksPolicy = true;
         break;
       case "restart-gmail-watcher":
         plan.restartGmailWatcher = true;

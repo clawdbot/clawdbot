@@ -164,4 +164,19 @@ describe("account-scoped conversation binding expiry", () => {
       binding.targetSessionKey,
     );
   });
+
+  it("derives the binding owner from an agent-scoped target before consulting defaults", () => {
+    const manager = createManager({
+      cfg: {
+        agents: { list: [{ id: "main" }, { id: "molty" }] },
+        session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } },
+      },
+    });
+
+    const binding = bindConversation(manager, {
+      targetSessionKey: "agent:molty:subagent:binding-owner",
+    });
+
+    expect(binding.agentId).toBe("molty");
+  });
 });

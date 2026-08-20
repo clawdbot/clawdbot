@@ -23,14 +23,14 @@ const callGatewayStatusProbe = vi.fn<
     ok: boolean;
     url?: string;
     error?: string | null;
-    server?: { version?: string | null; connId?: string | null };
+    server?: { version?: string | null; buildId?: string | null; connId?: string | null };
     version?: string | null;
   }>
 >(async (_opts?: unknown) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
-  server: { version: "2026.5.6", connId: "conn-1" },
+  server: { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
 }));
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
@@ -152,10 +152,13 @@ const resolveStateDir = vi.fn(
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
 });
-const createConfigIOCalls = vi.fn((configPath: string, pluginValidation?: "full" | "skip") => ({
-  configPath,
-  pluginValidation,
-}));
+const createConfigIOCalls = vi.fn(
+  (configPath: string, pluginValidation?: "full" | "skip", observe?: boolean) => ({
+    configPath,
+    pluginValidation,
+    observe,
+  }),
+);
 const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
 const loadConfigCalls = vi.fn((configPath: string) => configPath);
 let daemonConfigWarnings: Array<{ path: string; message: string }> = [];
@@ -176,15 +179,17 @@ let cliLoadedConfig: Record<string, unknown> = {
 vi.mock("../../config/config.js", () => ({
   createConfigIO: ({
     configPath,
+    observe,
     pluginValidation,
   }: {
     configPath: string;
+    observe?: boolean;
     pluginValidation?: "full" | "skip";
   }) => {
     const isDaemon = configPath.includes("/openclaw-daemon/");
     const runtimeConfig = isDaemon ? daemonLoadedConfig : cliLoadedConfig;
     const warnings = isDaemon ? daemonConfigWarnings : cliConfigWarnings;
-    createConfigIOCalls(configPath, pluginValidation);
+    createConfigIOCalls(configPath, pluginValidation, observe);
     return {
       readConfigFileSnapshot: async () => {
         readConfigFileSnapshotCalls(configPath);
@@ -437,6 +442,7 @@ describe("gatherDaemonStatus", () => {
       service: {
         label: "Scheduled Task",
         loaded: true,
+        loadState: { status: "loaded" as const },
         loadedText: "registered",
         notLoadedText: "not registered",
       },
@@ -473,7 +479,11 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.version).toBe("2026.5.6");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
-    expect(status.rpc?.server).toEqual({ version: "2026.5.6", connId: "conn-1" });
+    expect(status.rpc?.server).toEqual({
+      version: "2026.5.6",
+      buildId: "build-2026.5.6",
+      connId: "conn-1",
+    });
     expect(status.cli?.version).toBe(VERSION);
     if (process.argv[1]) {
       expect(status.cli?.entrypoint).toBe(process.argv[1]);
@@ -725,6 +735,7 @@ describe("gatherDaemonStatus", () => {
     expect(
       serviceReadRuntime.mock.calls.some(([env]) => env?.OPENCLAW_GATEWAY_PORT === "19001"),
     ).toBe(true);
+    expect(status.service.loaded).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
@@ -751,7 +762,11 @@ describe("gatherDaemonStatus", () => {
 
     expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
     expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
-    expect(status.service.loaded).toBe(false);
+    expect(status.service.loadState).toEqual({
+      status: "unknown",
+      detail: "Error: systemctl is-enabled timed out",
+    });
+    expect(status.service.loaded).toBeNull();
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Error: systemctl show timed out",
@@ -767,7 +782,11 @@ describe("gatherDaemonStatus", () => {
       }
       expect(JSON.parse(serialized)).toMatchObject({
         service: {
-          loaded: false,
+          loaded: null,
+          loadState: {
+            status: "unknown",
+            detail: "Error: systemctl is-enabled timed out",
+          },
           runtime: {
             status: "unknown",
             detail: "Error: systemctl show timed out",
@@ -783,6 +802,8 @@ describe("gatherDaemonStatus", () => {
     try {
       printDaemonStatus(status, { json: false, deep: true });
       const output = log.mock.calls.flat().join("\n");
+      expect(output).toContain("Service: LaunchAgent (unknown)");
+      expect(output).not.toContain("Service: LaunchAgent (not loaded)");
       expect(output).toContain("Runtime: unknown (Error: systemctl show timed out)");
     } finally {
       log.mockRestore();
@@ -802,6 +823,7 @@ describe("gatherDaemonStatus", () => {
 
     expect(status.service.command).toBeNull();
     expect(status.service.loaded).toBe(false);
+    expect(status.service.loadState).toEqual({ status: "not-loaded" });
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Gateway service install not supported on aix",
@@ -1002,7 +1024,7 @@ describe("gatherDaemonStatus", () => {
     try {
       const status = await gatherStatus({ probe: false, deep: true });
 
-      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full");
+      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full", false);
       expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
       expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
       expect(status.config?.daemon).toBe(status.config?.cli);

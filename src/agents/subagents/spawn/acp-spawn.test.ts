@@ -5,8 +5,17 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpInitializeSessionInput } from "../../../acp/control-plane/manager.types.js";
+import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
+import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
+import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
+import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../../infra/agent-run-registry.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -15,7 +24,11 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
+import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
+import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
+import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
@@ -870,7 +883,7 @@ describe("spawnAcpDirect", () => {
       inheritedToolPolicyVersion: 1,
       parentSessionKey: "agent:main:main",
       createdVia: "spawn",
-      createdActor: { type: "agent", id: "agent:main:main" },
+      createdActor: { type: "agent", id: "main" },
       createdAt: expect.any(Number),
     });
     expectBindingCallFields({
@@ -906,6 +919,16 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.acpTurnSource).toBe("manual_spawn");
+    // ACP registration must leave taskRowOwnership absent so the registry
+    // falls back to best-effort task-row creation (subagent-registry-run-launch.ts).
+    // Native/in-process spawn forwards "required" instead (subagent-spawn.ts);
+    // if ACP ever claimed "required" here, a failed task-row write would abort
+    // an ACP run the registry never actually owns.
+    const registeredAcpRun = expectRecordFields(
+      firstMockCall(hoisted.registerSubagentRunMock, "ACP subagent registration")[0],
+      {},
+    );
+    expect(registeredAcpRun.taskRowOwnership).toBeUndefined();
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       mode: "persistent",
@@ -917,6 +940,62 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("forwards ACP lineage with unsupported external native actions and the exact parent token", async () => {
+    const parentToken = createExecutionIdentityAdmissionToken("parent-run", {
+      contextId: "parent-context",
+      executionId: "parent-execution",
+    });
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      logging: { audit: { enabled: true, executionIdentity: true } },
+    });
+    const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    let capturedIdentity: AgentRuntimeIdentity | undefined;
+    setSubagentSpawnDepsForTest({
+      hasInProcessGatewayContext: () => true,
+      dispatchGatewayMethodInProcess: async <T>(
+        _method: string,
+        _params: Record<string, unknown>,
+        options?: NonNullable<Parameters<typeof dispatchGatewayMethodInProcess>[2]>,
+      ) => {
+        capturedIdentity = readInProcessAgentRuntimeIdentity(options);
+        return { runId: "acp-child-run" } as T;
+      },
+    });
+
+    try {
+      const result = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:telegram:direct:6098642967",
+          operationalRunInstance,
+          executionIdentityToken: parentToken,
+        },
+        () =>
+          spawnAcpDirect(
+            createSpawnRequest(),
+            withParentExecutionIdentity(createRequesterContext(), parentToken),
+          ),
+      );
+
+      expectAcceptedSpawn(result);
+      expect(capturedIdentity?.executionIdentity).toBe(parentToken);
+      expect(readAgentRuntimeExecutionLineage(capturedIdentity?.sessionSpawnContext)).toMatchObject(
+        {
+          relation: "sessions_spawn",
+          requesterRef: "agent:main:telegram:direct:6098642967",
+          controllerRef: "agent:main:telegram:direct:6098642967",
+          externalNativeActions: "unsupported",
+          runtimeAssuranceRefs: ["spawn-runtime:acp"],
+        },
+      );
+    } finally {
+      releaseAgentRunDelegatedAuthority(authority);
+      setSubagentSpawnDepsForTest();
+    }
   });
 
   it("allows ACP resume IDs recorded for the requester session", async () => {

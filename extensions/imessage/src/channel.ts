@@ -1,13 +1,14 @@
 // Imessage plugin module implements channel behavior.
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
+  sanitizeForPlainText,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -31,6 +32,7 @@ import {
   normalizeIMessageMessagingTarget,
   type ChannelPlugin,
 } from "./channel-api.js";
+import { resolveIMessageDirectChatService } from "./chat-context.js";
 import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
 import {
   matchIMessageAcpConversation,
@@ -100,7 +102,7 @@ const loadIMessageQuestionReactionsModule = createLazyRuntimeModule(
 
 async function prepareForwardedIMessageApprovalPayload(params: {
   payload: Parameters<NonNullable<ChannelOutboundAdapter["beforeDeliverPayload"]>>[0]["payload"];
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 }): Promise<void> {
   const prepared = (
     await loadIMessageApprovalReactionsModule()
@@ -237,11 +239,9 @@ function resolveIMessageOutboundSessionRoute(params: {
     }
     const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
     const service =
-      parsed.serviceExplicit || parsed.service !== "auto"
-        ? parsed.service
-        : account.config.service === "sms"
-          ? "sms"
-          : "imessage";
+      resolveIMessageDirectChatService(
+        parsed.serviceExplicit ? parsed.service : account.config.service,
+      ) ?? "auto";
     const directTarget = `${service}:${handle}`;
     const peer: RoutePeer = { kind: "direct", id: handle };
     const baseSessionKey = buildIMessageBaseSessionKey({

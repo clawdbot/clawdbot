@@ -1077,12 +1077,13 @@ describe("processResponsesStream", () => {
     const requests: ResponseCreateParamsStreaming[] = [];
     const output = createAssistantOutput();
     const onPayload = vi.fn((request: unknown) => request);
+    const onCompactionRejected = vi.fn();
 
     await runResponsesStreamLifecycle({
       stream: new AssistantMessageEventStream(),
       model: nativeOpenAIModel,
       output,
-      options: { ...replayIdentity, onPayload },
+      options: { ...replayIdentity, onCompactionRejected, onPayload },
       createClient: () => ({
         responses: {
           create: (request) => {
@@ -1132,6 +1133,7 @@ describe("processResponsesStream", () => {
     expect(retryItems.some((item) => item.type === "compaction")).toBe(false);
     expect(JSON.stringify(retryInput)).toContain("full history prefix");
     expect(onPayload).toHaveBeenCalledTimes(2);
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
     expect(output.stopReason).toBe("stop");
     expect(output.providerReplay).toMatchObject({
       type: "openai-responses-compaction-suppression",

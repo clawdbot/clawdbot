@@ -1,6 +1,10 @@
 // Screen-recording payload helpers for node media commands.
 import * as path from "node:path";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
+import {
+  parseScreenSnapshotResult,
+  type ScreenSnapshotResult,
+} from "../plugins/computer-use-contract.js";
 import { writeBase64ToFile } from "./nodes-camera.js";
 import { asRecord, readStringValue, resolveTempPathParts } from "./nodes-media-utils.js";
 
@@ -48,32 +52,9 @@ export async function writeScreenRecordToFile(
 }
 
 /** Validated payload returned by `nodes screen snapshot` RPC calls. */
-type ScreenSnapshotPayload = {
-  format: string;
-  base64: string;
-  /** Node-issued token binding this image to one physical display geometry. */
-  displayFrameId?: string;
-  screenIndex?: number;
-  width?: number;
-  height?: number;
-};
-
 /** Validate and normalize an unknown screen-snapshot payload. */
-export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotPayload {
-  const obj = asRecord(value);
-  const format = readStringValue(obj.format);
-  const base64 = readStringValue(obj.base64);
-  if (!format || !base64) {
-    throw new Error("invalid screen.snapshot payload");
-  }
-  return {
-    format,
-    base64,
-    displayFrameId: readStringValue(obj.displayFrameId) || undefined,
-    screenIndex: typeof obj.screenIndex === "number" ? obj.screenIndex : undefined,
-    width: typeof obj.width === "number" ? obj.width : undefined,
-    height: typeof obj.height === "number" ? obj.height : undefined,
-  };
+export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotResult {
+  return parseScreenSnapshotResult(value);
 }
 
 /**

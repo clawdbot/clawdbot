@@ -4,6 +4,7 @@ import {
   validateWorkerInferenceTerminalOutcome,
   type WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import type { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
@@ -13,13 +14,21 @@ import type {
 } from "../../agents/prepared-model-runtime.js";
 import type { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import type { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
-import { resolveSimpleCompletionModelResolverWorkspace } from "../../agents/simple-completion-scope.js";
+import { createEmptyPluginMetadataSnapshot } from "../../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
@@ -35,7 +44,7 @@ type Deps = {
   applyStreamPolicy: typeof applyExtraParamsToAgent;
   acquireRuntimeLease: typeof acquireAgentRunPreparedModelRuntime;
   prepareModel: typeof prepareSimpleCompletionModel;
-  resolveAuthProfileMode: () => string | undefined;
+  resolveSessionAuthSelection: typeof resolveSessionAuthSelection;
   resolveModel: typeof resolveModelAsync;
   resolveProviderStream: typeof registerProviderStreamForModel;
   resolveStream: typeof resolveEmbeddedAgentStreamFn;
@@ -86,6 +95,13 @@ const identity: WorkerConnectionIdentity = {
   bundleHash: "bundle-hash-runtime-test",
   sessionId: SESSION_ID,
   runId: "run-runtime-test",
+  turnClaim: {
+    sessionId: SESSION_ID,
+    claimId: "claim-runtime-test",
+    runId: "run-runtime-test",
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
+  },
   ownerEpoch: 3,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -171,7 +187,17 @@ function providerStream(message = finalMessage(), options: { omitToolEnd?: boole
   return stream;
 }
 
-function setup(entry: SessionEntry = sessionEntry) {
+function setup(
+  entry: SessionEntry = sessionEntry,
+  options: {
+    pluginRegistry?: PluginRegistry;
+    afterModelPreparation?: () => void;
+    observeStage?: (
+      stage: "factory" | "policy" | "wrapper" | "execution",
+      registry: PluginRegistry | null | undefined,
+    ) => void;
+  } = {},
+) {
   const scope: {
     agentDir?: string;
     agentRuntime?: string;
@@ -187,7 +213,8 @@ function setup(entry: SessionEntry = sessionEntry) {
     workspaceDir: WORKSPACE,
     config,
     authModes: {},
-    metadataSnapshot: { plugins: [] } as never,
+    metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),
+    pluginRegistry: options.pluginRegistry ?? createEmptyPluginRegistry(),
     modelCatalog: {
       entries: [
         { provider: PROVIDER, id: MODEL, name: "Approved model" },
@@ -200,18 +227,14 @@ function setup(entry: SessionEntry = sessionEntry) {
     createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
   } satisfies PreparedModelRuntimeSnapshot;
   let leasedPreparedModelRuntime: PreparedModelRuntimeSnapshot | undefined;
-  const resolveModel = vi.fn<Deps["resolveModel"]>(
-    async (_provider, _model, _dir, _cfg, options) => {
-      scope.agentRuntime = options?.agentRuntimeId;
-      scope.preparedModelRuntime = options?.preparedModelRuntime === leasedPreparedModelRuntime;
-      return {} as Awaited<ReturnType<Deps["resolveModel"]>>;
-    },
-  );
+  const resolveModel = vi.fn<Deps["resolveModel"]>(async () => {
+    return {} as Awaited<ReturnType<Deps["resolveModel"]>>;
+  });
   const prepareModel = vi.fn<Deps["prepareModel"]>(async (modelParams) => {
-    scope.prepareWorkspace = resolveSimpleCompletionModelResolverWorkspace(
-      modelParams.modelResolver,
-    );
-    await modelParams.modelResolver?.(PROVIDER, MODEL, modelParams.agentDir, modelParams.cfg, {});
+    scope.agentRuntime = modelParams.agentRuntimeId;
+    scope.preparedModelRuntime = modelParams.preparedModelRuntime === leasedPreparedModelRuntime;
+    scope.prepareWorkspace = modelParams.workspaceDir;
+    options.afterModelPreparation?.();
     return {
       model: bindModelLlmRuntime(logicalModel, {
         registry: {},
@@ -225,17 +248,33 @@ function setup(entry: SessionEntry = sessionEntry) {
       },
     };
   });
-  const resolveAuthProfileMode = vi.fn<Deps["resolveAuthProfileMode"]>(() => undefined);
-  const stream = vi.fn<StreamFn>(() => providerStream());
+  const resolveAuthSelection = vi.fn<Deps["resolveSessionAuthSelection"]>(async () =>
+    entry.authProfileOverride
+      ? {
+          profileId: entry.authProfileOverride,
+          source: entry.authProfileOverrideSource ?? "user",
+          routeRequirement: undefined,
+        }
+      : undefined,
+  );
+  const observedRegistry = () => getPluginRuntimeGenerationRegistry() ?? getActivePluginRegistry();
+  const stream = vi.fn<StreamFn>(() => {
+    options.observeStage?.("execution", observedRegistry());
+    return providerStream();
+  });
   const fallbackStream = vi.fn<StreamFn>(() => providerStream());
-  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>(() => stream);
+  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>(() => {
+    options.observeStage?.("factory", observedRegistry());
+    return stream;
+  });
   const resolveStream = vi.fn<Deps["resolveStream"]>((streamParams) => {
     scope.authProfile = streamParams.authProfileId;
     return streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream;
   });
-  const applyStreamPolicy = vi.fn<Deps["applyStreamPolicy"]>(() => ({
-    effectiveExtraParams: {},
-  }));
+  const applyStreamPolicy = vi.fn<Deps["applyStreamPolicy"]>(() => {
+    options.observeStage?.("policy", observedRegistry());
+    return { effectiveExtraParams: {} };
+  });
   const releaseRuntime = vi.fn();
   const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
     scope.agentDir = runtimeParams.agentDir;
@@ -258,14 +297,16 @@ function setup(entry: SessionEntry = sessionEntry) {
     })),
     acquireRuntimeLease,
     resolveDefaultModel: vi.fn(() => ({ provider: PROVIDER, model: MODEL })),
-    resolveSessionAuthProfile: vi.fn(async () => entry.authProfileOverride),
+    resolveSessionAuthSelection: resolveAuthSelection,
     resolveModel,
     prepareModel,
-    resolveAuthProfileMode,
     resolveProviderStream,
     resolveStream,
     applyStreamPolicy,
-    wrapStream: vi.fn((streamFn: StreamFn) => streamFn),
+    wrapStream: vi.fn((streamFn: StreamFn) => {
+      options.observeStage?.("wrapper", observedRegistry());
+      return streamFn;
+    }),
     createTrace: vi.fn(() => ({ traceId: "1".repeat(32), spanId: "2".repeat(16) })),
   };
   return {
@@ -274,7 +315,7 @@ function setup(entry: SessionEntry = sessionEntry) {
     acquireRuntimeLease,
     prepareModel,
     releaseRuntime,
-    resolveAuthProfileMode,
+    resolveAuthSelection,
     scope,
     stream,
   };
@@ -302,14 +343,48 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
+  it("keeps provider construction and execution on the leased generation", async () => {
+    const generationA = createEmptyPluginRegistry();
+    const generationB = createEmptyPluginRegistry();
+    const observed: string[] = [];
+    const runtime = setup(sessionEntry, {
+      pluginRegistry: generationA,
+      afterModelPreparation: () =>
+        setActivePluginRegistry(generationB, "worker-generation-b", "default", WORKSPACE),
+      observeStage: (stage, registry) =>
+        observed.push(
+          `${stage}:${registry === generationA ? "A" : registry === generationB ? "B" : "none"}`,
+        ),
+    });
+
+    try {
+      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+        type: "done",
+      });
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+
+    expect(observed).toEqual(["factory:A", "policy:A", "wrapper:A", "execution:A"]);
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
   it("projects the gateway-owned auth profile onto the provider route", async () => {
     const oauthRuntime = setup();
-    oauthRuntime.resolveAuthProfileMode.mockReturnValue("oauth");
+    oauthRuntime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "user",
+      routeRequirement: "subscription",
+    });
     await oauthRuntime.executor(params(request(), vi.fn()));
     const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
     const apiKeyRuntime = setup();
-    apiKeyRuntime.resolveAuthProfileMode.mockReturnValue("api_key");
+    apiKeyRuntime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "user",
+      routeRequirement: "api-key",
+    });
     await apiKeyRuntime.executor(params(request(), vi.fn()));
     const apiKey = apiKeyRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
@@ -327,7 +402,11 @@ describe("worker inference provider runtime", () => {
 
   it("prepares the selected model against its gateway-owned OAuth route", async () => {
     const runtime = setup();
-    runtime.resolveAuthProfileMode.mockReturnValue("oauth");
+    runtime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "user",
+      routeRequirement: "subscription",
+    });
 
     await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
       type: "done",
@@ -346,7 +425,11 @@ describe("worker inference provider runtime", () => {
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 1,
     });
-    runtime.resolveAuthProfileMode.mockReturnValue("oauth");
+    runtime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "auto",
+      routeRequirement: "subscription",
+    });
 
     await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
       type: "done",
@@ -396,7 +479,6 @@ describe("worker inference provider runtime", () => {
     expect(runtime.acquireRuntimeLease).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "runtime-agent",
-        inheritedAuthDir: expect.any(String),
       }),
     );
     const [streamModel, streamContext, streamOptions] = runtime.stream.mock.calls[0] ?? [];

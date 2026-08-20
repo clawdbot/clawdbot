@@ -31,6 +31,7 @@ function getOutboundRuntimeRegistry(): PluginRegistry | null {
 function normalizeOutboundChannelForResolution(params: {
   channel: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   allowBootstrap?: boolean;
 }): {
   channel?: string;
@@ -63,6 +64,7 @@ function normalizeOutboundChannelForResolution(params: {
   const bootstrapRegistry = bootstrapOutboundChannelPlugin({
     channel: normalized,
     cfg: params.cfg,
+    agentId: params.agentId,
   });
   const bootstrappedRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
     normalized,
@@ -193,6 +195,7 @@ function resolveActivatedOutboundPluginFromRuntimeRegistry(
 export function resolveOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   allowBootstrap?: boolean;
 }): ChannelPlugin | undefined {
   const {
@@ -229,7 +232,11 @@ export function resolveOutboundChannelPlugin(params: {
     return undefined;
   }
 
-  const registry = bootstrapOutboundChannelPlugin({ channel: normalized, cfg: params.cfg });
+  const registry = bootstrapOutboundChannelPlugin({
+    channel: normalized,
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   return resolveRuntimeOutboundPluginCandidate({
     loaded: resolveLoaded(),
     runtime: resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, registry),
@@ -243,6 +250,7 @@ export function resolveOutboundChannelPlugin(params: {
 export function resolveOutboundChannelMessageAdapter(params: {
   channel: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   allowBootstrap?: boolean;
 }): ChannelMessageAdapterShape | undefined {
   const {
@@ -264,7 +272,11 @@ export function resolveOutboundChannelMessageAdapter(params: {
   if (current || params.allowBootstrap !== true || didBootstrap) {
     return current;
   }
-  const registry = bootstrapOutboundChannelPlugin({ channel: normalized, cfg: params.cfg });
+  const registry = bootstrapOutboundChannelPlugin({
+    channel: normalized,
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   return (
     resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
     resolveValueFromRuntimeRegistry(normalized, resolveSendCapableMessageAdapter, registry) ??

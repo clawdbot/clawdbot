@@ -10,7 +10,10 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "../scheduled-tool-policy.js";
 import type {
   CronJobState,
   CronPacing,
@@ -193,13 +196,13 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
     job_json: JSON.stringify(stripJobRuntimeFields(job)),
     state_json: JSON.stringify(job.state ?? {}),
     runtime_updated_at_ms: job.updatedAtMs,
-    schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>) ?? null,
+    schedule_identity: tryCronScheduleIdentity({ ...job }) ?? null,
     sort_order: sortOrder,
   };
 }
 
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStoredJob | null {
-  const raw = structuredClone(job) as unknown as Record<string, unknown>;
+  const raw: Record<string, unknown> = { ...structuredClone(job) };
   const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
   normalizeCronJobIdentityFields(raw);
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
@@ -302,7 +305,13 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     isRecord(jobJson.toolsAllowProvenance) &&
     jobJson.toolsAllowProvenance.version === 1 &&
     jobJson.toolsAllowProvenance.source === "final-executable-surface"
-      ? ({ version: 1, source: "final-executable-surface" } as const)
+      ? ({
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: normalizeCronScheduledToolCallerOrigin(
+            jobJson.toolsAllowProvenance.callerOrigin,
+          ),
+        } as const)
       : undefined;
   if (!schedule || !payload) {
     return null;
@@ -534,6 +543,27 @@ export function upsertCronJobRow(
   return normalized;
 }
 
+export function deleteCronJobRowInDatabase(
+  db: DatabaseSync,
+  storeKey: string,
+  jobId: string,
+): void {
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .deleteFrom("cron_job_scratch")
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", jobId),
+  );
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .deleteFrom("cron_jobs")
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", jobId),
+  );
+}
+
 /** Updates only mutable runtime columns without rewriting full job config JSON. */
 export function updateCronRuntimeRows(
   db: DatabaseSync,
@@ -549,7 +579,7 @@ export function updateCronRuntimeRows(
           ...bindStateColumns(job.state ?? {}),
           state_json: JSON.stringify(job.state ?? {}),
           runtime_updated_at_ms: job.updatedAtMs,
-          schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
+          schedule_identity: tryCronScheduleIdentity({ ...job }),
         })
         .where("store_key", "=", storeKey)
         .where("job_id", "=", job.id),

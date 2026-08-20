@@ -10,12 +10,7 @@ import { listAgentIds } from "../../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import {
-  canonicalizeMainSessionAlias,
-  resolveAgentMainSessionKey,
-  resolveMainSessionKey,
-  resolveMainSessionKeyFromConfig,
-} from "../../config/sessions.js";
+import { canonicalizeMainSessionAlias, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CronAgentAdmissionDisposition,
@@ -62,7 +57,6 @@ type HookEventTarget = {
 function resolveHookEventTarget(params: {
   cfg: OpenClawConfig;
   resolvedAgentId: string;
-  explicitAgentId?: string;
   sessionKey?: string;
 }): HookEventTarget {
   if (params.cfg.session?.scope === "global") {
@@ -83,15 +77,10 @@ function resolveHookEventTarget(params: {
           mainKey: params.cfg.session?.mainKey,
         }),
       })
-    : params.explicitAgentId
-      ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.explicitAgentId })
-      : resolveMainSessionKey(params.cfg);
+    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.resolvedAgentId });
   return {
     eventSessionKey,
-    heartbeatTarget: {
-      ...(params.explicitAgentId ? { agentId: params.explicitAgentId } : {}),
-      sessionKey: eventSessionKey,
-    },
+    heartbeatTarget: { agentId: params.resolvedAgentId, sessionKey: eventSessionKey },
   };
 }
 
@@ -340,7 +329,13 @@ export function createGatewayHooksRequestHandler(params: {
     };
     const reportHookFailure = (err: unknown) => {
       logHooks.warn(`hook agent failed: ${String(err)}`);
-      const eventSessionKey = hookEventTarget?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
+      const eventTarget =
+        hookEventTarget ??
+        resolveHookEventTarget({
+          cfg: getRuntimeConfig(),
+          resolvedAgentId: value.effectiveAgentId,
+        });
+      const eventSessionKey = eventTarget.eventSessionKey;
       const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
       let heartbeatTarget: HookEventTarget["heartbeatTarget"];
       if (isGlobalEvent && hookEventTarget) {
@@ -350,13 +345,7 @@ export function createGatewayHooksRequestHandler(params: {
         }
         heartbeatTarget = { agentId: globalTerminalAgentId };
       } else {
-        heartbeatTarget =
-          hookEventTarget?.heartbeatTarget ??
-          (isGlobalEvent
-            ? {
-                agentId: value.effectiveAgentId,
-              }
-            : { sessionKey: eventSessionKey });
+        heartbeatTarget = eventTarget.heartbeatTarget;
       }
       const failureEventOptions = { sessionKey: eventSessionKey };
       enqueueSystemEvent(
@@ -453,13 +442,13 @@ export function createGatewayHooksRequestHandler(params: {
             });
             return;
           }
-          // Keep an omitted agent omitted for event routing so global session scope
-          // stays global; runner identity is frozen separately via accepted agentId.
-          hookEventTarget = resolveHookEventTarget({
+          // The accepted agent is the stable owner. Global scope stays global;
+          // other events keep that owner in their agent-qualified session key.
+          const eventTarget = resolveHookEventTarget({
             cfg,
             resolvedAgentId: agentId,
-            explicitAgentId: acceptedValue.agentId,
           });
+          hookEventTarget = eventTarget;
           const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
           // Lazy module loading is the last Gateway-owned async boundary before
           // cron preparation, so recheck the deadline after it settles.
@@ -524,8 +513,7 @@ export function createGatewayHooksRequestHandler(params: {
             });
           }
           if (shouldAnnounce) {
-            const eventSessionKey =
-              hookEventTarget?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
+            const eventSessionKey = eventTarget.eventSessionKey;
             const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
             let announceEventOptions = { sessionKey: eventSessionKey };
             let heartbeatTarget: HookEventTarget["heartbeatTarget"];
@@ -540,9 +528,7 @@ export function createGatewayHooksRequestHandler(params: {
               );
               heartbeatTarget = { agentId: globalTerminalAgentId };
             } else {
-              heartbeatTarget = hookEventTarget?.heartbeatTarget ?? {
-                sessionKey: eventSessionKey,
-              };
+              heartbeatTarget = eventTarget.heartbeatTarget;
             }
             enqueueSystemEvent(`${prefix}: ${summary}`.trim(), announceEventOptions);
             if (value.wakeMode === "now") {

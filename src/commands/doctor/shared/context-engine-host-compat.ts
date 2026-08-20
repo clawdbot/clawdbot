@@ -4,7 +4,8 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.js";
 import {
   listAgentEntriesWithSource,
-  resolveDefaultAgentDir,
+  resolveAgentDir,
+  resolveAmbientOwnerAgentId,
 } from "../../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
@@ -278,9 +279,13 @@ async function resolveSelectedContextEngineInfo(params: {
   }
 
   try {
+    const agentId = resolveAmbientOwnerAgentId(params.cfg, undefined, {
+      surface: "context-engine Doctor checks",
+      hint: "Set agents.defaults.systemAgent.agentId before running Doctor.",
+    });
     const resolve = () =>
       resolveContextEngine(params.cfg, {
-        agentDir: resolveDefaultAgentDir(params.cfg, params.env),
+        agentDir: resolveAgentDir(params.cfg, agentId, params.env),
         workspaceDir: params.cfg.agents?.defaults?.workspace
           ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)
           : undefined,

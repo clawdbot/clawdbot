@@ -2,10 +2,14 @@ import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
-import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  WorktreeRecord,
+  WorktreesRemoveResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
@@ -18,6 +22,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { repoName } from "../../lib/session-display.ts";
@@ -32,7 +37,6 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
 type WorktreesListResult = { worktrees: WorktreeRecord[] };
-type WorktreesRemoveResult = { removed: boolean; snapshotError?: string };
 type WorktreeBranchesResult = {
   branches: Array<{ name: string }>;
   defaultBranch?: string;
@@ -69,6 +73,11 @@ class WorktreesPage extends OpenClawLightDomElement {
       this.invalidateOperations();
     },
     ensureInitialData: () => void this.load(),
+    onSnapshot: (change) => {
+      if (!readGatewayOperatorAccess(change.snapshot).canAdmin) {
+        this.createOpen = false;
+      }
+    },
   });
 
   private readonly listTask = new Task(this, {
@@ -80,7 +89,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
     },
     onError: (error) => {
-      this.error = String(error);
+      this.error = formatUiError(error);
     },
   });
 
@@ -124,6 +133,14 @@ class WorktreesPage extends OpenClawLightDomElement {
     return this.gcLoading || this.listTask.status === TaskStatus.PENDING;
   }
 
+  private get canAdmin(): boolean {
+    return readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin;
+  }
+
+  private get canWrite(): boolean {
+    return readGatewayOperatorAccess(this.context.gateway.snapshot).canWrite;
+  }
+
   private async load(options: { preserveError?: boolean } = {}) {
     const client = this.gateway.client;
     if (
@@ -145,7 +162,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async removeWorktree(record: WorktreeRecord) {
     const scope = this.gateway.capture();
-    if (!scope || this.operationPending) {
+    if (!scope || !this.canAdmin || this.operationPending) {
       return;
     }
     if (
@@ -155,6 +172,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         danger: true,
       })) ||
       !this.gateway.isCurrent(scope) ||
+      !this.canAdmin ||
       this.operationPending
     ) {
       return;
@@ -176,7 +194,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         confirmLabel: t("common.delete"),
         danger: true,
       });
-      if (!this.gateway.isCurrent(scope)) {
+      if (!this.gateway.isCurrent(scope) || !this.canAdmin) {
         return;
       }
       if (!force) {
@@ -184,15 +202,21 @@ class WorktreesPage extends OpenClawLightDomElement {
         return;
       }
       try {
-        await scope.client.request("worktrees.remove", { id: record.id, force: true });
+        const forced = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
+          id: record.id,
+          force: true,
+        });
+        if (this.gateway.isCurrent(scope)) {
+          this.error = forced.snapshotError ?? null;
+        }
       } catch (forceError) {
         if (this.gateway.isCurrent(scope)) {
-          this.error = String(forceError);
+          this.error = formatUiError(forceError);
         }
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -204,7 +228,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async restore(record: WorktreeRecord) {
     const scope = this.gateway.capture();
-    if (!scope || this.operationPending) {
+    if (!scope || !this.canAdmin || this.operationPending) {
       return;
     }
     this.busyId = record.id;
@@ -213,7 +237,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       await scope.client.request("worktrees.restore", { id: record.id });
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -225,7 +249,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async gc() {
     const scope = this.gateway.capture();
-    if (!scope || this.operationPending) {
+    if (!scope || !this.canAdmin || this.operationPending) {
       return;
     }
     this.gcLoading = true;
@@ -234,7 +258,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       await scope.client.request("worktrees.gc", {});
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -245,7 +269,7 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private toggleCreate() {
-    if (this.creating) {
+    if (!this.canAdmin || this.creating) {
       return;
     }
     this.createOpen = !this.createOpen;
@@ -260,7 +284,7 @@ class WorktreesPage extends OpenClawLightDomElement {
   private loadCreateBranches() {
     const client = this.gateway.connected ? this.gateway.client : null;
     const repoRoot = this.createRepoRoot.trim();
-    if (!client || !repoRoot) {
+    if (!client || !repoRoot || !this.canWrite) {
       this.createBranches = [];
       void this.branchesTask.run([null, ""]);
       return;
@@ -271,7 +295,7 @@ class WorktreesPage extends OpenClawLightDomElement {
   private async createWorktree() {
     const scope = this.gateway.capture();
     const repoRoot = this.createRepoRoot.trim();
-    if (!scope || !repoRoot || this.operationPending) {
+    if (!scope || !this.canAdmin || !repoRoot || this.operationPending) {
       return;
     }
     this.creating = true;
@@ -288,7 +312,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -413,7 +437,8 @@ class WorktreesPage extends OpenClawLightDomElement {
           : renderSettingsStatus({ kind: "ok", label: t("common.active") })}
         <button
           class=${record.removedAt ? "btn btn--sm" : "btn btn--sm danger"}
-          ?disabled=${this.operationPending}
+          title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
+          ?disabled=${!this.canAdmin || this.operationPending}
           @click=${() =>
             void (record.removedAt ? this.restore(record) : this.removeWorktree(record))}
         >
@@ -425,10 +450,20 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   override render() {
     const actions = html`
-      <button class="btn" ?disabled=${this.creating} @click=${() => this.toggleCreate()}>
+      <button
+        class="btn"
+        title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
+        ?disabled=${!this.canAdmin || this.creating}
+        @click=${() => this.toggleCreate()}
+      >
         ${t("worktrees.newWorktree")}
       </button>
-      <button class="btn" ?disabled=${this.operationPending} @click=${() => void this.gc()}>
+      <button
+        class="btn"
+        title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
+        ?disabled=${!this.canAdmin || this.operationPending}
+        @click=${() => void this.gc()}
+      >
         ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}
       </button>
     `;
@@ -440,6 +475,9 @@ class WorktreesPage extends OpenClawLightDomElement {
     `;
     const body = renderSettingsPage(
       html`
+        ${!this.canAdmin
+          ? html`<div class="callout info" role="note">${t("worktrees.adminRequired")}</div>`
+          : nothing}
         ${this.error ? html`<div class="callout danger">${this.error}</div>` : nothing}
         ${renderSettingsSection(
           { title: t("worktrees.title"), description: t("worktrees.subtitle"), actions },

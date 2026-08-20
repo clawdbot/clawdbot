@@ -216,7 +216,8 @@ describe("runStartupSessionMigration", () => {
   it("imports legacy session metadata and transcripts into SQLite during startup", async () => {
     const log = makeLog();
     const cfg = makeCfg();
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" };
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-import-startup-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
     const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
     const runDoctorSessionSqlite = makeSessionSqliteImport({
       totals: {
@@ -234,12 +235,16 @@ describe("runStartupSessionMigration", () => {
       },
     });
 
-    await runStartupSessionMigration({
-      cfg,
-      env,
-      log,
-      deps: makeDeps(migrate, 0, runDoctorSessionSqlite),
-    });
+    try {
+      await runStartupSessionMigration({
+        cfg,
+        env,
+        log,
+        deps: makeDeps(migrate, 0, runDoctorSessionSqlite),
+      });
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
       allAgents: true,

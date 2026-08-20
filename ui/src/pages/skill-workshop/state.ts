@@ -1,6 +1,7 @@
 import type {
   SkillWorkshopAction,
   SkillWorkshopActionNotice,
+  SkillWorkshopAppliedDiffMode,
   SkillWorkshopMode,
   SkillWorkshopProposal,
   SkillWorkshopStatusFilter,
@@ -45,6 +46,7 @@ export type SkillWorkshopState = {
   skillWorkshopInspectingKey: string | null;
   skillWorkshopProposals: SkillWorkshopProposal[];
   skillWorkshopSelectedKey: string | null;
+  skillWorkshopAppliedDiffMode: SkillWorkshopAppliedDiffMode;
   skillWorkshopActionBusy: { key: string; action: SkillWorkshopAction } | null;
   skillWorkshopActionNotice: SkillWorkshopActionNotice | null;
   skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
@@ -85,6 +87,7 @@ export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWo
     skillWorkshopInspectingKey: data?.skillWorkshopInspectingKey ?? null,
     skillWorkshopProposals: data?.skillWorkshopProposals ?? [],
     skillWorkshopSelectedKey: data?.skillWorkshopSelectedKey ?? null,
+    skillWorkshopAppliedDiffMode: "changes",
     skillWorkshopActionBusy: data?.skillWorkshopActionBusy ?? null,
     skillWorkshopActionNotice: data?.skillWorkshopActionNotice ?? null,
     skillWorkshopActionNoticeTimer: null,

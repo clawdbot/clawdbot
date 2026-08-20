@@ -18,10 +18,11 @@ enum GatewayLaunchAgentManager {
             return testingDisableLaunchAgentMarkerURL
         }
         #endif
-        let root = AppProfile.current.isActive
-            ? OpenClawPaths.stateDirURL
-            : FileManager().homeDirectoryForCurrentUser.appendingPathComponent(".openclaw", isDirectory: true)
-        return root.appendingPathComponent(self.disableLaunchAgentMarker)
+        return self.disableLaunchAgentMarkerURL(in: OpenClawPaths.stateDirURL)
+    }
+
+    static func disableLaunchAgentMarkerURL(in stateDirectoryURL: URL) -> URL {
+        stateDirectoryURL.appendingPathComponent(self.disableLaunchAgentMarker)
     }
 
     private static var plistURL: URL {

@@ -38,7 +38,6 @@ export function createPopupMessageHandler({
   runAccessMutation,
   detachAllDebuggerSessions,
   syncTabsToRelay,
-  clearRelayOpeningDeadline,
   closeRelaySocket,
   connectRelay,
   setBadge,
@@ -71,7 +70,6 @@ export function createPopupMessageHandler({
     }
     const generation = ++pairingGeneration;
     suspendRelayConnections();
-    clearRelayOpeningDeadline();
     closeRelaySocket();
     await accessReady;
     assertPairingCurrent(generation);
@@ -81,7 +79,6 @@ export function createPopupMessageHandler({
         return;
       }
       suspendRelayConnections();
-      clearRelayOpeningDeadline();
       closeRelaySocket();
       const normalizedMode =
         accessMode === ACCESS_MODE_SELECTED ? ACCESS_MODE_SELECTED : ACCESS_MODE_ALL;
@@ -107,7 +104,6 @@ export function createPopupMessageHandler({
       resumeRelayConnections();
       await connectRelay(() => generation === pairingGeneration);
       if (generation !== pairingGeneration) {
-        clearRelayOpeningDeadline();
         closeRelaySocket();
         setBadge("off");
         assertPairingCurrent(generation);
@@ -123,13 +119,11 @@ export function createPopupMessageHandler({
     policy.invalidateAll();
     suspendRelayConnections();
     resetRelayState();
-    clearRelayOpeningDeadline();
     closeRelaySocket();
     setBadge("off");
     await accessReady;
     policy.setEnabled(false);
     policy.invalidateAll();
-    clearRelayOpeningDeadline();
     closeRelaySocket();
     setBadge("off");
     await runAccessMutation(async () => {
@@ -142,7 +136,6 @@ export function createPopupMessageHandler({
       await detaching;
       await discardRetiredCopilotCustody();
       resetRelayState();
-      clearRelayOpeningDeadline();
       closeRelaySocket();
       setBadge("off");
     });

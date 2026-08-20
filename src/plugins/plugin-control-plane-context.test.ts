@@ -10,6 +10,7 @@ function createIndex(
     doctorContractFile?: InstalledPluginIndex["plugins"][number]["doctorContractFile"];
     doctorContractHash?: string;
     generatedAtMs?: number;
+    packageBuild?: InstalledPluginIndex["plugins"][number]["packageBuild"];
   } = {},
 ): InstalledPluginIndex {
   return {
@@ -28,6 +29,10 @@ function createIndex(
         manifestHash: `${pluginId}-manifest-hash`,
         ...(options.doctorContractHash ? { doctorContractHash: options.doctorContractHash } : {}),
         ...(options.doctorContractFile ? { doctorContractFile: options.doctorContractFile } : {}),
+        packageBuild: options.packageBuild ?? {
+          openclawVersion: "test",
+          bundledDist: false,
+        },
         rootDir: `/plugins/${pluginId}`,
         origin: "global",
         enabled: true,
@@ -96,6 +101,22 @@ describe("plugin control-plane context", () => {
       doctorContractFile: { size: 10, mtimeMs: 20, ctimeMs: 30 },
       generatedAtMs: 1,
     });
+    const rebuiltIndex = createIndex("demo", {
+      doctorContractHash: "contract-a",
+      packageBuild: { openclawVersion: "next", bundledDist: false },
+    });
+    const bundledDistIndex = createIndex("demo", {
+      doctorContractHash: "contract-a",
+      packageBuild: { openclawVersion: "test", bundledDist: true },
+    });
+    const reorderedIndexSource = createIndex("demo", {
+      doctorContractHash: "contract-a",
+    });
+    const { pluginId, ...reorderedPlugin } = reorderedIndexSource.plugins[0]!;
+    const reorderedIndex: InstalledPluginIndex = {
+      ...reorderedIndexSource,
+      plugins: [{ ...reorderedPlugin, pluginId }],
+    };
     const resolveControlPlaneFingerprint = (index: InstalledPluginIndex) =>
       resolvePluginControlPlaneFingerprint({
         config: { plugins: { allow: ["demo"] } },
@@ -114,10 +135,22 @@ describe("plugin control-plane context", () => {
     expect(resolveInstalledManifestRegistryIndexFingerprint(retimedContractIndex)).toBe(
       inventoryFingerprint,
     );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(rebuiltIndex)).toBe(
+      inventoryFingerprint,
+    );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(bundledDistIndex)).not.toBe(
+      inventoryFingerprint,
+    );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(reorderedIndex)).toBe(
+      inventoryFingerprint,
+    );
 
     const controlPlaneFingerprint = resolveControlPlaneFingerprint(baseIndex);
     expect(resolveControlPlaneFingerprint(changedContractIndex)).not.toBe(controlPlaneFingerprint);
     expect(resolveControlPlaneFingerprint(regeneratedIndex)).toBe(controlPlaneFingerprint);
     expect(resolveControlPlaneFingerprint(retimedContractIndex)).toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(rebuiltIndex)).toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(bundledDistIndex)).not.toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(reorderedIndex)).toBe(controlPlaneFingerprint);
   });
 });

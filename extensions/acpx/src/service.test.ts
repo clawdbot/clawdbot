@@ -707,30 +707,35 @@ describe("createAcpxRuntimeService", () => {
     });
 
     expect(acpxRuntimeConstructorMock).toHaveBeenCalledOnce();
+    expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ elicitationModes: ["form", "url"] }),
+    );
     expect(backend.healthy).toBeUndefined();
 
     await service.stop?.(ctx);
   });
 
-  it("adapts lazy runTurn-only default runtimes for startTurn callers", async () => {
+  it("forwards startTurn through the lazily resolved default runtime", async () => {
     process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
     const workspaceDir = testWorkspace.dir;
     const ctx = createServiceContext(workspaceDir);
-    const runTurn = vi.fn(async function* () {
-      yield {
-        type: "text_delta" as const,
-        stream: "output" as const,
-        text: "legacy progress",
-      };
-      yield {
-        type: "done" as const,
-        stopReason: "end_turn",
-      };
-    });
+    const startTurn = vi.fn((input: { requestId: string }) => ({
+      requestId: input.requestId,
+      events: (async function* () {
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "legacy progress",
+        };
+      })(),
+      result: Promise.resolve({ status: "completed" as const, stopReason: "end_turn" }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
     acpxRuntimeConstructorMock.mockImplementationOnce(function AcpxRuntime(options: unknown) {
       return {
         ...createMockRuntime({
-          runTurn,
+          startTurn,
         }),
         getCapabilities: vi.fn(async () => ({ controls: [] })),
         getStatus: vi.fn(async () => ({ summary: "ready" })),
@@ -785,7 +790,7 @@ describe("createAcpxRuntimeService", () => {
         text: "legacy progress",
       },
     ]);
-    expect(runTurn).toHaveBeenCalledOnce();
+    expect(startTurn).toHaveBeenCalledOnce();
 
     await service.stop?.(ctx);
   });

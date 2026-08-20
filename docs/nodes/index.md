@@ -1,19 +1,20 @@
 ---
-summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for canvas/camera/screen/device/notifications/system"
+summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for camera/screen/device/notifications/system and the macOS widget panel"
 read_when:
   - Pairing iOS/watchOS/Android nodes to a gateway
-  - Using node canvas/camera for agent context
+  - Using node camera or screen capture for agent context
+  - Presenting a hosted widget on a Mac
   - Adding new node commands or CLI helpers
 title: "Nodes"
 ---
 
-A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
+A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
 macOS can also run in **node mode**: the menu bar app connects to the Gateway's
 WS server as one node (so `openclaw nodes …` works against this Mac). The app
-adds native Canvas, camera, screen, notification, and computer-control commands
+adds native widget-panel, camera, screen, notification, and computer-control commands
 to the same node-host command surface used by `openclaw node run`. Do not start a
 second CLI node on that Mac; the app runs the matching CLI node-host runtime as
 an internal worker and remains the sole Gateway connection and node identity.
@@ -85,6 +86,30 @@ Approval note:
 - Approval-backed node runs bind exact request context. The exec path prepares a canonical `systemRunPlan` before approval; once granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields, and re-validates the working directory before running.
 - For direct shell/runtime file executions, OpenClaw also best-effort binds one concrete local file operand and denies the run if that file changes before execution.
 - If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command, approval-backed execution is denied instead of pretending full runtime coverage. Use sandboxing, separate hosts, or an explicit trusted allowlist/full workflow for broader interpreter semantics.
+
+### Gateway deployments that cannot host nodes
+
+A Gateway can remain healthy for browser users while node hosting is unavailable. Run `openclaw doctor` on the Gateway before onboarding nodes, and check these preconditions:
+
+- **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
+- **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
+- **Node onboarding plugin:** Join codes and `openclaw connect` require the bundled `device-pair` plugin. If it is disabled or excluded by plugin policy, set `plugins.entries.device-pair.enabled: true`, make sure `device-pair` is allowed, and restart the Gateway.
+- **Device session runtime:** Paired-device runners host only the embedded OpenClaw runtime. Give at least one selected agent/model route `agentRuntime.id: "openclaw"`; Codex and ACPX routes cannot dispatch to a paired device. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [runtime policy](/gateway/config-agents#runtime-policy).
+- **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
+
+For a Cloudflare Access-fronted Gateway:
+
+1. In Cloudflare Zero Trust, create an Access service token. Copy its Client ID and Client Secret when Cloudflare displays them.
+2. Add a **Service Auth** policy that accepts the token on the Access application protecting the Gateway. If `/j/*` and `/__openclaw__/worker` are separate Access applications, add the same policy to both.
+3. On the node, provide the conventional environment fallback and connect:
+
+   ```bash
+   export CF_ACCESS_CLIENT_ID="<client-id>"
+   export CF_ACCESS_CLIENT_SECRET="<client-secret>"
+   openclaw connect https://gateway.example/j/<code> --service
+   ```
+
+The canonical node connection keys are `gateway.cloudflareAccess.clientId` and `gateway.cloudflareAccess.clientSecret`; both accept SecretInput values. The environment fallback above persists those keys as env SecretRefs, not copied plaintext. For installed nodes, OpenClaw stores the environment values in the managed service environment file rather than inline in launchd, systemd, or Task Scheduler definitions. Resolved values are bound to the configured Gateway origin and are not followed across redirects. OpenClaw rejects the pair before resolution on plaintext `http://` or `ws://` routes; credential-free loopback and private-network plaintext behavior is unchanged.
 
 ### Start a node host (foreground)
 
@@ -204,6 +229,12 @@ node host is updated. Adding, removing, or filtering servers after that does not
 require re-pairing because the approved command family is unchanged. Restart
 `openclaw node run` or `openclaw node restart` to apply node MCP config changes;
 the node host does not watch this config.
+
+Server-advertised tool-list changes apply live and replace the published node
+catalog. If an MCP transport closes or a stateful Streamable HTTP session
+expires, the node withdraws that server's stale tools and reconnects with
+bounded backoff. The failed call that detects an expired session is not replayed;
+a later call can use the replacement connection after its tools are republished.
 
 Gateway operators can ignore all agent-visible tools published by paired nodes,
 including node-hosted MCP tools, with
@@ -371,12 +402,24 @@ byte-offset cursors and bounded backward file reads, so selecting a large
 session or loading an older page does not read the whole JSONL history into one
 Gateway response.
 
-The list and read commands are read-only. They expose catalog metadata and transcript
-content only through the generic `sessions.catalog.list` and
-`sessions.catalog.read` methods to an authenticated operator connection with
-`operator.write`. A Gateway-local Claude CLI row can be adopted from the normal
-Chat composer: OpenClaw imports bounded visible history, resumes with
-`--fork-session` on the first turn, and leaves the source transcript untouched.
+Catalog RPCs keep their normal method scopes: `sessions.catalog.list` and
+`sessions.catalog.read` require `operator.read`; `sessions.catalog.continue` and
+`sessions.catalog.archive` require `operator.write`.
+
+Catalog visibility also follows the authenticated caller. An `operator.admin`
+connection sees every discovered row. When the Gateway has durable profiles for
+fewer than two people, catalog visibility is unchanged and rows remain unfiltered.
+On a multi-user Gateway, a non-admin connection sees and can read, continue, or
+archive only rows whose recorded `createdActor.id` matches the caller's Gateway
+profile. Unattributed host CLI or desktop sessions are hidden from those callers.
+This is a privacy and coordination boundary inside one trusted Gateway domain,
+not hostile-user isolation; use separate agents or Gateway/host trust boundaries
+when people must not share access to files, credentials, or tools. See
+[Multi-user mode](/concepts/multi-user).
+
+A Gateway-local Claude CLI row can be adopted from the normal Chat composer:
+OpenClaw imports bounded visible history, resumes with `--fork-session` on the
+first turn, and leaves the source transcript untouched.
 
 A headless node host can opt into the same continuation flow:
 
@@ -405,6 +448,86 @@ Gateway loopback MCP config or Gateway skills plugin, cannot reseed from a
 Gateway transcript, and reject attachments and images. Claude Desktop rows and
 nodes that do not advertise the run command remain view-only. The macOS app
 node does not advertise this command yet, so its rows remain view-only.
+
+### Host OpenClaw sessions
+
+A headless node host can separately opt into full OpenClaw session hosting:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: { enabled: true },
+  },
+}
+```
+
+Restart the node host after enabling this setting. On the first session dispatch
+for a Gateway build, the node downloads one sealed worker artifact from that
+paired Gateway, verifies its exact content hash, and publishes it atomically
+under the Gateway-namespaced node-host bundle root. The artifact already
+contains its complete JavaScript dependency closure; the node does not install
+packages or execute lifecycle scripts. Later turns reuse the immutable artifact
+while its receipt still matches the Gateway's current build.
+
+You can also enroll and enable a service host in one step with
+`openclaw connect --service --session-host`. In Control UI New Session, a
+write-scoped operator selects a Gateway project or folder and then the paired
+device. OpenClaw creates a session-owned managed worktree on the Gateway,
+dispatches it with the exact `deviceId`, and sends the first turn only after the
+device placement becomes active. New Session does not bind `execNode` or browse
+the device filesystem.
+
+The Devices page shows the validated Gateway-owned worker version in the node's
+metadata. If the retained artifact is missing or fails validation, Devices shows
+a **worker missing** warning; start a new session on that device to reinstall the
+current bundle. This status is observational and reconnect-scoped: launch still
+requires the exact durable receipt and current node authority.
+
+Node hosts must support the current private worker-supervisor dialect before
+they can host sessions. An older connected host remains visible but disabled in
+the session picker. Update OpenClaw on that device and reconnect it; for a
+headless node, run `openclaw update` followed by `openclaw node restart`. The
+Gateway does not fall back to the node's local OpenClaw package or an older
+supervisor dialect.
+
+This setting enables supervised session turns on the paired device, including
+Gateway-owned workspace transfer and result reconciliation. Each node runs at
+most two worker processes by default. A third launch waits up to 10 seconds for
+a durable slot; while both slots are occupied, the node remains available for
+status and cancellation but is not selected for a new session turn.
+
+The picker derives every device row from `environments.list`. A device is
+selectable only when current inventory reports status `available`,
+`sessionHost: true`, valid exact worker slots, and at least one available slot.
+Connected non-hosts, saturated hosts, hosts without current capacity,
+update-required or otherwise outdated hosts, and unavailable hosts remain
+visible but disabled with an actionable reason. Enable hosting with
+`openclaw connect --service --session-host` or the `nodeHost.workerRuns`
+setting, then restart the node host. Update-required hosts must be upgraded and
+restarted before selection.
+
+When a known session host disconnects, its paired-device record preserves only
+the last accepted current-v6 hosting consent. The offline row remains visible
+and disabled with status unavailable. A current disabled or empty v6
+publication records false; older v1-v5 and update-required dialects do not
+overwrite the last current fact. Connected inventory always wins over stored
+history, a missing stored value means false, and exact worker slots are never
+persisted or shown as offline capacity.
+
+If the device is offline before a turn is dispatched, the Gateway waits up to
+10 seconds and then returns a visible retry/reconnect error while keeping the
+session placement available for a later attempt. Gateway restart likewise
+preserves an idle device placement and reconnects its tunnel lazily on the next
+turn. A paired node remains dormant for 14 days after its exact recorded
+disconnect; at that boundary its old worker environment is treated as gone and
+the session placement reconciles normally. Pairing itself remains, so a later
+reconnect can provision a fresh environment. Legacy pairings without exact node
+disconnect history are retained fail-safe rather than expired from unrelated
+device activity. Removing the device pairing, silently pruning a superseded
+pairing, or removing only its node role invalidates clients first, then runs
+targeted environment and placement reconciliation; explicit removal waits for
+the credential fence before returning success, and the periodic sweep retries
+failed provider or placement cleanup.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
@@ -442,10 +565,10 @@ Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`
 Low-level (raw RPC):
 
 ```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
+openclaw nodes invoke --node <idOrNameOrIp> --command device.info --params '{}'
 ```
 
-`nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (canvas, camera, screen, location, below).
+`nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (camera, screen, location, below).
 
 Long-running streaming node commands use additive `node.invoke.progress`
 events. Each event carries the invoke ID, a zero-based sequence number, and a
@@ -478,7 +601,16 @@ Default allowlists by platform (before plugin defaults and `commands.allow`/`com
 
 These rows describe the Gateway policy ceiling, not the commands implemented by every node app. A command is usable only when the connected node also declares it. In particular, Android advertises mobile UI commands only while Accessibility Control is enabled, and desktop nodes advertise `computer.act` only while their local Computer Control fulfiller is enabled. The current macOS app does not declare the device and personal-data families listed in the macOS policy row.
 
-`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, Linux, and unknown platforms. Linux nodes declare them only when the desktop app's local Canvas socket is present. All Canvas commands are foreground-restricted on iOS.
+Plugin-owned defaults extend the platform table only for the plugin's supported
+surface:
+
+| Plugin | Platform | Commands allowed by default                        |
+| ------ | -------- | -------------------------------------------------- |
+| Canvas | macOS    | `canvas.present`, `canvas.hide`, `canvas.navigate` |
+
+The Canvas commands present hosted widget documents in the macOS app's native
+panel. iOS, Android, Windows, Linux, and unknown platforms do not receive Canvas
+plugin defaults.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
@@ -549,46 +681,26 @@ Per-agent exec node override:
 }
 ```
 
-## Screenshots (canvas snapshots)
-
-If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
-
-CLI helper (writes to a temp file and prints the saved path):
+## macOS widget panel
 
 ```bash
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format png
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
-```
-
-### Canvas controls
-
-```bash
-openclaw nodes canvas present --node <idOrNameOrIp> --target https://example.com
+openclaw nodes canvas present --node <idOrNameOrIp>
 openclaw nodes canvas hide --node <idOrNameOrIp>
-openclaw nodes canvas navigate https://example.com --node <idOrNameOrIp>
-openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
+openclaw nodes canvas navigate "/__openclaw__/canvas/documents/<document-id>/index.html" --node <idOrNameOrIp>
 ```
 
 Notes:
 
-- `canvas present` accepts URLs or local file paths (`--target`) on nodes that support local paths, plus optional `--x/--y/--width/--height` for positioning. Linux Canvas accepts HTTP(S) URLs or its bundled A2UI renderer.
-- `canvas eval` accepts inline JS (`--js`) or a positional arg.
-
-### A2UI (Canvas)
-
-```bash
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
-openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
-```
-
-Notes:
-
-- Mobile and Linux desktop nodes use a bundled app-owned A2UI page for action-capable rendering.
-- Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
-- iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
-- macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
-- Linux dispatches actions only from the bundled A2UI page. Other HTTP/HTTPS pages remain render-only, and a headless Linux node without the desktop app does not advertise Canvas.
+- `canvas present` accepts the existing optional target plus
+  `--x/--y/--width/--height` placement arguments.
+- `canvas navigate` accepts a hosted widget-document path or an app-local
+  Canvas URL. The macOS app resolves hosted paths through its current scoped
+  Canvas capability URL.
+- The agent-facing path is [`show_widget`](/tools/show-widget) with
+  `presentation.target: "node_panel"`; use the CLI helpers for direct operator
+  control.
+- A2UI renders on [session dashboards](/web/dashboards), not through node
+  Canvas commands.
 
 ## Photos + videos (node camera)
 
@@ -611,7 +723,7 @@ openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 
 Notes:
 
-- The node must be **foregrounded** for `canvas.*` and `camera.*` (background calls return `NODE_BACKGROUND_UNAVAILABLE`).
+- The node must be **foregrounded** for `camera.*` (background calls return `NODE_BACKGROUND_UNAVAILABLE`).
 - Nodes clamp clip duration to keep the base64 payload manageable (see [Camera capture](/nodes/camera) for exact per-platform limits). The `nodes` agent tool additionally caps requested `durationMs` at 300000 (5 minutes) before forwarding the call; the node itself enforces the tighter limit.
 - Android will prompt for `CAMERA`/`RECORD_AUDIO` permissions when possible; denied permissions fail with `*_PERMISSION_REQUIRED`.
 

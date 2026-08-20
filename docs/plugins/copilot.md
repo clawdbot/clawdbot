@@ -14,7 +14,7 @@ agent loop: native tool execution, native compaction (`infiniteSessions`), and
 CLI-managed thread state under `copilotHome`. OpenClaw still owns chat
 channels, session files, model selection, dynamic tools (bridged), approvals,
 media delivery, the visible transcript mirror, `/btw` side questions (see
-[Side questions (`/btw`)](#side-questions-btw)), and `openclaw doctor`.
+[Side questions (`/btw`)](/plugins/copilot#side-questions-%2Fbtw)), and `openclaw doctor`.
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes).

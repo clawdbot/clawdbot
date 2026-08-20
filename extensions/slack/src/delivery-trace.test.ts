@@ -46,7 +46,22 @@ type CapturedDispatcherOptions = {
 type CapturedReplyOptions = {
   suppressDefaultToolProgressMessages?: boolean;
   onPartialReply?: (payload: { text: string }) => Promise<void> | void;
-  onToolStart?: (payload: { name: string; phase: "start" | "result" }) => Promise<void> | void;
+  onToolStart?: (payload: {
+    name: string;
+    phase: "start" | "result";
+    itemId?: string;
+    toolCallId?: string;
+    args?: Record<string, unknown>;
+  }) => Promise<void> | void;
+  onItemEvent?: (payload: {
+    kind: string;
+    itemId?: string;
+    toolCallId?: string;
+    phase?: string;
+    status?: string;
+    progressText?: string;
+    name?: string;
+  }) => Promise<void> | void;
 };
 
 type TurnCounts = Record<ReplyDispatchKind, number>;
@@ -166,13 +181,18 @@ type SlackTraceScenarioName =
   | "final-blocks-and-text"
   | "cancel-mid-stream"
   | "preview-edit-fallback"
-  | "progress-session-card";
+  | "progress-session-card"
+  | "progress-native-unified";
 
 const NATIVE_SCENARIOS = new Set<SlackTraceScenarioName>([
   "streaming-happy-native",
   "stream-stop-first-network-call",
   "final-blocks-and-text",
 ]);
+
+const NATIVE_PROGRESS_NARRATION =
+  "I’m checking the native Slack stream before applying the focused patch.";
+const NATIVE_PROGRESS_NARRATION_UPDATED = `${NATIVE_PROGRESS_NARRATION} I’m applying it now.`;
 
 // Long enough that the second stream append pushes the SDK buffer past
 // buffer_size (256), forcing the first visible flush via chat.startStream.
@@ -261,6 +281,16 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "tool-progress", name: "read", phase: "start" },
     { kind: "advance", ms: 2000 },
     { kind: "final", text: "The session card is complete." },
+    { kind: "idle" },
+  ],
+  "progress-native-unified": [
+    { kind: "reply-start" },
+    { kind: "partial", text: NATIVE_PROGRESS_NARRATION },
+    { kind: "tool-progress", name: "write", phase: "start" },
+    { kind: "advance", ms: 2000 },
+    { kind: "partial", text: NATIVE_PROGRESS_NARRATION_UPDATED },
+    { kind: "tool-progress", name: "write", phase: "result" },
+    { kind: "final", text: "The unified native Slack turn is complete." },
     { kind: "idle" },
   ],
 };
@@ -431,9 +461,10 @@ function createRecordingSlackClient(): Record<string, unknown> {
 
 function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedSlackMessage {
   const progressCard = scenario === "progress-session-card";
+  const nativeProgress = scenario === "progress-native-unified";
   const cfg = {
     channels: { slack: { enabled: true } },
-    ...(progressCard
+    ...(progressCard || nativeProgress
       ? {
           gateway: {
             publicOrigin: "https://team.openclaw.ai",
@@ -490,13 +521,18 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     account: {
       accountId: "default",
       config: progressCard
-        ? {}
-        : {
-            streaming: {
-              mode: "partial",
-              nativeTransport: NATIVE_SCENARIOS.has(scenario),
+        ? // Native task cards are the progress default; this scenario owns the
+          // Block Kit opt-out path.
+          { streaming: { progress: { nativeTaskCards: false } } }
+        : nativeProgress
+          ? // Empty progress config on purpose: proves the shipped default.
+            { streaming: { mode: "progress" } }
+          : {
+              streaming: {
+                mode: "partial",
+                nativeTransport: NATIVE_SCENARIOS.has(scenario),
+              },
             },
-          },
     },
     message: {
       type: "message",
@@ -575,10 +611,41 @@ async function setupSlackTrace(
       case "partial":
         // Present only on the draft-preview tier; native streaming leaves
         // onPartialReply undefined and partials stay IN-only script context.
-        await turn.replyOptions.onPartialReply?.({ text: step.text });
+        if (scenario === "progress-native-unified") {
+          await turn.replyOptions.onItemEvent?.({
+            kind: "preamble",
+            itemId: "preamble-1",
+            progressText: step.text,
+          });
+          await deliver({ text: step.text, isCommentary: true }, "block");
+        } else {
+          await turn.replyOptions.onPartialReply?.({ text: step.text });
+        }
         break;
       case "tool-progress":
-        await turn.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
+        if (scenario === "progress-native-unified") {
+          if (step.phase === "start") {
+            await turn.replyOptions.onToolStart?.({
+              name: step.name,
+              phase: step.phase,
+              itemId: "write-1",
+              toolCallId: "write-call-1",
+              args: { path: "src/native-card.ts", content: "const unified = true;\n" },
+            });
+          } else {
+            await turn.replyOptions.onItemEvent?.({
+              kind: "tool",
+              itemId: "write-1",
+              toolCallId: "write-call-1",
+              phase: "end",
+              status: "completed",
+              progressText: "src/native-card.ts",
+              name: step.name,
+            });
+          }
+        } else {
+          await turn.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
+        }
         // The mocked core dispatcher owns default tool progress messages; when
         // dispatch did not suppress them it would deliver a tool-kind payload,
         // so the script forwards a deterministic stand-in text.

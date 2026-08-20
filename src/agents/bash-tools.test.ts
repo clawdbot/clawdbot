@@ -1,7 +1,4 @@
-/**
- * Integration-style tests for the public Bash/process tool barrel.
- * Exercises exec and process behavior through the shared exported tool factory.
- */
+/** Integration tests for the public Bash/process tool barrel and shared tool factory. */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -417,24 +414,28 @@ const requireRunningSessionId = (result: { details: unknown }) => {
   return requireSessionId(result.details as { sessionId?: string });
 };
 
-function hasNotifyEventForPrefix(prefix: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY): boolean {
-  return peekSystemEvents(sessionKey).some((event) => event.includes(prefix));
+function hasNotifyEventForSession(
+  sessionId: string,
+  sessionKey = DEFAULT_NOTIFY_SESSION_KEY,
+): boolean {
+  return peekSystemEventEntries(sessionKey).some(
+    (event) => event.contextKey === `exec:${sessionId}`,
+  );
 }
 
 async function waitForNotifyEvent(sessionId: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
-  const prefix = sessionId.slice(0, 8);
   let finished = getFinishedSession(sessionId);
-  let hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
+  let hasEvent = hasNotifyEventForSession(sessionId, sessionKey);
   await expect
     .poll(() => {
       finished = getFinishedSession(sessionId);
-      hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
+      hasEvent = hasNotifyEventForSession(sessionId, sessionKey);
       return Boolean(finished && hasEvent);
     }, NOTIFY_POLL_OPTIONS)
     .toBe(true);
   return {
     finished: finished ?? getFinishedSession(sessionId),
-    hasEvent: hasEvent || hasNotifyEventForPrefix(prefix),
+    hasEvent: hasEvent || hasNotifyEventForSession(sessionId),
   };
 }
 
@@ -638,8 +639,7 @@ const seedFinishedLogSession = (lines: string[]) => {
     startedAt: Date.now(),
     maxOutputChars: 100_000,
     pendingMaxOutputChars: 100_000,
-    pendingStdout: [],
-    pendingStderr: [],
+    pendingOutput: [],
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
     pendingOutputDropped: false,
@@ -830,8 +830,8 @@ describe("exec notifyOnExit", () => {
     const sessionId = await startBackgroundCommand(tool, shellEcho("notify"));
 
     const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
-    const queuedEvent = peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY).find((event) =>
-      event.text.includes(sessionId.slice(0, 8)),
+    const queuedEvent = peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY).find(
+      (event) => event.contextKey === `exec:${sessionId}`,
     );
     const formatted = await drainNotifyEvents();
 
@@ -852,8 +852,8 @@ describe("exec notifyOnExit", () => {
     const poll = await pollProcessSession({ tool: processTool, sessionId });
 
     expect(poll.status).toBe(PROCESS_STATUS_COMPLETED);
-    expect(hasNotifyEventForPrefix(sessionId.slice(0, 8))).toBe(false);
-    expect(hasNotifyEventForPrefix(unpolledSessionId.slice(0, 8))).toBe(true);
+    expect(hasNotifyEventForSession(sessionId)).toBe(false);
+    expect(hasNotifyEventForSession(unpolledSessionId)).toBe(true);
   });
 
   it("preserves the origin delivery context on background exec completion events", async () => {
@@ -868,8 +868,8 @@ describe("exec notifyOnExit", () => {
     const sessionId = await startBackgroundCommand(tool, shellEcho("notify"));
 
     await waitForNotifyEvent(sessionId, sessionKey);
-    const queuedEvent = peekSystemEventEntries(sessionKey).find((event) =>
-      event.text.includes(sessionId.slice(0, 8)),
+    const queuedEvent = peekSystemEventEntries(sessionKey).find(
+      (event) => event.contextKey === `exec:${sessionId}`,
     );
 
     expect(queuedEvent).toBeDefined();
@@ -884,14 +884,6 @@ describe("exec notifyOnExit", () => {
       intent: "event",
       reason: "exec-event",
       sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
-    });
-  });
-
-  it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
-    await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
     });
   });
 

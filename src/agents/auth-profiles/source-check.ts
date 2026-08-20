@@ -4,6 +4,7 @@
  */
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { coercePersistedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
@@ -100,8 +101,10 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
     return true;
   }
 
-  const authPath = resolveAuthProfileDatabasePath(agentDir);
-  const mainAuthPath = resolveAuthProfileDatabasePath();
+  const authPath = agentDir
+    ? resolveAuthProfileDatabasePath(agentDir)
+    : resolveSharedAuthStorePath();
+  const mainAuthPath = resolveSharedAuthStorePath();
   if (
     agentDir &&
     authPath !== mainAuthPath &&

@@ -347,7 +347,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(2);
     expectFields(replyPayloads[0], {
-      text: "keep text\n⚠️ Media failed.",
+      text: "keep text\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
@@ -1063,7 +1063,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expectFields(replyPayloads[0], {
-      text: "⚠️ Media failed.",
+      text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,

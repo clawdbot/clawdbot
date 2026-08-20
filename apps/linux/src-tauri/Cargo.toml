@@ -17,7 +17,6 @@ base64 = "0.23.0"
 ed25519-dalek = "3.0.0"
 futures-util = "0.3.33"
 getrandom = "0.4.3"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 mdns-sd = { version = "0.20", default-features = false }
 rustls = { version = "0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -48,10 +47,8 @@ uuid = { version = "1.24.0", features = ["v4"] }
 zeroize = "1.9.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-cairo-rs = { version = "0.18.5", features = ["png"] }
 libc = "0.2.189"
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "d20b4ff0e0e327e49fee80903478f825eac5a71a" }
-webkit2gtk = "2.0.2"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -1,5 +1,6 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
+import { isBuiltin } from "node:module";
 import path from "node:path";
 import type { UserConfig } from "tsdown";
 import {
@@ -22,6 +23,10 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
+import {
+  createWorkerDeployBuildPlugin,
+  WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+} from "./scripts/lib/worker-deploy-build-plugin.mts";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -48,6 +53,9 @@ type ExternalOptionFunction = (
 const env = {
   NODE_ENV: "production",
 };
+const workerDeployVersion = (
+  JSON.parse(fs.readFileSync("package.json", "utf8")) as { version: string }
+).version;
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
 const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
@@ -87,7 +95,10 @@ function matchesExternalOption(
   return false;
 }
 
-function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
+function buildInputOptions(
+  options: InputOptionsArg,
+  build?: { bundleAllDependencies?: boolean },
+): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
@@ -127,7 +138,7 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
     ...options,
     external(id: string, parentId: string | undefined, isResolved: boolean) {
       return (
-        shouldNeverBundleDependency(id) ||
+        (!build?.bundleAllDependencies && shouldNeverBundleDependency(id)) ||
         matchesExternalOption(previousExternal, id, parentId, isResolved)
       );
     },
@@ -156,7 +167,61 @@ function nodeBuildConfig(
     outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: buildInputOptions,
+    inputOptions: (options) => buildInputOptions(options),
+  };
+}
+
+function workerDeployBuildConfig(): UserConfig {
+  return {
+    name: TSDOWN_UNIFIED_CONFIG_GROUP,
+    entry: { "worker/worker": "src/worker/worker-deploy-entry.ts" },
+    outDir: "dist",
+    dts: false,
+    env,
+    define: {
+      WORKER_DEPLOY_BUILD: "true",
+      WORKER_DEPLOY_VERSION: JSON.stringify(workerDeployVersion),
+    },
+    alias: {
+      bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/cdp/CdpConnection": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "electron/index.js": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      fsevents: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      kerberos: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+    },
+    deps: {
+      alwaysBundle: (id) => !isBuiltin(id),
+      onlyBundle: false,
+    },
+    fixedExtension: false,
+    outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
+    outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
+    plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
+    shims: true,
+    sourcemap: OUTPUT_SOURCE_MAPS,
+    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
+  };
+}
+
+function workerRsyncReceiverBuildConfig(): UserConfig {
+  return {
+    name: TSDOWN_UNIFIED_CONFIG_GROUP,
+    entry: { "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts" },
+    outDir: "dist",
+    dts: false,
+    env,
+    deps: {
+      alwaysBundle: (id) => !isBuiltin(id),
+      onlyBundle: false,
+    },
+    fixedExtension: false,
+    outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
+    outputOptions: { codeSplitting: false },
+    shims: true,
+    sourcemap: OUTPUT_SOURCE_MAPS,
+    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
   };
 }
 
@@ -169,7 +234,7 @@ function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig 
     name: config.name ?? TSDOWN_PACKAGE_CONFIG_GROUP,
     outDir: config.outDir ?? tsdownPackageOutputRoot(packageDir),
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: buildInputOptions,
+    inputOptions: (options) => buildInputOptions(options),
   };
 }
 
@@ -292,12 +357,13 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
-    "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
+    "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
     "config/sessions/session-accessor.sqlite-archive.worker":
       "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
+    "infra/tailscale-route-owner.worker": "src/infra/tailscale-route-owner.worker.ts",
     "system-agent/setup-inference-detection.worker":
       "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
@@ -306,7 +372,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
     "gateway/plugin-channel-reload-targets": "src/gateway/plugin-channel-reload-targets.ts",
     "gateway/worker-environments/runtime": "src/gateway/worker-environments/runtime.ts",
-    "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
     "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
@@ -326,6 +391,9 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
+    "process/supervisor/service-child-relay": "src/process/supervisor/service-child-relay.ts",
+    "process/supervisor/service-child-group-anchor":
+      "src/process/supervisor/service-child-group-anchor.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
       "src/telegram-ingress-worker.runtime.ts",
@@ -446,7 +514,7 @@ function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
 }
 
 function shouldExternalizeGatewayClientDependency(id: string): boolean {
-  return ["ws", "@openclaw/gateway-protocol"].some(
+  return ["ws", "@openclaw/gateway-protocol", "ipaddr.js"].some(
     (dependency) => id === dependency || id.startsWith(`${dependency}/`),
   );
 }
@@ -524,8 +592,6 @@ function buildUnifiedDistEntries(): Record<string, string> {
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }
       : {}),
-    "memory-core-local-embedding-worker":
-      "packages/memory-host-sdk/src/host/embeddings-worker-child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     ...bundledHookEntries,
@@ -680,6 +746,8 @@ const configs = [
     },
     false,
   ),
+  workerDeployBuildConfig(),
+  workerRsyncReceiverBuildConfig(),
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>
         nodeBuildConfig(

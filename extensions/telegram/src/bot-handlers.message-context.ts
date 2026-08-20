@@ -1,5 +1,4 @@
 import type { Message } from "grammy/types";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -24,7 +23,6 @@ import {
   buildSenderName,
   getTelegramTextParts,
   resolveTelegramPrimaryMedia,
-  resolveTelegramForumThreadId,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -82,9 +80,7 @@ export type TelegramSessionState = {
 export type ResolveTelegramSessionStateParams = {
   chatId: number | string;
   isGroup: boolean;
-  isForum: boolean;
-  messageThreadId?: number;
-  resolvedThreadId?: number;
+  threadSpec: TelegramThreadSpec;
   botHasTopicsEnabled?: boolean;
   senderId?: string | number;
   runtimeCfg: OpenClawConfig;
@@ -188,14 +184,8 @@ export function createTelegramMessageSessionRuntime({
   const resolveTelegramSessionState = (
     params: ResolveTelegramSessionStateParams,
   ): TelegramSessionState => {
-    const resolvedThreadId =
-      params.resolvedThreadId ??
-      resolveTelegramForumThreadId({
-        isForum: params.isForum,
-        messageThreadId: params.messageThreadId,
-      });
-    const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
-    const topicThreadId = resolvedThreadId ?? dmThreadId;
+    const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
+    const topicThreadId = params.threadSpec.id;
     const { topicConfig } = resolveTelegramGroupConfig(
       params.chatId,
       topicThreadId,
@@ -206,8 +196,7 @@ export function createTelegramMessageSessionRuntime({
       accountId,
       chatId: params.chatId,
       isGroup: params.isGroup,
-      resolvedThreadId,
-      replyThreadId: topicThreadId,
+      threadSpec: params.threadSpec,
       senderId: params.senderId,
       topicAgentId: topicConfig?.agentId,
     });
@@ -293,17 +282,18 @@ export function createTelegramMessageSessionRuntime({
 export function createTelegramMessageContextRuntime({
   cfg,
   accountId,
+  ownerAgentId,
   opts,
   telegramCfg,
   telegramDeps,
 }: Pick<
   RegisterTelegramHandlerParams,
-  "cfg" | "accountId" | "opts" | "telegramCfg" | "telegramDeps"
+  "cfg" | "accountId" | "ownerAgentId" | "opts" | "telegramCfg" | "telegramDeps"
 >) {
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(
       telegramDeps.resolveStorePath(cfg.session?.store, {
-        agentId: cfg.agents ? resolveDefaultAgentId(cfg) : "main",
+        agentId: ownerAgentId,
       }),
     ),
   });

@@ -53,7 +53,14 @@ function buildContainerEnv(env: OpenClawContainerEnv): Record<string, string> {
 
 export class OpenClawContainer extends Container<OpenClawContainerEnv> {
   override defaultPort = 8080;
-  override pingEndpoint = "localhost/startupz";
+  // /healthz exists in every published OpenClaw image and answers as soon as the
+  // Gateway's listener is up, which is exactly what this readiness poll asks.
+  // Do not point this at a route the pinned image may not serve: the Control UI
+  // answers unknown paths with a catch-all 200, so a missing route would look
+  // permanently healthy instead of failing. /startupz additionally waits for
+  // startup work to finish and is the better signal once the derived image comes
+  // from a release that serves it.
+  override pingEndpoint = "localhost/healthz";
   override sleepAfter = "10m";
 
   private readonly webhookOnly: boolean;

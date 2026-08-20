@@ -52,6 +52,8 @@ describe("openclaw-modal-dialog", () => {
 
     expect(dialog.open).toBe(true);
     expect(dialog.localName).toBe("dialog");
+    expect(dialog.getAttribute("role")).toBe("dialog");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(dialog.getAttribute("aria-label")).toBe("Confirm action");
     expect(dialog.getAttribute("aria-description")).toBe("Review the operation before continuing.");
     expect(dialog.getRootNode()).toBe(webAwesomeDialog.shadowRoot);
@@ -136,23 +138,6 @@ describe("openclaw-modal-dialog", () => {
     );
     expect(styles).toMatch(
       /::slotted\(\.shell-nav-modal__content\)\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1\s+1\s+auto;[^}]*flex-direction:\s*column;[^}]*height:\s*100%;[^}]*min-height:\s*0;/u,
-    );
-  });
-
-  it("keeps responsive width and maximum-width limits owned by the same variant", () => {
-    const styles = OpenClawModalDialog.styles.cssText;
-
-    expect(styles).toMatch(
-      /:host\(\.fullscreen\)\s+wa-dialog::part\(dialog\)\s*\{[^}]*max-width:\s*calc\(100vw\s*-\s*20px\);/u,
-    );
-    expect(styles).toMatch(
-      /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?wa-dialog\s*\{[^}]*--width:\s*min\(var\(--openclaw-modal-width,\s*540px\),\s*calc\(100vw\s*-\s*24px\)\);[\s\S]*?wa-dialog::part\(dialog\)\s*\{[^}]*max-width:\s*var\(--openclaw-modal-max-width,\s*calc\(100vw\s*-\s*24px\)\);/u,
-    );
-    expect(styles).toMatch(
-      /:host\(\.drawer\)\s+wa-dialog\s*\{[^}]*--width:\s*min\(var\(--openclaw-modal-width,\s*100vw\),\s*100vw\);/u,
-    );
-    expect(styles).toMatch(
-      /:host\(\.drawer\)\s+wa-dialog::part\(dialog\)\s*\{[^}]*max-width:\s*100vw;/u,
     );
   });
 

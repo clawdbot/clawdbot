@@ -2341,7 +2341,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: String(rejection),
+      error: "payload rejected | OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED | invalid payload",
       deliveryAttempted: true,
     });
   });
@@ -2388,7 +2388,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: "Error: read ECONNRESET after send",
+      error: "read ECONNRESET after send | ECONNRESET",
       deliveryAttempted: true,
     });
   });
@@ -2452,7 +2452,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: String(notDispatchedError),
+      error:
+        "second payload stopped before final dispatch | OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED | connect ECONNREFUSED | ECONNREFUSED",
       deliveryAttempted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
@@ -2801,7 +2802,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: "Error: chat not found",
+      error: "chat not found",
       deliveryAttempted: true,
     });
   });
@@ -2827,7 +2828,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expectResultFields(state.result, {
       status: "error",
-      error: String(deliveryError),
+      error: deliveryError.message,
       deliveryAttempted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
@@ -2874,7 +2875,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expectResultFields(state.result, {
       status: "error",
-      error: String(deliveryError),
+      error: deliveryError.message,
       deliveryAttempted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
@@ -2902,7 +2903,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: "Error: boom",
+      error: "boom",
       deliveryAttempted: true,
     });
   });

@@ -75,7 +75,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(generateConversationLabelWithFallback).toHaveBeenCalledWith({
       userMessage: "Help me plan the release",
       prompt:
-        "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message. No emoji. Return only the title.",
+        "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.",
       cfg,
       agentId: "main",
       utilityModelRef: "openai/gpt-5.6-luna",
@@ -341,7 +341,9 @@ describe("buildDashboardSessionTitleSource", () => {
       message: "Review this rollout [[reply_to_current]]",
       attachments: [textAttachment("Deployment context"), textAttachment(pastedText)],
     });
-    expect(source).toBe(`Review this rollout\nDeployment context\n${pastedText}`.slice(0, 1_000));
+    expect(source).toBe(
+      `Review this rollout [[reply_to_current]]\nDeployment context\n${pastedText}`.slice(0, 1_000),
+    );
   });
 
   it.each([

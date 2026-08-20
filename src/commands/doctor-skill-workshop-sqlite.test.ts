@@ -322,7 +322,16 @@ describe("doctor Skill Workshop SQLite migration", () => {
     );
 
     await expect(listSkillProposals()).resolves.toMatchObject({ proposals: [] });
-    const result = await migrateLegacySkillWorkshopProposals({ config: {} });
+    const result = await migrateLegacySkillWorkshopProposals({
+      config: {
+        agents: {
+          entries: {
+            main: { workspace: oldWorkspace },
+            other: { workspace: currentWorkspace },
+          },
+        },
+      },
+    });
     expect(result).toMatchObject({ detected: 1, migrated: 1, warnings: [] });
 
     const listed = await listSkillProposals({ agentId: "main", workspaceDir: currentWorkspace });

@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_MODEL } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -128,17 +127,11 @@ export function resolveSessionListSearchModelFields(params: {
     subagentRun?.model,
     { allowPluginNormalization: false },
   );
-  const modelIdentity = {
-    provider: resolvedModel.provider,
-    model: resolvedModel.model ?? DEFAULT_MODEL,
-  };
-  const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelIdentity.provider;
-  const selectedOrRuntimeModel = selectedModel?.model ?? modelIdentity.model;
   const displayModelIdentity = resolveSessionDisplayModelIdentityRefCached({
     cfg: params.cfg,
     agentId,
-    provider: selectedOrRuntimeModelProvider,
-    model: selectedOrRuntimeModel,
+    provider: selectedModel.provider,
+    model: selectedModel.model,
     rowContext: params.rowContext,
   });
   const fields: Array<string | undefined> = [];
@@ -147,9 +140,7 @@ export function resolveSessionListSearchModelFields(params: {
     model: params.entry?.model,
   });
   addSessionListSearchModelFields(fields, resolvedModel);
-  if (selectedModel) {
-    addSessionListSearchModelFields(fields, selectedModel);
-  }
+  addSessionListSearchModelFields(fields, selectedModel);
   addSessionListSearchModelFields(fields, displayModelIdentity);
   return fields;
 }
@@ -162,9 +153,10 @@ type LoadGatewaySessionRowOptions = {
   transcriptUsageMaxBytes?: number;
 };
 
-export function loadGatewaySessionLifecycleSnapshot(
+function loadGatewaySessionSnapshot(
   sessionKey: string,
   options?: LoadGatewaySessionRowOptions,
+  lightweight = false,
 ): { lifecycleRunId?: string; row: GatewaySessionRow | null } {
   const now = options?.now ?? Date.now();
   const { cfg, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
@@ -198,16 +190,25 @@ export function loadGatewaySessionLifecycleSnapshot(
       includeLastMessage: options?.includeLastMessage,
       transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
       storeChildSessionsByKey,
+      skipTranscriptUsageFallback: lightweight,
+      lightweightListRow: lightweight,
       ...(options?.agentId ? { agentId: options.agentId } : {}),
     }),
   };
+}
+
+export function loadGatewaySessionLifecycleSnapshot(
+  sessionKey: string,
+  options?: LoadGatewaySessionRowOptions,
+): { lifecycleRunId?: string; row: GatewaySessionRow | null } {
+  return loadGatewaySessionSnapshot(sessionKey, options, true);
 }
 
 export function loadGatewaySessionRow(
   sessionKey: string,
   options?: LoadGatewaySessionRowOptions,
 ): GatewaySessionRow | null {
-  return loadGatewaySessionLifecycleSnapshot(sessionKey, options).row;
+  return loadGatewaySessionSnapshot(sessionKey, options).row;
 }
 
 export function buildGatewaySessionInfo(params: {

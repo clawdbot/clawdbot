@@ -12,6 +12,10 @@ import { createChatRunState } from "../server-chat-state.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+vi.mock("../../infra/command-analysis/explain.js", () => ({
+  resolveCommandAnalysisSummaryForDisplay: vi.fn(async () => null),
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function databaseOptions(): OpenClawStateDatabaseOptions {
@@ -106,6 +110,30 @@ describe("exec approval signed agent runtime", () => {
     expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
       message: expect.stringContaining("no longer active"),
     });
+  });
+
+  it("sanitizes display-only cwd and resolvedPath in the stored request", async () => {
+    const manager = new ExecApprovalManager({
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+    const opts = requestOptions(identity(false));
+    // Bidi override in cwd/resolvedPath can spoof what path reviewers see.
+    (opts.params as Record<string, unknown>).cwd = "/tmp/safe‮evil";
+    (opts.params as Record<string, unknown>).resolvedPath = "/usr/bin/echo​x";
+    // Free-form policy strings must not reach reviewer meta rows: security/ask
+    // are closed enums (arbitrary values null out), host is escape-hardened.
+    (opts.params as Record<string, unknown>).security = "full‮looks-deny";
+    (opts.params as Record<string, unknown>).ask = "always​ish";
+    const pending = handler(opts);
+    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
+    const record = manager.listPendingRecords()[0]!;
+    expect(record.request.cwd).toBe("/tmp/safe\\u{202E}evil");
+    expect(record.request.resolvedPath).toBe("/usr/bin/echo\\u{200B}x");
+    expect(record.request.security).toBeNull();
+    expect(record.request.ask).toBeNull();
+    manager.resolve(record.id, "deny");
+    await pending;
   });
 
   it("cancels an exec approval when authority closes after the handshake", async () => {

@@ -1,8 +1,13 @@
 /** Query helpers for discovering secret target registry entries. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 import { getPath } from "./path-utils.js";
-import { getCoreSecretTargetRegistry, getSecretTargetRegistry } from "./target-registry-data.js";
+import {
+  buildSecretTargetRegistryFromPlugins,
+  getCoreSecretTargetRegistry,
+  getSecretTargetRegistry,
+} from "./target-registry-data.js";
 import {
   compileTargetRegistryEntry,
   expandPathTokens,
@@ -105,8 +110,16 @@ function getCompiledSecretTargetRegistryState() {
   return compiledSecretTargetRegistryState;
 }
 
-function getConfiguredSecretTargetRegistryState(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  return compileSecretTargetRegistryState(getSecretTargetRegistry({ config, env }));
+function getConfiguredSecretTargetRegistryState(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">,
+) {
+  return compileSecretTargetRegistryState(
+    manifestRegistry
+      ? buildSecretTargetRegistryFromPlugins(manifestRegistry.plugins)
+      : getSecretTargetRegistry({ config, env }),
+  );
 }
 
 function getCompiledCoreOpenClawTargetState() {
@@ -495,7 +508,10 @@ export function resolveConfigSecretTargetByPath(pathSegments: string[]): Resolve
 /** Discovers configured secret-bearing values in openclaw.json. */
 export function discoverConfigSecretTargets(
   config: OpenClawConfig,
-  options: { env?: NodeJS.ProcessEnv } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  } = {},
 ): DiscoveredConfigSecretTarget[] {
   return discoverConfigSecretTargetsByIds(config, undefined, options);
 }
@@ -506,7 +522,10 @@ export function discoverConfigSecretTargets(
 export function discoverConfigSecretTargetsByIds(
   config: OpenClawConfig,
   targetIds?: Iterable<string>,
-  options: { env?: NodeJS.ProcessEnv } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  } = {},
 ): DiscoveredConfigSecretTarget[] {
   const env = options.env ?? process.env;
   const allowedTargetIds = normalizeAllowedTargetIds(targetIds);
@@ -515,7 +534,7 @@ export function discoverConfigSecretTargetsByIds(
     allowedTargetIds !== null &&
     Array.from(allowedTargetIds).every((targetId) => coreState.knownTargetIds.has(targetId));
   const configuredChannelEntries =
-    !hasOnlyCoreTargetIds && !configHasPluginEntries(config)
+    !options.manifestRegistry && !hasOnlyCoreTargetIds && !configHasPluginEntries(config)
       ? getConfiguredChannelOpenClawTargets(config, env)
       : null;
   const configuredEntries = hasOnlyCoreTargetIds
@@ -532,7 +551,7 @@ export function discoverConfigSecretTargetsByIds(
       Array.from(allowedTargetIds).every((targetId) => configuredEntriesById?.has(targetId)));
   const registryState = canUseConfiguredEntries
     ? null
-    : getConfiguredSecretTargetRegistryState(config, env);
+    : getConfiguredSecretTargetRegistryState(config, env, options.manifestRegistry);
   const discoveryEntries = resolveDiscoveryEntries({
     allowedTargetIds,
     defaultEntries: configuredEntries ?? registryState?.openClawCompiledSecretTargets ?? [],

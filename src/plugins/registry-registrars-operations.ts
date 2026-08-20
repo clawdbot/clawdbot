@@ -13,10 +13,13 @@ import {
 } from "../cli/program/command-descriptor-utils.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
+  isPrivateNodeInvokeCommand,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
 import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
+import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import type {
@@ -48,7 +51,7 @@ function isOfficialCodexPluginRecord(
   return sourcePath.includes("/node_modules/@openclaw/codex");
 }
 
-function canClaimReservedCommandOwnership(
+export function canClaimReservedCommandOwnership(
   record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
 ) {
   return record.origin === "bundled" || isOfficialCodexPluginRecord(record);
@@ -56,6 +59,61 @@ function canClaimReservedCommandOwnership(
 
 export function createOperationRegistrars(state: PluginRegistryState) {
   const { registry, pushDiagnostic } = state;
+
+  const registerWidgetPresenter = (record: PluginRecord, presenter: WidgetPresenter) => {
+    const description = normalizeOptionalString(presenter.description);
+    const currentCapabilities =
+      presenter.target === "current_channel" ? presenter.capabilities : undefined;
+    const currentChannelValid =
+      presenter.target === "current_channel" &&
+      typeof presenter.match === "function" &&
+      currentCapabilities !== undefined &&
+      Array.isArray(currentCapabilities.sourceKinds) &&
+      currentCapabilities.sourceKinds.length > 0 &&
+      currentCapabilities.sourceKinds.every(
+        (kind) => typeof kind === "string" && kind.trim().length > 0,
+      ) &&
+      (currentCapabilities.maxSourceBytes === undefined ||
+        (Number.isInteger(currentCapabilities.maxSourceBytes) &&
+          currentCapabilities.maxSourceBytes > 0));
+    if (
+      (presenter.target !== "node_panel" && !currentChannelValid) ||
+      !description ||
+      description.length > 160 ||
+      typeof presenter.availability !== "function" ||
+      typeof presenter.present !== "function"
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "invalid widget presenter registration",
+      });
+      return;
+    }
+    const existing =
+      presenter.target === "current_channel"
+        ? undefined
+        : registry.widgetPresenters.find(
+            (registration) => registration.presenter.target === presenter.target,
+          );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `widget presenter already registered for ${presenter.target} (${existing.pluginId})`,
+      });
+      return;
+    }
+    registry.widgetPresenters.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      presenter: { ...presenter, description },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
 
   const registerCli = (
     record: PluginRecord,
@@ -186,6 +244,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     ...NODE_SYSTEM_RUN_COMMANDS,
     ...NODE_EXEC_APPROVALS_COMMANDS,
     NODE_SYSTEM_NOTIFY_COMMAND,
+    ...NODE_WORKER_PRIVATE_COMMANDS,
   ]);
 
   const registerNodeHostCommand = (
@@ -248,6 +307,16 @@ export function createOperationRegistrars(state: PluginRegistryState) {
         pluginId: record.id,
         source: record.source,
         message: "node invoke policy registration missing commands",
+      });
+      return;
+    }
+    const reservedCommand = commands.find(isPrivateNodeInvokeCommand);
+    if (reservedCommand) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `node invoke policy command reserved by core: ${reservedCommand}`,
       });
       return;
     }
@@ -431,6 +500,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
   };
 
   return {
+    registerWidgetPresenter,
     registerCli,
     registerReload,
     registerNodeHostCommand,

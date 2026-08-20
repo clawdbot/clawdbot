@@ -5,6 +5,7 @@
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type queueAgentHarnessMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
@@ -14,6 +15,7 @@ import {
 import { buildCodexUserInput } from "./user-input.js";
 
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
+type AgentHarnessQueueMessageOptions = NonNullable<Parameters<typeof queueAgentHarnessMessage>[2]>;
 
 export class CodexSteeringAcceptedUnconfirmedError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -28,6 +30,7 @@ export type CodexSteeringQueueOptions = {
   images?: EmbeddedRunAttemptParams["images"];
   isInboundUserMessage?: boolean;
   onQueueAccepted?: (accepted: boolean) => void;
+  userTurnTranscriptRecorder?: AgentHarnessQueueMessageOptions["userTurnTranscriptRecorder"];
 };
 
 /**
@@ -39,12 +42,6 @@ export function createCodexSteeringQueue(params: {
   threadId: string;
   turnId: string;
   requestTimeoutMs: number;
-  claimPendingUserInput: () =>
-    | {
-        answer: (text: string) => boolean;
-        cancel: () => boolean;
-      }
-    | undefined;
   signal: AbortSignal;
 }) {
   type PendingSteerMessage = {
@@ -271,25 +268,6 @@ export function createCodexSteeringQueue(params: {
       if (unavailableError) {
         options?.onQueueAccepted?.(false);
         throw unavailableError;
-      }
-      // Only operator ingress can answer a pending prompt; internal steering stays transcript input.
-      const pendingUserInput =
-        options?.isInboundUserMessage === true ? params.claimPendingUserInput() : undefined;
-      if (pendingUserInput) {
-        if (!options?.images?.length) {
-          const answered = pendingUserInput.answer(text);
-          options?.onQueueAccepted?.(answered);
-          if (!answered) {
-            throw new Error("codex pending user input rejected the answer");
-          }
-          return;
-        }
-        // request_user_input cannot carry images. Submit the complete message
-        // before releasing the prompt so no partial text answer can win the race.
-        void flushBatch().catch(() => undefined);
-        const { item, delivery } = createPendingMessage(text, options);
-        await Promise.all([enqueueSend([item]).finally(() => pendingUserInput.cancel()), delivery]);
-        return;
       }
       const { item, delivery } = createPendingMessage(text, options);
       batchedMessages.push(item);

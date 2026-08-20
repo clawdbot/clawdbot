@@ -27,7 +27,7 @@ function makeAttempt(
   };
 }
 
-function makeCliUsageAssistant(stopReason: "error" | "stop", text = "legacy reply") {
+function makeCliUsageAssistant(stopReason: "aborted" | "error" | "stop", text = "legacy reply") {
   return {
     role: "assistant",
     api: "cli",
@@ -252,6 +252,30 @@ describe("normalizeEmbeddedRunAttempt", () => {
       throw new Error(`expected clean attempt to proceed, got ${clean.action}`);
     }
     expect(clean.replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
+  });
+
+  it("writes canonical assistant abort lifecycle metadata", async () => {
+    const state = makePromptState();
+    const assistant = makeCliUsageAssistant("aborted", "");
+    const setTerminalLifecycleMeta = vi.fn();
+    const attempt = makeAttempt();
+    attempt.lastAssistant = assistant as never;
+    attempt.currentAttemptAssistant = assistant as never;
+    attempt.setTerminalLifecycleMeta = setTerminalLifecycleMeta;
+
+    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
+
+    expect(result.action).toBe("proceed");
+    if (result.action !== "proceed") {
+      throw new Error(`expected proceed, got ${result.action}`);
+    }
+    result.setTerminalLifecycleMeta({ replayInvalid: false, livenessState: "blocked" });
+    expect(setTerminalLifecycleMeta).toHaveBeenCalledWith({
+      replayInvalid: false,
+      livenessState: "blocked",
+      stopReason: "aborted",
+      aborted: true,
+    });
   });
 
   it("does not promote historical CLI usage without context provenance", async () => {

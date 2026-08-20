@@ -18,7 +18,10 @@ export { registerProviders, requireProvider };
 /** Creates a minimal plugin registry fixture with quiet logger defaults. */
 export function createPluginRegistryFixture(
   config = {} as OpenClawConfig,
-  params: { hostServices?: PluginRegistryParams["hostServices"] } = {},
+  params: {
+    allowProcessHomeSessionCatalogs?: boolean;
+    hostServices?: PluginRegistryParams["hostServices"];
+  } = {},
 ) {
   return {
     config,
@@ -30,6 +33,7 @@ export function createPluginRegistryFixture(
         debug() {},
       },
       runtime: {} as PluginRuntime,
+      allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs ?? true,
       ...(params.hostServices ? { hostServices: params.hostServices } : {}),
     }),
   };

@@ -3,10 +3,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
@@ -204,6 +206,48 @@ describe("gateway restart handoff", () => {
     closeOpenClawStateDatabaseForTest();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  it("does not create shared state when no restart handoff database exists", () => {
+    const env = createHandoffEnv();
+    const databasePath = path.join(env.OPENCLAW_STATE_DIR ?? "", "state", "openclaw.sqlite");
+
+    expect(readGatewayRestartHandoffSync(env)).toBeNull();
+    expect(fs.existsSync(databasePath)).toBe(false);
+  });
+
+  it("reads a restart handoff without advancing an older shared schema", () => {
+    const env = createHandoffEnv();
+    const handoff = expectWrittenHandoff({
+      env,
+      pid: 12_345,
+      restartKind: "full-process",
+      supervisorMode: "external",
+      createdAt: 1_000,
+    });
+    closeOpenClawStateDatabaseForTest();
+    const databasePath = path.join(env.OPENCLAW_STATE_DIR ?? "", "state", "openclaw.sqlite");
+    const olderVersion = OPENCLAW_STATE_SCHEMA_VERSION - 1;
+    const writable = new DatabaseSync(databasePath);
+    writable.exec(`
+      PRAGMA user_version = ${olderVersion};
+      UPDATE schema_meta SET schema_version = ${olderVersion} WHERE meta_key = 'primary';
+    `);
+    writable.close();
+
+    expect(readGatewayRestartHandoffSync(env, 1_500)).toStrictEqual(handoff);
+
+    const readOnly = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(readOnly.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: olderVersion,
+      });
+      expect(
+        readOnly.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: olderVersion });
+    } finally {
+      readOnly.close();
     }
   });
 

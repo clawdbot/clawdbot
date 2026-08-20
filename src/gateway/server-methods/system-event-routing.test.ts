@@ -107,6 +107,44 @@ describe("system-event routing", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("keeps ambient explicit-owner events on the global session queue", async () => {
+    const respond = vi.fn();
+    const request = {
+      params: { text: "Wake the system owner.", wake: true },
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        incrementPresenceVersion: vi.fn(() => 1),
+        getHealthVersion: vi.fn(() => 1),
+        getRuntimeConfig: vi.fn(() => ({
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, molty: {} },
+          },
+        })),
+      },
+    } as unknown as GatewayRequestHandlerOptions;
+
+    await expectDefined(
+      systemHandlers["system-event"],
+      'systemHandlers["system-event"] test invariant',
+    )(request);
+
+    expect(peekSystemEvents("global")).toEqual(["Wake the system owner."]);
+    expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      agentId: "main",
+      sessionKey: "global",
+      heartbeat: { target: "last" },
+    });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
   it("rejects immediate wakes for unconfigured agents", async () => {
     const respond = vi.fn();
     const request = {

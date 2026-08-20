@@ -106,7 +106,6 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
       claimWorktreeRemoval(env, {
         worktreeId: staleRecord.id,
         token: "late-remover",
-        force: false,
       });
     } catch (error) {
       contention = error;

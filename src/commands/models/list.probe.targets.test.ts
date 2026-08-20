@@ -24,6 +24,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 vi.mock("../../agents/model-auth.js", () => ({
+  hasSyntheticLocalProviderAuthConfig: () => false,
   hasUsableCustomProviderApiKey: (cfg: OpenClawConfig, provider: string) => {
     const raw = cfg.models?.providers?.[provider]?.apiKey;
     return typeof raw === "string" && raw.trim().length > 0 && raw !== "ollama-local";

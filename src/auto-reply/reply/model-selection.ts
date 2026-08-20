@@ -2,8 +2,6 @@
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
-  resolveAgentDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -39,20 +37,19 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import * as storedModelOverrides from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.shared.js";
+import { normalizeRuntimeRef, resolveRuntimeNormalization } from "./model-runtime-normalization.js";
+import {
+  isStaleHeartbeatAutoFallbackOverride,
+  normalizeStoredRuntimeModelRef,
+} from "./stored-model-override.js";
 export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
 export { resolveContextTokens } from "./model-selection-context.js";
-import { normalizeRuntimeRef, resolveRuntimeNormalization } from "./model-runtime-normalization.js";
-import {
-  isStaleHeartbeatAutoFallbackOverride,
-  normalizeStoredRuntimeModelRef,
-  resolveDirectStoredModelOverride,
-  resolveStoredModelOverride,
-} from "./stored-model-override.js";
 
 type ModelCatalog = ModelCatalogEntry[];
 
@@ -191,17 +188,14 @@ export async function createModelSelectionState(params: {
     defaultProvider,
     defaultModel,
   } = params;
-  const catalogAgentId = params.agentId ?? resolveDefaultAgentId(cfg);
-  const catalogScope = {
-    config: cfg,
-    agentId: catalogAgentId,
-    agentDir: resolveAgentDir(cfg, catalogAgentId),
-  };
   const loadRuntimeCatalogSnapshot = async (): Promise<ModelCatalogSnapshot> =>
     params.preparedModelCatalog ??
     (await (
       await loadPreparedModelCatalogRuntime()
-    ).loadPreparedModelCatalogSnapshot(catalogScope));
+    ).loadPreparedModelCatalogSnapshot({
+      config: cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    }));
   const runtimeModelNormalization = resolveRuntimeNormalization(cfg);
   const { manifestPlugins } = runtimeModelNormalization;
 
@@ -244,7 +238,7 @@ export async function createModelSelectionState(params: {
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
   let resetModelOverrideReason: "disallowed" | "stale" | "temporarily-unavailable" | undefined;
-  const directStoredModelOverride = resolveDirectStoredModelOverride({
+  const directStoredModelOverride = storedModelOverrides.resolveDirectStoredModelOverride({
     sessionEntry,
     defaultProvider,
   });
@@ -424,7 +418,7 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  const storedOverride = resolveStoredModelOverride({
+  const storedOverride = storedModelOverrides.resolveStoredModelOverride({
     sessionEntry,
     sessionStore,
     sessionKey,

@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AUDIT_ACTIVITY_DIRECTIONS,
+  AUDIT_ACTIVITY_KINDS,
+  AUDIT_ACTIVITY_STATUSES,
+} from "../../packages/gateway-protocol/src/schema/audit-activity.js";
+import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { auditListCommand } from "./audit.js";
 
@@ -44,6 +50,8 @@ describe("audit command parsing", () => {
     callGateway.mockReset();
     callGateway.mockResolvedValue({ events: [] });
     vi.mocked(runtime.log).mockClear();
+    vi.mocked(runtime.error).mockClear();
+    vi.mocked(runtime.exit).mockClear();
   });
 
   it("converts ISO and millisecond timestamps before querying the Gateway", async () => {
@@ -107,11 +115,61 @@ describe("audit command parsing", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("rejects unknown event kinds before querying the Gateway", async () => {
-    await expect(
-      auditListCommand({ kind: "bogus" as never, limit: "10" }, runtime),
-    ).rejects.toThrow("--kind must be agent_run, tool_action, or message");
+  it.each([
+    {
+      options: { kind: "bogus" as never },
+      message: "--kind must be agent_run, tool_action, or message.",
+    },
+    {
+      options: { status: "bogus" as never },
+      message:
+        "--status must be started, succeeded, failed, cancelled, timed_out, blocked, or unknown.",
+    },
+    {
+      options: { direction: "sideways" as never },
+      message: "--direction must be inbound or outbound.",
+    },
+    {
+      options: { kind: "agent_run" as const, direction: "inbound" as const },
+      message: "--direction only applies to --kind message.",
+    },
+    {
+      options: { kind: "agent_run" as const, channel: "telegram" },
+      message: "--channel only applies to --kind message.",
+    },
+    {
+      options: { kind: "message" as const, sessionKey: "agent:main:main" },
+      message: "--session only applies to --kind agent_run or tool_action.",
+    },
+    {
+      options: { sessionKey: "agent:main:main", direction: "inbound" as const },
+      message: "--direction cannot be combined with --session.",
+    },
+    {
+      options: { sessionKey: "agent:main:main", channel: "telegram" },
+      message: "--channel cannot be combined with --session.",
+    },
+  ])("rejects invalid audit filters before querying the Gateway", async ({ options, message }) => {
+    await runCommandWithRuntime(runtime, () =>
+      auditListCommand({ ...options, limit: "10" }, runtime),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["kind", AUDIT_ACTIVITY_KINDS],
+    ["status", AUDIT_ACTIVITY_STATUSES],
+    ["direction", AUDIT_ACTIVITY_DIRECTIONS],
+  ] as const)("forwards every canonical %s value unchanged", async (filter, values) => {
+    for (const value of values) {
+      await auditListCommand({ [filter]: value }, runtime);
+      expect(callGateway).toHaveBeenLastCalledWith({
+        method: "audit.activity.list",
+        params: { limit: 100, [filter]: value },
+      });
+    }
   });
 
   it("renders activity safely without inventing message provenance", async () => {
@@ -164,22 +222,26 @@ describe("audit command gateway compatibility", () => {
   beforeEach(() => {
     callGateway.mockReset();
     callGateway.mockResolvedValue({ events: [] });
+    vi.mocked(runtime.error).mockClear();
+    vi.mocked(runtime.exit).mockClear();
   });
 
-  it("forwards all filters to audit.activity.list", async () => {
-    await auditListCommand(
-      {
-        agentId: "main",
-        kind: "message",
-        status: "failed",
-        direction: "outbound",
-        channel: "telegram",
-        after: "100",
-        before: "200",
-        cursor: "42",
-        limit: "25",
-      },
-      runtime,
+  it("forwards valid filters unchanged and keeps an empty page successful", async () => {
+    await runCommandWithRuntime(runtime, () =>
+      auditListCommand(
+        {
+          agentId: "main",
+          kind: "message",
+          status: "failed",
+          direction: "inbound",
+          channel: "telegram",
+          after: "100",
+          before: "200",
+          cursor: "42",
+          limit: "25",
+        },
+        runtime,
+      ),
     );
 
     expect(callGateway).toHaveBeenCalledTimes(1);
@@ -190,13 +252,15 @@ describe("audit command gateway compatibility", () => {
         agentId: "main",
         kind: "message",
         status: "failed",
-        direction: "outbound",
+        direction: "inbound",
         channel: "telegram",
         after: 100,
         before: 200,
         cursor: "42",
       },
     });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("falls back to audit.list only with legacy-compatible filters", async () => {
@@ -278,15 +342,40 @@ describe("audit command gateway compatibility", () => {
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fall back for other request errors", async () => {
+  it("renders other request errors without the Gateway error class name", async () => {
     const error = Object.assign(new Error("invalid audit activity params"), {
       name: "GatewayClientRequestError",
       gatewayCode: "INVALID_REQUEST",
     });
     callGateway.mockRejectedValueOnce(error);
 
-    await expect(auditListCommand({ limit: "10" }, runtime)).rejects.toBe(error);
+    await runCommandWithRuntime(runtime, () => auditListCommand({ limit: "10" }, runtime));
+
+    expect(runtime.error).toHaveBeenCalledWith("invalid audit activity params");
+    expect(String(vi.mocked(runtime.error).mock.calls[0]?.[0])).not.toContain(
+      "GatewayClientRequestError",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns an opaque cursor rejection into an operator recovery step", async () => {
+    callGateway.mockRejectedValueOnce(
+      Object.assign(new Error("invalid audit.activity.list range or cursor"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      }),
+    );
+
+    await runCommandWithRuntime(runtime, () => auditListCommand({ cursor: "abc" }, runtime));
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--cursor must be a continuation token returned by a previous audit result.",
+    );
+    expect(String(vi.mocked(runtime.error).mock.calls[0]?.[0])).not.toContain(
+      "audit.activity.list",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });
 
@@ -392,6 +481,18 @@ describe("audit run explanation", () => {
               strength: "boundary-verified",
             },
           ],
+          lineage: {
+            parentContextId: "parent-context",
+            parentExecutionId: "parent-execution",
+            parentRunId: "parent-run",
+            parentAgentPrincipal: {
+              kind: "agent",
+              domainRef: hmacRef,
+              principalRef: "parent-agent",
+            },
+            delegationRef: hmacRef,
+            depth: 2,
+          },
           coverageState: "unattributed",
           missingEvidence: ["invoker.principal"],
         },
@@ -502,7 +603,12 @@ describe("audit run explanation", () => {
       "Sponsor [absent]",
       "Applicable grants [absent]",
       "Assurance [present]",
-      "Parent [absent]",
+      "Parent context [present]",
+      "Parent execution [present]",
+      "Parent run [present]",
+      "Parent agent [present]",
+      "Delegation [present]",
+      "Depth [present]",
     ]) {
       expect(output).toContain(label);
     }

@@ -118,6 +118,7 @@ function createTurn(
 
 function createRejectedExecution(order: string[] = []): FollowupExecutionResult {
   return {
+    commentaryPayloadsEnabled: false,
     execution: {
       runId: "run-1",
       outcome: { kind: "rejected", payload: { text: "failed" } },
@@ -221,23 +222,30 @@ describe("createFollowupRunner", () => {
     expect(turn.operation.fail).not.toHaveBeenCalled();
   });
 
-  it("consumes a turn that fails after canonical execution starts", async () => {
+  it("does not replay a returned execution when terminal delivery fails", async () => {
     const typing = createTypingController();
     const turn = createTurn();
+    const execution = createRejectedExecution();
+    const failure = new Error("terminal delivery failed");
     state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockImplementation(async ({ onExecutionStarted }) => {
-      onExecutionStarted?.();
-      throw new Error("execution failed after start");
+    state.execute.mockResolvedValue(execution);
+    state.account.mockResolvedValue(undefined);
+    state.resolveDecision.mockReturnValue({
+      kind: "deliver",
+      payloads: [{ text: "terminal failure", isError: true }],
     });
+    state.deliver.mockRejectedValue(failure);
 
     await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
       turn.queued,
     );
 
     expect(state.execute).toHaveBeenCalledOnce();
+    expect(state.account).toHaveBeenCalledOnce();
+    expect(state.deliver).toHaveBeenCalledOnce();
     expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
-    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
+    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
   });
 
   it("holds the reply operation through progress drain, accounting, and delivery", async () => {
@@ -282,6 +290,34 @@ describe("createFollowupRunner", () => {
     ]);
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
   });
+
+  it.each([true, false])(
+    "projects queued commentary with the refreshed durable owner when enabled is %s",
+    async (commentaryPayloadsEnabled) => {
+      const typing = createTypingController();
+      const turn = createTurn();
+      const execution = Object.assign(createRejectedExecution(), {
+        commentaryPayloadsEnabled,
+      });
+      state.admit.mockResolvedValue({ kind: "admitted", turn });
+      state.execute.mockResolvedValue(execution);
+      state.account.mockResolvedValue(undefined);
+      state.deliver.mockResolvedValue(undefined);
+
+      await createFollowupRunner({
+        typing,
+        typingMode: "instant",
+        defaultModel: "claude",
+        opts: { commentaryPayloadsEnabled: !commentaryPayloadsEnabled },
+      })(turn.queued);
+
+      expect(state.resolveDecision).toHaveBeenCalledWith(
+        expect.objectContaining({
+          opts: expect.objectContaining({ commentaryPayloadsEnabled }),
+        }),
+      );
+    },
+  );
 
   it("does not replay a settled turn when progress presentation fails", async () => {
     const typing = createTypingController();

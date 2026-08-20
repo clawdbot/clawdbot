@@ -20,6 +20,7 @@ beforeEach(() => {
 describe("strict explicit session resolution", () => {
   it("resolves current to the requester before any ownership lookup", async () => {
     const result = await resolveSessionReference({
+      action: "status",
       sessionKey: "current",
       keyAgentId: "ops",
       alias: "main",
@@ -34,6 +35,7 @@ describe("strict explicit session resolution", () => {
       key: "agent:research:subagent:child",
       displayKey: "agent:research:subagent:child",
       resolvedViaSessionId: false,
+      requesterOwned: true,
     });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
@@ -41,6 +43,7 @@ describe("strict explicit session resolution", () => {
   it("still rejects an unknown non-alias explicit key", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("No session found: agent:main:missing"));
     const resolvedSession = await resolveSessionReference({
+      action: "history",
       sessionKey: "agent:main:missing",
       keyAgentId: "main",
       alias: "main",
@@ -79,6 +82,7 @@ describe("strict explicit session resolution", () => {
   it("carries an allowed missing fact only for deliberate main bootstrap", async () => {
     callGatewayMock.mockResolvedValueOnce({});
     const resolvedSession = await resolveSessionReference({
+      action: "send",
       sessionKey: "agent:main:main",
       keyAgentId: "main",
       alias: "main",
@@ -106,6 +110,7 @@ describe("strict explicit session resolution", () => {
       key: "agent:main:main",
       displayKey: "agent:main:main",
       missing: true,
+      requesterOwned: false,
     });
   });
 });

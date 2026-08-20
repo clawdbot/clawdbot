@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
+  isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 
@@ -41,6 +42,27 @@ describe("isControlUiApprovalDocumentPath", () => {
     { basePath: "/openclaw", pathname: "/approve/id" },
   ])("does not reserve $pathname", ({ basePath, pathname }) => {
     expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(false);
+  });
+});
+
+describe("isControlUiFocusDocumentPath", () => {
+  it.each([
+    { basePath: "", pathname: "/focus" },
+    { basePath: "", pathname: "/focus/" },
+    { basePath: "", pathname: "/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb" },
+    { basePath: "", pathname: "/focus/not-supported" },
+    { basePath: "/openclaw", pathname: "/openclaw/focus/desktop/control" },
+  ])("classifies $pathname", ({ basePath, pathname }) => {
+    expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(true);
+  });
+
+  it.each([
+    { basePath: "", pathname: "/focused" },
+    { basePath: "", pathname: "/focused/terminal" },
+    { basePath: "/openclaw", pathname: "/focus/terminal" },
+    { basePath: "/openclaw", pathname: "/openclaw/focused" },
+  ])("does not classify $pathname", ({ basePath, pathname }) => {
+    expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(false);
   });
 });
 
@@ -330,6 +352,24 @@ describe("classifyControlUiRequest", () => {
       {
         name: "preserves SPA routes that only resemble worker admission",
         pathname: "/__openclaw__/workers",
+        method: "GET",
+        expected: { kind: "serve" as const, spaFallback: true },
+      },
+      {
+        name: "keeps node workspace transfers outside the SPA catch-all",
+        pathname: "/__openclaw__/worker-transfer/v1/environments/worker%3A1/blobs/abc",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps malformed node workspace transfer descendants outside the SPA catch-all",
+        pathname: "/__openclaw__/worker-transfer/other",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "preserves SPA routes that only resemble node workspace transfers",
+        pathname: "/__openclaw__/worker-transfers",
         method: "GET",
         expected: { kind: "serve" as const, spaFallback: true },
       },

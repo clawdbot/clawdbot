@@ -22,7 +22,6 @@ import {
   markAuthProfileSuccess,
   promoteAuthProfileInOrder,
   removeAuthProfilesAcrossOwnerStores,
-  removeAuthProfilesWithLock,
   removeProviderAuthProfilesWithLock,
   setAuthProfileOrder,
   upsertAuthProfileWithLock,
@@ -33,6 +32,7 @@ import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreStateMutationToken,
+  listRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
@@ -598,6 +598,33 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
+  it("does not persist built-in CLI ownership metadata", async () => {
+    await withAuthProfileTestState("openclaw-auth-cli-provenance-", async ({ agentDir }) => {
+      const profileId = "openai:default";
+      const runtimeStore: RuntimeAuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai",
+            access: "external-access",
+            refresh: "external-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+        runtimeExternalProfileIds: [profileId],
+        runtimeExternalCliProfileIds: [profileId],
+      };
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: runtimeStore }]);
+
+      saveAuthProfileStore(runtimeStore, agentDir);
+
+      const persisted = loadPersistedAuthProfileStore(agentDir);
+      expect(persisted).not.toHaveProperty("runtimeExternalCliProfileIds");
+      expect(persisted?.profiles[profileId]).toBeUndefined();
+    });
+  });
+
   it.each(["before save", "before publication"] as const)(
     "preserves a runtime-only OAuth mutation %s",
     async (mutationTiming) => {
@@ -796,6 +823,69 @@ describe("promoteAuthProfileInOrder", () => {
         ).toBeUndefined();
       },
       { clearOAuthDir: true },
+    );
+  });
+
+  it("restores an exactly owned derived snapshot under its custom database key", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-custom-key-rollback-",
+      async ({ agentDirFor }) => {
+        const derivedAgentDir = agentDirFor("custom-key");
+        const databasePath = path.join(derivedAgentDir, "custom.sqlite");
+        saveAuthProfileStore({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:baseline": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-baseline",
+            },
+          },
+        });
+        const capturedRuntime = loadAuthProfileStoreForRuntime(derivedAgentDir);
+        replaceRuntimeAuthProfileStoreSnapshots([
+          { databasePath, agentDir: derivedAgentDir, store: capturedRuntime },
+        ]);
+        const snapshot = captureAuthProfileStorePersistenceSnapshot();
+        const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+          snapshot,
+          store: {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:temporary": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-temporary",
+              },
+            },
+          },
+        });
+
+        expect(committed.publishRuntimeSnapshots()).toBe(true);
+        expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+          expect.objectContaining({
+            databasePath,
+            store: expect.objectContaining({
+              profiles: expect.objectContaining({
+                "openai:temporary": expect.objectContaining({ key: "sk-temporary" }),
+              }),
+            }),
+          }),
+        ]);
+
+        restoreAuthProfileStorePersistenceSnapshot(snapshot, committed.owned);
+
+        expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+          expect.objectContaining({
+            databasePath,
+            store: expect.objectContaining({
+              profiles: expect.objectContaining({
+                "openai:baseline": expect.objectContaining({ key: "sk-baseline" }),
+              }),
+            }),
+          }),
+        ]);
+      },
     );
   });
 
@@ -1301,7 +1391,41 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
-  it("removes selected profiles while preserving unrelated provider credentials", async () => {
+  it("clears WHAM cooldown classification after a successful profile use", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-success-classification-",
+      async ({ agentDir }) => {
+        fs.mkdirSync(agentDir, { recursive: true });
+        const profileId = "openai:default";
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              [profileId]: { type: "api_key", provider: "openai", key: "sk-test" },
+            },
+            usageStats: {
+              [profileId]: {
+                cooldownUntil: Date.now() + 60_000,
+                cooldownReason: "auth",
+                cooldownClassification: "wham_token_expired",
+              },
+            },
+          },
+          agentDir,
+        );
+        const store = loadAuthProfileStoreForRuntime(agentDir);
+
+        await markAuthProfileSuccess({ store, provider: "openai", profileId, agentDir });
+
+        expect(store.usageStats?.[profileId]?.cooldownClassification).toBeUndefined();
+        expect(loadPersistedAuthProfileStore(agentDir)?.usageStats?.[profileId]).not.toHaveProperty(
+          "cooldownClassification",
+        );
+      },
+    );
+  });
+
+  it("narrows provider removal to selected profiles", async () => {
     await withAuthProfileTestState("openclaw-auth-remove-selected-", async ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });
       saveAuthProfileStore(
@@ -1331,8 +1455,9 @@ describe("promoteAuthProfileInOrder", () => {
         agentDir,
       );
 
-      await removeAuthProfilesWithLock({
+      await removeProviderAuthProfilesWithLock({
         agentDir,
+        provider: "openrouter",
         profileIds: ["openrouter:oauth"],
       });
 

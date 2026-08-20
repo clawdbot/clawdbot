@@ -7,10 +7,10 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitAgentEvent,
@@ -22,8 +22,8 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
+import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import {
   createChatAbortMarker,
@@ -49,6 +49,8 @@ export type ChatAbortControllerEntry = {
   agentRunDelegatedAuthority?: AgentRunDelegatedAuthority;
   agentId?: string;
   startedAtMs: number;
+  /** False until lane admission reaches the execution boundary. */
+  executionStarted?: boolean;
   expiresAtMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
@@ -113,7 +115,7 @@ type RegisteredChatAbortController = {
   controller: AbortController;
   registered: boolean;
   entry?: ChatAbortControllerEntry;
-  markExecutionStarted: () => void;
+  markExecutionStarted: () => boolean;
   bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
   cleanup: (opts?: { force?: boolean }) => void;
 };
@@ -217,21 +219,26 @@ export function registerChatAbortController(params: {
   let executionStarted = false;
   const markExecutionStarted = () => {
     if (executionStarted) {
-      return;
+      return false;
     }
     const entry = params.chatAbortControllers.get(params.runId);
-    if (entry?.controller !== controller || controller.signal.aborted || entry.kind !== "agent") {
-      return;
+    if (entry?.controller !== controller || controller.signal.aborted) {
+      return false;
+    }
+    executionStarted = true;
+    entry.executionStarted = true;
+    if (entry.kind !== "agent") {
+      return true;
     }
     const now = Date.now();
-    executionStarted = true;
     if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
-      return;
+      return true;
     }
     entry.expiresAtMs = resolveAgentRunExpiresAtMs({
       now,
       timeoutMs: params.timeoutMs,
     });
+    return true;
   };
   const cleanup = (opts?: { force?: boolean }) => {
     const entry = params.chatAbortControllers.get(params.runId);
@@ -294,6 +301,7 @@ export function registerChatAbortController(params: {
     operationalRunInstance: params.operationalRunInstance,
     agentId: normalizeActiveAgentId(params.agentId),
     startedAtMs: now,
+    executionStarted: false,
     expiresAtMs:
       explicitExpiresAtMs ??
       resolveChatRunExpiresAtMs({ now: rawNow, timeoutMs: params.timeoutMs }),
@@ -724,18 +732,24 @@ export function abortChatRunsForProvider(
 ): { runIds: string[] } {
   const providerId = normalizeProviderIdForActiveRun(params.providerId);
   const agentId = normalizeActiveAgentId(params.agentId);
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   if (!providerId) {
     return { runIds: [] };
   }
+  const compatibilityOwnerAgentId = agentId && tryResolveLegacyCompatibilityAgentId(params.cfg);
   const matches = [...ops.chatAbortControllers.entries()].filter(([, entry]) => {
-    const entryAgentId = normalizeActiveAgentId(
-      entry.agentId ?? parseAgentSessionKey(entry.sessionKey)?.agentId ?? defaultAgentId,
-    );
+    if (
+      normalizeProviderIdForActiveRun(entry.authProviderId) !== providerId &&
+      normalizeProviderIdForActiveRun(entry.providerId) !== providerId
+    ) {
+      return false;
+    }
     return (
-      (!agentId || entryAgentId === agentId) &&
-      (normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
-        normalizeProviderIdForActiveRun(entry.providerId) === providerId)
+      !agentId ||
+      resolveChatRunOwnerAgentId({
+        agentId: entry.agentId,
+        sessionKey: entry.sessionKey,
+        defaultAgentId: compatibilityOwnerAgentId,
+      }) === agentId
     );
   });
   const runIds: string[] = [];

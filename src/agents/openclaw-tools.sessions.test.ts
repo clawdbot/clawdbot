@@ -1086,6 +1086,22 @@ describe("sessions tools", () => {
     expect(Value.Check(tool.outputSchema!, waited.details)).toBe(true);
     expect(
       Value.Check(tool.outputSchema!, {
+        runId: "run-no-reply",
+        status: "no_reply",
+        sessionKey: "agent:main:other",
+        message: "Target session completed without a visible reply.",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(tool.outputSchema!, {
+        runId: "run-invalid-ok",
+        status: "ok",
+        sessionKey: "agent:main:other",
+        delivery: { status: "pending", mode: "announce" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(tool.outputSchema!, {
         runId: "run-error",
         status: "forbidden",
         error: "hidden",
@@ -1099,9 +1115,7 @@ describe("sessions tools", () => {
         extra: true,
       }),
     ).toBe(false);
-    expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ error: string; runId: string; status: "error" | "forbidden"; sentBeforeError?: true; sessionKey?: string; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; runId: string; sessionKey: string; status: "accepted"; watched?: boolean } | { error: string; runId: string; sentBeforeError: true; sessionKey: string; status: "timeout"; delivery?: { mode: "announce"; status: "pending" | "skipped" }; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; runId: string; sessionKey: string; status: "ok"; reply?: string; watched?: boolean }',
-    );
+    expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
     await waitForCalls(() => agentCallCount, 6);
     await waitForCalls(() => waitCallCount, 6);
     await waitForCalls(() => historyCallCount, 7);
@@ -1205,11 +1219,7 @@ describe("sessions tools", () => {
         delivery: { status: "skipped", mode: "announce" },
         watched: false,
       });
-      expect(calls.map((call) => call.method)).toEqual([
-        "sessions.resolve",
-        "sessions.list",
-        "agent",
-      ]);
+      expect(calls.map((call) => call.method)).toEqual(["agent"]);
     } finally {
       unregister();
       fs.rmSync(tmpDir, { recursive: true, force: true });

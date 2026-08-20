@@ -3,7 +3,11 @@ import crypto from "node:crypto";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import {
+  rawDataToString,
+  readRequestBodyWithLimit,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { isLoopbackHost } from "../../gateway/net.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -157,14 +161,15 @@ function rejectHttp(res: ServerResponse, status: number, message: string): void 
 }
 
 async function readAuthBody(req: IncomingMessage): Promise<string | null> {
-  let body = "";
-  for await (const chunk of req) {
-    body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-    if (Buffer.byteLength(body) > MAX_AUTH_BODY_BYTES) {
-      return null;
-    }
+  try {
+    return await readRequestBodyWithLimit(req, {
+      ...WEBHOOK_BODY_READ_DEFAULTS.preAuth,
+      maxBytes: MAX_AUTH_BODY_BYTES,
+      destroyOnLimit: false,
+    });
+  } catch {
+    return null;
   }
-  return body;
 }
 
 function bindSocket(

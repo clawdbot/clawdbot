@@ -184,17 +184,16 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
 }
 
-/** Formats dead-lettered delivery queue entries for text health output. */
+/** Formats dead-lettered and pressured delivery queue entries for text health output. */
 export function formatDeliveryQueueHealthLine(
   summary: HealthSummary,
   now = Date.now(),
 ): string | null {
   const failed = summary.deliveryQueues?.failed ?? [];
   const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
-  if (failed.length === 0 && ingressFailed.length === 0) {
-    return null;
-  }
-  const counts = [
+  const ingressPressure = summary.deliveryQueues?.ingressPressure ?? [];
+  const warnings: string[] = [];
+  const deadLetterCounts = [
     ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
     ...ingressFailed.map(
       (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
@@ -205,7 +204,24 @@ export function formatDeliveryQueueHealthLine(
     .filter((value): value is number => typeof value === "number");
   const oldestNote =
     oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
-  return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
+  if (deadLetterCounts) {
+    warnings.push(`dead-lettered entries — ${deadLetterCounts}${oldestNote}`);
+  }
+  if (ingressPressure.length > 0) {
+    const pressureCounts = ingressPressure
+      .map(
+        (queue) =>
+          `inbound ${queue.channelId}/${queue.accountId}: ${queue.laneCount} pressured ${
+            queue.laneCount === 1 ? "lane" : "lanes"
+          }, ${queue.pendingCount} pending, ${queue.claimedCount} claimed, ${queue.blockedCount} blocked`,
+      )
+      .join(", ");
+    const oldestPressure = Math.min(...ingressPressure.map((queue) => queue.oldestReceivedAt));
+    warnings.push(
+      `ingress pressure — ${pressureCounts}; oldest ${formatDurationHuman(now - oldestPressure)} ago`,
+    );
+  }
+  return warnings.length > 0 ? `Delivery queue: warning (${warnings.join("; ")})` : null;
 }
 
 /** Formats config hot-reload watcher degradation for text health output. */
@@ -233,7 +249,7 @@ export async function healthCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const cfg = opts.config ?? (await readBestEffortHealthConfig());
+  const cfg = opts.config ?? (await readNonObservingHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
   let summary: HealthSummary;
   try {
@@ -251,6 +267,7 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          sharedStateMode: "read-only",
           ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
         }),
@@ -284,9 +301,6 @@ export async function healthCommand(
     }
     throw error;
   }
-  // Gateway reachability defines success; channel issues are reported but not fatal here.
-  const fatal = false;
-
   if (opts.json) {
     writeRuntimeJson(runtime, summary);
   } else {
@@ -324,9 +338,10 @@ export async function healthCommand(
               } satisfies AgentHealthSummary;
             }),
           );
-    const displayAgents = opts.verbose
-      ? resolvedAgents
-      : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
+    const displayAgents =
+      opts.verbose || !defaultAgentId
+        ? resolvedAgents
+        : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,
@@ -546,13 +561,13 @@ export async function healthCommand(
       }
     }
   }
-
-  if (fatal) {
-    runtime.exit(1);
-  }
 }
 
-async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
-  const { readBestEffortConfig } = await loadConfigRuntime();
-  return await readBestEffortConfig();
+export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
+  const { readConfigFileSnapshot } = await loadConfigRuntime();
+  const snapshot = await readConfigFileSnapshot({
+    observe: false,
+    pluginValidation: "core-only",
+  });
+  return snapshot.runtimeConfig ?? snapshot.config;
 }

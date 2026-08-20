@@ -170,8 +170,8 @@ function finishedPollResult(
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
   acknowledgeNotifyOnExit(finished);
-  const { stdout, stderr, outputDropped } = drainFinishedSession(finished);
-  const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+  const { output: unreadOutput, outputDropped } = drainFinishedSession(finished);
+  const output = unreadOutput.trim();
   // Omitted retained output is pageable only while this public id still owns
   // the exact snapshot; a reused slug must never point the model at successor logs.
   const retainedOutputNote = outputDropped
@@ -461,8 +461,8 @@ export function createProcessTool(
             resetPollRetrySuggestion(params.sessionId);
             return failText(`No session found for ${params.sessionId}`);
           }
-          const { stdout, stderr, outputDropped } = drainSession(scopedSession);
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const { output: unreadOutput, outputDropped } = drainSession(scopedSession);
+          const output = unreadOutput.trim();
           const aggregateOutputNote = retentionCapNote(scopedSession);
           const retainedOutputNote = outputDropped
             ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"
@@ -665,6 +665,8 @@ export function createProcessTool(
             );
           }
           resetPollRetrySuggestion(params.sessionId);
+          // The kill was performed; "failed" here would flag a successful
+          // action as a tool error and invite the model to retry it.
           return {
             content: [
               {
@@ -673,7 +675,7 @@ export function createProcessTool(
               },
             ],
             details: {
-              status: "failed",
+              status: "completed",
               name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
             },
           };
@@ -716,6 +718,8 @@ export function createProcessTool(
             scopedSession.backgrounded = false;
             deleteSession(params.sessionId);
             resetPollRetrySuggestion(params.sessionId);
+            // Removal succeeded (termination requested + registry row dropped);
+            // match the finished-session remove branch's success shape.
             return {
               content: [
                 {
@@ -724,7 +728,7 @@ export function createProcessTool(
                 },
               ],
               details: {
-                status: "failed",
+                status: "completed",
                 name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
               },
             };

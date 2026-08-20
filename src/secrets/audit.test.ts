@@ -2,14 +2,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  noteCommittedSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
 import {
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { runSecretsAudit } from "./audit.js";
 import { writeSecretStoreEntry } from "./store/secret-store.js";
 
@@ -268,6 +275,7 @@ describe("secrets audit", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
@@ -700,6 +708,63 @@ describe("secrets audit", () => {
       .filter((entry) => entry.code === "PLAINTEXT_FOUND" && entry.file === fixture.authStorePath)
       .map((entry) => entry.jsonPath);
     expect(authPlaintextPaths).toEqual(["profiles.openai:plaintext-with-ref.key"]);
+  });
+
+  it("reads a relocated shared store from the explicitly routed state root", async () => {
+    const ambientStateDir = path.join(fixture.rootDir, "ambient-state");
+    const ambientAgentDir = path.join(ambientStateDir, "agents", "main", "agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", ambientStateDir);
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openai:ambient": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-ambient-plaintext",
+          },
+        },
+      },
+      ambientAgentDir,
+    );
+    const stateDatabase = openOpenClawStateDatabase({ env: fixture.env }).db;
+    stateDatabase
+      .prepare(
+        `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+         VALUES ('auth.sharedStore', ?, 1)`,
+      )
+      .run(JSON.stringify({ location: "state-db" }));
+    stateDatabase
+      .prepare(
+        "INSERT INTO auth_profile_stores (store_key, store_json, updated_at) VALUES (?, ?, 1)",
+      )
+      .run(
+        "shared",
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:target": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-target-plaintext",
+            },
+          },
+        }),
+      );
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    const sharedFindings = report.findings
+      .filter(
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === resolveSharedAuthStorePath(fixture.env),
+      )
+      .map((entry) => entry.jsonPath);
+
+    expect(sharedFindings).toContain("profiles.openai:target.key");
+    expect(sharedFindings).not.toContain("profiles.openai:ambient.key");
+    expect(report.filesScanned).not.toContain(resolveAuthProfileDatabasePath(ambientAgentDir));
   });
 
   it("exempts direct routing headers but audits request headers in openclaw config", async () => {

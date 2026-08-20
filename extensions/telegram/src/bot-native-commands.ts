@@ -64,7 +64,13 @@ type RegisterTelegramNativeCommandsParams = {
   telegramDeps?: TelegramNativeCommandDeps;
   opts: Pick<
     TelegramBotOptions,
-    "token" | "botInfo" | "allowFrom" | "groupAllowFrom" | "replyToMode" | "accountAbortSignal"
+    | "token"
+    | "ownerAgentId"
+    | "botInfo"
+    | "allowFrom"
+    | "groupAllowFrom"
+    | "replyToMode"
+    | "accountAbortSignal"
   >;
 };
 
@@ -98,12 +104,19 @@ export const registerTelegramNativeCommands = ({
       : [];
   const pluginCommandRuntime = createPluginCommandRuntime();
   const pluginCommandSpecs = pluginCommandRuntime.listNativeCandidates("telegram");
+  // Telegram is the channel here: resolve native names from the loaded registry
+  // only. The bundled fallback would jiti-load this whole plugin from source in
+  // dev/test checkouts (minutes of transpile) to call a hook Telegram never defines.
   const nativeCommands = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "telegram" })
+    ? listNativeCommandSpecsForConfig(cfg, {
+        skillCommands,
+        provider: "telegram",
+        includeBundledChannelFallback: false,
+      })
     : [];
   const reservedCommands = new Set(
-    listNativeCommandSpecs({ provider: "telegram" }).map((command) =>
-      normalizeTelegramCommandName(command.name),
+    listNativeCommandSpecs({ provider: "telegram", includeBundledChannelFallback: false }).map(
+      (command) => normalizeTelegramCommandName(command.name),
     ),
   );
   for (const command of skillCommands) {
@@ -125,7 +138,10 @@ export const registerTelegramNativeCommands = ({
     runtime.error?.(danger(issue));
   }
   const firstSkillCommandIndex = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, { provider: "telegram" }).length
+    ? listNativeCommandSpecsForConfig(cfg, {
+        provider: "telegram",
+        includeBundledChannelFallback: false,
+      }).length
     : 0;
   const nativeMenuCommands = nativeCommands
     .map((command, index): TelegramMenuCommand | null => {
@@ -165,8 +181,13 @@ export const registerTelegramNativeCommands = ({
       "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
     );
   }
-  const loginCommand = listNativeCommandSpecsForConfig(cfg, { provider: "telegram" }).find(
-    (command) => findCommandByNativeName(command.name, "telegram")?.key === "login",
+  const loginCommand = listNativeCommandSpecsForConfig(cfg, {
+    provider: "telegram",
+    includeBundledChannelFallback: false,
+  }).find(
+    (command) =>
+      findCommandByNativeName(command.name, "telegram", { includeBundledChannelFallback: false })
+        ?.key === "login",
   );
   const nativeCommandsToHandle = nativeEnabled
     ? nativeCommands
@@ -258,7 +279,10 @@ export const registerTelegramNativeCommands = ({
         );
       });
     }
-    if (findCommandByNativeName(command.name, "telegram")?.key === "login") {
+    if (
+      findCommandByNativeName(command.name, "telegram", { includeBundledChannelFallback: false })
+        ?.key === "login"
+    ) {
       handleLoginCallback = handleNativeCommand;
     }
   }
@@ -294,7 +318,7 @@ export const registerTelegramNativeCommands = ({
       .split("@", 1)[0]
       ?.toLowerCase();
     const commandDefinition = commandName
-      ? findCommandByNativeName(commandName, "telegram")
+      ? findCommandByNativeName(commandName, "telegram", { includeBundledChannelFallback: false })
       : undefined;
     if (commandDefinition?.key !== "login") {
       return { handled: false, clearButtons: false };
