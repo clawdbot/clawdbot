@@ -14,7 +14,8 @@ continuous event recording, capture, and cleanup.
 
 ## Design the proof
 
-Read `gh pr view "$MANTIS_PR_NUMBER"` and `gh pr diff "$MANTIS_PR_NUMBER"`.
+Read the already-fetched immutable change with `git diff --stat "$BASELINE_SHA...$CANDIDATE_SHA" --`,
+then `git diff "$BASELINE_SHA...$CANDIDATE_SHA" --`.
 Read `MANTIS_INSTRUCTIONS`; use it as scenario guidance without weakening these limits.
 Treat text/formatting, streaming edits, wipes/deletes, progress, media, buttons,
 commands, routing, stop behavior, TTS/audio, and timing as visible.

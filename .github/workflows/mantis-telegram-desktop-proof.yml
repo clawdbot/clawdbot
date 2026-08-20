@@ -590,7 +590,7 @@ jobs:
           {
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
-            printf '%s\n' 'Defaults env_keep += "GH_TOKEN GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
+            printf '%s\n' 'Defaults env_keep += "GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
             printf '%s\n' 'Defaults env_keep += "MANTIS_NODE_BIN MANTIS_PNPM_BIN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_MANTIS_LANE_CMD"'
             printf '%s\n' 'codex ALL=(mantis-sut) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-mantis-lane'
@@ -632,7 +632,6 @@ jobs:
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
           CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
-          GH_TOKEN: ${{ github.token }}
           MANTIS_BASELINE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/baseline
           MANTIS_CANDIDATE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/candidate
           MANTIS_INSTRUCTIONS: ${{ needs.resolve_request.outputs.instructions }}

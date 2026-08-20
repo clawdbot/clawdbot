@@ -496,6 +496,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(agent.env?.OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD).toBeUndefined();
     expect(agent.env?.MANTIS_NODE_BIN).toBe("/usr/local/lib/mantis-toolchain/node");
     expect(agent.env?.MANTIS_PNPM_BIN).toBe("/usr/local/lib/mantis-toolchain/pnpm");
+    expect(agent.env?.GH_TOKEN).toBeUndefined();
     expect(agent.env?.CRABBOX_COORDINATOR).toBeUndefined();
     expect(agent.env?.CRABBOX_COORDINATOR_TOKEN).toBeUndefined();
 
@@ -504,6 +505,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prepare.run).not.toContain("OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD");
     expect(prepare.run).not.toContain("TELEGRAM_USER_DRIVER_STATE_DIR");
     expect(prepare.run).not.toContain("MANTIS_CANDIDATE_TRUST");
+    expect(prepare.run).not.toContain("GH_TOKEN");
     expect(prepare.run).toContain("MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT");
     expect(prepare.run).toContain("MANTIS_NODE_BIN MANTIS_PNPM_BIN");
 
@@ -519,6 +521,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("hold the model");
     expect(prompt).toContain("session-owned outbound message");
     expect(prompt).toContain("This proof has no skipped lane");
+    expect(prompt).toContain('git diff --stat "$BASELINE_SHA...$CANDIDATE_SHA" --');
+    expect(prompt).toContain('git diff "$BASELINE_SHA...$CANDIDATE_SHA" --');
+    expect(prompt).not.toContain("gh pr");
     expect(prompt).not.toContain("--sut-container");
     expect(prompt).not.toContain("OPENCLAW_TELEGRAM_USER_PROOF_CMD");
   });
