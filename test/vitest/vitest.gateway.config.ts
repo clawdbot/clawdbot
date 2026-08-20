@@ -1,3 +1,4 @@
+import { gatewayServerIsolatedTestFiles } from "./vitest.gateway-server-paths.mjs";
 // Vitest gateway config wires the gateway test shard.
 import { createProjectShardVitestConfig } from "./vitest.project-shard-config.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
@@ -18,6 +19,7 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
       "src/gateway/gateway.test.ts",
       "src/gateway/server.startup-matrix-migration.integration.test.ts",
       "src/gateway/sessions-history-http.test.ts",
+      ...gatewayServerIsolatedTestFiles,
     ],
     name: "gateway",
   });
