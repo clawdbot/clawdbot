@@ -26,6 +26,7 @@ const directCronCompletionRetention = {
 
 const {
   appendAssistantMessageToSessionTranscriptMock,
+  commitBackgroundResultToSessionMock,
   countActiveDescendantRunsMock,
   deliverOutboundPayloadsMock,
   ensureOutboundSessionEntryMock,
@@ -38,6 +39,10 @@ const {
     ok: true,
     sessionFile: "session.jsonl",
     messageId: "mirror-message",
+  }),
+  commitBackgroundResultToSessionMock: vi.fn().mockResolvedValue({
+    ok: true,
+    messageId: "current-completion-message",
   }),
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
   deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
@@ -129,6 +134,10 @@ vi.mock("../../infra/outbound/outbound-session.js", () => ({
 
 vi.mock("../../config/sessions/transcript.runtime.js", () => ({
   appendAssistantMessageToSessionTranscript: appendAssistantMessageToSessionTranscriptMock,
+}));
+
+vi.mock("../../sessions/background-session-result.js", () => ({
+  commitBackgroundResultToSession: commitBackgroundResultToSessionMock,
 }));
 
 vi.mock("./session.js", () => ({
@@ -247,11 +256,15 @@ function makeBaseParams(overrides: {
       id: "test-job",
       name: "Test Job",
       sessionTarget: overrides.sessionTarget ?? "isolated",
+      sessionKey:
+        overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
       deleteAfterRun: false,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
+    sourceSessionKey:
+      overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
     runSessionKey: overrides.runSessionKey ?? "agent:main",
     sessionId: "test-session-id",
     lifecycleRevision: "test-lifecycle-revision",
@@ -349,6 +362,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         storePath: "/tmp/sessions.json",
       },
       messageId: "mirror-message",
+    });
+    commitBackgroundResultToSessionMock.mockResolvedValue({
+      ok: true,
+      messageId: "current-completion-message",
     });
     loadCronSessionEntryLatestMock.mockReturnValue({
       sessionId: "test-session-id",
@@ -3065,6 +3082,93 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
       payloads: [{ text: "hello from cron" }],
     });
+  });
+
+  it("commits a current-target completion without requiring an outbound adapter", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "durable WebChat completion",
+      sessionTarget: "current",
+      runStartedAt: 1_000,
+    });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "webchat",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("webchat has no outbound adapter"),
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:webchat:direct:owner",
+      text: "durable WebChat completion",
+      idempotencyKey: "cron-current-completion:cron:test-job:1000",
+      provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
+      config: params.cfgWithAgentDefaults,
+      signal: undefined,
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("requires the current-session commit in addition to one external delivery", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "durable external completion",
+      sessionTarget: "current",
+      runStartedAt: 2_000,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not mark or send a current-target delivery when its session commit fails", async () => {
+    commitBackgroundResultToSessionMock.mockResolvedValueOnce({
+      ok: false,
+      reason: "source session was archived",
+    });
+    const params = makeBaseParams({
+      synthesizedText: "must not escape before commit",
+      sessionTarget: "current",
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "source session was archived",
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("commits current-target output after a verified message-tool send without resending", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "message-tool completion",
+      sessionTarget: "current",
+    });
+    params.sourceDeliveryOutcome = {
+      visibleDeliveries: [],
+      verifiedMessageToolDelivery: true,
+      satisfiesSourceDelivery: true,
+      unverifiedMessageToolDelivery: false,
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("keeps unresolved message-tool delivery out of delivered status", async () => {

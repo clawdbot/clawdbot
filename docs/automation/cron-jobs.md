@@ -303,18 +303,18 @@ envelope continue their ordinary non-app behavior; recreate or reauthorize one
 only when it needs Codex app access. See
 [Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
 
-| Style           | `--session` value   | Runs in                     | Best for                        |
-| --------------- | ------------------- | --------------------------- | ------------------------------- |
-| Main session    | `main`              | Owning agent's main session | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>`    | Reports, background chores      |
-| Current session | `current`           | Bound at creation time      | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session    | Workflows that build on history |
+| Style           | `--session` value   | Runs in                                              | Best for                        |
+| --------------- | ------------------- | ---------------------------------------------------- | ------------------------------- |
+| Main session    | `main`              | Owning agent's main session                          | Reminders, system events        |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`                             | Reports, background chores      |
+| Current session | `current`           | Detached; commits to the creation-bound conversation | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session                             | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
 <AccordionGroup>
-  <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+  <Accordion title="Main session vs current vs isolated vs custom">
+    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 
@@ -343,6 +343,12 @@ Agent-turn jobs default to the creating conversation when the create request car
 | `announce` | Fallback-deliver final text to the target if the agent did not send |
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
+
+For a `current` job using `announce` (the default), the final assistant result is a first-class session completion, not a WebChat-specific outbound message. OpenClaw waits for active turns in the creation-bound conversation, verifies that the same session generation still owns the key, and commits the result through the canonical transcript writer with cron job/run provenance and a job/run idempotency key. A retry cannot append the same result twice.
+
+WebChat receives the committed `session.message` event immediately. The same assistant result comes from `chat.history` after a refresh or reconnect; no follow-up user message is required. Delivery is successful only after that transcript/event commit succeeds.
+
+If the bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the canonical session commit succeed.
 
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,

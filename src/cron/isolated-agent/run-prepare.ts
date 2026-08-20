@@ -97,6 +97,7 @@ export type PreparedCronRunContext = {
   agentCfg: AgentDefaultsConfig;
   agentDir: string;
   agentSessionKey: string;
+  sourceSessionKey?: string;
   runSessionId: string;
   currentRunSessionId: () => string;
   runSessionKey: string;
@@ -682,6 +683,7 @@ export async function prepareCronRunContext(params: {
         agentCfg,
         agentDir,
         agentSessionKey,
+        sourceSessionKey,
         runSessionId,
         currentRunSessionId,
         runSessionKey,

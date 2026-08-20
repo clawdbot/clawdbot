@@ -17,6 +17,7 @@ export type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
+  sourceSessionKey?: string;
   runSessionKey: string;
   sessionId: string;
   lifecycleRevision: string;
