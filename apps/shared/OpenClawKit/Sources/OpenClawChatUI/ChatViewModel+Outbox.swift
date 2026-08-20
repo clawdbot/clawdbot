@@ -55,19 +55,39 @@ extension OpenClawChatViewModel {
         return leaf.isEmpty ? nil : leaf
     }
 
+    /// Marks a sessions.branches.list rejection decided from the hello method
+    /// catalog, without a network call. Released 2026.7.x gateways authorize
+    /// before dispatch and reject unknown methods with "missing scope:
+    /// operator.admin" — an error that never names the method, so text
+    /// matching alone can never detect them.
+    struct BranchListingUnadvertisedError: Error {}
+
     static func branchListingIsUnsupported(_ error: Error) -> Bool {
+        if error is BranchListingUnadvertisedError { return true }
         if let gatewayError = error as? GatewayResponseError {
-            let message = gatewayError.message.lowercased()
-            return message.contains("sessions.branches.list") &&
-                (gatewayError.code == "INVALID_REQUEST" ||
-                    message.contains("unsupported") ||
-                    message.contains("unimplemented"))
+            // Only the modern unknown-method rejection counts; a genuine scope
+            // denial ("missing scope: ...") must keep queued work parked.
+            return gatewayError.message.lowercased()
+                .contains("unknown method: sessions.branches.list")
         }
         let error = error as NSError
         let message = error.localizedDescription.lowercased()
         return message.contains("sessions.branches.list") &&
             (message.contains("not supported") || message.contains("unsupported") ||
                 message.contains("unimplemented") || message.contains("unknown method"))
+    }
+
+    /// Single dispatch point for sessions.branches.list: the hello catalog is
+    /// consulted first so paired clients never poll gateways that predate the
+    /// method (see BranchListingUnadvertisedError); nil catalog still calls.
+    func requestSessionBranchListing(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatSessionBranchesResponse
+    {
+        if await self.transport.gatewayAdvertisesMethod("sessions.branches.list") == false {
+            throw Self.BranchListingUnadvertisedError()
+        }
+        return try await self.transport.listSessionBranches(sessionKey: sessionKey, agentID: agentID)
     }
 
     func outboxBranchScope(for session: SessionSnapshot) -> OpenClawChatOutboxScope? {
@@ -209,7 +229,7 @@ extension OpenClawChatViewModel {
                       let state = await outbox.branchState(for: scope)
                 else { continue }
                 do {
-                    let response = try await self.transport.listSessionBranches(
+                    let response = try await self.requestSessionBranchListing(
                         sessionKey: command.deliverySessionKey,
                         agentID: command.agentID)
                     let activeLeaf: String? = response.branches.isEmpty ? nil : Self

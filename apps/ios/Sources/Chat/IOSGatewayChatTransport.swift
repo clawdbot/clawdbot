@@ -551,11 +551,9 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, ifCurrentRoute: nil)
     }
 
-    func gatewayAdvertisesProgressCardStore() async -> Bool? {
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard let route = await self.currentSessionMutationRoute() else { return nil }
-        return await self.gateway.supportsServerMethod(
-            "progressCard.get",
-            ifCurrentRoute: route)
+        return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)
     }
 
     func fetchProgressCard(sessionKey: String) async throws -> ProgressCard? {
