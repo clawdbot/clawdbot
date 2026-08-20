@@ -16,6 +16,7 @@ import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
@@ -66,7 +67,7 @@ type FollowupDeliveryDecision =
 
 function isTerminalDeliveryPayload(
   payload: ReplyPayload,
-  sourceReplyDeliveryMode: "allow" | "message_tool_only",
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode,
 ): boolean {
   return (
     payload.isReasoning !== true &&
