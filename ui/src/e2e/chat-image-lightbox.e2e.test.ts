@@ -224,33 +224,53 @@ describeControlUiE2e("Control UI image lightbox", () => {
       await sidebarTrigger.click();
       await sidebarDialog.waitFor({ state: "visible" });
       await waitForLightboxAnimations(page);
+      await page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
+        lightbox.style.setProperty("--safe-area-top", "18px");
+        lightbox.style.setProperty("--safe-area-right", "12px");
+        lightbox.style.setProperty("--safe-area-bottom", "22px");
+        lightbox.style.setProperty("--safe-area-left", "12px");
+        lightbox.setAttribute(
+          "src",
+          "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='1200'%3E%3Crect width='600' height='1200' fill='%2386a5ff'/%3E%3C/svg%3E",
+        );
+      });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-image-lightbox .image")
+            .evaluate((image) =>
+              image instanceof HTMLImageElement && image.complete ? image.naturalHeight : 0,
+            ),
+        )
+        .toBe(1200);
       const mobileBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       const mobileImage = page.locator("openclaw-image-lightbox .image");
-      const mobileImageLayout = await page
-        .locator("openclaw-image-lightbox .stage")
-        .evaluate((stage) => {
+      const readMobileLayout = () =>
+        page.locator("openclaw-image-lightbox .stage").evaluate((stage) => {
+          const root = stage.getRootNode();
           const image = stage.querySelector("img");
-          if (!image) {
-            throw new Error("missing lightbox image");
+          const header = root instanceof ShadowRoot ? root.querySelector(".header") : null;
+          const controls = root instanceof ShadowRoot ? root.querySelector(".zoom-controls") : null;
+          if (!image || !header || !controls) {
+            throw new Error("missing lightbox geometry");
           }
-          const stageBox = stage.getBoundingClientRect();
-          const imageBox = image.getBoundingClientRect();
-          const style = getComputedStyle(stage);
+          const rect = (element: Element) => {
+            const box = element.getBoundingClientRect();
+            return { bottom: box.bottom, left: box.left, right: box.right, top: box.top };
+          };
+          const imageBox = rect(image);
+          const stageBox = rect(stage);
+          const overlaps = (other: ReturnType<typeof rect>) =>
+            Math.min(imageBox.right, other.right) > Math.max(imageBox.left, other.left) &&
+            Math.min(imageBox.bottom, other.bottom) > Math.max(imageBox.top, other.top);
           return {
-            image: {
-              bottom: imageBox.bottom,
-              left: imageBox.left,
-              right: imageBox.right,
-              top: imageBox.top,
-            },
-            stage: {
-              bottom: stageBox.bottom - Number.parseFloat(style.paddingBottom),
-              left: stageBox.left + Number.parseFloat(style.paddingLeft),
-              right: stageBox.right - Number.parseFloat(style.paddingRight),
-              top: stageBox.top + Number.parseFloat(style.paddingTop),
-            },
+            image: imageBox,
+            stage: stageBox,
+            overlapsControls: overlaps(rect(controls)),
+            overlapsHeader: overlaps(rect(header)),
           };
         });
+      const mobileImageLayout = await readMobileLayout();
       const mobileViewport = await page.evaluate(() => ({
         height: window.innerHeight,
         width: window.innerWidth,
@@ -261,6 +281,13 @@ describeControlUiE2e("Control UI image lightbox", () => {
       expect(mobileImageLayout.image.right).toBeLessThanOrEqual(mobileImageLayout.stage.right);
       expect(mobileImageLayout.image.top).toBeGreaterThanOrEqual(mobileImageLayout.stage.top);
       expect(mobileImageLayout.image.bottom).toBeLessThanOrEqual(mobileImageLayout.stage.bottom);
+      expect(mobileImageLayout.overlapsHeader).toBe(false);
+      expect(mobileImageLayout.overlapsControls).toBe(false);
+      await page.setViewportSize({ height: 500, width: 932 });
+      const landscapeLayout = await readMobileLayout();
+      expect(landscapeLayout.overlapsHeader).toBe(false);
+      expect(landscapeLayout.overlapsControls).toBe(false);
+      await page.setViewportSize({ height: 844, width: 390 });
       await mobileImage.dblclick();
       await expect
         .poll(() =>

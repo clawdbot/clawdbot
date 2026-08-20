@@ -40,10 +40,13 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   @queryAll(".action") private actions!: NodeListOf<HTMLElement>;
   @state() private openOriginalUrl = "";
   @state() private scale = 1;
+  @state() private imageReady = false;
 
   private originalBlobUrl = "";
   private originalUrlRequest = 0;
   private panzoom?: PanzoomObject;
+  private panzoomImage?: HTMLImageElement;
+  private panzoomStage?: HTMLDivElement;
 
   static override styles = css`
     :host {
@@ -57,9 +60,10 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
 
     .lightbox {
-      position: relative;
       width: min(1280px, calc(100vw - 40px));
       height: min(900px, calc(100dvh - 40px));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
       overflow: hidden;
       border: 1px solid color-mix(in srgb, var(--border-strong) 80%, transparent);
       border-radius: var(--radius-lg);
@@ -71,18 +75,14 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
 
     .header {
-      position: absolute;
-      z-index: 2;
-      top: 0;
-      right: 0;
-      left: 0;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 16px;
       min-height: 54px;
       padding: 10px 12px 10px 18px;
-      background: linear-gradient(rgba(7, 9, 15, 0.9), transparent);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.04);
       color: #fff;
     }
 
@@ -151,6 +151,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
 
     .stage {
+      min-height: 0;
       width: 100%;
       height: 100%;
       display: grid;
@@ -180,17 +181,14 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
 
     .zoom-controls {
-      position: absolute;
-      z-index: 2;
-      right: 50%;
-      bottom: 14px;
+      justify-self: center;
       gap: 4px;
+      margin-bottom: 14px;
       padding: 4px;
       border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: var(--radius-lg);
       background: rgba(7, 9, 15, 0.82);
       box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-      transform: translateX(50%);
       backdrop-filter: blur(12px);
     }
 
@@ -228,13 +226,14 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       }
 
       .header {
-        padding-top: calc(10px + env(safe-area-inset-top));
-        padding-right: calc(12px + env(safe-area-inset-right));
-        padding-left: calc(16px + env(safe-area-inset-left));
+        padding-top: calc(10px + var(--safe-area-top, 0px));
+        padding-right: calc(12px + var(--safe-area-right, 0px));
+        padding-left: calc(16px + var(--safe-area-left, 0px));
       }
 
       .stage {
-        padding: 0;
+        padding: 0 calc(12px + var(--safe-area-right, 0px)) 0
+          calc(12px + var(--safe-area-left, 0px));
       }
 
       .close,
@@ -244,7 +243,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       }
 
       .zoom-controls {
-        bottom: calc(12px + env(safe-area-inset-bottom));
+        margin-bottom: calc(12px + var(--safe-area-bottom, 0px));
       }
     }
   `;
@@ -253,6 +252,12 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     super.connectedCallback();
     if (this.hasUpdated) {
       void this.resolveOriginalUrl();
+      void this.updateComplete.then(() => {
+        const image = this.image;
+        if (image?.complete && image.naturalWidth > 0) {
+          this.initializePanzoom(image);
+        }
+      });
     }
   }
 
@@ -267,12 +272,14 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     if (changed.has("src")) {
       this.destroyPanzoom();
       this.scale = 1;
+      this.imageReady = false;
       void this.resolveOriginalUrl();
     }
   }
 
   override render() {
     const title = this.title.trim() || t("chat.imageLightbox.untitled");
+    const canZoom = this.imageReady && this.panzoom !== undefined;
     return html`
       <openclaw-modal-dialog
         class="mobile-edge-to-edge"
@@ -312,7 +319,8 @@ class OpenClawImageLightbox extends OpenClawLitElement {
               class=${this.scale > 1 ? "image zoomed" : "image"}
               src=${this.src}
               alt=${title}
-              @load=${this.initializePanzoom}
+              @load=${this.handleImageLoad}
+              @error=${this.handleImageError}
               @dragstart=${(event: DragEvent) => event.preventDefault()}
             />
           </div>
@@ -321,7 +329,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
               class="action zoom-control"
               type="button"
               aria-label=${t("chat.imageLightbox.zoomOut")}
-              ?disabled=${this.scale <= 1}
+              ?disabled=${!canZoom || this.scale <= 1}
               @click=${this.zoomOut}
             >
               −
@@ -330,7 +338,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
               class="action zoom-control zoom-level"
               type="button"
               aria-label=${t("chat.imageLightbox.resetZoom")}
-              ?disabled=${this.scale === 1}
+              ?disabled=${!canZoom || this.scale === 1}
               @click=${this.resetZoom}
             >
               ${Math.round(this.scale * 100)}%
@@ -339,7 +347,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
               class="action zoom-control"
               type="button"
               aria-label=${t("chat.imageLightbox.zoomIn")}
-              ?disabled=${this.scale >= MAX_SCALE}
+              ?disabled=${!canZoom || this.scale >= MAX_SCALE}
               @click=${this.zoomIn}
             >
               +
@@ -350,13 +358,30 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     `;
   }
 
-  private initializePanzoom = () => {
-    const image = this.image;
-    const stage = this.stage;
-    if (!image || !stage) {
+  private handleImageLoad = (event: Event) => {
+    const image = event.currentTarget;
+    if (image instanceof HTMLImageElement && image === this.image) {
+      this.initializePanzoom(image);
+    }
+  };
+
+  private handleImageError = (event: Event) => {
+    if (event.currentTarget !== this.image) {
       return;
     }
     this.destroyPanzoom();
+    this.scale = 1;
+    this.imageReady = false;
+  };
+
+  private initializePanzoom(image: HTMLImageElement) {
+    const stage = this.stage;
+    if (!stage || image !== this.image) {
+      return;
+    }
+    this.destroyPanzoom();
+    this.panzoomImage = image;
+    this.panzoomStage = stage;
     this.panzoom = Panzoom(image, {
       maxScale: MAX_SCALE,
       minScale: 1,
@@ -364,14 +389,21 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     });
     image.addEventListener("panzoomchange", this.handlePanzoomChange);
     stage.addEventListener("wheel", this.handleWheel, { passive: false });
-  };
+    this.imageReady = true;
+  }
 
   private destroyPanzoom() {
-    this.image?.removeEventListener("panzoomchange", this.handlePanzoomChange);
-    this.stage?.removeEventListener("wheel", this.handleWheel);
+    const image = this.panzoomImage;
+    image?.removeEventListener("panzoomchange", this.handlePanzoomChange);
+    this.panzoomStage?.removeEventListener("wheel", this.handleWheel);
     this.panzoom?.destroy();
     this.panzoom?.resetStyle();
+    image?.style.removeProperty("transform");
+    image?.style.removeProperty("transition");
     this.panzoom = undefined;
+    this.panzoomImage = undefined;
+    this.panzoomStage = undefined;
+    this.imageReady = false;
   }
 
   private handlePanzoomChange = (event: Event) => {
@@ -391,11 +423,17 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   };
 
   private handleWheel = (event: WheelEvent) => {
+    if (!this.panzoom) {
+      return;
+    }
     event.preventDefault();
-    this.panzoom?.zoomWithWheel(event);
+    this.panzoom.zoomWithWheel(event);
   };
 
   private handleDoubleClick = (event: MouseEvent) => {
+    if (!this.panzoom) {
+      return;
+    }
     event.preventDefault();
     if (this.scale > 1) {
       this.resetZoom();
@@ -460,17 +498,17 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   }
 
   private handleKeydown = (event: KeyboardEvent) => {
-    if (event.key === "+" || event.key === "=") {
+    if (this.panzoom && (event.key === "+" || event.key === "=")) {
       event.preventDefault();
       this.zoomIn();
       return;
     }
-    if (event.key === "-") {
+    if (this.panzoom && event.key === "-") {
       event.preventDefault();
       this.zoomOut();
       return;
     }
-    if (event.key === "0") {
+    if (this.panzoom && event.key === "0") {
       event.preventDefault();
       this.resetZoom();
       return;
