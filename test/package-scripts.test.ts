@@ -182,6 +182,15 @@ describe("package scripts", () => {
     );
   });
 
+  it("cleans package builds before validating release contents", () => {
+    const scripts = readPackageJson().scripts;
+
+    expect(scripts["build:package"]).toBe("pnpm clean:dist && pnpm build");
+    expect(scripts["release:check"]).toBe(
+      "pnpm build:package && pnpm release:generated:check && node --import tsx scripts/release-check.ts",
+    );
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });

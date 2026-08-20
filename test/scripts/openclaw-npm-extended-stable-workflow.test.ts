@@ -325,7 +325,11 @@ describe("minimal npm extended-stable workflow", () => {
     expect(buildControlUi.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
     expect(buildControlUi.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
     expect(step(preflight, "Check").if).toBeUndefined();
-    expect(step(preflight, "Verify release contents").if).toBeUndefined();
+    const verifyReleaseContents = step(preflight, "Verify release contents");
+    expect(verifyReleaseContents.if).toBeUndefined();
+    expect(verifyReleaseContents.run).toBe(
+      "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
+    );
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
 
     const save = step(preflight, "Save preflight build outputs");
