@@ -45,18 +45,21 @@ struct ManagedProcessTests {
             gracefulShutdownTimeout: .seconds(2))
         _ = try await process.waitUntilStarted()
 
-        let startedAt = ContinuousClock.now
         let termination = Task { await process.terminate() }
         let eofDeadline = ContinuousClock.now + .seconds(1)
         while !FileManager.default.fileExists(atPath: eofFile.path), ContinuousClock.now < eofDeadline {
             try await Task.sleep(for: .milliseconds(10))
         }
+        // Time the abort alone. The EOF handshake above owns a separate 1s budget,
+        // so timing from before it spends that budget against the grace period this
+        // asserts on, leaving no headroom for the abort on a loaded machine.
+        let abortRequestedAt = ContinuousClock.now
         process.requestTermination(gracefully: false)
         await termination.value
 
         #expect(FileManager.default.fileExists(atPath: eofFile.path))
         #expect(FileManager.default.fileExists(atPath: termFile.path))
-        #expect(ContinuousClock.now - startedAt < .seconds(1))
+        #expect(ContinuousClock.now - abortRequestedAt < .seconds(1))
     }
 
     @Test func `instant exits cannot outrun process monitoring`() async throws {

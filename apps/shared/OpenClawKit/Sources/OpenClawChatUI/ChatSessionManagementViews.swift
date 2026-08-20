@@ -176,7 +176,7 @@ struct ChatSessionInspectorSheet: View {
                     HStack(alignment: .firstTextBaseline) {
                         LabeledContent("Key", value: self.details.key)
                         Button {
-                            Self.copy(self.details.key)
+                            ChatClipboard.copy(self.details.key)
                         } label: {
                             Image(systemName: "doc.on.doc")
                         }
@@ -330,15 +330,6 @@ struct ChatSessionInspectorSheet: View {
 
     private static func duration(_ milliseconds: Double) -> String {
         Duration.seconds(milliseconds / 1000).formatted(.units(allowed: [.hours, .minutes, .seconds]))
-    }
-
-    private static func copy(_ value: String) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-        #elseif os(iOS)
-        UIPasteboard.general.string = value
-        #endif
     }
 }
 
