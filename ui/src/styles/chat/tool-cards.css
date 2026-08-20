@@ -1130,10 +1130,10 @@
 }
 
 /* Completed-turn work rollup: slim "Worked for X" disclosure standing in for
-   the turn's intermediate tool/commentary groups. Redistribute its existing
-   gap so it separates from the prompt while staying grouped with the reply. */
+   the turn's intermediate tool/commentary groups. Keep it equally separated
+   from the prompt and final reply. */
 .chat-group--work {
-  padding-block: 4px;
+  padding-block: 9px;
 }
 
 .chat-work-group .chat-activity-group__label {

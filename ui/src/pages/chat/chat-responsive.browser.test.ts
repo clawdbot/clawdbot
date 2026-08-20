@@ -1267,9 +1267,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each([
-    { label: "desktop", width: 1366, hasTouch: false, expectedGap: 4 },
-    { label: "narrow touch", width: 430, hasTouch: true, expectedGap: 18 },
-    { label: "wide touch", width: 1366, hasTouch: true, expectedGap: 18 },
+    { label: "desktop", width: 1366, hasTouch: false, expectedGap: 9 },
+    { label: "narrow touch", width: 430, hasTouch: true, expectedGap: 23 },
+    { label: "wide touch", width: 1366, hasTouch: true, expectedGap: 23 },
   ])("balances completed-work spacing on $label", async ({ width, hasTouch, expectedGap }) => {
     const page = await openBrowserPage(width, 720, { hasTouch, isolated: true });
     try {
