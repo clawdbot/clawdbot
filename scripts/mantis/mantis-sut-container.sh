@@ -11,6 +11,7 @@ readonly iptables_bin="/usr/sbin/iptables"
 readonly timeout_bin="/usr/bin/timeout"
 readonly network_lock_file="/run/lock/openclaw-mantis-sut-network.lock"
 readonly network_state_root="/run/openclaw-mantis-sut-networks"
+readonly telegram_proxy_script="/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-bot-api-proxy.mjs"
 
 die() {
   echo "mantis SUT container: $*" >&2
@@ -162,6 +163,12 @@ runtime_resource_args=(
   --cpus 4
   --memory 8g
   --memory-swap 8g
+)
+
+proxy_resource_args=(
+  --cpus 1
+  --memory 256m
+  --memory-swap 256m
 )
 
 blocked_networks=(
@@ -415,6 +422,25 @@ create_public_only_network_unlocked() {
 
 create_public_only_network() {
   with_network_lock create_public_only_network_unlocked "$1"
+}
+
+create_internal_network_unlocked() {
+  local network_name="$1"
+  cleanup_network_unlocked "$network_name" || return 1
+  if ! "$docker_bin" network create --driver bridge --internal "$network_name" >/dev/null; then
+    return 1
+  fi
+  local subnet
+  if ! subnet="$(network_subnet "$network_name")"; then
+    cleanup_network_unlocked "$network_name" || true
+    return 1
+  fi
+  [[ "$subnet" =~ ^[0-9.]+/[0-9]+$ ]] || return 1
+  write_network_state "$network_name" "$subnet"
+}
+
+create_internal_network() {
+  with_network_lock create_internal_network_unlocked "$1"
 }
 
 require_locked_worktree() {
@@ -766,8 +792,11 @@ case "$command" in
     write_root_attestation "$runtime_parent/attestations/$lane.json" "$lane" "$attested_sha"
     success_marker="$(jq -er '.mockResponseText | strings' "$input_file")"
     telegram_bot_token="$(jq -er '.telegramBotToken | strings' "$input_file")"
+    telegram_bot_id="${telegram_bot_token%%:*}"
+    [[ "$telegram_bot_id" =~ ^[1-9][0-9]*$ ]] || die "invalid Telegram bot token"
+    telegram_alias_token="${telegram_bot_id}:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     export SUCCESS_MARKER="$success_marker"
-    export TELEGRAM_BOT_TOKEN="$telegram_bot_token"
+    export TELEGRAM_BOT_TOKEN="$telegram_alias_token"
     mock_response_chunk_delay_ms="$(jq -r '.mockResponseChunkDelayMs // ""' "$input_file")"
     gateway_password="$(jq -r '.gatewayPassword // ""' "$input_file")"
     rm -f "$input_file"
@@ -816,18 +845,38 @@ case "$command" in
     done
 
     network_name="${container_name}-net"
-    create_public_only_network "$network_name"
+    egress_network_name="${container_name}-egress"
+    proxy_container_name="${container_name}-telegram-proxy"
+    [[ -f "$telegram_proxy_script" && ! -L "$telegram_proxy_script" ]] \
+      || die "missing trusted Telegram Bot API proxy"
+    [[ "$(stat -c %u "$telegram_proxy_script")" == "0" ]] \
+      || die "Telegram Bot API proxy owner mismatch"
+    [[ -z "$(find "$telegram_proxy_script" -perm /222 -print -quit)" ]] \
+      || die "Telegram Bot API proxy is writable"
     # shellcheck disable=SC2329
     cleanup_run() {
       local result=0
       remove_container_or_fail "$container_name" || result=$?
+      remove_container_or_fail "$proxy_container_name" || result=$?
       cleanup_network "$network_name" || result=$?
+      cleanup_network "$egress_network_name" || result=$?
       return "$result"
     }
     trap cleanup_run EXIT INT TERM
-    run_network_probe "$network_name"
+    create_internal_network "$network_name"
+    create_public_only_network "$egress_network_name"
+    run_network_probe "$egress_network_name"
     require_runtime_claim_active "$container_name"
-      "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
+    "$docker_bin" run --detach --name "$proxy_container_name" --network "$egress_network_name" \
+      "${container_security_args[@]}" "${proxy_resource_args[@]}" \
+      --mount "type=bind,src=$telegram_proxy_script,dst=/opt/mantis/telegram-bot-api-proxy.mjs,readonly" \
+      --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
+      --env TELEGRAM_PROXY_ALIAS_TOKEN="$telegram_alias_token" \
+      --env TELEGRAM_PROXY_UPSTREAM_TOKEN="$telegram_bot_token" \
+      "$image" node /opt/mantis/telegram-bot-api-proxy.mjs >/dev/null
+    "$docker_bin" network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"
+    require_runtime_claim_active "$container_name"
+    "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${runtime_resource_args[@]}" \
       --mount "type=bind,src=$repo_root,dst=$repo_root,readonly" \
       --mount "type=bind,src=$safe_runtime,dst=$runtime_source" \
@@ -835,7 +884,9 @@ case "$command" in
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       "${docker_env[@]}" \
       "$image" sh -c "$sut_command"
+    remove_container_or_fail "$proxy_container_name"
     cleanup_network "$network_name"
+    cleanup_network "$egress_network_name"
     trap - EXIT INT TERM
     ;;
   stop)
@@ -854,7 +905,9 @@ case "$command" in
     terminate_runtime_claim
     stop_result=0
     remove_container_or_fail "$1" || stop_result=1
+    remove_container_or_fail "${1}-telegram-proxy" || stop_result=1
     cleanup_network "${1}-net" || stop_result=1
+    cleanup_network "${1}-egress" || stop_result=1
     wait_for_runtime_claim_exit
     exit "$stop_result"
     ;;
@@ -879,15 +932,23 @@ case "$command" in
       exists_result=$?
       ((exists_result == 1)) || exit "$exists_result"
     fi
-    if network_exists "${1}-net"; then
-      die "refusing to destroy an active SUT network"
+    if container_exists "${1}-telegram-proxy"; then
+      die "refusing to destroy a running Telegram proxy container"
     else
       exists_result=$?
       ((exists_result == 1)) || exit "$exists_result"
     fi
-    network_state="$(network_state_path "${1}-net")"
-    [[ ! -e "$network_state" && ! -L "$network_state" ]] \
-      || die "refusing to destroy runtime with pending network cleanup"
+    for network_name in "${1}-net" "${1}-egress"; do
+      if network_exists "$network_name"; then
+        die "refusing to destroy an active SUT network"
+      else
+        exists_result=$?
+        ((exists_result == 1)) || exit "$exists_result"
+      fi
+      network_state="$(network_state_path "$network_name")"
+      [[ ! -e "$network_state" && ! -L "$network_state" ]] \
+        || die "refusing to destroy runtime with pending network cleanup"
+    done
     if [[ -L "$runtime_source" ]]; then
       [[ "$(readlink "$runtime_source")" == "$runtime_root" ]] \
         || die "invalid locked runtime symlink"

@@ -906,7 +906,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain('connects("runner-host", 9)');
     expect(wrapper).toContain("--add-host runner-host:host-gateway");
     expect(wrapper).not.toContain("PROXY_PORT");
-    expect(wrapper.match(/run_network_probe "\$network_name"/gu)).toHaveLength(3);
+    expect(wrapper.match(/run_network_probe "\$network_name"/gu)).toHaveLength(2);
+    expect(wrapper).toContain('run_network_probe "$egress_network_name"');
     expect(wrapper).not.toMatch(/run_network_probe "\$network_name"[ \t]+\S/u);
     expect(wrapper).toContain('[[ $# -eq 0 ]] || die "check expects no arguments"');
     expect(wrapper).toContain("[[ $# -eq 6 ]]");
@@ -977,6 +978,18 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain("169.254.0.0/16");
     expect(wrapper).toContain("api.telegram.org");
     expect(wrapper).toContain('--network "$network_name"');
+    expect(wrapper).toContain('create_internal_network "$network_name"');
+    expect(wrapper).toContain('create_public_only_network "$egress_network_name"');
+    expect(wrapper).toContain(
+      'network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"',
+    );
+    expect(wrapper).toContain('--env TELEGRAM_PROXY_UPSTREAM_TOKEN="$telegram_bot_token"');
+    expect(wrapper).toContain('export TELEGRAM_BOT_TOKEN="$telegram_alias_token"');
+    expect(wrapper).not.toContain('export TELEGRAM_BOT_TOKEN="$telegram_bot_token"');
+    expect(wrapper).toContain('remove_container_or_fail "${1}-telegram-proxy"');
+    expect(workflow).toContain(
+      "/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-bot-api-proxy.mjs",
+    );
     expect(wrapper).toContain('"$worktree_root/candidate"');
     expect(wrapper).toContain('"${SUDO_USER:-}" == "runner"');
     expect(wrapper).toContain("corepack pnpm install --frozen-lockfile");
@@ -1026,7 +1039,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).not.toContain("mantis-sut:mantis-sut");
     expect(wrapper).toContain('attested_sha="$(attest_worktree "$repo_root" "$lane")"');
     expect(wrapper).toContain("sut-attestation.json");
-    expect(wrapper.match(/run_network_probe "\$network_name"/gu)).toHaveLength(3);
     expect(wrapper).toContain("host isolation rule did not observe the probe");
     expect(wrapper).toContain("remove_container_or_fail");
     expect(wrapper).toContain('if network_exists "$network_name"; then');

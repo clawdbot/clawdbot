@@ -219,6 +219,9 @@ jobs:
           node_modules/.bin/esbuild scripts/e2e/telegram-mantis-lane.ts \
             --bundle --platform=node --format=esm --target=node24 \
             --outfile="$toolchain_build/scripts/e2e/telegram-mantis-lane.mjs"
+          node_modules/.bin/esbuild scripts/e2e/telegram-bot-api-proxy.ts \
+            --bundle --platform=node --format=esm --target=node24 \
+            --outfile="$toolchain_build/scripts/e2e/telegram-bot-api-proxy.mjs"
           node_modules/.bin/esbuild scripts/e2e/telegram-desktop-recorder.ts \
             --bundle --platform=node --format=esm --target=node24 \
             --outfile="$toolchain_build/scripts/e2e/telegram-desktop-recorder.mjs"
@@ -323,6 +326,8 @@ jobs:
             /usr/local/lib/mantis-toolchain/scripts/windows-cmd-helpers.mjs
           sudo install -m 0444 "$toolchain_build/scripts/e2e/telegram-mantis-lane.mjs" \
             /usr/local/lib/mantis-toolchain/scripts/e2e/telegram-mantis-lane.mjs
+          sudo install -m 0444 "$toolchain_build/scripts/e2e/telegram-bot-api-proxy.mjs" \
+            /usr/local/lib/mantis-toolchain/scripts/e2e/telegram-bot-api-proxy.mjs
           sudo install -m 0444 "$toolchain_build/scripts/e2e/telegram-desktop-recorder.mjs" \
             /usr/local/lib/mantis-toolchain/scripts/e2e/telegram-desktop-recorder.mjs
           sudo ln -s /usr/bin/ffmpeg /usr/local/lib/mantis-toolchain/ffmpeg

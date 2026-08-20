@@ -199,6 +199,7 @@ describe("Telegram Mantis SUT", () => {
     const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
       channels: { telegram: Record<string, unknown> };
     };
+    expect(config.channels.telegram.apiRoot).toBe("http://telegram-api-proxy:8080");
     expect(config.channels.telegram).not.toHaveProperty("replyToMode");
   });
 });

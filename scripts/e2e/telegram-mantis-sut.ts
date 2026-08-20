@@ -202,6 +202,7 @@ export function writeSutConfig(params: {
     channels: {
       telegram: {
         allowFrom: [params.testerId],
+        apiRoot: "http://telegram-api-proxy:8080",
         botToken: { id: "TELEGRAM_BOT_TOKEN", provider: "default", source: "env" },
         commands: { native: true, nativeSkills: false },
         dmPolicy: "allowlist",
