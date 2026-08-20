@@ -334,6 +334,24 @@ describePosix("scripts/pr worktree containment", () => {
     expectCanonicalCheckoutUnchanged(fixture);
   });
 
+  it("allows a missing transition path that merely matches an ignore rule", () => {
+    const fixture = createReviewFixture();
+    const result = runShell(fixture, [
+      "review_init 42",
+      "review_checkout_pr 42",
+      'printf "main-only.txt\\n" >> "$(git rev-parse --git-path info/exclude)"',
+      "git check-ignore -q main-only.txt",
+      "test ! -e main-only.txt",
+      "review_checkout_main 42",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(readFileSync(join(fixture.root, ".worktrees", "pr-42", "main-only.txt"), "utf8")).toBe(
+      "main-only\n",
+    );
+    expectCanonicalCheckoutUnchanged(fixture);
+  });
+
   it("checks every transition target for ignored collisions with bounded Git queries", () => {
     const fixture = createReviewFixture();
     git(fixture.root, "checkout", "review/pr");
