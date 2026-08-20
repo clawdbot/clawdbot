@@ -498,22 +498,18 @@ suite.define(() => {
         }),
       );
       expect(threadRowMetrics).toHaveLength(4);
-      // Gateway threads and native catalog children must stay density-identical, but a
-      // row with no preview text collapses to one line. Assert uniformity per shape, so
-      // the two sources drifting apart still fails while the collapse stays legal.
-      const singleLineHeights = new Set(
-        threadRowMetrics.filter((metric) => metric.singleLine).map((metric) => metric.height),
-      );
-      const twoLineHeights = new Set(
-        threadRowMetrics.filter((metric) => !metric.singleLine).map((metric) => metric.height),
-      );
+      // Gateway threads and native catalog children must stay density-identical.
+      // Catalog children never carry preview text, so every subtitle-less row —
+      // whichever source it came from — collapses to the same one-line height
+      // instead of reserving a phantom second line.
+      for (const metric of threadRowMetrics) {
+        expect(metric.singleLine).toBe(true);
+      }
+      const singleLineHeights = new Set(threadRowMetrics.map((metric) => metric.height));
       expect(singleLineHeights.size).toBe(1);
-      expect(twoLineHeights.size).toBe(1);
       const [collapsedHeight] = [...singleLineHeights];
-      const [expandedHeight] = [...twoLineHeights];
       // Collapsed rows sit on the 30px min-height floor; renderer sub-pixels vary.
       expect(collapsedHeight).toBeCloseTo(30, 1);
-      expect(expandedHeight).toBeGreaterThan(collapsedHeight!);
       for (const metric of threadRowMetrics) {
         expect(metric).toMatchObject({
           minHeight: "30px",
