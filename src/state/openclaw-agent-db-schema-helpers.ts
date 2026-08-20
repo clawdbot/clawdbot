@@ -291,3 +291,26 @@ export function assertExistingAgentSchemaOwner(
     );
   }
 }
+
+/**
+ * Assert no foreign key violations remain after a schema migration transaction.
+ *
+ * The migration transaction intentionally disables FK enforcement so legacy
+ * table rebuilds don't cascade-delete children. While FK enforcement is off,
+ * ON DELETE CASCADE constraints don't fire, so orphaned rows can accumulate.
+ * This check runs after FK enforcement is restored to catch migration bugs
+ * early instead of crashing the gateway on the next startup foreign_key_check.
+ */
+export function assertNoForeignKeyViolationsAfterMigration(
+  db: DatabaseSync,
+  pathname: string,
+): void {
+  const violations = db.prepare("PRAGMA foreign_key_check;").all() as Array<{
+    table?: string;
+  }>;
+  if (violations.length > 0) {
+    throw new Error(
+      `Agent database schema migration completed with ${violations.length} foreign key violation(s) in ${pathname}; first table: ${violations[0]?.table ?? "?"}`,
+    );
+  }
+}

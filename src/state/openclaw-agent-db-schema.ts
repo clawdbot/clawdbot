@@ -33,6 +33,7 @@ import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-perm
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
   assertExistingAgentSchemaOwner,
+  assertNoForeignKeyViolationsAfterMigration,
   assertOpenClawAgentSchemaContains,
   assertOpenClawAgentCurrentRuntimeSchema,
   assertSupportedAgentSchemaVersion,
@@ -727,14 +728,7 @@ function ensureAgentSchema(
   // may have been introduced while FK enforcement was intentionally off during
   // the schema transaction. This surfaces migration bugs early instead of
   // crashing the gateway on the next startup foreign_key_check.
-  const violations = db.prepare("PRAGMA foreign_key_check;").all() as Array<{
-    table?: unknown;
-  }>;
-  if (violations.length > 0) {
-    throw new Error(
-      `Agent database schema migration completed with ${violations.length} foreign key violation(s) in ${pathname}; first table: ${String(violations[0]?.table ?? "?")}`,
-    );
-  }
+  assertNoForeignKeyViolationsAfterMigration(db, pathname);
 }
 
 /** Initialize agent schema/ownership metadata on an independently managed connection. */
