@@ -770,6 +770,7 @@ img.chat-avatar.chat-avatar--logo {
 
   .chat-group.user.chat-group--peer .chat-group-footer-actions {
     flex-basis: 100%;
+    justify-content: flex-end;
   }
 
   .chat-group-footer-actions .chat-copy-btn,

@@ -50,6 +50,7 @@ async function readFooterGeometry(group: Locator) {
         left: identityRect.left,
         right: identityRect.right,
       },
+      footer: { right: footerRect.right },
       name: { left: nameRect.left - footerRect.left, top: nameRect.top - footerRect.top },
     };
   });
@@ -217,6 +218,7 @@ suite.define(() => {
     expect(revealedTouchGeometry.actions.top).toBeGreaterThanOrEqual(
       revealedTouchGeometry.identity.bottom,
     );
+    expect(revealedTouchGeometry.actions.right).toBeCloseTo(revealedTouchGeometry.footer.right, 0);
     await expect(longNamePeerGroup.getByRole("button", { name: "Reply to message" })).toHaveCSS(
       "opacity",
       "1",
