@@ -30,6 +30,7 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   if?: string;
+  needs?: string | string[];
   steps?: WorkflowStep[];
 };
 
@@ -104,7 +105,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       (job.steps ?? []).filter((step) => step.name === "Checkout harness ref"),
     );
 
-    expect(checkouts).toHaveLength(3);
+    expect(checkouts).toHaveLength(2);
     for (const checkout of checkouts) {
       expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
       expect(checkout.with?.["persist-credentials"]).toBe(false);
@@ -112,11 +113,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const proofCheckout = workflow.jobs?.run_telegram_desktop_proof?.steps?.find(
       (step) => step.name === "Checkout harness ref",
     );
-    const validationCheckout = workflow.jobs?.validate_refs?.steps?.find(
-      (step) => step.name === "Checkout harness ref",
-    );
     expect(proofCheckout?.with?.["fetch-depth"]).toBe(1);
-    expect(validationCheckout?.with?.["fetch-depth"]).toBe(0);
   });
 
   it("serializes on the shared credential rather than on other runs", () => {
@@ -287,7 +284,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
     expect(workflowText).not.toContain("allow-bot-users: clawsweeper[bot]");
     expect(workflowText).toContain('setOutput("request_source", "workflow_dispatch")');
-    expect(workflowText).toContain('"$APPROVED_HEAD_SHA" != "$candidate_revision"');
+    expect(workflowText).toContain("inputs.approved_head_sha !== candidateRevision");
     expect(workflowStep("Upload Mantis Telegram desktop artifacts").if).toContain(
       "steps.trusted_evidence.outcome == 'success'",
     );
@@ -304,16 +301,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
     const publishJob = workflow.jobs?.publish_existing_telegram_desktop_proof;
     const captureJob = workflow.jobs?.run_telegram_desktop_proof;
-    const validateJob = workflow.jobs?.validate_refs;
 
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_artifact_name?.required).toBe(false);
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_run_id?.required).toBe(false);
     expect(captureJob?.if).toBe(
       "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
     );
-    expect(validateJob?.if).toBe(
-      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
-    );
+    expect(workflow.jobs?.validate_refs).toBeUndefined();
     expect(publishJob?.if).toBe(
       "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name != ''",
     );
@@ -553,7 +547,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(createRun).toContain('git worktree add --detach "$baseline_root" "$BASELINE_SHA"');
     expect(createRun).toContain('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"');
     expect(restore.uses).toContain("actions/cache/restore@");
-    expect(restore.with?.key).toContain("needs.validate_refs.outputs.baseline_revision");
+    expect(restore.with?.key).toContain("needs.resolve_request.outputs.baseline_revision");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.lockfile_sha256");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.node_version");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.pnpm_version");
@@ -644,8 +638,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
   it("derives refs from the PR instead of parsing comment prose", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
-    expect(workflowText).toContain('setOutput("baseline_ref", pr.base.sha)');
-    expect(workflowText).toContain('setOutput("candidate_ref", pr.head.sha)');
+    expect(workflowText).toContain("const baselineRevision = pr.base.sha");
+    expect(workflowText).toContain("const candidateRevision = pr.head.sha");
+    expect(workflowText).toContain('setOutput("baseline_ref", baselineRevision)');
+    expect(workflowText).toContain('setOutput("candidate_ref", candidateRevision)');
     expect(workflowText).not.toContain("body.match");
     expect(workflowText).not.toContain("baselineMatch");
     expect(workflowText).not.toContain("candidateMatch");
@@ -656,10 +652,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
   });
 
   it("trusts the open PR head and marks fork heads for sandboxed handling", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const workflowText = readFileSync(WORKFLOW, "utf8");
-    expect(workflowText).toContain("repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}");
-    expect(workflowText).toContain('candidate_trust="maintainer-approved-fork-pr-head"');
-    expect(workflowText).toContain('pr_head_repo" != "$GITHUB_REPOSITORY"');
+    expect(workflow.jobs?.run_telegram_desktop_proof?.needs).toBe("resolve_request");
+    expect(workflowText).toContain('"GET /repos/{owner}/{repo}/compare/{basehead}"');
+    expect(workflowText).toContain('comparison.data.status !== "ahead"');
+    expect(workflowText).toContain('comparison.data.status !== "identical"');
+    expect(workflowText).toContain('pr.state !== "open"');
+    expect(workflowText).toContain("Candidate PR source repository is unavailable.");
+    expect(workflowText).toContain("pr.head.repo.full_name !== `${owner}/${repo}`");
 
     const agent = workflowStep("Run Codex Mantis Telegram agent");
     expect(agent.env?.MANTIS_CANDIDATE_TRUST).toBeUndefined();

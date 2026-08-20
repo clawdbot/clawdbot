@@ -50,7 +50,9 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
+      baseline_revision: ${{ steps.resolve.outputs.baseline_revision }}
       candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
+      candidate_revision: ${{ steps.resolve.outputs.candidate_revision }}
       instructions: ${{ steps.resolve.outputs.instructions }}
       publish_artifact_name: ${{ steps.resolve.outputs.publish_artifact_name }}
       publish_run_id: ${{ steps.resolve.outputs.publish_run_id }}
@@ -83,111 +85,76 @@ jobs:
               repo,
               pull_number: Number(prNumber),
             });
+            const publishArtifactName = inputs.publish_artifact_name || "";
+            const baselineRevision = pr.base.sha;
+            const candidateRevision = pr.head.sha;
+
+            if (!publishArtifactName) {
+              const immutableSha = /^[0-9a-f]{40}$/u;
+              if (!immutableSha.test(baselineRevision)) {
+                core.setFailed(`Baseline ref '${baselineRevision}' is not an immutable commit SHA.`);
+                return;
+              }
+              if (!immutableSha.test(candidateRevision)) {
+                core.setFailed(`Candidate ref '${candidateRevision}' is not an immutable commit SHA.`);
+                return;
+              }
+              if (pr.state !== "open") {
+                core.setFailed(`Candidate ref '${candidateRevision}' is not the open PR head.`);
+                return;
+              }
+              if (!pr.head.repo) {
+                core.setFailed("Candidate PR source repository is unavailable.");
+                return;
+              }
+
+              const comparison = await github.request(
+                "GET /repos/{owner}/{repo}/compare/{basehead}",
+                { owner, repo, basehead: `${baselineRevision}...main` },
+              );
+              if (comparison.data.status !== "ahead" && comparison.data.status !== "identical") {
+                core.setFailed(
+                  `Baseline ref '${baselineRevision}' is not an ancestor of main ` +
+                    `(comparison status: ${comparison.data.status}).`,
+                );
+                return;
+              }
+
+              if (pr.head.repo.full_name !== `${owner}/${repo}`) {
+                const allowFork =
+                  inputs.allow_fork_candidate === true || inputs.allow_fork_candidate === "true";
+                if (!allowFork) {
+                  core.setFailed(
+                    "Fork PR heads require explicit allow_fork_candidate approval for this secret-bearing run.",
+                  );
+                  return;
+                }
+                if (
+                  !immutableSha.test(inputs.approved_head_sha || "") ||
+                  inputs.approved_head_sha !== candidateRevision
+                ) {
+                  core.setFailed(
+                    `Fork approval must name the exact current PR head SHA (${candidateRevision}).`,
+                  );
+                  return;
+                }
+              }
+            }
+
             setOutput("should_run", "true");
-            setOutput("baseline_ref", pr.base.sha);
-            setOutput("candidate_ref", pr.head.sha);
+            setOutput("baseline_ref", baselineRevision);
+            setOutput("baseline_revision", baselineRevision);
+            setOutput("candidate_ref", candidateRevision);
+            setOutput("candidate_revision", candidateRevision);
             setOutput("pr_number", String(pr.number));
             setOutput("instructions", body);
-            setOutput("publish_artifact_name", inputs.publish_artifact_name || "");
+            setOutput("publish_artifact_name", publishArtifactName);
             setOutput("publish_run_id", inputs.publish_run_id || "");
             setOutput("request_source", "workflow_dispatch");
 
-  validate_refs:
-    name: Validate selected refs
-    needs: resolve_request
-    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
-    runs-on: ubuntu-24.04
-    outputs:
-      baseline_revision: ${{ steps.validate.outputs.baseline_revision }}
-      candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
-      candidate_trust: ${{ steps.validate.outputs.candidate_trust }}
-    steps:
-      - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-          fetch-depth: 0
-
-      # Intentionally separate: the candidate is the selected open PR head SHA, with fork
-      # heads allowed as fork-pr-head, while only the baseline uses main-ancestor trust.
-      - name: Validate refs are trusted
-        id: validate
-        env:
-          ALLOW_FORK_CANDIDATE: ${{ inputs.allow_fork_candidate }}
-          APPROVED_HEAD_SHA: ${{ inputs.approved_head_sha }}
-          BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
-          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-
-          resolve_commit() {
-            local input_ref="$2"
-            local revision=""
-
-            if ! revision="$(git rev-parse --verify "${input_ref}^{commit}" 2>/dev/null)"; then
-              echo "$1 ref '${input_ref}' is not available in the workflow checkout." >&2
-              exit 1
-            fi
-            printf '%s\n' "$revision"
-          }
-
-          baseline_revision="$(resolve_commit baseline "$BASELINE_REF")"
-          if ! git merge-base --is-ancestor "$baseline_revision" refs/remotes/origin/main; then
-            echo "baseline ref '${BASELINE_REF}' resolved to ${baseline_revision}, which is not on main." >&2
-            exit 1
-          fi
-          pr_head="$(
-            gh api \
-              -H "Accept: application/vnd.github+json" \
-              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state, head_sha: .head.sha, head_repo: .head.repo.full_name}'
-          )"
-          pr_state="$(jq -r '.state' <<<"$pr_head")"
-          pr_head_sha="$(jq -r '.head_sha' <<<"$pr_head")"
-          pr_head_repo="$(jq -r '.head_repo' <<<"$pr_head")"
-          candidate_revision="$CANDIDATE_REF"
-          if [[ ! "$candidate_revision" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "candidate ref '${CANDIDATE_REF}' is not an immutable commit SHA." >&2
-            exit 1
-          fi
-          if [[ "$pr_state" != "open" || "$candidate_revision" != "$pr_head_sha" ]]; then
-            echo "candidate ref '${CANDIDATE_REF}' resolved to ${candidate_revision}, which is not the open PR head." >&2
-            exit 1
-          fi
-          candidate_trust="open-pr-head"
-          if [[ "$pr_head_repo" != "$GITHUB_REPOSITORY" ]]; then
-            if [[ "$ALLOW_FORK_CANDIDATE" != "true" ]]; then
-              echo "Fork PR heads require explicit allow_fork_candidate approval for this secret-bearing run." >&2
-              exit 1
-            fi
-            if [[ ! "$APPROVED_HEAD_SHA" =~ ^[0-9a-f]{40}$ || "$APPROVED_HEAD_SHA" != "$candidate_revision" ]]; then
-              echo "Fork approval must name the exact current PR head SHA (${candidate_revision})." >&2
-              exit 1
-            fi
-            candidate_trust="maintainer-approved-fork-pr-head"
-          fi
-
-          echo "baseline_revision=${baseline_revision}" >> "$GITHUB_OUTPUT"
-          echo "candidate_revision=${candidate_revision}" >> "$GITHUB_OUTPUT"
-          echo "candidate_trust=${candidate_trust}" >> "$GITHUB_OUTPUT"
-          {
-            echo "baseline: \`${BASELINE_REF}\`"
-            echo "baseline SHA: \`${baseline_revision}\`"
-            echo "baseline trust: \`main-ancestor\`"
-            echo "candidate: \`${CANDIDATE_REF}\`"
-            echo "candidate SHA: \`${candidate_revision}\`"
-            echo "candidate trust: \`${candidate_trust}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
   run_telegram_desktop_proof:
     name: Run agentic native Telegram proof
-    needs: [resolve_request, validate_refs]
+    needs: resolve_request
     if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 360
@@ -217,8 +184,8 @@ jobs:
 
       - name: Install local proof tools
         env:
-          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
         shell: bash
         run: |
           set -euo pipefail
@@ -406,8 +373,8 @@ jobs:
       - name: Create exact proof worktrees
         id: proof_worktrees
         env:
-          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
           MANTIS_PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
         shell: bash
         run: |
@@ -440,7 +407,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/mantis-baseline-build.tar
-          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ needs.validate_refs.outputs.baseline_revision }}-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}
+          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ needs.resolve_request.outputs.baseline_revision }}-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}
 
       - name: Prepare baseline proof build
         env:
@@ -511,8 +478,8 @@ jobs:
       - name: Prepare candidate proof build
         env:
           BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-baseline-build.tar
-          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
         shell: bash
         run: |
           set -euo pipefail
@@ -665,9 +632,9 @@ jobs:
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
         env:
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
-          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
           CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
-          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
           GH_TOKEN: ${{ github.token }}
           MANTIS_BASELINE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/baseline
           MANTIS_CANDIDATE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/candidate
@@ -756,9 +723,9 @@ jobs:
         if: ${{ always() }}
         env:
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
-          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
           CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
-          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
           SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
           SUT_CREDENTIAL_DIR: ${{ steps.telegram_credential.outputs.sut_credential_dir }}
         shell: bash
