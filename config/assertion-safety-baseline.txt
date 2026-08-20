@@ -431,7 +431,7 @@ extensions/discord/src/resolve-users.ts	1
 extensions/discord/src/security-audit.ts	12
 extensions/discord/src/send.components.ts	3
 extensions/discord/src/send.messages.ts	2
-extensions/discord/src/send.outbound.ts	3
+extensions/discord/src/send.outbound.ts	2
 extensions/discord/src/send.shared.ts	4
 extensions/discord/src/send.webhook.ts	1
 extensions/discord/src/setup-account-state.ts	1
