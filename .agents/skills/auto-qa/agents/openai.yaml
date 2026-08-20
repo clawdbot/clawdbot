@@ -1,4 +1,0 @@
-interface:
-  display_name: "Auto QA"
-  short_description: "Continuously verify real OpenClaw bugs"
-  default_prompt: "Use $auto-qa to audit current OpenClaw main across at least ten independent subsystem lanes, reproduce real bugs, maintain a verified ledger, and land only authorized high-confidence low-risk fixes."

@@ -1,8 +1,0 @@
-{
-  "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "rootDir": "../..",
-    "outDir": "dist"
-  },
-  "include": ["src/**/*", "../../src/agents/**/*", "../../src/shared/**/*"]
-}

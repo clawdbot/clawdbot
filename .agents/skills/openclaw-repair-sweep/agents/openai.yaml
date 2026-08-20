@@ -1,4 +1,0 @@
-interface:
-  display_name: "OpenClaw Repair Sweep"
-  short_description: "Fix, refactor, land, and close OpenClaw issues and PRs"
-  default_prompt: "Use $openclaw-repair-sweep to orchestrate workers over OpenClaw issues and PRs; prove root causes, prefer clean refactors over quick fixes, land verified repairs, and close items proven fixed or no longer useful."

@@ -1,1 +1,0 @@
-export const DEFAULT_RELAY_TIMEOUT_MS = 5_000;

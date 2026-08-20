@@ -1,4 +1,0 @@
-interface:
-  display_name: "OpenClaw Testing"
-  short_description: "Choose cheap, targeted OpenClaw validation"
-  default_prompt: "Use $openclaw-testing to choose the cheapest safe test or CI verification path, inspect failures, and rerun only the relevant OpenClaw lane."

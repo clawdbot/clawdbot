@@ -1,7 +1,0 @@
-<resources>
-    <string-array name="ask_openclaw_query_patterns">
-        <item>"OpenClaw에 %1$s 요청"</item>
-        <item>"OpenClaw에 %1$s 지시"</item>
-        <item>"OpenClaw을 열고 %1$s 요청"</item>
-    </string-array>
-</resources>
