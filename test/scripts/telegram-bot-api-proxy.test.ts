@@ -78,12 +78,6 @@ describe("Telegram Bot API credential proxy", () => {
       }),
     ).toHaveProperty("status", 200);
     expect(
-      await post(proxyPort, "deleteMessage", {
-        chat_id: CHAT_ID,
-        message_id: 90,
-      }),
-    ).toHaveProperty("status", 403);
-    expect(
       await post(proxyPort, "sendMessage", {
         chat_id: "-100999",
         text: "escape",
@@ -193,10 +187,6 @@ describe("Telegram Bot API credential proxy", () => {
       });
     });
 
-    expect(await post(proxyPort, "getUpdates", { drop_pending_updates: true })).toHaveProperty(
-      "status",
-      403,
-    );
     const response = await post(proxyPort, "getUpdates", {
       allowed_updates: ["chat_member"],
       offset: 2_000_000_000,
@@ -219,9 +209,6 @@ describe("Telegram Bot API credential proxy", () => {
       ok: true,
       result: [{ message: { chat: { id: Number(CHAT_ID) }, message_id: 41 }, update_id: 101 }],
     });
-    expect(
-      await post(proxyPort, "deleteMessage", { chat_id: CHAT_ID, message_id: 41 }),
-    ).toHaveProperty("status", 403);
   });
 
   it("refuses to acknowledge pending updates from another chat", async () => {

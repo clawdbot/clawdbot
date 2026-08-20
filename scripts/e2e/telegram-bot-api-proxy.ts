@@ -6,21 +6,22 @@ import { pathToFileURL } from "node:url";
 
 type JsonObject = Record<string, unknown>;
 
-const MAX_API_BODY_BYTES = 1024 * 1024;
-const MAX_MEDIA_BODY_BYTES = 110 * 1024 * 1024;
-const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-const MAX_NON_POLL_REQUESTS = 2048;
-const MAX_SENDS = 64;
-const GROUP_UPDATE_TYPES = [
+const MAX_BODY_BYTES = 110 * 1024 * 1024;
+const UPDATE_TYPES = [
   "message",
   "edited_message",
   "callback_query",
   "message_reaction",
   "message_reaction_count",
 ];
-const SEND_METHODS = new Set([
+const CHAT_METHODS = new Set([
+  "deleteMessage",
+  "editMessageCaption",
+  "editMessageReplyMarkup",
+  "editMessageText",
   "sendAnimation",
   "sendAudio",
+  "sendChatAction",
   "sendDocument",
   "sendLocation",
   "sendMessage",
@@ -31,23 +32,9 @@ const SEND_METHODS = new Set([
   "sendVideo",
   "sendVideoNote",
   "sendVoice",
+  "setMessageReaction",
 ]);
-const MEDIA_SEND_METHODS = new Set([
-  "sendAnimation",
-  "sendAudio",
-  "sendDocument",
-  "sendPhoto",
-  "sendVideo",
-  "sendVideoNote",
-  "sendVoice",
-]);
-const OWN_MESSAGE_METHODS = new Set([
-  "deleteMessage",
-  "editMessageCaption",
-  "editMessageReplyMarkup",
-  "editMessageText",
-]);
-
+const CHATLESS_METHODS = new Set(["answerCallbackQuery", "getFile"]);
 const hopByHopHeaders = new Set([
   "connection",
   "keep-alive",
@@ -79,9 +66,9 @@ function forwardedHeaders(headers: IncomingMessage["headers"]): http.OutgoingHtt
   );
 }
 
-async function readBody(stream: IncomingMessage, maxBytes: number): Promise<Buffer> {
+async function readBody(stream: IncomingMessage): Promise<Buffer> {
   const declaredLength = Number(stream.headers["content-length"] ?? 0);
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
     throw new Error("request body exceeds the proof limit");
   }
   const chunks: Buffer[] = [];
@@ -89,7 +76,7 @@ async function readBody(stream: IncomingMessage, maxBytes: number): Promise<Buff
   for await (const chunk of stream) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
-    if (total > maxBytes) {
+    if (total > MAX_BODY_BYTES) {
       throw new Error("request body exceeds the proof limit");
     }
     chunks.push(buffer);
@@ -97,7 +84,7 @@ async function readBody(stream: IncomingMessage, maxBytes: number): Promise<Buff
   return Buffer.concat(chunks, total);
 }
 
-function parseJsonObject(body: Buffer): JsonObject {
+function parseJson(body: Buffer): JsonObject {
   const value: unknown = JSON.parse(body.toString("utf8"));
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("request body must be a JSON object");
@@ -109,173 +96,89 @@ function requireJson(body: Buffer, contentType: string): JsonObject {
   if (!/^application\/json(?:\s*;.*)?$/iu.test(contentType)) {
     throw new Error("Bot API request must use JSON");
   }
-  return parseJsonObject(body);
+  return parseJson(body);
+}
+
+function requireReplyChatScope(replyParameters: unknown, chatId: string): void {
+  if (replyParameters === undefined) {
+    return;
+  }
+  if (!replyParameters || typeof replyParameters !== "object" || Array.isArray(replyParameters)) {
+    throw new Error("invalid reply_parameters");
+  }
+  const replyChatId = (replyParameters as JsonObject).chat_id;
+  if (replyChatId !== undefined && String(replyChatId) !== chatId) {
+    throw new Error("Bot API reply is outside the leased proof chat");
+  }
 }
 
 async function requireChatScope(body: Buffer, contentType: string, chatId: string): Promise<void> {
-  let chatIds: unknown[];
-  let replyParameters: unknown;
   if (/^multipart\/form-data\s*;/iu.test(contentType)) {
-    const bodyBytes =
+    const bytes =
       body.buffer instanceof ArrayBuffer
         ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
         : Uint8Array.from(body);
-    const form = await new Response(bodyBytes, {
-      headers: { "content-type": contentType },
-    }).formData();
-    chatIds = form.getAll("chat_id");
+    const form = await new Response(bytes, { headers: { "content-type": contentType } }).formData();
+    const chatIds = form.getAll("chat_id");
+    if (chatIds.length !== 1 || String(chatIds[0]) !== chatId) {
+      throw new Error("Bot API request is outside the leased proof chat");
+    }
     const replies = form.getAll("reply_parameters");
     if (replies.length > 1 || (replies[0] !== undefined && typeof replies[0] !== "string")) {
       throw new Error("invalid reply_parameters");
     }
-    replyParameters = replies[0] === undefined ? undefined : JSON.parse(replies[0]);
-  } else {
-    const payload = requireJson(body, contentType);
-    chatIds = [payload.chat_id];
-    replyParameters = payload.reply_parameters;
+    requireReplyChatScope(replies[0] === undefined ? undefined : JSON.parse(replies[0]), chatId);
+    return;
   }
-  if (chatIds.length !== 1 || String(chatIds[0]) !== chatId) {
+  const payload = requireJson(body, contentType);
+  if (String(payload.chat_id) !== chatId) {
     throw new Error("Bot API request is outside the leased proof chat");
   }
-  if (replyParameters !== undefined) {
-    if (!replyParameters || typeof replyParameters !== "object" || Array.isArray(replyParameters)) {
-      throw new Error("invalid reply_parameters");
-    }
-    const replyChatId = (replyParameters as JsonObject).chat_id;
-    if (replyChatId !== undefined) {
-      if (
-        (typeof replyChatId !== "string" && typeof replyChatId !== "number") ||
-        String(replyChatId) !== chatId
-      ) {
-        throw new Error("Bot API reply is outside the leased proof chat");
-      }
-    }
-  }
+  requireReplyChatScope(payload.reply_parameters, chatId);
 }
 
-function requireStringField(payload: JsonObject, field: string): string {
-  const value = payload[field];
-  if (typeof value !== "string" || value.length === 0 || value.length > 512) {
-    throw new Error(`invalid ${field}`);
+function updateChatId(update: unknown): unknown {
+  if (!update || typeof update !== "object" || Array.isArray(update)) {
+    return undefined;
   }
-  return value;
+  const record = update as JsonObject;
+  const callback = record.callback_query;
+  const callbackMessage =
+    callback && typeof callback === "object" && !Array.isArray(callback)
+      ? (callback as JsonObject).message
+      : undefined;
+  const message =
+    record.message ??
+    record.edited_message ??
+    record.message_reaction ??
+    record.message_reaction_count ??
+    callbackMessage;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const chat = (message as JsonObject).chat;
+  return chat && typeof chat === "object" && !Array.isArray(chat)
+    ? (chat as JsonObject).id
+    : undefined;
 }
 
-function requireMessageId(payload: JsonObject): number {
-  const value = payload.message_id;
-  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
-    throw new Error("invalid message_id");
-  }
-  return value as number;
+function writeError(response: ServerResponse, description: string): void {
+  response.writeHead(403, { "content-type": "application/json" });
+  response.end(JSON.stringify({ description, error_code: 403, ok: false }));
 }
 
-function chatIdFromUpdate(update: JsonObject): unknown {
-  const containers: unknown[] = [
-    update.message,
-    update.edited_message,
-    update.message_reaction,
-    update.message_reaction_count,
-  ];
-  const callback = update.callback_query;
-  if (callback && typeof callback === "object" && !Array.isArray(callback)) {
-    containers.push((callback as JsonObject).message);
-  }
-  for (const container of containers) {
-    if (!container || typeof container !== "object" || Array.isArray(container)) {
-      continue;
-    }
-    const chat = (container as JsonObject).chat;
-    if (chat && typeof chat === "object" && !Array.isArray(chat)) {
-      return (chat as JsonObject).id;
-    }
-  }
-  return undefined;
-}
-
-function collectFileIds(value: unknown, fileIds: Set<string>): void {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectFileIds(item, fileIds);
-    }
-    return;
-  }
-  if (!value || typeof value !== "object") {
-    return;
-  }
-  const record = value as JsonObject;
-  if (typeof record.file_id === "string" && record.file_id.length <= 512) {
-    fileIds.add(record.file_id);
-  }
-  for (const nested of Object.values(record)) {
-    collectFileIds(nested, fileIds);
-  }
-}
-
-function collectUpdateCapabilities(
-  update: JsonObject,
-  observedMessageIds: Set<number>,
-  fileIds: Set<string>,
-  callbackQueryIds: Set<string>,
-): void {
-  for (const value of [update.message, update.edited_message]) {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      const messageId = (value as JsonObject).message_id;
-      if (Number.isSafeInteger(messageId) && (messageId as number) > 0) {
-        observedMessageIds.add(messageId as number);
-      }
-    }
-  }
-  const reaction = update.message_reaction ?? update.message_reaction_count;
-  if (reaction && typeof reaction === "object" && !Array.isArray(reaction)) {
-    const messageId = (reaction as JsonObject).message_id;
-    if (Number.isSafeInteger(messageId) && (messageId as number) > 0) {
-      observedMessageIds.add(messageId as number);
-    }
-  }
-  const callback = update.callback_query;
-  if (callback && typeof callback === "object" && !Array.isArray(callback)) {
-    const callbackRecord = callback as JsonObject;
-    if (typeof callbackRecord.id === "string") {
-      callbackQueryIds.add(callbackRecord.id);
-    }
-    const message = callbackRecord.message;
-    if (message && typeof message === "object" && !Array.isArray(message)) {
-      const messageId = (message as JsonObject).message_id;
-      if (Number.isSafeInteger(messageId) && (messageId as number) > 0) {
-        observedMessageIds.add(messageId as number);
-      }
-    }
-  }
-  collectFileIds(update, fileIds);
-}
-
-function collectSentMessageIds(value: unknown, messageIds: Set<number>): void {
-  for (const message of Array.isArray(value) ? value : [value]) {
-    if (message && typeof message === "object" && !Array.isArray(message)) {
-      const messageId = (message as JsonObject).message_id;
-      if (Number.isSafeInteger(messageId) && (messageId as number) > 0) {
-        messageIds.add(messageId as number);
-      }
-    }
-  }
-}
-
-function writeError(response: ServerResponse, statusCode: number, description: string): void {
-  response.writeHead(statusCode, { "content-type": "application/json" });
-  response.end(JSON.stringify({ description, error_code: statusCode, ok: false }));
-}
-
-function writeSuccess(response: ServerResponse, result: unknown): void {
+function writeSuccess(response: ServerResponse): void {
   response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify({ ok: true, result }));
+  response.end('{"ok":true,"result":true}');
 }
 
 async function forwardApiRequest(params: {
   body: Buffer;
   headers: IncomingMessage["headers"];
-  path: string;
+  method: string;
   transport: typeof http | typeof https;
   upstreamOrigin: URL;
+  upstreamToken: string;
 }): Promise<{ body: Buffer; headers: IncomingMessage["headers"]; statusCode: number }> {
   return await new Promise((resolve, reject) => {
     const upstream = params.transport.request(
@@ -288,21 +191,20 @@ async function forwardApiRequest(params: {
         },
         hostname: params.upstreamOrigin.hostname,
         method: "POST",
-        path: params.path,
+        path: `/bot${params.upstreamToken}/${params.method}`,
         port: params.upstreamOrigin.port || undefined,
         protocol: params.upstreamOrigin.protocol,
       },
-      (upstreamResponse) => {
-        readBody(upstreamResponse, MAX_RESPONSE_BYTES).then(
-          (body) =>
-            resolve({
-              body,
-              headers: upstreamResponse.headers,
-              statusCode: upstreamResponse.statusCode ?? 502,
-            }),
-          (error: unknown) =>
-            reject(error instanceof Error ? error : new Error("Telegram response read failed")),
-        );
+      async (upstreamResponse) => {
+        try {
+          resolve({
+            body: await readBody(upstreamResponse),
+            headers: upstreamResponse.headers,
+            statusCode: upstreamResponse.statusCode ?? 502,
+          });
+        } catch (error) {
+          reject(error);
+        }
       },
     );
     upstream.setTimeout(90_000, () => upstream.destroy(new Error("Telegram Bot API timed out")));
@@ -322,60 +224,48 @@ export function createTelegramBotApiProxy(params: {
   const alias = escapeRegExp(params.aliasToken);
   const methodPattern = new RegExp(`^/bot${alias}/([A-Za-z][A-Za-z0-9_]{0,63})$`, "u");
   const filePattern = new RegExp(`^/file/bot${alias}/([^?#]+)$`, "u");
-  const callbackQueryIds = new Set<string>();
-  const fileIds = new Set<string>();
-  const filePaths = new Set<string>();
-  const observedMessageIds = new Set<number>();
-  const sentMessageIds = new Set<number>();
   let nextUpdateOffset: number | undefined;
   let polling = false;
-  let nonPollRequestCount = 0;
-  let sendCount = 0;
 
-  const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
+  const handle = async (request: IncomingMessage, response: ServerResponse) => {
     const requestPath = request.url ?? "";
-    const method = methodPattern.exec(requestPath)?.[1];
-    let callbackQueryId: string | undefined;
-    let ownsPoll = false;
-    try {
-      if (method !== "getUpdates" && ++nonPollRequestCount > MAX_NON_POLL_REQUESTS) {
-        throw new Error("Mantis Telegram request limit reached");
-      }
-      const filePath = filePattern.exec(requestPath)?.[1];
-      if (filePath) {
-        if (request.method !== "GET" || !filePaths.has(filePath)) {
-          throw new Error("Telegram file is outside this proof attempt");
-        }
-        const upstream = transport.request(
-          {
-            headers: { ...forwardedHeaders(request.headers), host: upstreamOrigin.host },
-            hostname: upstreamOrigin.hostname,
-            method: "GET",
-            path: `/file/bot${params.upstreamToken}/${filePath}`,
-            port: upstreamOrigin.port || undefined,
-            protocol: upstreamOrigin.protocol,
-          },
-          (upstreamResponse) => {
-            response.writeHead(
-              upstreamResponse.statusCode ?? 502,
-              forwardedHeaders(upstreamResponse.headers),
-            );
-            upstreamResponse.pipe(response);
-          },
-        );
-        upstream.setTimeout(90_000, () => upstream.destroy(new Error("Telegram file timed out")));
-        upstream.on("error", () => response.destroy());
-        upstream.end();
+    const filePath = filePattern.exec(requestPath)?.[1];
+    if (filePath) {
+      if (request.method !== "GET" || filePath.split("/").includes("..")) {
+        writeError(response, "Telegram file request is not allowed");
         return;
       }
-      if (!method || request.method !== "POST") {
-        throw new Error("Telegram Bot API operation is not allowed");
-      }
-
-      const body = await readBody(
-        request,
-        MEDIA_SEND_METHODS.has(method) ? MAX_MEDIA_BODY_BYTES : MAX_API_BODY_BYTES,
+      const upstream = transport.request(
+        {
+          headers: { ...forwardedHeaders(request.headers), host: upstreamOrigin.host },
+          hostname: upstreamOrigin.hostname,
+          method: "GET",
+          path: `/file/bot${params.upstreamToken}/${filePath}`,
+          port: upstreamOrigin.port || undefined,
+          protocol: upstreamOrigin.protocol,
+        },
+        (upstreamResponse) => {
+          response.writeHead(
+            upstreamResponse.statusCode ?? 502,
+            forwardedHeaders(upstreamResponse.headers),
+          );
+          upstreamResponse.pipe(response);
+        },
       );
+      upstream.on("error", () => response.destroy());
+      upstream.end();
+      return;
+    }
+
+    const method = methodPattern.exec(requestPath)?.[1];
+    if (!method || request.method !== "POST") {
+      writeError(response, "Telegram Bot API operation is not allowed");
+      return;
+    }
+
+    let ownsPoll = false;
+    try {
+      const body = await readBody(request);
       const contentType = request.headers["content-type"] ?? "";
       let forwardedBody = body;
       if (method === "getMe") {
@@ -384,31 +274,23 @@ export function createTelegramBotApiProxy(params: {
         }
       } else if (method === "deleteWebhook") {
         const payload = requireJson(body, contentType);
-        if (
-          Object.keys(payload).some((key) => key !== "drop_pending_updates") ||
-          payload.drop_pending_updates === true
-        ) {
-          throw new Error("deleteWebhook is limited to safe polling startup");
+        if (payload.drop_pending_updates === true) {
+          throw new Error("deleteWebhook cannot drop updates");
         }
-        writeSuccess(response, true);
+        writeSuccess(response);
         return;
       } else if (method === "getUpdates") {
         if (polling) {
-          writeError(response, 503, "Only one Telegram poll is allowed");
-          return;
+          throw new Error("Only one Telegram poll is allowed");
         }
         const payload = requireJson(body, contentType);
-        const allowedKeys = new Set(["allowed_updates", "limit", "offset", "timeout"]);
-        if (Object.keys(payload).some((key) => !allowedKeys.has(key))) {
-          throw new Error("unsupported getUpdates payload");
-        }
         const timeout =
           typeof payload.timeout === "number" && Number.isInteger(payload.timeout)
             ? Math.max(0, Math.min(30, payload.timeout))
             : 30;
         forwardedBody = Buffer.from(
           JSON.stringify({
-            allowed_updates: GROUP_UPDATE_TYPES,
+            allowed_updates: UPDATE_TYPES,
             limit: 100,
             ...(nextUpdateOffset === undefined ? {} : { offset: nextUpdateOffset }),
             timeout,
@@ -416,84 +298,36 @@ export function createTelegramBotApiProxy(params: {
         );
         polling = true;
         ownsPoll = true;
-      } else if (SEND_METHODS.has(method)) {
-        if (++sendCount > MAX_SENDS) {
-          throw new Error("Mantis Telegram send limit reached");
-        }
+      } else if (CHAT_METHODS.has(method)) {
         await requireChatScope(body, contentType, params.chatId);
-      } else if (OWN_MESSAGE_METHODS.has(method)) {
-        const payload = requireJson(body, contentType);
-        await requireChatScope(body, contentType, params.chatId);
-        if (!sentMessageIds.has(requireMessageId(payload))) {
-          throw new Error("message is outside this proof attempt");
-        }
-      } else if (method === "sendChatAction" || method === "setMessageReaction") {
-        const payload = requireJson(body, contentType);
-        await requireChatScope(body, contentType, params.chatId);
-        if (method === "setMessageReaction") {
-          const messageId = requireMessageId(payload);
-          if (!observedMessageIds.has(messageId) && !sentMessageIds.has(messageId)) {
-            throw new Error("message is outside this proof attempt");
-          }
-        }
-      } else if (method === "answerCallbackQuery") {
-        callbackQueryId = requireStringField(requireJson(body, contentType), "callback_query_id");
-        if (!callbackQueryIds.has(callbackQueryId)) {
-          throw new Error("callback query is outside this proof attempt");
-        }
-      } else if (method === "getFile") {
-        const id = requireStringField(requireJson(body, contentType), "file_id");
-        if (!fileIds.has(id)) {
-          throw new Error("file is outside this proof attempt");
-        }
-      } else {
+      } else if (!CHATLESS_METHODS.has(method)) {
         throw new Error("Telegram Bot API operation is not allowed");
       }
 
       const upstream = await forwardApiRequest({
         body: forwardedBody,
         headers: { ...request.headers, "content-type": contentType },
-        path: `/bot${params.upstreamToken}/${method}`,
+        method,
         transport,
         upstreamOrigin,
+        upstreamToken: params.upstreamToken,
       });
       let responseBody = upstream.body;
-      if (upstream.statusCode >= 200 && upstream.statusCode < 300) {
-        const payload = parseJsonObject(upstream.body);
-        const result = payload.result;
-        if (payload.ok === true) {
-          if (method === "getUpdates" && Array.isArray(result)) {
-            const scoped = result.filter(
-              (update): update is JsonObject =>
-                Boolean(update) &&
-                typeof update === "object" &&
-                !Array.isArray(update) &&
-                String(chatIdFromUpdate(update as JsonObject)) === params.chatId,
-            );
-            if (scoped.length !== result.length) {
-              throw new Error("QA bot has pending updates outside the leased proof chat");
-            }
-            for (const update of scoped) {
-              if (Number.isSafeInteger(update.update_id)) {
-                nextUpdateOffset = Math.max(
-                  nextUpdateOffset ?? 0,
-                  (update.update_id as number) + 1,
-                );
+      if (method === "getUpdates" && upstream.statusCode >= 200 && upstream.statusCode < 300) {
+        const payload = parseJson(upstream.body);
+        if (payload.ok === true && Array.isArray(payload.result)) {
+          if (payload.result.some((update) => String(updateChatId(update)) !== params.chatId)) {
+            throw new Error("QA bot has pending updates outside the leased proof chat");
+          }
+          for (const update of payload.result) {
+            if (update && typeof update === "object" && !Array.isArray(update)) {
+              const updateId = (update as JsonObject).update_id;
+              if (Number.isSafeInteger(updateId)) {
+                nextUpdateOffset = Math.max(nextUpdateOffset ?? 0, (updateId as number) + 1);
               }
-              collectUpdateCapabilities(update, observedMessageIds, fileIds, callbackQueryIds);
-            }
-            responseBody = Buffer.from(JSON.stringify({ ...payload, result: scoped }));
-          } else if (SEND_METHODS.has(method)) {
-            collectSentMessageIds(result, sentMessageIds);
-          } else if (method === "getFile" && result && typeof result === "object") {
-            const returnedPath = (result as JsonObject).file_path;
-            if (typeof returnedPath === "string" && returnedPath.length <= 512) {
-              filePaths.add(returnedPath);
             }
           }
-          if (callbackQueryId) {
-            callbackQueryIds.delete(callbackQueryId);
-          }
+          responseBody = Buffer.from(JSON.stringify(payload));
         }
       }
       const headers = forwardedHeaders(upstream.headers);
@@ -501,24 +335,15 @@ export function createTelegramBotApiProxy(params: {
       response.writeHead(upstream.statusCode, headers);
       response.end(responseBody);
     } catch (error) {
-      if (!response.headersSent) {
-        writeError(
-          response,
-          403,
-          error instanceof Error ? error.message : "Telegram Bot API request denied",
-        );
-      } else {
-        response.end();
-      }
+      writeError(response, error instanceof Error ? error.message : "Telegram request denied");
     } finally {
       if (ownsPoll) {
         polling = false;
       }
     }
   };
-  return http.createServer((request, response) => {
-    void handleRequest(request, response);
-  });
+
+  return http.createServer((request, response) => void handle(request, response));
 }
 
 function main(): void {
