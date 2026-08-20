@@ -466,7 +466,11 @@ export async function completeReplyAgentRun(input: {
     }
   }
   const result = returnWithQueuedFollowupDrain(
-    finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
+    finalPayloads.length === 0
+      ? undefined
+      : finalPayloads.length === 1
+        ? finalPayloads[0]
+        : finalPayloads,
   );
   return result;
 }
