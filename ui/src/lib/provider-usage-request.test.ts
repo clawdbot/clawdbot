@@ -10,14 +10,17 @@ describe("requestProviderUsage", () => {
   it("returns the summary for an answered request", async () => {
     const summary = { updatedAt: 1, providers: [] };
     const client = clientWith((async () => summary) as GatewayBrowserClient["request"]);
-    await expect(requestProviderUsage(client)).resolves.toEqual({ summary, failed: false });
+    await expect(requestProviderUsage(client)).resolves.toEqual({ ok: true, value: summary });
   });
 
   it("records a rejected request as failed", async () => {
     const client = clientWith((async () => {
       throw new Error("gateway unreachable");
     }) as GatewayBrowserClient["request"]);
-    await expect(requestProviderUsage(client)).resolves.toEqual({ summary: null, failed: true });
+    await expect(requestProviderUsage(client)).resolves.toEqual({
+      ok: false,
+      error: { kind: "request-failed" },
+    });
   });
 
   it("does not record a cancelled request as failed", async () => {
@@ -26,9 +29,8 @@ describe("requestProviderUsage", () => {
       controller.abort();
       throw new Error("aborted");
     }) as GatewayBrowserClient["request"]);
-    await expect(requestProviderUsage(client, { signal: controller.signal })).resolves.toEqual({
-      summary: null,
-      failed: false,
-    });
+    await expect(requestProviderUsage(client, { signal: controller.signal })).rejects.toThrow(
+      "aborted",
+    );
   });
 });

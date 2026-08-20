@@ -25,6 +25,20 @@ const totals = {
   missingCostEntries: 0,
 };
 
+const emptyTotals = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  totalCost: 0,
+  inputCost: 0,
+  outputCost: 0,
+  cacheReadCost: 0,
+  cacheWriteCost: 0,
+  missingCostEntries: 0,
+};
+
 function dayOffset(offset: number): string {
   const date = new Date();
   date.setHours(12, 0, 0, 0);
@@ -65,7 +79,7 @@ function emptyUsageResponses() {
       startDate: date,
       endDate: date,
       sessions: [],
-      totals,
+      totals: emptyTotals,
       aggregates: {
         messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
         tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
@@ -76,7 +90,7 @@ function emptyUsageResponses() {
         daily: [],
       },
     },
-    "usage.cost": { updatedAt, days: 1, daily: [], totals },
+    "usage.cost": { updatedAt, days: 1, daily: [], totals: emptyTotals },
   };
 }
 

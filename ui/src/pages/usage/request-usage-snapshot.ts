@@ -27,10 +27,5 @@ export async function requestUsageSnapshot(
       : client.request<CostUsageSummary>("usage.cost", costParams),
     requestProviderUsage(client, signal ? { signal } : undefined),
   ]);
-  return {
-    result,
-    costSummary,
-    providerUsageSummary: providerUsage.summary,
-    providerUsageUnavailable: providerUsage.failed,
-  };
+  return { result, costSummary, providerUsage };
 }

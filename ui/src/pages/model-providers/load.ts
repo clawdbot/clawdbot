@@ -1,7 +1,6 @@
 // Fetches the gateway signals behind the Models settings page.
 // Each source degrades independently: a missing usage hook or an older
 // gateway must not blank the provider list.
-import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -17,7 +16,10 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
+import {
+  requestProviderUsage,
+  type ProviderUsageRequestResult,
+} from "../../lib/provider-usage-request.ts";
 import { requestSessionUsage } from "../../lib/sessions/index.ts";
 import { loadModels } from "../chat/models.ts";
 
@@ -30,9 +32,7 @@ export type ModelProvidersData = {
   providerOutcomes: ModelCatalogProviderOutcome[];
   catalogError: string | null;
   config: Record<string, unknown> | null;
-  providerUsage: UsageSummary | null;
-  /** True when the usage.status request failed, as opposed to returning no data. */
-  providerUsageFailed: boolean;
+  providerUsage: ProviderUsageRequestResult | null;
   costByProvider: SessionModelUsage[] | null;
   updatedAt: number | null;
   error: string | null;
@@ -49,7 +49,6 @@ export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   catalogError: null,
   config: null,
   providerUsage: null,
-  providerUsageFailed: false,
   costByProvider: null,
   updatedAt: null,
   error: null,
@@ -126,8 +125,7 @@ export async function loadModelProvidersData(
     providerOutcomes: catalogResult.ok ? (catalogResult.result?.providerOutcomes ?? []) : [],
     catalogError: catalogResult.ok ? null : errorMessage(catalogResult.error),
     config,
-    providerUsage: providerUsageFetch.summary,
-    providerUsageFailed: providerUsageFetch.failed,
+    providerUsage: providerUsageFetch,
     costByProvider,
     updatedAt: Date.now(),
     // Auth status is the primary provider list; its failure is the only one

@@ -104,8 +104,7 @@ describe("loadModelProvidersData", () => {
     expect(result.providerOutcomes).toEqual([]);
     expect(result.catalogError).toBeNull();
     expect(result.config).toEqual({});
-    expect(result.providerUsage).toEqual({ updatedAt: 1, providers: [] });
-    expect(result.providerUsageFailed).toBe(false);
+    expect(result.providerUsage).toEqual({ ok: true, value: { updatedAt: 1, providers: [] } });
     expect(result.costByProvider).toEqual([]);
     expect(result.error).toBeNull();
   });
@@ -131,8 +130,10 @@ describe("loadModelProvidersData", () => {
 
     const result = await loadModelProvidersData(client, { agentId: "main" });
 
-    expect(result.providerUsage).toBeNull();
-    expect(result.providerUsageFailed).toBe(true);
+    expect(result.providerUsage).toEqual({
+      ok: false,
+      error: { kind: "request-failed" },
+    });
     expect(result.error).toBeNull();
   });
 
@@ -167,8 +168,10 @@ describe("loadModelProvidersData", () => {
 
     const result = await loadModelProvidersData(client, { agentId: "main" });
 
-    expect(result.providerUsageFailed).toBe(false);
-    expect(result.providerUsage?.providers[0]?.error).toBe("provider API unavailable");
+    expect(result.providerUsage).toMatchObject({
+      ok: true,
+      value: { providers: [{ error: "provider API unavailable" }] },
+    });
   });
 
   it("surfaces an explicit catalog refresh failure while retaining cached configured models", async () => {

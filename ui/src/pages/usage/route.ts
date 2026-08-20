@@ -40,8 +40,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
-      providerUsageSummary: null,
-      providerUsageUnavailable: false,
+      providerUsage: null,
       loadedAtMs: null,
       error: null,
     };
@@ -56,7 +55,9 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       gateway,
       gatewaySnapshot,
       query,
-      ...snapshot,
+      result: snapshot.result,
+      costSummary: snapshot.costSummary,
+      providerUsage: snapshot.providerUsage,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -67,8 +68,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
-      providerUsageSummary: null,
-      providerUsageUnavailable: false,
+      providerUsage: null,
       loadedAtMs: null,
       error: errorMessage(error),
     };

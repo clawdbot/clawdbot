@@ -30,8 +30,7 @@ describe("usage route", () => {
     const result = (await page.loader?.(context, {} as RouteLoaderOptions)) as UsageRouteData;
 
     expect(result.error).toBeNull();
-    expect(result.providerUsageSummary).toBeNull();
-    expect(result.providerUsageUnavailable).toBe(true);
+    expect(result.providerUsage).toEqual({ ok: false, error: { kind: "request-failed" } });
   });
 
   it("redacts secrets in displayed loader failures", async () => {

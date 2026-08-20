@@ -1,29 +1,27 @@
-// One boundary for the usage.status RPC: a null summary is the gateway's
-// answer, while `failed` records that the request itself never answered.
-// Consumers must not render the two the same way (silent empty panels).
+// One boundary for the usage.status RPC. A successful empty response is valid data;
+// request failure remains a separate closed Result arm for consumer views.
+// Never convert cancellation into that arm: Lit Task discards superseded work.
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { UsageSummary } from "../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 
-type ProviderUsageFetch = {
-  summary: UsageSummary | null;
-  failed: boolean;
-};
+export type ProviderUsageRequestFailure = { kind: "request-failed" };
 
-export function requestProviderUsage(
+export type ProviderUsageRequestResult = Result<UsageSummary, ProviderUsageRequestFailure>;
+
+export async function requestProviderUsage(
   client: GatewayBrowserClient,
   opts?: { signal?: AbortSignal },
-): Promise<ProviderUsageFetch> {
-  const pending = opts?.signal
-    ? client.request<UsageSummary>("usage.status", undefined, { signal: opts.signal })
-    : client.request<UsageSummary>("usage.status");
-  return pending.then(
-    (summary) => ({ summary, failed: false }),
-    // A cancelled request is the caller superseding its own work, not an
-    // outage; reporting it as failed would render the unavailable notice
-    // for every navigation or refresh that aborts an in-flight load. Both
-    // task hosts abort only through supersession, which also discards the
-    // settled result; a caller that aborts and still consumes the result
-    // must classify the failure itself.
-    () => ({ summary: null, failed: !opts?.signal?.aborted }),
-  );
+): Promise<ProviderUsageRequestResult> {
+  try {
+    const summary = opts?.signal
+      ? await client.request<UsageSummary>("usage.status", undefined, { signal: opts.signal })
+      : await client.request<UsageSummary>("usage.status");
+    return ok<UsageSummary, ProviderUsageRequestFailure>(summary);
+  } catch (error) {
+    if (opts?.signal?.aborted) {
+      throw error;
+    }
+    return err<UsageSummary, ProviderUsageRequestFailure>({ kind: "request-failed" });
+  }
 }

@@ -25,6 +25,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
 import {
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
@@ -36,7 +37,6 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
-import type { ProviderUsageSummary } from "./data-types.ts";
 import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import {
   currentLocalDate,
@@ -68,8 +68,7 @@ export type UsageRouteData = {
   };
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
-  providerUsageSummary: ProviderUsageSummary | null;
-  providerUsageUnavailable: boolean;
+  providerUsage: ProviderUsageRequestResult | null;
   loadedAtMs: number | null;
   error: string | null;
 };
@@ -87,8 +86,7 @@ class UsagePage extends OpenClawLightDomElement {
 
   @state() private usageResult: SessionsUsageResult | null = null;
   @state() private usageCostSummary: CostUsageSummary | null = null;
-  @state() private providerUsageSummary: ProviderUsageSummary | null = null;
-  @state() private providerUsageUnavailable = false;
+  @state() private providerUsage: ProviderUsageRequestResult | null = null;
   @state() private usageError: string | null = null;
   @state() private usageStartDate = currentLocalDate();
   @state() private usageEndDate = currentLocalDate();
@@ -191,18 +189,14 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageTaskActiveClient = null;
       this.usageResult = value.result;
       this.usageCostSummary = value.costSummary;
-      this.providerUsageSummary = value.providerUsageSummary;
-      this.providerUsageUnavailable = value.providerUsageUnavailable;
+      this.providerUsage = value.providerUsage;
       this.usageError = null;
       this.refreshPolicy.markLoaded();
       this.refreshPolicy.flushPending();
     },
     onError: (error) => {
       this.usageTaskActiveClient = null;
-      // Per-attempt state: a failed aggregate load says nothing about provider
-      // usage, so a stale flag from an earlier attempt must not keep claiming
-      // the last provider request failed.
-      this.providerUsageUnavailable = false;
+      this.providerUsage = null;
       if (isMissingOperatorReadScopeError(error)) {
         this.usageResult = null;
         this.usageCostSummary = null;
@@ -318,8 +312,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageAgentId = data.query.agentId;
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
-    this.providerUsageSummary = data.providerUsageSummary;
-    this.providerUsageUnavailable = data.providerUsageUnavailable;
+    this.providerUsage = data.providerUsage;
     this.refreshPolicy.setLastLoadedAtMs(data.loadedAtMs);
     this.usageError = data.error;
   }
@@ -346,8 +339,7 @@ class UsagePage extends OpenClawLightDomElement {
     }
     this.usageResult = null;
     this.usageCostSummary = null;
-    this.providerUsageSummary = null;
-    this.providerUsageUnavailable = false;
+    this.providerUsage = null;
     this.refreshPolicy.resetPayload();
     this.usageError = null;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
@@ -510,8 +502,8 @@ class UsagePage extends OpenClawLightDomElement {
           this.usageResult?.cacheStatus,
           this.usageCostSummary?.cacheStatus,
         ),
-        providerUsage: this.providerUsageSummary?.providers ?? [],
-        providerUsageUnavailable: this.providerUsageUnavailable,
+        providerUsage: this.providerUsage?.ok ? this.providerUsage.value.providers : [],
+        providerUsageUnavailable: this.providerUsage?.ok === false,
       },
       filters: {
         startDate: this.usageStartDate,

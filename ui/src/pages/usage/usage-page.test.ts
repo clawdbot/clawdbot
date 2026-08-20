@@ -11,7 +11,7 @@ import "./usage-page.ts";
 
 type TestUsagePage = HTMLElement & {
   context: ApplicationContext;
-  providerUsageUnavailable: boolean;
+  providerUsage: { ok: boolean } | null;
   routeData: UsageRouteData;
   usageError: string | null;
   usageSelectedSessions: string[];
@@ -116,8 +116,7 @@ describe("UsagePage provider usage flag", () => {
       },
       result: null,
       costSummary: null,
-      providerUsageSummary: null,
-      providerUsageUnavailable: false,
+      providerUsage: null,
       loadedAtMs: null,
       error: null,
     };
@@ -129,7 +128,7 @@ describe("UsagePage provider usage flag", () => {
     };
     refresh();
     await vi.waitFor(() => {
-      expect(page.providerUsageUnavailable).toBe(true);
+      expect(page.providerUsage).toMatchObject({ ok: false });
     });
 
     // Second load: usage.status succeeds but the aggregate fails on usage.cost.
@@ -139,7 +138,7 @@ describe("UsagePage provider usage flag", () => {
     await vi.waitFor(() => {
       expect(page.usageError).not.toBeNull();
     });
-    expect(page.providerUsageUnavailable).toBe(false);
+    expect(page.providerUsage).toBeNull();
   });
 });
 
