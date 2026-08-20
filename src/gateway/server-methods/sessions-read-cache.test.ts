@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -266,6 +267,55 @@ describe("sessions.list single-flight", () => {
       emitSessionsChanged(context, { reason: "test", sessionKey: "agent:main:active" });
       await listSessions({ client, context, request });
       expect(loader.calls).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("reprojects a cached list when a completed model catalog replaces startup metadata", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      config.agents = {
+        ...config.agents,
+        defaults: { model: { primary: "dynamic-router/reasoner" } },
+      };
+      const startupCatalog: ModelCatalogEntry[] = [
+        {
+          provider: "dynamic-router",
+          id: "reasoner",
+          name: "Reasoner",
+          reasoning: false,
+        },
+      ];
+      const fullCatalog: ModelCatalogEntry[] = [
+        {
+          provider: "dynamic-router",
+          id: "reasoner",
+          name: "Reasoner",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "high", "max"] },
+        },
+      ];
+      let catalog = startupCatalog;
+      const context = {
+        ...requestContext(config),
+        readPreparedGatewayModelCatalog: vi.fn(async () => catalog),
+      };
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+
+      const first = await listSessions({ client, context, request });
+      expect(first.sessions.find((session) => session.agentId === "main")?.thinkingOptions).toEqual(
+        ["off"],
+      );
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      catalog = fullCatalog;
+      const refreshed = await listSessions({ client, context, request });
+      expect(refreshed).not.toBe(first);
+      expect(
+        refreshed.sessions.find((session) => session.agentId === "main")?.thinkingOptions,
+      ).toEqual(expect.arrayContaining(["off", "low", "high", "max"]));
+      expect(loader.calls).toHaveBeenCalledTimes(2);
     });
   });
 

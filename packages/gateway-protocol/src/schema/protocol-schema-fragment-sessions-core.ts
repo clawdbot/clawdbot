@@ -2,6 +2,7 @@ import * as sessionsCatalog from "./sessions-catalog.js";
 import * as sessions from "./sessions.js";
 
 export const SessionCoreProtocolSchemas = {
+  SessionPermissionMode: sessions.SessionPermissionModeSchema,
   SessionsListParams: sessions.SessionsListParamsSchema,
   SessionCatalogCapabilities: sessionsCatalog.SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptor: sessionsCatalog.SessionCatalogDescriptorSchema,

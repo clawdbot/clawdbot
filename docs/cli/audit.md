@@ -219,7 +219,7 @@ with an expiry-and-rerun next step. After cleanup it can become `unknown` if no
 separately retained activity remains; this absence does not prove that the run
 did not occur. Startup and hourly maintenance prune at most 1,024 identity
 contexts per tick and continue when collection is disabled. Queue saturation,
-worker/storage failure, cleanup failure, or abrupt process termination can lose
+storage failure, cleanup failure, shutdown timeout, or abrupt process termination can lose
 best-effort evidence but never block or abort the agent run. Normal Gateway and
 direct-local CLI shutdown flushes accepted work when its writer lifecycle
 permits.
@@ -324,7 +324,7 @@ receipt comes from the authoritative first-answer-wins approval row, and a
 returned generic receipt comes from the additive immutable decision-fact
 table. All three surfaces use 30-day retention, but absence from the activity
 ledger cannot prove that an approval or action did not occur. Generic fact
-delivery is also best-effort until its bounded worker write persists the row;
+delivery is also best-effort until its bounded queue write persists the row;
 owner-native approval persistence does not use that queue.
 
 The shipped `audit.list` RPC remains unchanged for older run/tool clients. When

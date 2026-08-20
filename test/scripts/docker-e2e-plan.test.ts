@@ -956,7 +956,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
       upgradeSurvivorBaselines: "2026.4.29 2026.4.23",
-      upgradeSurvivorScenarios: "base feishu-channel tilde-log-path",
+      upgradeSurvivorScenarios: "base feishu-channel tilde-log-path sqlite-volume",
     });
 
     expect(plan.lanes.map(summarizeLane)).toEqual([
@@ -976,6 +976,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "tilde-log-path",
       ),
       publishedUpgradeSurvivorLane(
+        "published-upgrade-survivor-2026.4.29-sqlite-volume",
+        "openclaw@2026.4.29",
+        "sqlite-volume",
+      ),
+      publishedUpgradeSurvivorLane(
         "published-upgrade-survivor-2026.4.23",
         "openclaw@2026.4.23",
         "base",
@@ -989,6 +994,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "published-upgrade-survivor-2026.4.23-tilde-log-path",
         "openclaw@2026.4.23",
         "tilde-log-path",
+      ),
+      publishedUpgradeSurvivorLane(
+        "published-upgrade-survivor-2026.4.23-sqlite-volume",
+        "openclaw@2026.4.23",
+        "sqlite-volume",
       ),
     ]);
   });
@@ -1014,6 +1024,22 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
       "published-upgrade-survivor-2026.4.29-cron-scheduled-authority",
     ]);
+  });
+
+  it("keeps SQLite volume stress out of release soak and in far-reaching runs", () => {
+    const scenariosFor = (upgradeSurvivorScenarios: string) =>
+      planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorBaselines: "2026.7.1-2",
+        upgradeSurvivorScenarios,
+      }).lanes.map((lane) => lane.name);
+
+    expect(scenariosFor("reported-issues")).not.toContain(
+      "published-upgrade-survivor-2026.7.1-2-sqlite-volume",
+    );
+    expect(scenariosFor("far-reaching")).toContain(
+      "published-upgrade-survivor-2026.7.1-2-sqlite-volume",
+    );
   });
 
   it("omits trusted-current scenarios unsupported by a frozen target harness", () => {

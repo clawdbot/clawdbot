@@ -112,6 +112,22 @@ describe("qa-bus server", () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
   });
 
+  it("returns a 500 JSON response when request handling rejects", async () => {
+    const state = createQaBusState();
+    const requestError = new Error("snapshot unavailable");
+    state.getSnapshot = () => {
+      throw requestError;
+    };
+    const bus = await startQaBusServer({ state });
+    stops.push(async () => await bus.stop());
+
+    const response = await fetch(`${bus.baseUrl}/v1/state`, {
+      signal: AbortSignal.timeout(1_000),
+    });
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: requestError.message });
+  });
+
   it("wakes matching polls and fences late polls and writes during shutdown", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });

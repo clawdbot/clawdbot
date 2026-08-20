@@ -4,6 +4,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  appendChatMessageToCache,
   cacheChatSessionSnapshot,
   observeChatCache,
   type ChatMessageCache,
@@ -80,10 +81,9 @@ describe("persistent chat session snapshots", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shares sanitized snapshots and measured row heights across store owners", async () => {
+  it("shares sanitized snapshots across store owners", async () => {
     const writer = new SessionSnapshotStore();
     writer.write("agent:main:shared", snapshot({ text: "cached", callback: () => true }));
-    writer.recordRowHeight("agent:main:shared", "message:1", 184);
     const savedAt = writer.readSavedAt("agent:main:shared");
     expect(savedAt).not.toBeNull();
     await writer.flush();
@@ -93,7 +93,47 @@ describe("persistent chat session snapshots", () => {
     await reader.loadSavedAtIndex();
     expect(await reader.read("agent:main:shared")).toEqual(snapshot({ text: "cached" }));
     expect(reader.readSavedAt("agent:main:shared")).toBe(savedAt);
-    expect(reader.readRowHeight("agent:main:shared", "message:1")).toBe(184);
+  });
+
+  it("round-trips the optional history delta cursor", async () => {
+    const sessionKey = "agent:main:cursor";
+    const writer = new SessionSnapshotStore();
+    const cached = { ...snapshot("cached"), deltaCursor: "cursor-1" };
+    writer.write(sessionKey, cached);
+    await writer.flush();
+
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(cached);
+  });
+
+  it("does not let an append miss replace a richer persisted snapshot", async () => {
+    const sessionKey = "agent:main:append-miss";
+    const persisted = {
+      ...snapshot("unused", "session-rich"),
+      deltaCursor: "cursor-rich",
+      messages: ["one", "two", "three", "four", "five"],
+    };
+    const writer = new SessionSnapshotStore();
+    writer.write(sessionKey, persisted);
+    await writer.flush();
+
+    const memoryCache: ChatMessageCache = new Map();
+    const store = new SessionSnapshotStore(memoryCache);
+    store.connect();
+    observeChatCache(memoryCache, store);
+    try {
+      appendChatMessageToCache(
+        memoryCache,
+        { assistantAgentId: "main", agentsList: null, hello: null },
+        { sessionKey },
+        "newest",
+      );
+      await store.flush();
+
+      expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(persisted);
+    } finally {
+      store.disconnect();
+      await store.whenIdle();
+    }
   });
 
   it("seeds the savedAt index once for every synchronous lookup", async () => {
@@ -120,8 +160,6 @@ describe("persistent chat session snapshots", () => {
     await writer.flush();
 
     writer.write(sessionKey, snapshot(1n));
-    writer.recordRowHeight(sessionKey, "message:1", 184);
-    expect(writer.readRowHeight(sessionKey, "message:1")).toBe(184);
 
     await writer.flush();
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
@@ -188,7 +226,6 @@ describe("persistent chat session snapshots", () => {
       sessionId: "session-1",
       savedAt: Date.now(),
       snapshot: { messages: "not-an-array" },
-      rowHeights: new Map(),
     });
 
     const reader = new SessionSnapshotStore();

@@ -581,7 +581,51 @@ describe("setup-registry module loader", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
-  it("reports setup descriptor drift without rejecting runtime registrations", () => {
+  it("allows provider descriptors to remain metadata-only beside other setup hooks", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }, { id: "elevenlabs" }],
+            cliBackends: ["codex-cli"],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: SetupRegistryApi) {
+            api.registerCliBackend({
+              id: "codex-cli",
+              config: { command: "codex" },
+            });
+            api.registerConfigMigration((config) => ({
+              config,
+              changes: ["openai"],
+            }));
+            api.registerAutoEnableProbe(() => "openai configured");
+          },
+        },
+      });
+    });
+
+    const registry = resolvePluginSetupRegistry({ env: {} });
+
+    expect(registry.providers).toStrictEqual([]);
+    expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["codex-cli"]);
+    expect(registry.configMigrations).toHaveLength(1);
+    expect(registry.autoEnableProbes).toHaveLength(1);
+    expect(registry.diagnostics).toStrictEqual([]);
+  });
+
+  it("reports undeclared runtime contributions and missing CLI backends", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -623,19 +667,16 @@ describe("setup-registry module loader", () => {
 
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["anthropic"]);
     expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["claude-cli"]);
-    expect(registry.diagnostics).toHaveLength(4);
+    expect(registry.diagnostics).toHaveLength(3);
     expect(registry.diagnostics[0]?.pluginId).toBe("openai");
-    expect(registry.diagnostics[0]?.code).toBe("setup-descriptor-provider-missing-runtime");
-    expect(registry.diagnostics[0]?.declaredId).toBe("openai");
+    expect(registry.diagnostics[0]?.code).toBe("setup-descriptor-provider-runtime-undeclared");
+    expect(registry.diagnostics[0]?.runtimeId).toBe("anthropic");
     expect(registry.diagnostics[1]?.pluginId).toBe("openai");
-    expect(registry.diagnostics[1]?.code).toBe("setup-descriptor-provider-runtime-undeclared");
-    expect(registry.diagnostics[1]?.runtimeId).toBe("anthropic");
+    expect(registry.diagnostics[1]?.code).toBe("setup-descriptor-cli-backend-missing-runtime");
+    expect(registry.diagnostics[1]?.declaredId).toBe("codex-cli");
     expect(registry.diagnostics[2]?.pluginId).toBe("openai");
-    expect(registry.diagnostics[2]?.code).toBe("setup-descriptor-cli-backend-missing-runtime");
-    expect(registry.diagnostics[2]?.declaredId).toBe("codex-cli");
-    expect(registry.diagnostics[3]?.pluginId).toBe("openai");
-    expect(registry.diagnostics[3]?.code).toBe("setup-descriptor-cli-backend-runtime-undeclared");
-    expect(registry.diagnostics[3]?.runtimeId).toBe("claude-cli");
+    expect(registry.diagnostics[2]?.code).toBe("setup-descriptor-cli-backend-runtime-undeclared");
+    expect(registry.diagnostics[2]?.runtimeId).toBe("claude-cli");
   });
 
   it("does not report drift when setup descriptors match runtime registrations", () => {

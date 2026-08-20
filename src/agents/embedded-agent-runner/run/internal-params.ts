@@ -1,4 +1,5 @@
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
+import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
@@ -9,6 +10,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   preparedModelRuntimeMode?: "isolated-read-only";
   /** Ring-zero tool override, supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: SystemAgentToolOptions;
+  /** Gateway-private lifecycle generation selected before command admission. */
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
 };
 
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {

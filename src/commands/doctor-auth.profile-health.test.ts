@@ -322,6 +322,46 @@ describe("noteAuthProfileHealth", () => {
     ]);
   });
 
+  it("shows exact WHAM classification while retaining canonical recovery policy", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:expired": {
+          type: "oauth",
+          provider: "openai",
+          access: "secret",
+          refresh: "refresh-secret",
+          expires: now + 365 * 24 * 60 * 60_000,
+        },
+      },
+      usageStats: {
+        "openai:expired": {
+          cooldownUntil: now + 5 * 60_000,
+          cooldownReason: "auth",
+          cooldownClassification: "wham_token_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: "Auth profile openai:expired is cooldown:wham_token_expired (5m).",
+        fixHint: expect.stringContaining("Re-authenticate with"),
+      }),
+    ]);
+  });
+
   it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);

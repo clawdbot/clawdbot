@@ -10,6 +10,7 @@ export function resolveWorkerBrowserLaunchPlan(params: {
   desktop: WorkerDesktopEndpoint | null;
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
+  githubPublicationAvailable?: boolean;
 }): {
   browser?: WorkerBrowserLaunchDescriptor;
   toolAuthority: WorkerToolAuthority;
@@ -26,6 +27,7 @@ export function resolveWorkerBrowserLaunchPlan(params: {
   const toolAuthority = resolveWorkerToolAuthority({
     modelRef: params.modelRef,
     turn: params.turn,
+    githubPublicationAvailable: params.githubPublicationAvailable,
     ...(browserAvailable ? { availableOptionalToolNames: ["browser"] } : {}),
   });
   return {

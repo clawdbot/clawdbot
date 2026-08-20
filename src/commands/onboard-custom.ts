@@ -13,6 +13,7 @@ import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
 import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
@@ -238,6 +239,7 @@ export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   config: OpenClawConfig;
+  target?: OnboardingAgentTarget;
   secretInputMode?: SecretInputMode;
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
@@ -412,6 +414,7 @@ export async function promptCustomApiConfig(params: {
     providerId: providerIdInput,
     alias: aliasInput,
     supportsImageInput,
+    ...(params.target ? { target: params.target } : {}),
   });
 
   if (result.providerIdRenamedFrom && result.providerId) {

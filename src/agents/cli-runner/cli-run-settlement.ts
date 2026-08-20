@@ -554,6 +554,7 @@ export function buildCliRunResult(params: {
         : {}),
       systemPromptReport: context.systemPromptReport,
       ...(yielded ? { yielded: true, livenessState: "paused" as const, stopReason } : {}),
+      ...(output.yieldAcknowledgment ? { yieldAcknowledgment: output.yieldAcknowledgment } : {}),
       executionTrace: {
         winnerProvider: runParams.provider,
         winnerModel: context.modelId,

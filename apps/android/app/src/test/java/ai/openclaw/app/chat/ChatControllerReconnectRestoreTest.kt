@@ -76,10 +76,9 @@ class ChatControllerReconnectRestoreTest {
   private fun history(
     messages: List<ReplayHistoryMessage>,
     inFlightRun: Pair<String, String>? = null,
-    inFlightPlan: ChatPlanSnapshot? = null,
     hasActiveRun: Boolean? = inFlightRun?.let { true },
     activeRunIds: List<String>? = inFlightRun?.let { listOf(it.first) },
-  ): String = historyResponse("session-1", messages, inFlightRun, inFlightPlan, hasActiveRun, activeRunIds)
+  ): String = historyResponse("session-1", messages, inFlightRun, hasActiveRun, activeRunIds)
 
   private val userTurn = ReplayHistoryMessage("user", "keep working", 1_000)
 
@@ -437,255 +436,29 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  fun reconnectRestoresInFlightPlanSnapshot() =
+  fun reconnectHealthRefetchesProgressCard() =
     runTest {
       val gateway = ScriptedGateway(json)
       val controller = loadController(gateway, history(emptyList()))
-
       gateway.respondWith(
-        "chat.history",
-        history(
-          emptyList(),
-          inFlightRun = "run-active" to "working",
-          inFlightPlan =
-            ChatPlanSnapshot(
-              steps =
-                listOf(
-                  ChatPlanStep("Inspect", ChatPlanStepStatus.Completed),
-                  ChatPlanStep("Reconnect", ChatPlanStepStatus.InProgress),
-                ),
-              explanation = "Restore checklist",
-            ),
-        ),
+        "progressCard.get",
+        """{"card":{"sessionKey":"agent:main:main","revision":1,"updatedAt":10,"markdown":"First"}}""",
       )
-      reconnect(controller)
+      controller.handleGatewayEvent("progressCard.changed", """{"sessionKey":"main","revision":1}""")
+      runCurrent()
+      assertEquals("First", controller.progressCard.value?.markdown)
 
-      assertEquals(
-        ChatPlanSnapshot(
-          steps =
-            listOf(
-              ChatPlanStep("Inspect", ChatPlanStepStatus.Completed),
-              ChatPlanStep("Reconnect", ChatPlanStepStatus.InProgress),
-            ),
-          explanation = "Restore checklist",
-        ),
-        controller.planSnapshot.value,
+      controller.onDisconnected("Reconnecting…")
+      gateway.respondWith(
+        "progressCard.get",
+        """{"card":{"sessionKey":"agent:main:main","revision":2,"updatedAt":20,"markdown":"Restored"}}""",
       )
-    }
+      val cardRequestsBeforeHealth = gateway.callCount("progressCard.get")
+      controller.handleGatewayEvent("health", null)
+      runCurrent()
 
-  @Test
-  fun historyPlanReconciliationContract() =
-    runTest {
-      val retainedSteps = listOf(ChatPlanStep("Retained", ChatPlanStepStatus.InProgress))
-      val retainedPlan = ChatPlanSnapshot(steps = retainedSteps, explanation = "Retained explanation")
-
-      data class Case(
-        val name: String,
-        val history: String,
-        val expectedPlan: ChatPlanSnapshot,
-        val staleAfterLivePlan: Boolean = false,
-        val snapshotForNewLiveRun: ChatPlanSnapshot? = null,
-        val gatewayScopeChange: Boolean = false,
-      )
-
-      val cases =
-        listOf(
-          Case(
-            name = "replace",
-            history =
-              history(
-                emptyList(),
-                inFlightRun = "run-retained" to "working",
-                inFlightPlan =
-                  ChatPlanSnapshot(
-                    steps = listOf(ChatPlanStep("Replacement", ChatPlanStepStatus.Completed)),
-                    explanation = "Replacement explanation",
-                  ),
-              ),
-            expectedPlan =
-              ChatPlanSnapshot(
-                steps = listOf(ChatPlanStep("Replacement", ChatPlanStepStatus.Completed)),
-                explanation = "Replacement explanation",
-              ),
-          ),
-          Case(
-            name = "legacy-preserve",
-            history =
-              history(
-                emptyList(),
-                inFlightRun = "run-retained" to "working",
-              ),
-            expectedPlan = retainedPlan,
-          ),
-          Case(
-            name = "superseded",
-            history =
-              history(
-                emptyList(),
-                inFlightRun = "run-next" to "next",
-                inFlightPlan =
-                  ChatPlanSnapshot(
-                    steps = listOf(ChatPlanStep("Next run", ChatPlanStepStatus.InProgress)),
-                    explanation = "Next explanation",
-                  ),
-              ),
-            expectedPlan =
-              ChatPlanSnapshot(
-                steps = listOf(ChatPlanStep("Next run", ChatPlanStepStatus.InProgress)),
-                explanation = "Next explanation",
-              ),
-          ),
-          Case(
-            name = "active-preserve",
-            history =
-              history(
-                emptyList(),
-                hasActiveRun = true,
-                activeRunIds = listOf("run-retained"),
-              ),
-            expectedPlan = retainedPlan,
-          ),
-          Case(
-            name = "terminal-clear",
-            history =
-              history(
-                emptyList(),
-                hasActiveRun = false,
-                activeRunIds = emptyList(),
-              ),
-            expectedPlan = ChatPlanSnapshot(steps = emptyList()),
-          ),
-          Case(
-            name = "no-evidence-preserve",
-            history =
-              history(
-                emptyList(),
-                hasActiveRun = null,
-                activeRunIds = null,
-              ),
-            expectedPlan = retainedPlan,
-          ),
-          Case(
-            name = "stale-response-does-not-clobber-newer-live-plan",
-            history =
-              history(
-                emptyList(),
-                hasActiveRun = false,
-                activeRunIds = emptyList(),
-              ),
-            expectedPlan =
-              ChatPlanSnapshot(
-                steps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
-                explanation = "New live explanation",
-              ),
-            staleAfterLivePlan = true,
-          ),
-          Case(
-            name = "stale-previous-run-snapshot-does-not-clobber-newer-live-plan",
-            history =
-              history(
-                emptyList(),
-                inFlightRun = "run-previous" to "stale",
-                inFlightPlan = ChatPlanSnapshot(steps = emptyList()),
-              ),
-            expectedPlan =
-              ChatPlanSnapshot(
-                steps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
-                explanation = "New live explanation",
-              ),
-            staleAfterLivePlan = true,
-          ),
-          Case(
-            name = "snapshot-for-newer-owned-run-is-accepted",
-            history = history(emptyList()),
-            expectedPlan =
-              ChatPlanSnapshot(
-                steps = listOf(ChatPlanStep("Matching snapshot", ChatPlanStepStatus.Completed)),
-                explanation = "Matching explanation",
-              ),
-            staleAfterLivePlan = true,
-            snapshotForNewLiveRun =
-              ChatPlanSnapshot(
-                steps = listOf(ChatPlanStep("Matching snapshot", ChatPlanStepStatus.Completed)),
-                explanation = "Matching explanation",
-              ),
-          ),
-          Case(
-            name = "explicit-empty-clears",
-            history =
-              history(
-                emptyList(),
-                inFlightRun = "run-retained" to "working",
-                inFlightPlan = ChatPlanSnapshot(steps = emptyList()),
-              ),
-            expectedPlan = ChatPlanSnapshot(steps = emptyList()),
-          ),
-          Case(
-            name = "gateway-scope-change-clears",
-            history = history(emptyList()),
-            expectedPlan = ChatPlanSnapshot(steps = emptyList()),
-            gatewayScopeChange = true,
-          ),
-        )
-
-      for (testCase in cases) {
-        val gateway = ScriptedGateway(json)
-        if (testCase.staleAfterLivePlan) {
-          gateway.respondWith("chat.history", history(emptyList()))
-        } else {
-          gateway.respondWith(
-            "chat.history",
-            history(
-              emptyList(),
-              inFlightRun = "run-retained" to "working",
-              inFlightPlan = retainedPlan,
-            ),
-          )
-        }
-        val controller = newController(gateway)
-        controller.load("main")
-        runCurrent()
-
-        if (testCase.staleAfterLivePlan) {
-          val historyStarted = CompletableDeferred<Unit>()
-          val releaseHistory = CompletableDeferred<String>()
-          gateway.respond("chat.history") {
-            historyStarted.complete(Unit)
-            releaseHistory.await()
-          }
-          gateway.respondChatSend(status = "started")
-          controller.refresh()
-          runCurrent()
-          historyStarted.await()
-          assertTrue(controller.sendMessageAwaitAcceptance("new work", "off", emptyList()))
-          val runId = requireNotNull(gateway.lastRunId)
-          controller.handleGatewayEvent(
-            "agent",
-            """{"sessionKey":"main","runId":"$runId","seq":1,"ts":10,"stream":"plan","data":{"phase":"update","explanation":"New live explanation","steps":[{"step":"New live plan","status":"in_progress"}]}}""",
-          )
-          releaseHistory.complete(
-            testCase.snapshotForNewLiveRun?.let { plan ->
-              history(
-                emptyList(),
-                inFlightRun = runId to "matching",
-                inFlightPlan = plan,
-              )
-            } ?: testCase.history,
-          )
-          runCurrent()
-          assertEquals(testCase.name, 1, controller.pendingRunCount.value)
-        } else if (testCase.gatewayScopeChange) {
-          controller.onGatewayScopeChanging()
-          runCurrent()
-        } else {
-          gateway.respondWith("chat.history", testCase.history)
-          controller.onDisconnected("Reconnecting…")
-          controller.onGatewayConnected()
-          runCurrent()
-        }
-
-        assertEquals(testCase.name, testCase.expectedPlan, controller.planSnapshot.value)
-      }
+      assertEquals(cardRequestsBeforeHealth + 1, gateway.callCount("progressCard.get"))
+      assertEquals("Restored", controller.progressCard.value?.markdown)
     }
 
   @Test
@@ -707,6 +480,29 @@ class ChatControllerReconnectRestoreTest {
       assertNull(controller.errorText.value)
       assertTrue(controller.healthOk.value)
       assertEquals(1, controller.messages.value.size)
+    }
+
+  @Test
+  fun reconnectHistoryOmissionClearsStaleExactRunIds() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(emptyList()))
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"patch","session":{"key":"main","agentId":"main","hasActiveRun":true,"activeRunIds":["run-stale"]}}""",
+      )
+      assertEquals("run-stale", controller.selectedActiveRunPresentation.value.runId)
+
+      gateway.respondWith(
+        "chat.history",
+        history(emptyList(), hasActiveRun = true, activeRunIds = null),
+      )
+      val pendingSessionList = CompletableDeferred<String>()
+      gateway.respond("sessions.list") { pendingSessionList.await() }
+      reconnect(controller)
+
+      assertEquals(1, controller.selectedActiveRunPresentation.value.count)
+      assertNull(controller.selectedActiveRunPresentation.value.runId)
     }
 
   @Test

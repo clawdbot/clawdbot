@@ -38,7 +38,7 @@ import {
 } from "./doctor-session-sqlite-migration-run.js";
 import {
   createTranscriptEventReader,
-  readOnlySqliteSessionEntries,
+  readOnlySqliteValidationSnapshot,
   resolveTargetSqlitePath,
 } from "./doctor-session-sqlite-readers.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -125,15 +125,12 @@ describe("runDoctorSessionSqlite", () => {
       database.close();
     }
 
-    expect(readOnlySqliteSessionEntries(target)).toEqual({
-      exists: true,
+    expect(readOnlySqliteValidationSnapshot(target)).toEqual({
       ok: true,
-      summaries: [
-        {
-          sessionKey: "agent:main:v13-reader",
-          entry: { sessionId: "v13-reader-session", updatedAt: 13 },
-        },
-      ],
+      snapshot: {
+        sessionIdsBySessionKey: new Map([["agent:main:v13-reader", "v13-reader-session"]]),
+        transcriptEventCountsBySessionId: new Map(),
+      },
     });
   });
 
@@ -163,16 +160,110 @@ describe("runDoctorSessionSqlite", () => {
       database.close();
     }
 
-    expect(readOnlySqliteSessionEntries(target)).toEqual({
-      exists: true,
+    expect(readOnlySqliteValidationSnapshot(target)).toEqual({
       ok: true,
-      summaries: [
-        {
-          sessionKey: "agent:main:v14-reader",
-          entry: { sessionId: "v14-reader-session", updatedAt: 14 },
-        },
-      ],
+      snapshot: {
+        sessionIdsBySessionKey: new Map([["agent:main:v14-reader", "v14-reader-session"]]),
+        transcriptEventCountsBySessionId: new Map(),
+      },
     });
+  });
+
+  it("reads compact promoted validation identities without parsing large entry JSON", () => {
+    const stateDir = autoCleanupTempDirs.make("openclaw-doctor-compact-validation-");
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const target = { agentId: "main", storePath };
+    const sqlitePath = resolveTargetSqlitePath(target);
+    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath);
+    const payload = "x".repeat(2 * 1024 * 1024);
+    const entryJson = JSON.stringify({
+      payload,
+      sessionId: "embedded-stale-id",
+      updatedAt: 17,
+    });
+    try {
+      database.exec(`
+        CREATE TABLE session_nodes (
+          session_key TEXT NOT NULL PRIMARY KEY,
+          current_session_id TEXT NOT NULL,
+          entry_json TEXT NOT NULL,
+          entry_valid INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE transcript_events (
+          session_id TEXT NOT NULL,
+          event_json TEXT NOT NULL
+        );
+      `);
+      database
+        .prepare("INSERT INTO session_nodes VALUES (?, ?, ?, 1, 17)")
+        .run("agent:main:compact", "promoted-session-id", entryJson);
+      database
+        .prepare("INSERT INTO transcript_events VALUES (?, '{}'), (?, '{}')")
+        .run("promoted-session-id", "promoted-session-id");
+    } finally {
+      database.close();
+    }
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      expect(readOnlySqliteValidationSnapshot(target)).toEqual({
+        ok: true,
+        snapshot: {
+          sessionIdsBySessionKey: new Map([["agent:main:compact", "promoted-session-id"]]),
+          transcriptEventCountsBySessionId: new Map([["promoted-session-id", 2]]),
+        },
+      });
+      expect(parseSpy.mock.calls.some(([value]) => value === entryJson)).toBe(false);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
+  it("imports zero legacy records without parsing canonical entry JSON", async () => {
+    const stateDir = autoCleanupTempDirs.make("openclaw-doctor-empty-import-");
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(storePath, "{}\n", { mode: 0o600 });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const entryJson = JSON.stringify({
+      payload: "empty-import-sentinel".repeat(64 * 1024),
+      sessionId: "canonical-only-session",
+      updatedAt: 19,
+    });
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("agent:main:main", "canonical-only-session", entryJson, 19);
+    database.db.prepare("UPDATE session_nodes SET entry_valid = 1").run();
+    const sqlitePath = database.path;
+    closeOpenClawAgentDatabasesForTest();
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      const report = await runDoctorSessionSqlite({ env, mode: "import", store: storePath });
+      expect(report.totals).toMatchObject({
+        importedEntries: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 1,
+      });
+      expect(parseSpy.mock.calls.some(([value]) => value === entryJson)).toBe(false);
+    } finally {
+      parseSpy.mockRestore();
+    }
+    const verifier = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(sqlitePath, {
+      readOnly: true,
+    });
+    try {
+      expect(verifier.prepare("SELECT entry_json FROM session_nodes").get()).toEqual({
+        entry_json: entryJson,
+      });
+    } finally {
+      verifier.close();
+    }
   });
 
   it("dry-runs a legacy store without writing SQLite rows", async () => {
@@ -548,6 +639,33 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
+  it("aborts a batch when a prepared transcript changes before import", async () => {
+    const store = createLegacyStore();
+    const realStatSync = fs.statSync.bind(fs);
+    let changed = false;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((candidate, options) => {
+      const stat = realStatSync(candidate, options as never);
+      if (
+        !changed &&
+        path.resolve(String(candidate)) === path.resolve(store.transcriptPath) &&
+        !(options as { bigint?: boolean } | undefined)?.bigint
+      ) {
+        changed = true;
+        fs.appendFileSync(store.transcriptPath, '{"type":"custom","customType":"late"}\n');
+      }
+      return stat;
+    }) as typeof fs.statSync);
+
+    try {
+      await expect(
+        runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath }),
+      ).rejects.toThrow(/stop active session writers and rerun `openclaw doctor --fix`/);
+      expect(fs.existsSync(store.transcriptPath)).toBe(true);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
   it("preserves the legacy transcript mtime as the SQLite mutation watermark", async () => {
     const store = createLegacyStore();
     const transcriptMtimeMs = 1_700_000_000_000;
@@ -589,7 +707,6 @@ describe("runDoctorSessionSqlite", () => {
         updatedAt: 3000,
       },
     );
-
     const report = await runDoctorSessionSqlite({
       env: store.env,
       mode: "import",
@@ -1134,7 +1251,6 @@ describe("runDoctorSessionSqlite", () => {
       storePath: expectedStorePath,
       validationBeforeArchive: "passed",
     });
-    expect(target.plannedMoves).toHaveLength(4);
     expect(target.completedMoves).toHaveLength(4);
     expect(target.plannedMoves.map((move) => path.basename(move.sourcePath)).toSorted()).toEqual([
       "orphan.jsonl",
@@ -1144,13 +1260,32 @@ describe("runDoctorSessionSqlite", () => {
     ]);
   });
 
-  it("checkpoints bulk unreferenced archive moves without per-file manifest rewrites", async () => {
+  it("checkpoints bulk archive moves without per-file manifest rewrites", async () => {
     const store = createLegacyStore();
+    const sessions = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
     for (let index = 0; index < 64; index += 1) {
+      const sessionId = `bulk-session-${index}`;
+      const sessionFile = `${sessionId}.jsonl`;
+      sessions[`agent:main:bulk:${index}`] = {
+        channel: "cli",
+        chatType: "direct",
+        sessionFile,
+        sessionId,
+        updatedAt: 2000 + index,
+      };
+      fs.writeFileSync(
+        path.join(store.sessionDir, sessionFile),
+        `${JSON.stringify({ type: "session", sessionId })}\n`,
+        { mode: 0o600 },
+      );
       fs.writeFileSync(path.join(store.sessionDir, `orphan-${index}.jsonl`), "{}\n", {
         mode: 0o600,
       });
     }
+    fs.writeFileSync(store.storePath, JSON.stringify(sessions, null, 2), { mode: 0o600 });
     fs.writeFileSync(path.join(store.sessionDir, "orphan collision.jsonl"), "{}\n", {
       mode: 0o600,
     });
@@ -1172,12 +1307,18 @@ describe("runDoctorSessionSqlite", () => {
       const plannedUnreferencedMoves =
         manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "unreferenced-jsonl") ??
         [];
+      const plannedTranscriptMoves =
+        manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "transcript") ?? [];
 
       expect(plannedUnreferencedMoves).toHaveLength(67);
       expect(new Set(plannedUnreferencedMoves.map((move) => move.archivePath)).size).toBe(67);
+      expect(plannedTranscriptMoves).toHaveLength(65);
       expect(
         manifest.targets[0]?.completedMoves.filter((move) => move.kind === "unreferenced-jsonl"),
       ).toHaveLength(67);
+      expect(
+        manifest.targets[0]?.completedMoves.filter((move) => move.kind === "transcript"),
+      ).toHaveLength(65);
       expect(manifestWrites).toBeLessThan(20);
       expect(replaceFileAtomicSync).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -2838,6 +2979,40 @@ describe("runDoctorSessionSqlite", () => {
         updatedAt: 3000,
       },
     );
+    for (const suffix of ["zeta", "alpha"]) {
+      fs.writeFileSync(path.join(store.sessionDir, `${suffix}.jsonl`), '{"type":"event"}\n', {
+        mode: 0o600,
+      });
+      await upsertSessionEntryCore(
+        {
+          agentId: "main",
+          env: store.env,
+          sessionKey: `agent:main:${suffix}`,
+          storePath: store.storePath,
+        },
+        {
+          sessionId: `${suffix}-session`,
+          skillsSnapshot: {
+            prompt: "active-transcript-scan".repeat(16 * 1024),
+            skills: [],
+          },
+          updatedAt: 3000,
+        },
+      );
+    }
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: store.env,
+      path: resolveTargetSqlitePath({ agentId: "main", storePath: store.storePath }),
+    });
+    for (const suffix of ["zeta", "alpha"]) {
+      database.db
+        .prepare(
+          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.sessionFile', ?) WHERE session_key = ?",
+        )
+        .run(`${suffix}.jsonl`, `agent:main:${suffix}`);
+    }
+    database.db.prepare("UPDATE session_nodes SET entry_valid = 1").run();
 
     const report = await runDoctorSessionSqlite({
       env: store.env,
@@ -2845,12 +3020,12 @@ describe("runDoctorSessionSqlite", () => {
       store: store.storePath,
     });
 
-    expect(report.totals.issues).toBe(1);
-    expect(report.targets[0]?.issues[0]).toMatchObject({
-      code: "active_sqlite_transcript_jsonl",
-      sessionKey: "agent:main:main",
-    });
-    expect(report.targets[0]?.issues[0]?.message).toContain("session-1.jsonl");
+    expect(report.targets[0]?.issues).toMatchObject([
+      { code: "active_sqlite_transcript_jsonl", sessionKey: "agent:main:alpha" },
+      { code: "active_sqlite_transcript_jsonl", sessionKey: "agent:main:main" },
+      { code: "active_sqlite_transcript_jsonl", sessionKey: "agent:main:zeta" },
+    ]);
+    expect(report.targets[0]?.issues[1]?.message).toContain("session-1.jsonl");
   });
 
   it("reports active JSONL scan failures without aborting inspect", async () => {

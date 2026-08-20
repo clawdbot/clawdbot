@@ -707,6 +707,9 @@ describe("createAcpxRuntimeService", () => {
     });
 
     expect(acpxRuntimeConstructorMock).toHaveBeenCalledOnce();
+    expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ elicitationModes: ["form", "url"] }),
+    );
     expect(backend.healthy).toBeUndefined();
 
     await service.stop?.(ctx);

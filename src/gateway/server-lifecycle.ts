@@ -51,7 +51,6 @@ export async function prepareGatewayLifecycle(params: {
   const { runtime, port, log, logCron, diagnosticsEnabled, shutdownRuntime } = params;
   const {
     minimalTestGateway,
-    workerGatewayEndpoint,
     transportBridge,
     sessionMessageSubscribers,
     isConnectionActive,
@@ -85,10 +84,12 @@ export async function prepareGatewayLifecycle(params: {
     residentRegistry,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
+    nodeDesktopObserveAvailable,
     bindDeviceNodeControl,
+    bindWorkerNodeDesktopControl,
     workerPlacementRuntime,
+    lifecycle,
   } = runtime;
-  workerGatewayEndpoint.resolve = transportBridge.getWorkerIngressEndpoint;
   const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
     connId,
     sessionKey,
@@ -134,7 +135,7 @@ export async function prepareGatewayLifecycle(params: {
     },
   });
   const nodeDesktopService =
-    desktopSessionRegistry && nodeDesktopStreamBroker
+    nodeDesktopObserveAvailable && desktopSessionRegistry && nodeDesktopStreamBroker
       ? (await import("./desktop/node-source.js")).createNodeDesktopService({
           getConfig: getRuntimeConfig,
           nodeRegistry,
@@ -144,6 +145,7 @@ export async function prepareGatewayLifecycle(params: {
       : undefined;
   nodeDesktopServiceRef.current = nodeDesktopService;
   bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
+  bindWorkerNodeDesktopControl?.(nodeWorkerSupervisorTransport);
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,
@@ -348,7 +350,6 @@ export async function prepareGatewayLifecycle(params: {
     },
   };
 
-  const lifecycle = { closePreludeStarted: false };
   const cronReconciliation = createGatewayCronReconciliation({
     port,
     workspaceDir: defaultWorkspaceDir,
@@ -389,6 +390,9 @@ export async function prepareGatewayLifecycle(params: {
     return mediaCleanupStopPromise;
   };
   const markClosePreludeStarted = () => {
+    if (lifecycle.closePreludeStarted) {
+      return;
+    }
     lifecycle.closePreludeStarted = true;
     postReadySidecarStopOwner.beginClose();
     gatewayLifetimeSidecarStopOwner.beginClose();
@@ -489,6 +493,7 @@ export async function prepareGatewayLifecycle(params: {
     }
   };
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
+    markClosePreludeStarted();
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const transport = transportBridge.current();
     await transport?.portalService.closeAll();
@@ -561,7 +566,6 @@ export async function prepareGatewayLifecycle(params: {
       closeProviderTransportDispatcherPool: shutdownRuntime.closeProviderTransportDispatcherPool,
     })(optsValue);
   };
-  let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
     await runGatewayShutdownSteps({
       steps: [
@@ -574,7 +578,6 @@ export async function prepareGatewayLifecycle(params: {
           name: "gateway close",
           run: () => createCloseHandler()({ reason: "gateway startup failed" }),
         },
-        { name: "fallback gateway context", run: clearFallbackGatewayContextForServer },
       ],
       onError: (message) => log.error(message),
     });
@@ -651,12 +654,6 @@ export async function prepareGatewayLifecycle(params: {
     registerGatewayLifetimeSidecars: gatewayLifetimeSidecarStopOwner.publish,
     sealAndJoinRegisteredSidecarStops,
     createCloseHandler,
-    clearFallbackGatewayContextForServer: {
-      get: () => clearFallbackGatewayContextForServer,
-      set: (cleanup: () => void) => {
-        clearFallbackGatewayContextForServer = cleanup;
-      },
-    },
     closeOnStartupFailure,
   };
 }

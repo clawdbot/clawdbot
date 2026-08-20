@@ -263,7 +263,7 @@ public struct OpenClawChatView: View {
         VStack(spacing: Layout.stackSpacing) {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
-            self.planPill
+            self.progressCard
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
             self.turnRecapRow
             self.swarmProgress
@@ -279,7 +279,7 @@ public struct OpenClawChatView: View {
         VStack(spacing: 0) {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
-            self.planPill
+            self.progressCard
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
             self.turnRecapRow
@@ -299,11 +299,11 @@ public struct OpenClawChatView: View {
     }
 
     @ViewBuilder
-    private var planPill: some View {
-        if self.viewModel.hasBlockingRunActivity, !self.viewModel.planSteps.isEmpty {
-            ChatPlanPill(
-                steps: self.viewModel.planSteps,
-                explanation: self.viewModel.planExplanation)
+    private var progressCard: some View {
+        if let progressCard = self.viewModel.progressCard {
+            ChatProgressCard(
+                steps: progressCard.steps ?? [],
+                markdown: progressCard.markdown)
         }
     }
 

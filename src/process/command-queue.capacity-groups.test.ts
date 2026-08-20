@@ -19,6 +19,7 @@ import {
 
 const CRON = "cron-nested";
 const HOOK = "hook-dispatch";
+const DELIVERY = "delivery-dispatch";
 const GROUP = "cron-hooks";
 
 type LaneGroupSpec = NonNullable<Parameters<typeof publishLaneConfiguration>[0]["groups"]>[string];
@@ -53,6 +54,7 @@ beforeEach(() => {
   clearCommandLaneGroup(GROUP);
   setCommandLaneConcurrency(CRON, 8);
   setCommandLaneConcurrency(HOOK, 8);
+  setCommandLaneConcurrency(DELIVERY, 8);
 });
 
 afterEach(() => {
@@ -70,20 +72,26 @@ describe("command lane capacity groups", () => {
 
     // Fill the group to its budget minus the hook's reservation.
     const gates = Array.from({ length: 7 }, () => gate());
-    const cronRuns = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
+    const cronRuns = gates.map((g) =>
+      enqueueCommandInLane(CRON, async () => await g.promise, { priority: "foreground" }),
+    );
     await settle();
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(7);
 
     // The 8th slot is the hook's hard reservation: cron must not take it.
     const extra = gate();
-    const blockedCron = enqueueCommandInLane(CRON, async () => await extra.promise);
+    const blockedCron = enqueueCommandInLane(CRON, async () => await extra.promise, {
+      priority: "foreground",
+    });
     await settle();
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(7);
     expect(getCommandLaneSnapshot(CRON).blockedBy).toBe("sibling-reservation");
 
     // And the hook starts immediately despite the group being otherwise full.
     const hookGate = gate();
-    const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
+    const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise, {
+      priority: "background",
+    });
     await settle();
     expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(1);
     expect(getCommandLaneSnapshot(HOOK).groupActive).toBe(8);
@@ -176,6 +184,259 @@ describe("command lane capacity groups", () => {
     hookGate.release();
     b.release();
     await Promise.all([second, hookRun]);
+  });
+
+  test.each(["successful", "failing"] as const)(
+    "a %s completion gives shared capacity to the older eligible sibling head",
+    async (outcome) => {
+      setCommandLaneGroup(GROUP, {
+        budget: 2,
+        members: [CRON, HOOK],
+        reservations: { [HOOK]: 1 },
+      });
+
+      const firstHookGate = gate();
+      const secondHookGate = gate();
+      const firstHook = enqueueCommandInLane(
+        HOOK,
+        async () => {
+          await firstHookGate.promise;
+          if (outcome === "failing") {
+            throw new Error("expected hook failure");
+          }
+        },
+        { priority: "background" },
+      );
+      const secondHook = enqueueCommandInLane(HOOK, async () => await secondHookGate.promise, {
+        priority: "background",
+      });
+      await settle();
+      expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(2);
+
+      // Cron queues first. A later hook queues behind the same full group. The
+      // completing hook lane must not synchronously reclaim the shared slot.
+      const cronGate = gate();
+      const cronRun = enqueueCommandInLane(CRON, async () => await cronGate.promise, {
+        priority: "background",
+      });
+      const thirdHookGate = gate();
+      const thirdHook = enqueueCommandInLane(HOOK, async () => await thirdHookGate.promise, {
+        priority: "background",
+      });
+      await settle();
+
+      firstHookGate.release();
+      if (outcome === "failing") {
+        await expect(firstHook).rejects.toThrow("expected hook failure");
+      } else {
+        await firstHook;
+      }
+      await settle();
+
+      expect(getCommandLaneSnapshot(CRON)).toMatchObject({ activeCount: 1, queuedCount: 0 });
+      expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+
+      cronGate.release();
+      secondHookGate.release();
+      thirdHookGate.release();
+      await Promise.all([cronRun, secondHook, thirdHook]);
+    },
+  );
+
+  test("priority outranks group-global enqueue sequence", async () => {
+    setCommandLaneGroup(GROUP, { budget: 1, members: [CRON, HOOK] });
+
+    const blockerGate = gate();
+    const blocker = enqueueCommandInLane(HOOK, async () => await blockerGate.promise);
+    await settle();
+
+    const cronGate = gate();
+    const olderBackground = enqueueCommandInLane(CRON, async () => await cronGate.promise, {
+      priority: "background",
+    });
+    const hookGate = gate();
+    const newerForeground = enqueueCommandInLane(HOOK, async () => await hookGate.promise, {
+      priority: "foreground",
+    });
+
+    blockerGate.release();
+    await blocker;
+    await settle();
+
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 1, queuedCount: 0 });
+    expect(getCommandLaneSnapshot(CRON)).toMatchObject({ activeCount: 0, queuedCount: 1 });
+
+    hookGate.release();
+    await newerForeground;
+    cronGate.release();
+    await olderBackground;
+  });
+
+  test("three-member arbitration is independent of member iteration order", async () => {
+    setCommandLaneGroup(GROUP, { budget: 1, members: [CRON, HOOK, DELIVERY] });
+
+    const blockerGate = gate();
+    const blocker = enqueueCommandInLane(CRON, async () => await blockerGate.promise, {
+      priority: "background",
+    });
+    await settle();
+
+    // DELIVERY is last in the member Set but queues before HOOK. A simple
+    // sibling-first loop would start HOOK merely because it is visited first.
+    const deliveryGate = gate();
+    const olderDelivery = enqueueCommandInLane(DELIVERY, async () => await deliveryGate.promise, {
+      priority: "background",
+    });
+    const hookGate = gate();
+    const newerHook = enqueueCommandInLane(HOOK, async () => await hookGate.promise, {
+      priority: "background",
+    });
+
+    blockerGate.release();
+    await blocker;
+    await settle();
+
+    expect(getCommandLaneSnapshot(DELIVERY)).toMatchObject({ activeCount: 1, queuedCount: 0 });
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 0, queuedCount: 1 });
+
+    deliveryGate.release();
+    await olderDelivery;
+    hookGate.release();
+    await newerHook;
+  });
+
+  test("multi-slot reset re-arbitrates before stale completions arrive", async () => {
+    setCommandLaneGroup(GROUP, { budget: 2, members: [CRON, HOOK] });
+
+    const staleGates = [gate(), gate()];
+    const staleHooks = staleGates.map((g) =>
+      enqueueCommandInLane(HOOK, async () => await g.promise, { priority: "background" }),
+    );
+    await settle();
+
+    const cronGate = gate();
+    const cronRun = enqueueCommandInLane(CRON, async () => await cronGate.promise, {
+      priority: "background",
+    });
+    const queuedHookGates = [gate(), gate()];
+    const queuedHooks = queuedHookGates.map((g) =>
+      enqueueCommandInLane(HOOK, async () => await g.promise, { priority: "background" }),
+    );
+    await settle();
+
+    expect(resetCommandLane(HOOK)).toBe(2);
+    await settle();
+    expect(getCommandLaneSnapshot(CRON)).toMatchObject({ activeCount: 1, queuedCount: 0 });
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+    expect(getCommandLaneSnapshot(HOOK).groupActive).toBe(2);
+
+    // The reset invalidated these task IDs. Their late completions must neither
+    // remove new-generation IDs nor admit the remaining queued hook.
+    for (const g of staleGates) {
+      g.release();
+    }
+    await Promise.all(staleHooks);
+    await settle();
+    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(1);
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+
+    cronGate.release();
+    queuedHookGates[0]?.release();
+    await Promise.all([cronRun, queuedHooks[0]]);
+    queuedHookGates[1]?.release();
+    await queuedHooks[1];
+  });
+
+  test("resetAllLanes refills a group by queue order rather than lane order", async () => {
+    setCommandLaneGroup(GROUP, { budget: 1, members: [HOOK, CRON] });
+
+    const staleGate = gate();
+    const staleHook = enqueueCommandInLane(HOOK, async () => await staleGate.promise, {
+      priority: "background",
+    });
+    await settle();
+
+    const cronGate = gate();
+    const olderCron = enqueueCommandInLane(CRON, async () => await cronGate.promise, {
+      priority: "background",
+    });
+    const hookGate = gate();
+    const newerHook = enqueueCommandInLane(HOOK, async () => await hookGate.promise, {
+      priority: "background",
+    });
+    await settle();
+
+    resetAllLanes();
+    await settle();
+    expect(getCommandLaneSnapshot(CRON)).toMatchObject({ activeCount: 1, queuedCount: 0 });
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 0, queuedCount: 1 });
+
+    staleGate.release();
+    await staleHook;
+    await settle();
+    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(1);
+    expect(getCommandLaneSnapshot(HOOK).queuedCount).toBe(1);
+
+    cronGate.release();
+    await olderCron;
+    hookGate.release();
+    await newerHook;
+  });
+
+  test("commits a slot before an onWait callback can re-enter the group", async () => {
+    setCommandLaneConcurrency(CRON, 0);
+    setCommandLaneConcurrency(HOOK, 1);
+
+    const cronGate = gate();
+    const hookGate = gate();
+    let hookRun: Promise<void> | undefined;
+    let active = 0;
+    let peak = 0;
+    const cronRun = enqueueCommandInLane(
+      CRON,
+      async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await cronGate.promise;
+        active -= 1;
+      },
+      {
+        priority: "background",
+        warnAfterMs: 0,
+        onWait: () => {
+          hookRun = enqueueCommandInLane(
+            HOOK,
+            async () => {
+              active += 1;
+              peak = Math.max(peak, active);
+              await hookGate.promise;
+              active -= 1;
+            },
+            { priority: "foreground" },
+          );
+        },
+      },
+    );
+    await settle();
+
+    publishLaneConfiguration({
+      lanes: { [CRON]: 1 },
+      groups: { [GROUP]: { budget: 1, members: [CRON, HOOK] } },
+    });
+    await settle();
+
+    expect(hookRun).toBeDefined();
+    expect(peak).toBe(1);
+    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(1);
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 0, queuedCount: 1 });
+
+    cronGate.release();
+    await cronRun;
+    await settle();
+    expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(1);
+    hookGate.release();
+    await hookRun;
+    expect(peak).toBe(1);
   });
 
   test("a failing task releases group capacity like a successful one", async () => {

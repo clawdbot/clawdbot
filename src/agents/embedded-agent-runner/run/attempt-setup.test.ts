@@ -19,6 +19,7 @@ vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
 
 import {
   installEmbeddedAttemptContextGuards,
+  prepareEmbeddedAttemptSkills,
   prepareEmbeddedAttemptSetup,
   resolveAttemptWorkspaceSandbox,
 } from "./attempt-setup.js";
@@ -106,6 +107,24 @@ describe("prepareEmbeddedAttemptSetup", () => {
     }
   });
 
+  it("prepares one closed session permission policy", async () => {
+    const root = path.join(os.tmpdir(), "openclaw-attempt-permission-root");
+    const setup = await prepareEmbeddedAttemptSetup({
+      config: {},
+      modelId: "gpt-5.4",
+      permissionMode: "workspace",
+      provider: "openai",
+      runId: "run-prepared-permission",
+      sessionId: "session-prepared-permission",
+      sessionRoot: root,
+      thinkLevel: "high",
+      timeoutMs: 30_000,
+      workspaceDir: root,
+    } as unknown as EmbeddedRunAttemptParams);
+
+    expect(setup.sessionPermissionPolicy).toEqual({ root, mode: "workspace" });
+  });
+
   it("passes the resolved skill snapshot into sandbox synchronization", async () => {
     const skillsSnapshot = {
       prompt: "skills",
@@ -176,12 +195,13 @@ describe("prepareEmbeddedAttemptSetup", () => {
     expect(resolveProviderRuntimePluginHandle).not.toHaveBeenCalled();
   });
 
-  it("resolves partial handles without trusting scoped metadata", async () => {
+  it("resolves partial handles with the exact lifecycle metadata", async () => {
     const resolvedHandle: ProviderRuntimePluginHandle = {
       provider: "openai",
       modelId: "gpt-5.4",
     };
     resolveProviderRuntimePluginHandle.mockReturnValue(resolvedHandle);
+    const metadataSnapshot = { pluginIds: ["other"] };
     const setup = await prepareEmbeddedAttemptSetup({
       config: {},
       modelId: "gpt-5.4",
@@ -192,7 +212,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       timeoutMs: 30_000,
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-partial"),
       preparedModelRuntime: {
-        metadataSnapshot: { pluginIds: ["other"] },
+        metadataSnapshot,
       } as never,
       runtimePlan: { providerRuntimeHandle: { provider: "openai" } } as never,
     } as unknown as EmbeddedRunAttemptParams);
@@ -204,6 +224,48 @@ describe("prepareEmbeddedAttemptSetup", () => {
     expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledOnce();
     const call = resolveProviderRuntimePluginHandle.mock.calls[0]?.[0];
     expect(call).toMatchObject({ provider: "openai", modelId: "gpt-5.4" });
-    expect(call).not.toHaveProperty("pluginMetadataSnapshot");
+    expect(call?.pluginMetadataSnapshot).toBe(metadataSnapshot);
+  });
+});
+
+describe("prepareEmbeddedAttemptSkills", () => {
+  it("discovers fallback skills from the agent and execution workspaces", async () => {
+    const agentWorkspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-skills-")),
+    );
+    const executionWorkspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-execution-skills-")),
+    );
+    const writeSkill = async (workspaceDir: string, name: string) => {
+      const skillDir = path.join(workspaceDir, "skills", name);
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name} description\n---\n\n# ${name}\n`,
+      );
+    };
+    await writeSkill(agentWorkspace, "agent-workspace-skill");
+    await writeSkill(executionWorkspace, "execution-workspace-skill");
+
+    try {
+      const prepared = prepareEmbeddedAttemptSkills({
+        attempt: {
+          bootstrapWorkspaceDir: agentWorkspace,
+          config: {},
+        } as EmbeddedRunAttemptParams,
+        effectiveWorkspace: executionWorkspace,
+        sandbox: null,
+        sessionAgentId: "main",
+      });
+      try {
+        expect(prepared.skillsPrompt).toContain("agent-workspace-skill");
+        expect(prepared.skillsPrompt).toContain("execution-workspace-skill");
+      } finally {
+        prepared.restoreSkillEnv();
+      }
+    } finally {
+      await fs.rm(agentWorkspace, { recursive: true, force: true });
+      await fs.rm(executionWorkspace, { recursive: true, force: true });
+    }
   });
 });

@@ -425,8 +425,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
 
-  const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
-  resolveAndApplyOutboundReplyToId(params, {
+  const initialReply = resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
     matchesToolContextTarget: channelPlugin?.threading?.matchesToolContextTarget,
@@ -444,9 +443,14 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     resolvedTarget,
     resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
     resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
-    replyToIsExplicit,
+    replyToIsExplicit: initialReply?.source === "explicit",
     resolveOutboundSessionRoute,
   });
+  const canonicalReplyToId = readToolStringParam(params, "replyTo");
+  const reply =
+    initialReply && canonicalReplyToId && canonicalReplyToId !== initialReply.replyToId
+      ? { ...initialReply, replyToId: canonicalReplyToId }
+      : initialReply;
   // Durable route/session persistence commits only on send success. A failed
   // probe (missing channel credentials above all) must not rebind the folded
   // main session's delivery route or mint a conversation identity. Once-only:
@@ -459,7 +463,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     outboundRoutePersisted = true;
     await ensureOutboundSessionEntry({ cfg, channel, accountId, route: outboundRoute });
   };
-  const resolvedReplyToId = readToolStringParam(params, "replyTo");
   throwIfAborted(abortSignal);
 
   const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
@@ -510,6 +513,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         channel,
         channelPlugin,
         action,
+        reply,
         accountId,
         dryRun,
         gateway,
@@ -536,7 +540,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         accountId,
         input,
         agentId,
-        replyToIsExplicit,
+        replyToIsExplicit: reply?.source === "explicit",
       },
     );
   }
@@ -632,8 +636,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     gifPlayback: sendPayload.gifPlayback,
     forceDocument: sendPayload.forceDocument,
     bestEffort: sendPayload.bestEffort,
-    replyToId: resolvedReplyToId ?? undefined,
-    replyToIdSource: resolvedReplyToId ? (replyToIsExplicit ? "explicit" : "implicit") : undefined,
+    reply,
     threadId: resolvedThreadId ?? undefined,
   });
 
@@ -664,6 +667,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     accountId,
     input,
     agentId,
-    replyToIsExplicit,
+    replyToIsExplicit: reply?.source === "explicit",
   });
 }

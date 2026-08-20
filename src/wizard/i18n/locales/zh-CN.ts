@@ -112,6 +112,8 @@ export const zh_CN = {
       cacheFailed: "生成 completion 缓存失败。稍后运行 `{command}`。",
       enable: "为 {cli} 启用 {shell} shell completion？",
       installed: "Shell completion 已安装。{reloadHint}",
+      profileNotWritable:
+        "Shell completion 未更改：{profile} 不可写。请对可写的 profile 文件运行 `{command}`。",
       reloadPowerShell: "重启 shell 或运行：{command}",
       reloadShell: "重启 shell 或运行：source {profile}",
       title: "Shell completion",
@@ -123,6 +125,7 @@ export const zh_CN = {
       complete: "迁移完成。下一步运行 `openclaw doctor`。",
       continuing: "迁移完成。继续设置。",
       importFrom: "从 {source} 导入",
+      importFromAnotherAgent: "从其他 agent 导入",
       includeCredentials: "同时导入支持的认证凭据？",
       previewTitle: "迁移预览",
       setupModelSeparately: "单独设置模型",
@@ -1065,14 +1068,9 @@ export const zh_CN = {
       controlUiTitle: "Control UI",
       controlUiDocs: "文档：https://docs.openclaw.ai/web/control-ui",
       dashboardCopyPaste: "在本机浏览器中复制/粘贴这个 URL 来控制 OpenClaw。",
-      dashboardLinkWithToken: "Dashboard 链接（含令牌）：{url}",
       dashboardOpened: "已在浏览器中打开。保留该标签页以控制 OpenClaw。",
       dashboardOpenAnytime: "随时打开 dashboard：{command}",
       dashboardReady: "Dashboard 已就绪",
-      dashboardTokenMemory:
-        "Web UI 会把 dashboard URL 中的令牌保存在当前标签页内存中，并在加载后从 URL 中移除。",
-      dashboardTokenPrompt:
-        "如果被提示：把令牌粘贴到 Control UI 设置中（或使用带令牌的 dashboard URL）。",
       dashboardWhenReady: "准备好后运行：{command}",
       daemonRuntime: "Gateway 服务运行时",
       daemonRuntimeNode: "Node（推荐）",
@@ -1168,7 +1166,6 @@ export const zh_CN = {
       webSearchUnavailableAction:
         "重新启用该 provider 或选择其他 provider 前，web_search 无法工作。",
       webUiUrl: "Web UI：{url}",
-      webUiWithTokenUrl: "Web UI（含令牌）：{url}",
       whatNow: '下一步：https://openclaw.ai/showcase（"What People Are Building"）。',
       whatNowTitle: "下一步",
       workspaceBackupTitle: "工作区备份",

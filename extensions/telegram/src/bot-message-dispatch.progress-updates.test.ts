@@ -293,7 +293,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
         content: "Photo",
         messageId: 2001,
-        success: true,
+        success: false,
       });
       expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(1);
       expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {

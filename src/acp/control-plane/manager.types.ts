@@ -1,5 +1,6 @@
 /** Shared types and dependency wiring for the ACP session manager control plane. */
 import type {
+  AcpElicitationHandler,
   AcpRuntime,
   AcpRuntimeCapabilities,
   AcpRuntimeEvent,
@@ -69,6 +70,7 @@ export type AcpRunTurnInput = {
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
+  onElicitation?: AcpElicitationHandler;
   onLifecycle?: (event: AcpTurnLifecycleEvent) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
 };

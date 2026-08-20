@@ -162,7 +162,8 @@ export async function reloadCodexRegistryAfterActivation(params: {
   >;
   workspaceDir: string;
   deps: ActivateSetupInferenceDeps;
-}): Promise<boolean> {
+  requireValidConfig?: boolean;
+}): Promise<OpenClawConfig | null> {
   let snapshot: Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>;
   try {
     snapshot = await params.readSnapshot();
@@ -170,7 +171,13 @@ export async function reloadCodexRegistryAfterActivation(params: {
     setupInferenceLog.warn(
       "Could not read config while reloading the plugin registry after Codex activation.",
     );
-    return false;
+    return null;
+  }
+  if (params.requireValidConfig && (!snapshot.exists || !snapshot.valid)) {
+    setupInferenceLog.warn(
+      "Could not reload the plugin registry after Codex activation because the committed config is unavailable.",
+    );
+    return null;
   }
   const runtimeConfig =
     snapshot.exists && snapshot.valid
@@ -205,12 +212,12 @@ export async function reloadCodexRegistryAfterActivation(params: {
       activationSourceConfig: sourceConfig,
       workspaceDir: params.workspaceDir,
     });
-    return true;
+    return runtimeConfig;
   } catch {
     setupInferenceLog.warn(
       "Could not reload the active plugin registry after Codex inference activation.",
     );
-    return false;
+    return null;
   }
 }
 

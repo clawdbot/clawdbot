@@ -30,6 +30,8 @@ const MCP_OAUTH_PENDING_SCHEMA_END = "\n) STRICT;";
 const DEVICE_PAIRING_JOIN_CODE_SCHEMA_START =
   "CREATE TABLE IF NOT EXISTS device_pairing_join_codes (";
 const DEVICE_PAIRING_JOIN_CODE_SCHEMA_END = "\n) STRICT;";
+const CONFIG_REVISION_KEY_SCHEMA_START = "CREATE TABLE IF NOT EXISTS config_revision_keys (";
+const CONFIG_REVISION_KEY_SCHEMA_END = "\n) STRICT;";
 
 function secretStoreSchemaSql(): string {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
@@ -75,6 +77,18 @@ export function ensureDevicePairingJoinCodeSchema(database: DatabaseSync): void 
       endMarkerStart + DEVICE_PAIRING_JOIN_CODE_SCHEMA_END.length,
     ),
   ); // sqlite-allow-raw -- Canonical additive DDL only.
+}
+
+/** Lazily installs the Gateway's installation-local config revision key owner. */
+export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(CONFIG_REVISION_KEY_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(CONFIG_REVISION_KEY_SCHEMA_END, start);
+  if (start < 0 || endMarkerStart < start) {
+    throw new Error("OpenClaw config revision key schema marker is missing.");
+  }
+  database.exec(
+    OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + CONFIG_REVISION_KEY_SCHEMA_END.length),
+  ); // sqlite-allow-raw -- Canonical additive DDL only; key rows use Kysely.
 }
 
 export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
@@ -130,6 +144,13 @@ export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): v
 /** Lazily add setup correlation only when setup pairing first writes or consumes a token. */
 export function ensureDevicePairSetupBootstrapSchema(database: DatabaseSync): void {
   ensureColumn(database, "device_bootstrap_tokens", "setup_id TEXT");
+}
+
+/** Installs environment-owned node binding columns at first cloud enrollment use. */
+export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: DatabaseSync): void {
+  ensureDevicePairSetupCompletionSchema(database);
+  ensureColumn(database, "worker_environments", "node_setup_id TEXT");
+  ensureColumn(database, "worker_environments", "node_device_id TEXT");
 }
 
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
@@ -213,6 +234,86 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
   `);
 }
 
+export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS github_publication_requests (
+      request_id TEXT NOT NULL PRIMARY KEY,
+      idempotency_key TEXT NOT NULL,
+      request_digest TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      session_key TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      worktree_id TEXT NOT NULL,
+      repository_fingerprint TEXT NOT NULL,
+      claim_id TEXT,
+      run_id TEXT,
+      environment_id TEXT,
+      owner_epoch INTEGER CHECK (owner_epoch IS NULL OR owner_epoch >= 1),
+      placement_generation INTEGER CHECK (
+        placement_generation IS NULL OR placement_generation >= 0
+      ),
+      identity_source TEXT NOT NULL CHECK (
+        identity_source IN ('system-detected', 'system-configured', 'agent-override')
+      ),
+      identity_profile_id TEXT,
+      identity_account_id INTEGER NOT NULL CHECK (identity_account_id >= 1),
+      identity_login TEXT NOT NULL,
+      title TEXT,
+      body TEXT,
+      status TEXT NOT NULL CHECK (
+        status IN ('requested', 'publishing', 'published', 'failed')
+      ),
+      gateway_instance_id TEXT,
+      repository TEXT,
+      branch TEXT NOT NULL,
+      base_branch TEXT,
+      source_head_commit TEXT,
+      source_index_tree TEXT,
+      workspace_tree TEXT,
+      head_commit TEXT,
+      pull_request_url TEXT,
+      error_code TEXT,
+      next_action TEXT,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      reported_at_ms INTEGER,
+      UNIQUE (session_id, idempotency_key),
+      CHECK (
+        (claim_id IS NULL AND run_id IS NULL AND environment_id IS NULL
+          AND owner_epoch IS NULL AND placement_generation IS NULL)
+        OR
+        (claim_id IS NOT NULL AND run_id IS NOT NULL AND placement_generation IS NOT NULL
+          AND ((environment_id IS NULL AND owner_epoch IS NULL)
+            OR (environment_id IS NOT NULL AND owner_epoch IS NOT NULL)))
+      ),
+      CHECK (
+        (identity_source IS 'system-detected' AND identity_profile_id IS NULL)
+        OR
+        (identity_source IN ('system-configured', 'agent-override')
+          AND identity_profile_id IS NOT NULL)
+      ),
+      CHECK (
+        (source_head_commit IS NULL AND source_index_tree IS NULL AND workspace_tree IS NULL)
+        OR
+        (source_head_commit IS NOT NULL AND workspace_tree IS NOT NULL)
+      ),
+      CHECK (
+        (status IS 'published' AND pull_request_url IS NOT NULL AND error_code IS NULL
+          AND next_action IS NULL)
+        OR
+        (status IS 'failed' AND pull_request_url IS NULL AND error_code IS NOT NULL
+          AND next_action IS NOT NULL)
+        OR
+        (status IN ('requested', 'publishing') AND pull_request_url IS NULL
+          AND error_code IS NULL AND next_action IS NULL)
+      )
+    ) STRICT;
+
+    CREATE INDEX IF NOT EXISTS idx_github_publication_requests_pending
+      ON github_publication_requests(status, updated_at_ms, request_id);
+  `);
+}
+
 /**
  * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
  *
@@ -280,6 +381,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
+  ensureColumn(db, "node_host_config", "gateway_cloudflare_access_json TEXT");
   ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");

@@ -109,8 +109,8 @@ export async function runQaRuntimeParitySuite(params: {
   let runFailed = false;
   let runError: unknown;
   let parentTransportCleaned = false;
-  let result: QaSuiteResult | undefined;
-  let evidenceWritten = false;
+  let terminalScenarios: QaSuiteScenarioResult[] | undefined;
+  let publishTerminalResult: (() => Promise<QaSuiteResult>) | undefined;
   const startedScenarioIds = new Set<string>();
   try {
     if (params.channelDriver === "live") {
@@ -255,59 +255,60 @@ export async function runQaRuntimeParitySuite(params: {
       },
     );
 
-    const finishedAt = new Date();
-    const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
-      {
-        repoRoot: params.repoRoot,
+    terminalScenarios = scenarios;
+    publishTerminalResult = async () => {
+      const finishedAt = new Date();
+      const { evidence, evidencePath, report, reportPath, summaryPath } =
+        await writeQaSuiteArtifacts({
+          repoRoot: params.repoRoot,
+          outputDir: params.outputDir,
+          startedAt: params.startedAt,
+          finishedAt,
+          scenarios,
+          scenarioDefinitions: params.selectedScenarios,
+          evidenceMode: params.evidenceMode,
+          transport,
+          providerMode: params.providerMode,
+          primaryModel: params.primaryModel,
+          alternateModel: params.alternateModel,
+          fastMode: params.fastMode,
+          concurrency: params.concurrency,
+          channel: params.channelId ?? params.channelDriverSelection?.channel ?? transport.id,
+          channelDriver: transportFactoryResult.driver,
+          channelDriverSelection: params.channelDriverSelection,
+          scenarioIds:
+            params.scenarioIds && params.scenarioIds.length > 0
+              ? params.selectedScenarios.map((scenario) => scenario.id)
+              : undefined,
+          runtimePair: params.runtimePair,
+          writeEvidenceFile: params.writeEvidenceFile,
+        });
+      lab.setLatestReport({
+        outputPath: reportPath,
+        markdown: report,
+        generatedAt: finishedAt.toISOString(),
+      } satisfies QaLabLatestReport);
+      lab.setScenarioRun({
+        kind: "suite",
+        status: "completed",
+        startedAt: params.startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        scenarios: [...liveScenarioOutcomes],
+      });
+      return {
         outputDir: params.outputDir,
-        startedAt: params.startedAt,
-        finishedAt,
+        evidence,
+        evidencePath,
+        reportPath,
+        summaryPath,
+        report,
         scenarios,
-        scenarioDefinitions: params.selectedScenarios,
-        evidenceMode: params.evidenceMode,
-        transport,
-        providerMode: params.providerMode,
-        primaryModel: params.primaryModel,
-        alternateModel: params.alternateModel,
-        fastMode: params.fastMode,
-        concurrency: params.concurrency,
-        channel: params.channelId ?? params.channelDriverSelection?.channel ?? transport.id,
-        channelDriver: transportFactoryResult.driver,
-        channelDriverSelection: params.channelDriverSelection,
-        scenarioIds:
-          params.scenarioIds && params.scenarioIds.length > 0
-            ? params.selectedScenarios.map((scenario) => scenario.id)
-            : undefined,
-        runtimePair: params.runtimePair,
-        writeEvidenceFile: params.writeEvidenceFile,
-      },
-    );
-    lab.setLatestReport({
-      outputPath: reportPath,
-      markdown: report,
-      generatedAt: finishedAt.toISOString(),
-    } satisfies QaLabLatestReport);
-    lab.setScenarioRun({
-      kind: "suite",
-      status: "completed",
-      startedAt: params.startedAt.toISOString(),
-      finishedAt: finishedAt.toISOString(),
-      scenarios: [...liveScenarioOutcomes],
-    });
-    evidenceWritten = evidence !== undefined && (params.writeEvidenceFile ?? true);
-    result = {
-      outputDir: params.outputDir,
-      evidence,
-      evidencePath,
-      reportPath,
-      summaryPath,
-      report,
-      scenarios,
-      startedScenarioIds: params.selectedScenarios
-        .map((scenario) => scenario.id)
-        .filter((scenarioId) => startedScenarioIds.has(scenarioId)),
-      watchUrl: lab.baseUrl,
-    } satisfies QaSuiteResult;
+        startedScenarioIds: params.selectedScenarios
+          .map((scenario) => scenario.id)
+          .filter((scenarioId) => startedScenarioIds.has(scenarioId)),
+        watchUrl: lab.baseUrl,
+      } satisfies QaSuiteResult;
+    };
   } catch (error) {
     runFailed = true;
     runError = error;
@@ -319,11 +320,17 @@ export async function runQaRuntimeParitySuite(params: {
         : []),
       ...(ownsLab ? [{ phase: "lab stop", run: () => lab.stop() }] : []),
     ]);
-    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
+    throwQaSuiteCleanupErrors({
+      cleanupFailures,
+      runFailed,
+      runError,
+      scenarios: terminalScenarios,
+    });
   }
-  if (!result) {
+  if (!publishTerminalResult) {
     throw new Error("QA runtime parity suite completed without a result");
   }
+  const result = await publishTerminalResult();
   writeQaSuiteProgress(params.progressEnabled, "run complete");
   return result;
 }

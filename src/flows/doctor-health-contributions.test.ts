@@ -273,6 +273,16 @@ vi.mock("../daemon/service.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/service.js")>();
   return {
     ...actual,
+    readGatewayServiceState: async () => ({
+      installed: true,
+      loadState: {
+        status: (await mocks.gatewayServiceIsLoaded()) ? "loaded" : "not-loaded",
+      },
+      running: false,
+      env: {},
+      command: null,
+      runtime: { status: "stopped" },
+    }),
     resolveGatewayService: mocks.resolveGatewayService,
   };
 });
@@ -1165,7 +1175,7 @@ describe("doctor health contributions", () => {
     // candidate config, so the loop stops before they persist state derived
     // from a config that never reached disk (same invariant as cron deferral).
     expect(laterRun).not.toHaveBeenCalled();
-    expect(ctx.configWriteBlockedByValidation).toBe(true);
+    expect(ctx.configWriteRefusal).toBe("validation");
     expect(ctx.configResultWriteCommitted).not.toBe(true);
     expect(ctx.cfgForPersistence).toEqual(cfg);
     // Never print "Doctor changes" for changes that were not persisted.
@@ -1225,7 +1235,7 @@ describe("doctor health contributions", () => {
     );
     await requireDoctorContribution("doctor:write-config").run(ctx);
 
-    expect(ctx.configWriteBlockedByValidation).toBe(true);
+    expect(ctx.configWriteRefusal).toBe("validation");
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Earlier config fixes were already saved"),
       "Doctor warnings",
@@ -1302,7 +1312,7 @@ describe("doctor health contributions", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
     expect(laterRun).not.toHaveBeenCalled();
     expect(ctx.configResultWriteCommitted).not.toBe(true);
-    expect(ctx.configWriteDeferredByCronOwnership).toBe(true);
+    expect(ctx.configWriteRefusal).toBe("cron-owner-safety");
     expect(ctx.cfgForPersistence).toEqual(cfg);
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("preserving any retained legacy owner"),

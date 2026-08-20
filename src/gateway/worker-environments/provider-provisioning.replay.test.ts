@@ -97,6 +97,72 @@ describe("worker environment service provision replay", () => {
     });
   });
 
+  it("preserves an allocated lease after indeterminate provision cleanup across restart", async () => {
+    const leaseId = "lease:worker-provision-cleanup";
+    let releaseCommitted = false;
+    const provision = vi.fn(async () => {
+      releaseCommitted = true;
+      throw WorkerProviderError.cleanupIndeterminate(
+        leaseId,
+        new Error("worker enrollment failed"),
+        new Error("provider stop timed out after release was requested"),
+      );
+    });
+    const inspect = vi.fn(async () => ({
+      status: releaseCommitted ? ("destroyed" as const) : ("active" as const),
+    }));
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({ provision, inspect, destroy });
+    const workerService = support.createService(provider);
+
+    await expect(
+      workerService.create("development", "request-provision-cleanup"),
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const pending = expectDefined(support.testState.store.list()[0], "persisted provision cleanup");
+    expect(pending).toMatchObject({
+      state: "destroying",
+      leaseId,
+      destroyRequestedAtMs: expect.any(Number),
+      teardownTerminalState: "failed",
+      lastError: expect.stringMatching(
+        /worker enrollment failed.*provider stop timed out after release was requested/u,
+      ),
+    });
+
+    await workerService.stop();
+    support.testState.service = undefined;
+    closeOpenClawStateDatabaseForTest();
+    support.testState.stateDb = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: support.testState.root },
+    });
+    support.testState.store = createWorkerEnvironmentStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    const restarted = support.createService(provider);
+    restarted.start();
+    await support.waitForFast(() =>
+      expect(support.testState.store.get(pending.environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+      }),
+    );
+
+    expect(provision).toHaveBeenCalledTimes(1);
+    expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+    expect(destroy).not.toHaveBeenCalled();
+    expect(support.testState.store.get(pending.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      teardownTerminalState: "failed",
+      lastError: expect.stringMatching(
+        /worker enrollment failed.*provider stop timed out after release was requested/u,
+      ),
+    });
+  });
+
   it("records a permanent legacy provision replay failure without allocating", async () => {
     const legacyOperationId = `provision:${"0".repeat(64)}`;
     const intent = support.testState.store.createIntent({

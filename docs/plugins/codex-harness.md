@@ -48,19 +48,34 @@ dynamic tools routed through the app-server `item/tool/call` bridge. An
 active OpenClaw sandbox or restricted tool policy disables native code mode
 entirely unless you opt into the experimental sandbox exec-server path.
 
+Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
+as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
+needs OpenClaw-managed Gateway environment access, including Secret Store
+agent-readable environment values or protected egress sentinels. It is pinned
+to the Gateway host and follows OpenClaw exec policy. `gateway_process` uses the
+existing per-session OpenClaw process scope for background follow-up. Prefer
+Codex native shell for ordinary local work.
+
 With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
-Codex also receives `node_exec` and `node_process` tools for commands on paired
-nodes. Native shell remains on the Codex app-server host and workspace
+Codex also receives `node_exec` for commands on paired nodes. Native shell
+remains on the Codex app-server host and workspace
 (Gateway-local for the default stdio deployment); `node_exec` selects a node by
-name or id and keeps OpenClaw's node approval policy in force. If a finite
-runtime allowlist disables native Code Mode and leaves the turn without an
-execution environment, OpenClaw keeps its policy-filtered `exec` and `process`
-tools available instead for direct, unsandboxed execution.
+name or id, keeps OpenClaw's node approval policy in force, and waits for the
+remote command to finish. Remote-node background follow-up is not available. If
+a finite runtime allowlist disables native Code Mode and leaves the turn without
+an execution environment, OpenClaw keeps its policy-filtered `exec` and
+`process` tools available instead for direct, unsandboxed execution.
 
 When `tools.exec.host: "node"` or `/exec host=node` makes the node the session
-default, OpenClaw hides the Codex-native shell and exposes `node_exec` and
-`node_process` as the shell path. This keeps the configured execution host from
-silently falling back to the app-server or Gateway machine.
+default, OpenClaw hides the Codex-native shell and exposes `node_exec` as the
+shell path. This keeps the configured execution host from silently falling
+back to the app-server or Gateway machine.
+
+`gateway_exec` is not exposed when an active OpenClaw sandbox, a node-default
+execution policy, memory-flush restrictions, tool allow/deny policy, or
+`codexDynamicToolsExclude` would make Gateway host access a bypass. Secret
+Store environment values never enter the Codex app-server process, native
+shell, sandbox exec-server, ACP children, sandbox exec, or node exec.
 
 This Codex-native feature is separate from
 [OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
@@ -74,10 +89,12 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.147.0`. The plugin ships and manages `@openai/codex`
-  `0.147.0` by default, so a `codex` command on `PATH` does not affect normal
-  startup. Explicit custom, remote, and macOS desktop-owned app-servers must
-  report the same exact stable `0.147.0` version.
+- Codex app-server `0.147.0` or newer. The plugin still ships and manages the
+  exact `@openai/codex` `0.147.0` artifact, so a `codex` command on `PATH` does
+  not affect normal startup. Explicit custom, remote, and macOS desktop-owned
+  app-servers must report valid SemVer at or above that managed baseline.
+  Newer versions initialize with a warning; acceptance permits an attempt and
+  is not readiness or capability proof.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -253,6 +270,22 @@ for the same Codex run. Profile order chooses credentials, not the runtime.
 Changing auth order does not make a custom, Completions, HTTP, or
 request-overridden route Codex-compatible. Valid model-scoped Fast-mode and
 cutoff controls are runtime controls, not request overrides.
+
+### Project instructions
+
+Codex loads `AGENTS.md` files through native project-document discovery. For
+normal app-server threads, OpenClaw raises Codex's aggregate root-to-working-
+directory budget from the upstream 32 KiB default to a bounded 128 KiB so later
+scoped instructions are not silently clipped. Lightweight and restricted turns
+set the native project-document budget to zero instead.
+
+This byte budget is separate from the character-based workspace bootstrap
+limits configured through `agents.defaults.bootstrapMaxChars` and
+`agents.defaults.bootstrapTotalMaxChars`.
+
+`/context` reports native project documents as unverified because app-server
+exposes their source paths but not the retained byte counts needed to tell
+whether any individual file was fully loaded or truncated.
 
 ### Compaction
 
@@ -724,6 +757,28 @@ permissions, see [Permission modes](/tools/permission-modes). For every
 app-server field, auth order, environment isolation, and timeout behavior,
 see [Codex harness reference](/plugins/codex-harness-reference).
 
+### Native approval audit evidence
+
+With `tools.exec.mode: "ask"` and the Codex user reviewer, native command and
+file prompts use OpenClaw's two-phase operator approval route. The prompt shows
+only decisions that the native request can preserve. For example, a command
+that permits one execution but not session trust offers allow-once and deny;
+byte-bound script approvals also remain one-shot. File prompts support both
+one-shot and session approval.
+
+Terminal operator decisions reuse the Gateway's authoritative approval row and
+its exact execution binding. When execution identity collection is enabled,
+inspect the admitted run with
+[`openclaw audit --run <run-id> --explain`](/cli/audit). The resulting receipt
+can report allow-once, allow-always, denial, no-route, expiry, or cancellation
+without exposing command text, patch content, paths, or native request ids.
+
+Codex auto-review, full-access policy, and native hook or OpenClaw policy
+decisions do not create an operator approval row. Missing or stale native turn
+context is rejected before routing. These cases therefore do not produce an
+enforced operator-approval receipt; audit inspection does not reconstruct one
+from later tool events.
+
 ## Commands and diagnostics
 
 The `codex` plugin registers `/codex` as a slash command on any channel that
@@ -933,16 +988,20 @@ Malformed or unknown options and code-loading options such as `--require` or
 
 Codex dynamic tools default to `searchable` loading. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
-`read`, `write`, `edit`, `apply_patch`, `exec`, `process`, `update_plan`,
+`read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `get_goal`, `create_goal`, `update_goal`, `tool_call`, `tool_describe`,
 `tool_search`, and `tool_search_code`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
-browser, nodes, gateway, and `heartbeat_respond`, are available through
+browser, nodes, gateway, `progress_card`, and `heartbeat_respond` are available through
 Codex tool search under the `openclaw` namespace, keeping the initial model
 context smaller. The restricted-turn shell fallback is the exception for
 `exec` and `process` when a finite allowlist disables native Code Mode;
 runtime allowlists and `codexDynamicToolsExclude` still apply.
+When native shell remains active and Gateway access is policy-eligible,
+OpenClaw instead publishes the distinct `gateway_exec` and `gateway_process`
+names so native shell and the OpenClaw-managed environment path cannot be
+confused.
 
 Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
 tool, use the `openclaw_direct` namespace instead. Codex treats that namespace
@@ -1066,6 +1125,15 @@ networking, so a full-access profile would not protect outbound traffic.
 Domain entries use `allow` or `deny`; Unix socket entries use Codex's
 `allow` or `none` values.
 
+### Image loader ownership
+
+For image-capable models with Codex native tools enabled, Codex owns
+`view_image` and OpenClaw suppresses its duplicate loader. The native Codex
+schema accepts one local filesystem `path`. For text-only models, or when the
+native tool surface is disabled, OpenClaw supplies `view_image` with its
+`path`/`paths` schema and delegated vision route. Callers must use the schema
+advertised for the active run.
+
 ### Dynamic tool call timeouts
 
 OpenClaw-owned dynamic tool calls are bounded independently from
@@ -1074,7 +1142,7 @@ second OpenClaw watchdog by default. A positive per-call `timeoutMs`
 argument extends or shortens that specific tool budget, capped at 600000 ms.
 The `image_generate` tool uses `agents.defaults.mediaModels.image.timeoutMs`
 when the tool call does not provide its own timeout, or a 120 second
-image-generation default otherwise. The media-understanding `image` tool
+image-generation default otherwise. The media-understanding `view_image` tool
 uses the selected image-capable `tools.media.models[]` entry's `timeoutSeconds` or its 60 second media default; for
 image understanding, that timeout applies to the request itself and is not
 reduced by earlier preparation work. On timeout, OpenClaw aborts the tool
@@ -1221,6 +1289,10 @@ The Codex harness changes the low-level embedded agent executor only.
 - Codex-native shell, patch, MCP, and native app tools are owned by Codex.
   OpenClaw can observe or block selected native events through the
   supported relay, but it does not rewrite native tool arguments.
+- `gateway_exec` and `gateway_process` are OpenClaw-owned dynamic tools. They
+  deliberately re-enter Gateway exec preparation for agent-readable Secret
+  Store environment and protected egress; those values never flow into Codex
+  native shell.
 - Codex owns native compaction. OpenClaw keeps a transcript mirror for
   channel history, search, `/new`, `/reset`, and future model or harness
   switching, but does not replace Codex compaction with an OpenClaw or
@@ -1283,11 +1355,12 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use exactly stable Codex `0.147.0`. Older or
-newer versions, prereleases, build-suffixed versions, and unversioned servers
-are rejected because OpenClaw validates generated schemas and runtime contracts
-against the Codex version it ships. Update or remove custom, remote, or desktop
-binary overrides that select another version.
+**The app-server is rejected:** use Codex `0.147.0` or newer. OpenClaw rejects
+older, malformed, and unversioned servers. Same-version prereleases such as
+`0.147.0-alpha.2` remain below the stable minimum; build metadata such as
+`0.147.0+desktop` does not affect precedence. A newer external version is
+permitted to initialize rather than treated as proof of compatibility, so
+startup and capability operations can still fail with their normal diagnostics.
 
 **`/codex status` cannot connect:** check that the `codex` plugin
 is enabled, that `plugins.allow` includes it when an allowlist is

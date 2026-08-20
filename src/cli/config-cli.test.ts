@@ -65,6 +65,16 @@ const mockLoadChannelSecretContractApi = vi.hoisted(() =>
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
     mockReadConfigFileSnapshot(...args),
+  readConfigFileSnapshotWithPluginMetadata: async (
+    ...args: Parameters<typeof mockReadConfigFileSnapshot>
+  ) => ({
+    snapshot: await mockReadConfigFileSnapshot(...args),
+    pluginMetadataSnapshot: createPluginMetadataSnapshot(),
+  }),
+  readConfigFileSnapshotForWrite: async () => ({
+    snapshot: await mockReadConfigFileSnapshot(),
+    writeOptions: {},
+  }),
   writeConfigFile: (
     cfg: OpenClawConfig,
     options?: {
@@ -88,6 +98,7 @@ vi.mock("../secrets/resolve.js", () => ({
 }));
 
 vi.mock("../config/runtime-schema.js", () => ({
+  buildRuntimeConfigSchemaFromRegistry: () => ({ uiHints: {} }),
   readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
 }));
 
@@ -1993,6 +2004,43 @@ describe("config cli", () => {
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        "leading equals",
+        "=SYNTHETIC_PROVIDER_ENV_SECRET",
+        "--provider-env expects KEY=*** entries.",
+      ],
+      [
+        "whitespace key",
+        "   =SYNTHETIC_PROVIDER_ENV_SECRET",
+        "--provider-env key must not be empty.",
+      ],
+    ])("does not disclose provider env values for a %s entry", async (_name, entry, message) => {
+      const secret = "SYNTHETIC_PROVIDER_ENV_SECRET";
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "secrets.providers.runner",
+          "--provider-source",
+          "exec",
+          "--provider-command",
+          "/usr/bin/env",
+          "--provider-env",
+          entry,
+          "--dry-run",
+        ]),
+      ).rejects.toThrow(message);
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(JSON.stringify(mockLog.mock.calls)).not.toContain(secret);
+      expect(JSON.stringify(mockWriteStdout.mock.calls)).not.toContain(secret);
+      expect(JSON.stringify(mockError.mock.calls)).not.toContain(secret);
+      expectErrorIncludes(message);
     });
 
     it("runs resolvability checks in builder dry-run mode without writing", async () => {
@@ -4103,7 +4151,7 @@ describe("config cli", () => {
       ]);
     });
 
-    it("explains when unset targets a runtime-only default shown by config get", async () => {
+    it("fails when unsetting a runtime-only default shown by config get", async () => {
       const resolved = {
         agents: {
           defaults: {
@@ -4133,12 +4181,11 @@ describe("config cli", () => {
 
       await expect(runConfigCommand(["config", "unset", aliasPath])).rejects.toThrow(ExitError);
 
-      expectErrorIncludes(`Config path not found in authored config: ${aliasPath}.`);
-      expectErrorIncludes("It only exists after runtime defaults are applied");
-      expectErrorIncludes("openclaw config set <path> <value>");
-      expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
-        "Run openclaw config get <path>",
+      expectLogExcludes("No change");
+      expectErrorIncludes(
+        `Config path not found in authored config: ${aliasPath}. It only exists after runtime defaults are applied, so there is nothing for config unset to remove. Use openclaw config set <path> <value> to override the inherited value.`,
       );
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
 
       setSnapshot(resolved, runtimeMerged);
       await expect(
@@ -4157,6 +4204,28 @@ describe("config cli", () => {
         ],
       });
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("reports No change when removing a normalized duplicate leaves config unchanged", async () => {
+      const retired = "google/gemini-3-pro-preview";
+      const canonical = "google/gemini-3.1-pro-preview";
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              [retired]: { alias: "gemini" },
+              [canonical]: { alias: "gemini" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", `agents.defaults.models["${retired}"]`]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expectLogIncludes("No change");
     });
 
     it("validates existing refs when unset dry-run removes all secret providers", async () => {
@@ -4247,13 +4316,13 @@ describe("config cli", () => {
   });
 
   describe("config apply hints - issue #80722", () => {
-    it("prints a no-restart hint for a same-value config set", async () => {
+    it("prints No change without writing for a same-value config set", async () => {
       setGatewaySnapshot();
 
       await runConfigSet("gateway.port", "18789", "--strict-json");
 
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      expectLogIncludes("Updated gateway.port. No gateway restart needed.");
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectLogIncludes("No change");
       expectLogExcludes("Restart the gateway to apply.");
       expectLogExcludes("Change will apply without restarting the gateway.");
     });

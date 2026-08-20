@@ -3,6 +3,7 @@ import {
   isChannelExecApprovalClientEnabledFromConfig,
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createNativeApprovalChannelRouteGates,
   doesApprovalRequestSelectChannelAccount,
@@ -42,7 +43,6 @@ import {
   parseSlackTarget,
 } from "./target-parsing.js";
 
-export type SlackApprovalKind = "exec" | "plugin";
 export type SlackNativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 export type SlackOriginTarget = {
   to: string;
@@ -334,7 +334,7 @@ function isSlackNativeApprovalAccountEligible(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: SlackNativeApprovalRequest;
-  approvalKind: SlackApprovalKind;
+  approvalKind: ChannelApprovalKind;
 }): boolean {
   const config = resolveSlackNativeApprovalConfig(params);
   const approverCount =
@@ -401,7 +401,7 @@ export function shouldHandleSlackPluginViaForwardingSession(params: {
 function isSlackNativeApprovalClientEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  approvalKind: SlackApprovalKind;
+  approvalKind: ChannelApprovalKind;
 }): boolean {
   if (params.approvalKind === "exec") {
     return isSlackExecApprovalClientEnabled(params);
@@ -428,7 +428,7 @@ export function isSlackAnyNativeApprovalClientEnabled(params: {
 export function shouldHandleSlackNativeApprovalRequest(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  approvalKind?: SlackApprovalKind;
+  approvalKind?: ChannelApprovalKind;
   request: SlackNativeApprovalRequest;
 }): boolean {
   const account = resolveSlackAccount(params);

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { getModelProviderMetadataOwners } from "../provider-request-config.js";
+import { getModelProviderRequestRouteFacts } from "../provider-request-config.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginManifestRegistryCore: vi.fn(),
@@ -224,7 +224,9 @@ describe("prepared bundled provider static catalogs", () => {
         contextWindow: 1_048_576,
       }),
     ]);
-    expect(getModelProviderMetadataOwners(models[0]!)).toBe(metadataSnapshot.owners);
+    expect(getModelProviderRequestRouteFacts(models[0]!)?.providerMetadataOwners).toBe(
+      metadataSnapshot.owners,
+    );
     expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledOnce();
     expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });

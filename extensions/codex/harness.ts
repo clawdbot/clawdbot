@@ -7,8 +7,10 @@ import type {
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
+import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
@@ -118,6 +120,10 @@ export function createCodexAppServerAgentHarness(
   );
   const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
+  const resolveAttemptPluginConfig = (config: OpenClawConfig | undefined) =>
+    resolvePluginConfigObject(config, "codex") ??
+    options.resolvePluginConfig?.() ??
+    options.pluginConfig;
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
@@ -168,6 +174,13 @@ export function createCodexAppServerAgentHarness(
       return await fetchCodexAppServerUsageSnapshot(ctx, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
+    },
+    loadModelCatalog: async (params) => {
+      const { loadCodexAppServerModelCatalog } = await import("./src/app-server/model-catalog.js");
+      return await loadCodexAppServerModelCatalog(
+        params,
+        resolveAttemptPluginConfig(params.config),
+      );
     },
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
@@ -237,7 +250,8 @@ export function createCodexAppServerAgentHarness(
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        pluginConfig: resolveAttemptPluginConfig(params.config),
+        runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
         nativeHookRelay: { enabled: true },
       });
     },
@@ -276,6 +290,7 @@ export function createCodexAppServerAgentHarness(
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        runtimeModelId: readCodexRuntimeModelId(params.runtimeModel, params.model),
         nativeHookRelay: { enabled: true },
       });
     },

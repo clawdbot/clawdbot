@@ -1,5 +1,9 @@
 import type { ConfigUiHints } from "../../api/types.ts";
-import { settingsSearchTextMatches, type SettingsSearchBlock } from "../../app-navigation.ts";
+import {
+  isSettingsNavigationRouteVisible,
+  settingsSearchTextMatches,
+  type SettingsSearchBlock,
+} from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
@@ -61,6 +65,7 @@ export function findSettingsSearchBlocks(params: {
   uiHints: ConfigUiHints;
   identityAvailable?: boolean;
   basePath?: string;
+  canAdmin?: boolean;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -69,7 +74,9 @@ export function findSettingsSearchBlocks(params: {
   const matches: SettingsSearchBlock[] =
     criteria.tags.length === 0 && criteria.text
       ? STATIC_SETTINGS_BLOCKS.filter(
-          (block) => params.identityAvailable || !block.requiresIdentity,
+          (block) =>
+            (params.identityAvailable || !block.requiresIdentity) &&
+            isSettingsNavigationRouteVisible(block.routeId, params.canAdmin !== false),
         )
           .map(resolveStaticSettingsBlock)
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
@@ -84,6 +91,9 @@ export function findSettingsSearchBlocks(params: {
   const value = params.value ?? {};
   for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
     const routeId = configPageForSection(key);
+    if (!isSettingsNavigationRouteVisible(routeId, params.canAdmin !== false)) {
+      continue;
+    }
     const sectionSchema = visibleSectionSchema(routeId, rawSectionSchema);
     const meta = SECTION_META[key];
     const tierSplit = splitConfigSchemaByTier({

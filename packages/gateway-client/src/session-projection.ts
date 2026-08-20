@@ -411,6 +411,11 @@ export function projectLiveSessionMessage(
   if (existing && existing.message === message && existing.live && !existing.pending) {
     return state;
   }
+  if (existing && !existing.pending && existing.identity?.id && !incoming.identity.id) {
+    // A terminal projection carries no transcript identity; adopting it over the
+    // durable row would lose the ID every later snapshot reconciles against.
+    return state;
+  }
   if (existing?.pending && incoming.identity.sequence !== null) {
     const sequence = incoming.identity.sequence;
     const violatesOrder = state.entries.some(

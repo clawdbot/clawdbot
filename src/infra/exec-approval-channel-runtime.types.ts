@@ -1,14 +1,15 @@
 // Defines channel-native approval runtime contracts.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ApprovalRequestInput, NormalizedApprovalRequest } from "./approval-types.js";
+import type {
+  ApprovalRequestInput,
+  ChannelApprovalKind,
+  NormalizedApprovalRequest,
+} from "./approval-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
 
 type ApprovalRequestEvent = ApprovalRequestInput;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
-
-/** Approval event families a channel-native approval runtime can subscribe to. */
-export type ExecApprovalChannelRuntimeEventKind = "exec" | "plugin";
 
 /** Adapter implemented by a channel to deliver and finalize native approval prompts. */
 export type ExecApprovalChannelRuntimeAdapter<
@@ -21,7 +22,7 @@ export type ExecApprovalChannelRuntimeAdapter<
   cfg: OpenClawConfig;
   gatewayUrl?: string;
   /** Defaults to exec-only; include plugin when the adapter can handle plugin approvals. */
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
   isConfigured: () => boolean;
   shouldHandle: (request: NormalizedApprovalRequest<TRequest>) => boolean;
   deliverRequested: (request: NormalizedApprovalRequest<TRequest>) => Promise<TPending[]>;

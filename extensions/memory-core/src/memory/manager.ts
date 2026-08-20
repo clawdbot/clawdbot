@@ -13,6 +13,7 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   type MemoryProviderStatus,
+  type MemoryReadResult,
   type MemorySearchManager,
   type MemorySessionSyncTarget,
   type MemorySource,
@@ -439,7 +440,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     relPath: string;
     from?: number;
     lines?: number;
-  }): Promise<{ text: string; path: string }> {
+  }): Promise<MemoryReadResult> {
     return await readMemoryFile({
       workspaceDir: this.workspaceDir,
       extraPaths: this.settings.extraPaths,

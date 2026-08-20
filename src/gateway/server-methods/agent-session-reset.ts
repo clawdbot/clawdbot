@@ -31,6 +31,7 @@ export async function runSessionResetFromAgent(params: {
     reason: params.reason,
     commandSource: "gateway:agent",
     creation: params.creation,
+    armSessionDiffBaselineCapture: true,
     assertCurrent: params.assertCurrent,
     onCommitted: params.onCommitted,
   });

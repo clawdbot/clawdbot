@@ -152,16 +152,6 @@ async function runSetupWizardOnce(
     baseConfig,
     detections: migrationDetections,
   });
-  const importOptions = migrationOptions.map((option) => {
-    const choice: { value: `import:${string}`; label: string; hint?: string } = {
-      value: `import:${option.providerId}`,
-      label: t("wizard.migration.importFrom", { source: option.label }),
-    };
-    if (option.hint) {
-      choice.hint = option.hint;
-    }
-    return choice;
-  });
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
   if (
@@ -202,7 +192,9 @@ async function runSetupWizardOnce(
         ...(keepModelOption ? [keepModelOption] : []),
         { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
         { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
-        ...importOptions,
+        ...(migrationOptions.length > 0
+          ? [{ value: "import" as const, label: t("wizard.migration.importFromAnotherAgent") }]
+          : []),
       ],
       initialValue: hasExistingModelConfig ? "keep-model" : "quickstart",
     });
@@ -232,7 +224,6 @@ async function runSetupWizardOnce(
   let importedInferenceVerified = false;
   while (opts.importFrom || flow === "import" || flow.startsWith("import:")) {
     const importFrom = opts.importFrom ?? (flow.startsWith("import:") ? flow.slice(7) : undefined);
-    prompter.disableBackNavigation?.();
     let migrationOutcome: Awaited<ReturnType<typeof runSetupMigrationImport>>;
     try {
       migrationOutcome = await runSetupMigrationImport({
@@ -260,8 +251,13 @@ async function runSetupWizardOnce(
             ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
           });
         },
+        allowProviderBack: flowFromPrompt,
         continueOnboarding: true,
       });
+      if (migrationOutcome.kind === "back") {
+        ({ flow, keepExistingModelConfig } = await normalizeSetupFlow(await promptSetupFlow()));
+        continue;
+      }
     } catch (error) {
       const canReturnToSetupMode =
         error instanceof SetupMigrationFreshnessError ||
@@ -416,6 +412,7 @@ async function runSetupWizardOnce(
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
+        ...(baseConfig.gateway?.remote?.edgeAuth ? { config: baseConfig } : {}),
         token: remoteProbeAuth?.auth.token,
         ...(remoteProbeAuth?.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
       })
@@ -454,6 +451,9 @@ async function runSetupWizardOnce(
     const { logConfigUpdated } = await loadConfigLoggingModule();
     let nextConfig = await promptRemoteGatewayConfig(remoteSeedConfig, prompter, {
       secretInputMode: opts.secretInputMode,
+      ...(opts.remoteUrl !== undefined && storedRemoteUrl
+        ? { edgeAuthOriginUrl: storedRemoteUrl }
+        : {}),
     });
     if (opts.skipBootstrap) {
       nextConfig = applySkipBootstrapConfig(nextConfig);

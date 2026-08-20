@@ -496,7 +496,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(docs).toContain("scripts/lib/plugin-sdk-entrypoints.json");
     expect(docs).toContain("scripts/lib/plugin-sdk-private-local-only-subpaths.json");
     expect(docs).toContain("scripts/lib/plugin-sdk-deprecated-public-subpaths.json");
-    expect(docs).toContain("private-local entries explicitly");
+    expect(docs).toContain("selected private-local entries");
 
     for (const subpath of pluginSdkSubpaths) {
       expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`, {
@@ -1255,7 +1255,11 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
-    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedAgentCompactResult"]);
+    expectSourceMentions("agent-harness-runtime", [
+      "AgentHarness",
+      "EmbeddedAgentCompactResult",
+      "agentHarnessStructuredInput",
+    ]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");

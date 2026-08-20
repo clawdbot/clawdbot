@@ -14,8 +14,11 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import { loadCronJobsPage, type CronState } from "../../lib/cron/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { AgentsRouteData } from "./route.ts";
 import "./agents-page.ts";
+
+const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods(["config.patch", "config.set"]);
 
 type TestAgentsPage = HTMLElement & {
   context: ApplicationContext;
@@ -91,7 +94,7 @@ function snapshot(
     phase: connected ? "connected" : "stopped",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: AGENTS_PAGE_GATEWAY_HELLO,
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,

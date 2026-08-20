@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
   ExecApprovalIdLookupResult,
   ExecApprovalManager,
@@ -77,9 +78,9 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
 export function listVisiblePendingApprovalRequests<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   client?: GatewayClient | null;
-  approvalKind?: "exec" | "plugin";
+  approvalKind?: ChannelApprovalKind;
 }): Array<{
-  approvalKind?: "exec" | "plugin";
+  approvalKind?: ChannelApprovalKind;
   id: string;
   request: TPayload;
   createdAtMs: number;

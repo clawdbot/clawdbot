@@ -1067,7 +1067,10 @@ describe("runSetupWizard", () => {
         }),
       }),
       expect.any(Object),
-      { secretInputMode: undefined },
+      {
+        secretInputMode: undefined,
+        edgeAuthOriginUrl: "wss://stored.example.com:18789",
+      },
     );
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
   });
@@ -1096,6 +1099,33 @@ describe("runSetupWizard", () => {
       url: "wss://gateway.example.test",
       token: undefined,
       password: remotePassword,
+    });
+  });
+
+  it("passes configured remote edge auth to the setup reachability probe", async () => {
+    const config: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example.test",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
+
+    await runSetupWizard(
+      { acceptRisk: true, flow: "advanced", mode: "remote" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      config: expect.objectContaining({
+        gateway: config.gateway,
+      }),
+      token: undefined,
     });
   });
 
@@ -1180,6 +1210,7 @@ describe("runSetupWizard", () => {
             url: "wss://stored.example.com:18789",
             token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
             password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
           },
         },
       },
@@ -1206,6 +1237,14 @@ describe("runSetupWizard", () => {
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://flag.example.com:18789",
+      config: expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: expect.objectContaining({
+            url: "wss://stored.example.com:18789",
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
+          }),
+        }),
+      }),
       token: undefined,
     });
     expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
@@ -1215,11 +1254,15 @@ describe("runSetupWizard", () => {
             url: "wss://flag.example.com:18789",
             token: undefined,
             password: undefined,
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
           },
         }),
       }),
       expect.any(Object),
-      { secretInputMode: undefined },
+      {
+        secretInputMode: undefined,
+        edgeAuthOriginUrl: "wss://stored.example.com:18789",
+      },
     );
   });
 
@@ -1533,11 +1576,18 @@ describe("runSetupWizard", () => {
     },
   ])("returns to setup mode after an interactive import $label", async ({ error, detail }) => {
     const workspaceDir = await makeCaseDir("import-retry-");
-    listSetupMigrationOptions.mockResolvedValueOnce([{ providerId: "hermes", label: "Hermes" }]);
+    listSetupMigrationOptions.mockResolvedValueOnce([
+      { providerId: "hermes", label: "Import from Hermes" },
+    ]);
     runSetupMigrationImport.mockRejectedValueOnce(error);
-    const setupChoices: Array<"import:hermes" | "quickstart"> = ["import:hermes", "quickstart"];
-    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
-      if (message === "Setup mode") {
+    const setupChoices: Array<"import" | "quickstart"> = ["import", "quickstart"];
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      if (params.message === "Setup mode") {
+        expect(params.options).toEqual([
+          expect.objectContaining({ value: "quickstart", label: "QuickStart (recommended)" }),
+          expect.objectContaining({ value: "advanced", label: "Manual setup" }),
+          expect.objectContaining({ value: "import", label: "Import from another agent" }),
+        ]);
         return setupChoices.shift();
       }
       return "__skip__";
@@ -1566,6 +1616,39 @@ describe("runSetupWizard", () => {
       expect.stringContaining(detail),
       "Existing config detected",
     );
+    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
+  });
+
+  it("returns from the migration picker without restarting setup", async () => {
+    const workspaceDir = await makeCaseDir("import-back-");
+    listSetupMigrationOptions.mockResolvedValueOnce([
+      { providerId: "hermes", label: "Import from Hermes" },
+    ]);
+    runSetupMigrationImport.mockResolvedValueOnce({ kind: "back" });
+    const setupChoices: Array<"import" | "quickstart"> = ["import", "quickstart"];
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "Setup mode" ? setupChoices.shift() : "__skip__",
+    );
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      createRuntime(),
+      buildWizardPrompter({ select: select as unknown as WizardPrompter["select"] }),
+    );
+
+    expect(select.mock.calls.filter(([params]) => params.message === "Setup mode")).toHaveLength(2);
+    expect(detectSetupMigrationSources).toHaveBeenCalledOnce();
+    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
     expect(finalizeSetupWizard).toHaveBeenCalledOnce();
   });
 

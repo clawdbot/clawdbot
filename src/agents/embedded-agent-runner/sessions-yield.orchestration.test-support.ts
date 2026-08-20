@@ -99,6 +99,7 @@ describe("sessions_yield orchestration", () => {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
           yieldDetected: true,
+          yieldAcknowledgment: "Research started; results will follow.",
           assistantTexts: [],
           acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "child-key" }],
         }),
@@ -113,6 +114,7 @@ describe("sessions_yield orchestration", () => {
       expect(result.payloads).toBeUndefined();
       expect(result.meta.stopReason).toBe("end_turn");
       expect(result.meta.yielded).toBe(true);
+      expect(result.meta.yieldAcknowledgment).toBe("Research started; results will follow.");
     });
 
     it("yield with async started tool — diagnostic suppressed", async () => {

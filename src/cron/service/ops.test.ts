@@ -1217,6 +1217,7 @@ describe("cron service ops seam coverage", () => {
           action: "finished",
           job,
           status: "ok",
+          completionStatus: "succeeded",
           runAtMs: startedAt,
           durationMs: 1_000,
         },
@@ -1285,6 +1286,7 @@ describe("cron service ops seam coverage", () => {
           action: "finished",
           job,
           status: "ok",
+          completionStatus: "succeeded",
           summary: "completed before restart",
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
@@ -1425,6 +1427,7 @@ describe("cron service ops seam coverage", () => {
             action: "finished",
             job: original,
             status,
+            completionStatus: status === "ok" ? "succeeded" : "failed",
             ...(status === "error" ? { error: "original failed before restart" } : {}),
             summary: "original completed before restart",
             runAtMs: startedAt,
@@ -1498,6 +1501,9 @@ describe("cron service ops seam coverage", () => {
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs[0]?.state.lastFailureAlertAtMs).toBe(endedAt);
       expect(persisted.jobs[0]?.state.consecutiveErrors).toBe(1);
+      expect(persisted.jobs[0]?.state.lastFailureNotificationDelivered).toBeUndefined();
+      expect(persisted.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+      expect(persisted.jobs[0]?.state.lastFailureNotificationDeliveryError).toBeUndefined();
       expect(sendCronFailureAlert).not.toHaveBeenCalled();
       stop(state);
     });

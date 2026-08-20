@@ -49,6 +49,12 @@ export function createHarness(
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
+    prepareAcceptedWorkspacePublication?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["prepareAcceptedWorkspacePublication"];
+    publishAcceptedWorkspace?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["publishAcceptedWorkspace"];
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -93,6 +99,7 @@ export function createHarness(
       }
       return begun;
     },
+    cancelPlacementMove: (params) => placementStore.cancelPlacementMove(params),
     completePlacementMoveSourceToLocal: (params) => {
       log.push("placement:local");
       return placementStore.completePlacementMoveSourceToLocal(params);
@@ -342,22 +349,25 @@ export function createHarness(
     placements,
     environments,
     workspaceOperations: options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator(),
-    runLocalBarrier: async ({ startDispatch }) => {
+    runLocalBarrier: async ({ authorize, startDispatch }) => {
       log.push("barrier");
       if (options.failAt === "preflight") {
         fail("preflight");
       }
+      authorize?.();
       const placement = startDispatch();
       if (options.failAt === "barrier") {
         throw new Error("barrier failed");
       }
       return placement;
     },
-    runActivationBarrier: async ({ activate }) => {
+    runActivationBarrier: async ({ authorize, activate }) => {
+      authorize?.();
       fail("activation");
       return activate();
     },
-    runMoveBarrier: async ({ begin }) => {
+    runMoveBarrier: async ({ authorize, begin }) => {
+      authorize?.();
       const begun = begin();
       if (options.failMoveAfterBegin) {
         throw new Error("move barrier interrupted");
@@ -372,14 +382,26 @@ export function createHarness(
             executionMode: REQUEST.executionMode,
             ...(target.kind === "device" ? { deviceId: target.deviceId } : {}),
           },
-    runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim(options.workspacePath ?? "/gateway/workspace", begin()),
+    runReclaimBarrier: async ({ authorize, begin, reclaim }) => {
+      authorize?.();
+      return await reclaim(options.workspacePath ?? "/gateway/workspace", begin());
+    },
+    runFailedReclaimBarrier: async ({ authorize, reclaim }) => {
+      authorize?.();
+      return await reclaim();
+    },
     resolveWorkspacePath: async () => {
       fail("workspace");
       return options.workspacePath ?? "/gateway/workspace";
     },
     reportWorkspaceResultConflict,
     resolveWorkspaceResultConflict: vi.fn(async () => options.priorWorkspaceResultConflict),
+    ...(options.prepareAcceptedWorkspacePublication
+      ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
+      : {}),
+    ...(options.publishAcceptedWorkspace
+      ? { publishAcceptedWorkspace: options.publishAcceptedWorkspace }
+      : {}),
   });
   return {
     log,
@@ -421,8 +443,8 @@ export function createHarness(
     markEnvironmentOwnerEpoch: (ownerEpoch: number) => {
       currentEnvironment = { ...attached, ownerEpoch };
     },
-    markEnvironmentProviderId: (providerId: string) => {
-      currentEnvironment = { ...attached, providerId };
+    markEnvironmentNodeDeviceId: (nodeDeviceId: string) => {
+      currentEnvironment = { ...attached, providerId: "device", nodeDeviceId };
     },
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };

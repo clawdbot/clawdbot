@@ -415,19 +415,6 @@ async function assertTerminalAttackPrefixSanitized(
   );
 }
 
-function hasStatusFrame(
-  raw: string,
-  markers: string[],
-  status: RegExp,
-  dimensions: PtyTerminalDimensions,
-) {
-  return latestFrameHasRow(
-    raw,
-    dimensions,
-    (row) => markers.every((marker) => row.includes(marker)) && status.test(row),
-  );
-}
-
 async function exerciseSelectorOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
@@ -588,8 +575,20 @@ async function exerciseGatewayOutputSafety(
     for (const attack of systemAttacks) {
       expect(raw).not.toContain(attack);
     }
-    expect(hasStatusFrame(fixture.run.output(), idlePayload.markers, /\| idle/u, fixture.run)).toBe(
-      true,
+    expect(
+      latestFrameHasRow(
+        fixture.run.output(),
+        fixture.run,
+        (row) =>
+          idlePayload.markers.every((marker) => row.includes(marker)) && /\| idle/u.test(row),
+      ),
+    ).toBe(true);
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) =>
+        rows.some((row) => row.includes("gateway reconnected after transport loss")) &&
+        rows.some((row) => row.includes("local ready | idle")),
+      startupTimeoutMs,
     );
 
     const helpOffset = fixture.run.visibleOutput().length;

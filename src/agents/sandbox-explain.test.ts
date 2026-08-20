@@ -39,11 +39,11 @@ describe("sandbox explain helpers", () => {
     };
 
     const resolved = resolveSandboxConfigForAgent(cfg, "work");
-    expect(resolved.tools.allow).toEqual(["write", "image"]);
+    expect(resolved.tools.allow).toEqual(["write", "view_image"]);
     expect(resolved.tools.deny).toEqual(["browser"]);
 
     const policy = resolveSandboxToolPolicyForAgent(cfg, "work");
-    expect(policy.allow).toEqual(["write", "image"]);
+    expect(policy.allow).toEqual(["write", "view_image"]);
     expect(policy.sources.allow.source).toBe("agent");
     expect(policy.deny).toEqual(["browser"]);
     expect(policy.sources.deny.source).toBe("global");
@@ -75,7 +75,7 @@ describe("sandbox explain helpers", () => {
       "write",
       "edit",
       "apply_patch",
-      "image",
+      "view_image",
     ]);
   });
 

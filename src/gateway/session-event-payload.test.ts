@@ -36,3 +36,28 @@ it("projects session actors and explicitly clears absent attribution", () => {
     participantCount: 0,
   });
 });
+
+it("projects the prepared permission boundary only for an explicit mode", () => {
+  const ordinary = buildGatewaySessionEventFields({
+    sessionRow: {
+      key: "agent:main:ordinary",
+      kind: "direct",
+      sessionRoot: "/workspace/private",
+      updatedAt: 3,
+    },
+  });
+  expect(ordinary).toMatchObject({ permissionMode: null });
+  expect(ordinary).not.toHaveProperty("sessionRoot");
+
+  expect(
+    buildGatewaySessionEventFields({
+      sessionRow: {
+        key: "agent:main:workspace",
+        kind: "direct",
+        permissionMode: "workspace",
+        sessionRoot: "/workspace/project",
+        updatedAt: 4,
+      },
+    }),
+  ).toMatchObject({ permissionMode: "workspace", sessionRoot: "/workspace/project" });
+});

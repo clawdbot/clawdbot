@@ -17,6 +17,7 @@ import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.
 
 const localExecutionActions = new Set<ChannelMessageActionName>([
   "send",
+  "poll",
   "upload-file",
   "thread-reply",
   "sticker",
@@ -253,6 +254,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     sessionKey,
     inboundEventKind,
     conversationReadOrigin,
+    reply,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -271,6 +273,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       ...(inboundEventKind ? { inboundEventKind } : {}),
       ...(requesterAccountId ? { requesterAccountId } : {}),
       ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
+      ...(reply ? { reply } : {}),
     });
   },
 };

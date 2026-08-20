@@ -19,6 +19,7 @@ type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
   ctx: BaseAgentEndSideEffectsParams["ctx"] & {
     authProfileId?: string;
     modelIterations?: number;
+    modelContextWindowTokens?: number;
     skillWorkshopAvailable?: boolean;
     compacted?: boolean;
     messageChannel?: string | null;

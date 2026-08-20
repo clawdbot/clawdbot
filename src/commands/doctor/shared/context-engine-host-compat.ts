@@ -5,9 +5,7 @@ import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.
 import {
   listAgentEntriesWithSource,
   resolveAgentDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-  tryResolveSystemAgentTargetAgentId,
+  resolveAmbientOwnerAgentId,
 } from "../../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
@@ -281,13 +279,10 @@ async function resolveSelectedContextEngineInfo(params: {
   }
 
   try {
-    const agentId =
-      tryResolveLegacyCompatibilityAgentId(params.cfg) ??
-      tryResolveSystemAgentTargetAgentId(params.cfg) ??
-      resolveDefaultAgentId(params.cfg, {
-        surface: "context-engine Doctor checks",
-        hint: "Set agents.defaults.systemAgent.agentId before running Doctor.",
-      });
+    const agentId = resolveAmbientOwnerAgentId(params.cfg, undefined, {
+      surface: "context-engine Doctor checks",
+      hint: "Set agents.defaults.systemAgent.agentId before running Doctor.",
+    });
     const resolve = () =>
       resolveContextEngine(params.cfg, {
         agentDir: resolveAgentDir(params.cfg, agentId, params.env),

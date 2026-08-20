@@ -97,6 +97,8 @@ type RuntimeCreateSessionEntryBaseParams = {
   agentId?: string;
   label?: string;
   spawnedCwd?: string;
+  sessionRoot?: string;
+  permissionMode?: RuntimeSessionEntry["permissionMode"];
   /** Bind the created session's CLI execution to this paired node. */
   execNode?: string;
   /** Working directory interpreted only by execNode. */

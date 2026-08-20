@@ -55,6 +55,7 @@ export async function deliverOutboundPayloadsCore(
     throw new Error("Outbound delivery requires a prepared payload batch");
   }
   const accountId = params.accountId;
+  const reply = params.reply;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const results: OutboundDeliveryResult[] = [];
@@ -78,8 +79,8 @@ export async function deliverOutboundPayloadsCore(
       to,
       deps,
       accountId,
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
+      replyToId: reply?.replyToId,
+      replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
       formatting: params.formatting,
       threadId: params.threadId,
       identity: params.identity,
@@ -144,8 +145,7 @@ export async function deliverOutboundPayloadsCore(
     ? (params.formatting?.chunkMode ?? resolveChunkMode(cfg, channel, accountId))
     : "length";
   const { resolveCurrentReplyTo, applyReplyToConsumption } = createReplyToDeliveryPolicy({
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    reply,
   });
 
   const sendTextChunks = async (
@@ -225,6 +225,7 @@ export async function deliverOutboundPayloadsCore(
     activeSourceIndex = payloadIndex;
     const payload = preparedEntry.payload;
     const payloadResultStartIndex = results.length;
+    let effectivePayload: typeof payload | null | undefined;
     let payloadSummary = buildPayloadSummary(payload);
     const originalMediaCount = preparedEntry.preparedMediaCount;
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
@@ -301,7 +302,7 @@ export async function deliverOutboundPayloadsCore(
         renderedHandler.normalizePayload
           ? renderedHandler.normalizePayload(renderedPayload)
           : renderedPayload;
-      const effectivePayload = normalizedEffectivePayload
+      effectivePayload = normalizedEffectivePayload
         ? normalizeEmptyPayloadForDelivery(
             stripInternalRuntimeScaffoldingFromPayload(normalizedEffectivePayload),
           )
@@ -586,6 +587,15 @@ export async function deliverOutboundPayloadsCore(
       // results. Keep the results, but never match them to a later payload.
       resetReportedResults();
       const failedPayloadResults = results.slice(payloadResultStartIndex);
+      adoptSuccessfulResultsSince(payloadResultStartIndex);
+      if (effectivePayload && failedPayloadResults.length > 0) {
+        await maybeNotifyAfterDeliveredPayload({
+          handler: await getDeliveryHandler(buildPayloadSummary(effectivePayload).mediaUrls),
+          payload: effectivePayload,
+          target: baseHandler.buildTargetRef({ threadId: preparedTarget.threadId }),
+          results: failedPayloadResults,
+        });
+      }
       recordPayloadOutcome({
         index: payloadIndex,
         status: "failed",

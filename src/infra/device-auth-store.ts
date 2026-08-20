@@ -24,6 +24,12 @@ type DeviceAuthDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "device_auth_tokens" | "gateway_origin_device_tokens"
 >;
+type DeviceAuthRow = {
+  token: string;
+  role: string;
+  scopes_json: string;
+  updated_at_ms: number;
+};
 // The Gateway lock makes state-directory contents process-stable. Cache both
 // outcomes to keep reconnects free of freshness polling; Doctor invalidates
 // the entry after its exclusive legacy import removes the retired file.
@@ -78,12 +84,7 @@ export function resetLegacyDeviceAuthPresenceCache(env: NodeJS.ProcessEnv): void
   legacyPresenceCache.delete(resolveStateDir(env));
 }
 
-function fromRow(row: {
-  token: string;
-  role: string;
-  scopes_json: string;
-  updated_at_ms: number;
-}): DeviceAuthEntry | null {
+function fromRow(row: DeviceAuthRow): DeviceAuthEntry | null {
   try {
     const scopes = JSON.parse(row.scopes_json) as unknown;
     if (!Array.isArray(scopes)) {
@@ -98,6 +99,37 @@ function fromRow(row: {
   } catch {
     return null;
   }
+}
+
+function readDeviceAuthTokenFromDatabase(
+  db: DatabaseSync,
+  params: { deviceId: string; role: string },
+): DeviceAuthEntry | null {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<DeviceAuthDatabase>(db)
+      .selectFrom("device_auth_tokens")
+      .select(["token", "role", "scopes_json", "updated_at_ms"])
+      .where("device_id", "=", params.deviceId)
+      .where("role", "=", normalizeDeviceAuthRole(params.role)),
+  );
+  return row ? fromRow(row) : null;
+}
+
+function readOriginDeviceTokenFromDatabase(
+  db: DatabaseSync,
+  params: { gatewayScope: string; deviceId: string; role: string },
+): DeviceAuthEntry | null {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<DeviceAuthDatabase>(db)
+      .selectFrom("gateway_origin_device_tokens")
+      .select(["token", "role", "scopes_json", "updated_at_ms"])
+      .where("gateway_scope", "=", params.gatewayScope)
+      .where("device_id", "=", params.deviceId)
+      .where("role", "=", normalizeDeviceAuthRole(params.role)),
+  );
+  return row ? fromRow(row) : null;
 }
 
 function createDeviceAuthEntry(params: {
@@ -121,15 +153,7 @@ export function loadDeviceAuthToken(params: {
 }): DeviceAuthEntry | null {
   assertNoLegacyDeviceAuth(params.env);
   const { db } = openOpenClawStateDatabase({ env: params.env });
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<DeviceAuthDatabase>(db)
-      .selectFrom("device_auth_tokens")
-      .select(["token", "role", "scopes_json", "updated_at_ms"])
-      .where("device_id", "=", params.deviceId)
-      .where("role", "=", normalizeDeviceAuthRole(params.role)),
-  );
-  return row ? fromRow(row) : null;
+  return readDeviceAuthTokenFromDatabase(db, params);
 }
 
 /** Load one cached device-auth token without creating or joining writable state. */
@@ -142,15 +166,7 @@ export function loadDeviceAuthTokenReadOnly(params: {
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
       ({ db }) => {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<DeviceAuthDatabase>(db)
-            .selectFrom("device_auth_tokens")
-            .select(["token", "role", "scopes_json", "updated_at_ms"])
-            .where("device_id", "=", params.deviceId)
-            .where("role", "=", normalizeDeviceAuthRole(params.role)),
-        );
-        return row ? fromRow(row) : null;
+        return readDeviceAuthTokenFromDatabase(db, params);
       },
       { env: params.env },
     ) ?? null
@@ -184,34 +200,55 @@ export function storeDeviceAuthToken(params: {
   token: string;
   scopes?: string[];
   env?: NodeJS.ProcessEnv;
-}): DeviceAuthEntry {
+  expectedToken?: string;
+}): DeviceAuthEntry | null {
   assertNoLegacyDeviceAuth(params.env);
   const entry = createDeviceAuthEntry(params);
+  let stored = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DeviceAuthDatabase>(db)
-          .insertInto("device_auth_tokens")
-          .values({
-            device_id: params.deviceId,
-            role: entry.role,
-            token: entry.token,
-            scopes_json: JSON.stringify(entry.scopes),
-            updated_at_ms: entry.updatedAtMs,
-          })
-          .onConflict((conflict) =>
-            conflict.columns(["device_id", "role"]).doUpdateSet({
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
-            }),
-          ),
-      );
+      const kysely = getNodeSqliteKysely<DeviceAuthDatabase>(db);
+      // Fenced writes update only the row that supplied the request snapshot;
+      // they never upsert a row that another request rotated or removed.
+      const result =
+        params.expectedToken === undefined
+          ? executeSqliteQuerySync(
+              db,
+              kysely
+                .insertInto("device_auth_tokens")
+                .values({
+                  device_id: params.deviceId,
+                  role: entry.role,
+                  token: entry.token,
+                  scopes_json: JSON.stringify(entry.scopes),
+                  updated_at_ms: entry.updatedAtMs,
+                })
+                .onConflict((conflict) =>
+                  conflict.columns(["device_id", "role"]).doUpdateSet({
+                    token: entry.token,
+                    scopes_json: JSON.stringify(entry.scopes),
+                    updated_at_ms: entry.updatedAtMs,
+                  }),
+                ),
+            )
+          : executeSqliteQuerySync(
+              db,
+              kysely
+                .updateTable("device_auth_tokens")
+                .set({
+                  token: entry.token,
+                  scopes_json: JSON.stringify(entry.scopes),
+                  updated_at_ms: entry.updatedAtMs,
+                })
+                .where("device_id", "=", params.deviceId)
+                .where("role", "=", entry.role)
+                .where("token", "=", params.expectedToken),
+            );
+      stored = result.numAffectedRows === 1n;
     },
     { env: params.env },
   );
-  return entry;
+  return stored ? entry : null;
 }
 
 /** Remove one role token for the current gateway device from shared SQLite state. */
@@ -219,20 +256,25 @@ export function clearDeviceAuthToken(params: {
   deviceId: string;
   role: string;
   env?: NodeJS.ProcessEnv;
-}): void {
+  expectedToken?: string;
+}): boolean {
   assertNoLegacyDeviceAuth(params.env);
+  let cleared = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DeviceAuthDatabase>(db)
-          .deleteFrom("device_auth_tokens")
-          .where("device_id", "=", params.deviceId)
-          .where("role", "=", normalizeDeviceAuthRole(params.role)),
-      );
+      const baseQuery = getNodeSqliteKysely<DeviceAuthDatabase>(db)
+        .deleteFrom("device_auth_tokens")
+        .where("device_id", "=", params.deviceId)
+        .where("role", "=", normalizeDeviceAuthRole(params.role));
+      const query =
+        params.expectedToken === undefined
+          ? baseQuery
+          : baseQuery.where("token", "=", params.expectedToken);
+      cleared = executeSqliteQuerySync(db, query).numAffectedRows === 1n;
     },
     { env: params.env },
   );
+  return cleared;
 }
 
 /** Load one device token bound to an exact normalized gateway origin. */
@@ -244,16 +286,7 @@ export function loadOriginDeviceToken(params: {
 }): DeviceAuthEntry | null {
   ensureOriginDeviceAuthSchema(params.env);
   const { db } = openOpenClawStateDatabase({ env: params.env });
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<DeviceAuthDatabase>(db)
-      .selectFrom("gateway_origin_device_tokens")
-      .select(["token", "role", "scopes_json", "updated_at_ms"])
-      .where("gateway_scope", "=", params.gatewayScope)
-      .where("device_id", "=", params.deviceId)
-      .where("role", "=", normalizeDeviceAuthRole(params.role)),
-  );
-  return row ? fromRow(row) : null;
+  return readOriginDeviceTokenFromDatabase(db, params);
 }
 
 /** Load one origin-bound device token without schema creation or writable state access. */
@@ -267,16 +300,7 @@ export function loadOriginDeviceTokenReadOnly(params: {
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
       ({ db }) => {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<DeviceAuthDatabase>(db)
-            .selectFrom("gateway_origin_device_tokens")
-            .select(["token", "role", "scopes_json", "updated_at_ms"])
-            .where("gateway_scope", "=", params.gatewayScope)
-            .where("device_id", "=", params.deviceId)
-            .where("role", "=", normalizeDeviceAuthRole(params.role)),
-        );
-        return row ? fromRow(row) : null;
+        return readOriginDeviceTokenFromDatabase(db, params);
       },
       { env: params.env },
     ) ?? null
@@ -291,35 +315,55 @@ export function storeOriginDeviceToken(params: {
   token: string;
   scopes?: string[];
   env?: NodeJS.ProcessEnv;
-}): DeviceAuthEntry {
+  expectedToken?: string;
+}): DeviceAuthEntry | null {
   ensureOriginDeviceAuthSchema(params.env);
   const entry = createDeviceAuthEntry(params);
+  let stored = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DeviceAuthDatabase>(db)
-          .insertInto("gateway_origin_device_tokens")
-          .values({
-            gateway_scope: params.gatewayScope,
-            device_id: params.deviceId,
-            role: entry.role,
-            token: entry.token,
-            scopes_json: JSON.stringify(entry.scopes),
-            updated_at_ms: entry.updatedAtMs,
-          })
-          .onConflict((conflict) =>
-            conflict.columns(["gateway_scope", "device_id", "role"]).doUpdateSet({
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
-            }),
-          ),
-      );
+      const kysely = getNodeSqliteKysely<DeviceAuthDatabase>(db);
+      const result =
+        params.expectedToken === undefined
+          ? executeSqliteQuerySync(
+              db,
+              kysely
+                .insertInto("gateway_origin_device_tokens")
+                .values({
+                  gateway_scope: params.gatewayScope,
+                  device_id: params.deviceId,
+                  role: entry.role,
+                  token: entry.token,
+                  scopes_json: JSON.stringify(entry.scopes),
+                  updated_at_ms: entry.updatedAtMs,
+                })
+                .onConflict((conflict) =>
+                  conflict.columns(["gateway_scope", "device_id", "role"]).doUpdateSet({
+                    token: entry.token,
+                    scopes_json: JSON.stringify(entry.scopes),
+                    updated_at_ms: entry.updatedAtMs,
+                  }),
+                ),
+            )
+          : executeSqliteQuerySync(
+              db,
+              kysely
+                .updateTable("gateway_origin_device_tokens")
+                .set({
+                  token: entry.token,
+                  scopes_json: JSON.stringify(entry.scopes),
+                  updated_at_ms: entry.updatedAtMs,
+                })
+                .where("gateway_scope", "=", params.gatewayScope)
+                .where("device_id", "=", params.deviceId)
+                .where("role", "=", entry.role)
+                .where("token", "=", params.expectedToken),
+            );
+      stored = result.numAffectedRows === 1n;
     },
     { env: params.env },
   );
-  return entry;
+  return stored ? entry : null;
 }
 
 /** Remove one device token only from its exact normalized gateway origin. */
@@ -328,19 +372,24 @@ export function clearOriginDeviceToken(params: {
   deviceId: string;
   role: string;
   env?: NodeJS.ProcessEnv;
-}): void {
+  expectedToken?: string;
+}): boolean {
   ensureOriginDeviceAuthSchema(params.env);
+  let cleared = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DeviceAuthDatabase>(db)
-          .deleteFrom("gateway_origin_device_tokens")
-          .where("gateway_scope", "=", params.gatewayScope)
-          .where("device_id", "=", params.deviceId)
-          .where("role", "=", normalizeDeviceAuthRole(params.role)),
-      );
+      const baseQuery = getNodeSqliteKysely<DeviceAuthDatabase>(db)
+        .deleteFrom("gateway_origin_device_tokens")
+        .where("gateway_scope", "=", params.gatewayScope)
+        .where("device_id", "=", params.deviceId)
+        .where("role", "=", normalizeDeviceAuthRole(params.role));
+      const query =
+        params.expectedToken === undefined
+          ? baseQuery
+          : baseQuery.where("token", "=", params.expectedToken);
+      cleared = executeSqliteQuerySync(db, query).numAffectedRows === 1n;
     },
     { env: params.env },
   );
+  return cleared;
 }

@@ -38,13 +38,11 @@ export function buildDraftSessionCreateParams(draft: {
   worktreeName?: string;
   cwd?: string;
   workspace?: string;
-  execNode?: string;
   catalogId?: string;
   category?: string;
 }): Record<string, unknown> {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
-  const execNode = normalizeOptionalString(draft.execNode);
   const catalogId = normalizeOptionalString(draft.catalogId);
   const category = normalizeOptionalString(draft.category);
   const model = normalizeOptionalString(draft.model);
@@ -63,7 +61,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(!catalogId && model ? { model } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(projectId ? { projectId } : {}),
-    ...(customFolder && !execNode ? { cwd: customFolder } : {}),
+    ...(customFolder ? { cwd: customFolder } : {}),
     ...(draft.worktree
       ? {
           worktree: true,
@@ -76,6 +74,5 @@ export function buildDraftSessionCreateParams(draft: {
             : {}),
         }
       : {}),
-    ...(!projectId && execNode ? { execNode, ...(cwd ? { cwd } : {}) } : {}),
   };
 }

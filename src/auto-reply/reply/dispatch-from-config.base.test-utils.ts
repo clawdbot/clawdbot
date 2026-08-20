@@ -53,6 +53,8 @@ import {
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -156,6 +158,7 @@ describe("dispatchReplyFromConfig", () => {
       config: cfg,
       modelCatalog: { entries: [], routeVariants: [] },
       inboundPluginRegistry: preparedRegistry,
+      pluginGeneration: {} as never,
     });
     const preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
@@ -342,6 +345,42 @@ describe("dispatchReplyFromConfig", () => {
     activeOperation.complete();
   });
 
+  it.each([
+    ["confirmed", false, "succeeded", "completed", "active_run_injected"],
+    ["unconfirmed", true, "blocked", "skipped", "reply_operation_aborted"],
+  ])(
+    "audits %s shared steering finalization with the Gateway terminal",
+    async (_name, aborted, status, outcome, reasonCode) => {
+      setNoAbort();
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        const runState = resolveReplyOperationRunState(opts);
+        if (!runState) {
+          throw new Error("expected reply operation run state");
+        }
+        runState.admission = { status: "accepted", mode: "steer" };
+        runState.messageInjectionAborted = aborted ? true : undefined;
+        return undefined;
+      });
+
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: "agent:main:telegram:direct:steer-audit",
+        }),
+        cfg: automaticDirectReplyConfig,
+        dispatcher,
+        replyResolver,
+      });
+
+      expect(result.deferredToActiveRun).toBe("steer");
+      expect(messageAuditEvents()).toContainEqual(
+        expect.objectContaining({ status, outcome, reasonCode }),
+      );
+    },
+  );
+
   it("skips a Telegram topic heartbeat turn while a reply operation is active", async () => {
     setNoAbort();
     const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
@@ -495,7 +534,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "slack" });
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
     const ctx = buildTestCtx({
       Provider: "slack",
       Surface: "slack",
@@ -539,7 +578,7 @@ describe("dispatchReplyFromConfig", () => {
   it("mirrors reset acknowledgements into the canonically prepared Slack session", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
     const sessionKey = "Agent:Main:Slack:Channel:C123";
     const preparedSessionKey = "agent:main:slack:channel:c123";
     sessionStoreMocks.currentEntry = {
@@ -754,7 +793,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("mirrors the delivered ownerless Slack text after dispatcher hook rewrites", async () => {
     setNoAbort();
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
     dispatcher.appendBeforeDeliver?.((payload, info) =>
       info.kind === "final" ? { ...payload, text: "Redacted Slack reply" } : payload,
     );
@@ -1054,9 +1093,9 @@ describe("dispatchReplyFromConfig", () => {
         replyResolver: async () => undefined,
       });
 
-      // Direct empty completions get a core no-visible-reply fallback final.
-      expect(result.queuedFinal).toBe(true);
-      expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+      // An unsettled custom dispatcher has no receipt, so the turn cannot claim delivery.
+      expect(result.queuedFinal).toBe(false);
+      expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
       await vi.waitFor(
         () => {
           expect(

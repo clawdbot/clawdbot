@@ -28,7 +28,7 @@ describe("resolveNodeOnlyGatewayInfo", () => {
         daemon: { installed: false },
         node: {
           installed: true,
-          loaded: true,
+          loadState: { status: "loaded" },
           externallyManaged: false,
           runtime: { status: "running", pid: 4321 },
         },
@@ -57,7 +57,7 @@ describe("resolveNodeOnlyGatewayInfo", () => {
         daemon: { installed: false },
         node: {
           installed: true,
-          loaded: false,
+          loadState: { status: "not-loaded" },
           externallyManaged: false,
           runtime: { status: "stopped" },
         },
@@ -73,7 +73,7 @@ describe("resolveNodeOnlyGatewayInfo", () => {
         daemon: { installed: false },
         node: {
           installed: true,
-          loaded: true,
+          loadState: { status: "loaded" },
           externallyManaged: false,
         },
       }),

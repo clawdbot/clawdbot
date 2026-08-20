@@ -32,6 +32,33 @@ import {
 } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
 
+const visibleFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 1,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: true,
+} as const;
+
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 const runtimeModuleMocks = vi.hoisted(() => ({
   pluginCommandHandler: vi.fn(),
@@ -1532,12 +1559,13 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
-  it("does not warn when dispatch reports a queued final without visible counts", async () => {
+  it("does not warn when the settled receipt reports a visible final", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: { final: 0, block: 0, tool: 0 },
       queuedFinal: true,
+      settledReceipt: visibleFinalReceipt,
     } as never);
     const command = await createNativeCommand(cfg, {
       name: "new",
