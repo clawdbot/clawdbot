@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { collectDisplacedChannelOwners } from "../config/channel-config-metadata.js";
+import { collectRuntimeDisplacedChannelOwners } from "../config/channel-config-metadata.js";
 import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
@@ -295,10 +295,12 @@ export function pushPluginValidationError(params: {
  * Which channels each plugin has ceded to a preferred replacement, keyed by plugin id, plus the
  * claimant each ceded channel went to, keyed by canonical channel id.
  *
- * Channel schema ownership already decides this, per channel, and skips a claimant the operator
- * selected by hand. Reading its decision is what makes the runtime owner and the validated schema
- * the same plugin by construction; deriving a second answer at registration time would leave the
- * two free to disagree, which is the defect this whole path exists to close.
+ * Displacement here is the rule channel schema ownership applies — declared replacement wins, a
+ * hand-selected claimant is never displaced — read over the runtime claimant set, where a bare
+ * `record.channels` claim serves a channel with or without a schema descriptor. Sharing the rule
+ * is what keeps the runtime owner and the validated schema the same plugin by construction; a
+ * second registration-time answer would leave the two free to disagree, which is the defect this
+ * whole path exists to close.
  *
  * A cede only stands when a claimant it yields to is part of this load. Schema ownership is
  * computed from the whole manifest registry, but a scoped load can contain the ceding plugin
@@ -326,7 +328,7 @@ export function collectCededChannelIdsByPlugin(params: {
     registry: params.registry,
     env: params.env,
   });
-  const displaced = collectDisplacedChannelOwners(params.registry, policy);
+  const displaced = collectRuntimeDisplacedChannelOwners(params.registry, policy);
   const claimantsByChannel = new Map<string, string[]>();
   for (const record of params.registry.plugins) {
     for (const channelId of record.channels) {

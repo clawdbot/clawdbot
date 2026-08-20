@@ -195,45 +195,42 @@ function isDisplacedChannelOwner(
 }
 
 /**
- * Records, per channel, which claimants another claimant declares it replaces.
+ * Every claimant of each channel, keyed by claimed id. Only a record listed in `record.channels`
+ * claims: auto-enable and the read-only channel facade build candidate sets from that list alone.
+ */
+function collectChannelClaimants(
+  registry: PluginManifestRegistry,
+): Map<string, PluginManifestRecord[]> {
+  const claimantsByChannel = new Map<string, PluginManifestRecord[]>();
+  for (const record of registry.plugins) {
+    for (const channelId of record.channels) {
+      const claimedId = normalizeClaimedChannelId(channelId);
+      const claimants = claimantsByChannel.get(claimedId) ?? [];
+      claimantsByChannel.set(claimedId, claimants);
+      claimants.push(record);
+    }
+  }
+  return claimantsByChannel;
+}
+
+/**
+ * Records, per contested channel, which claimants another claimant declares it replaces.
  *
- * Built across the whole registry before any schema is chosen, because comparing each record only
- * against the current owner lets an A-replaces-B-replaces-C chain settle differently per registry
- * order, while `shouldSkipPreferredPluginAutoEnable` scans every configured candidate and drops
- * both B and C. Only a record listed in `record.channels` contributes: auto-enable and the
- * read-only channel facade build claimants from that list alone. Contested channels only, since
- * resolving a preference can read an external plugin catalog from disk.
+ * Built across the whole claimant set before any owner is chosen, because comparing each record
+ * only against the current owner lets an A-replaces-B-replaces-C chain settle differently per
+ * registry order, while `shouldSkipPreferredPluginAutoEnable` scans every configured candidate and
+ * drops both B and C. Callers pass contested channels only, since resolving a preference can read
+ * an external plugin catalog from disk.
  *
  * Inactive claimants normally declare nothing, so a denied replacement cannot take a channel from
  * the plugin activation would run instead. When no claimant is active there is no such plugin, and
  * dropping every declaration would leave registry order picking a winner; the declarations are
  * read from the whole claimant set in that case so the answer stays deterministic.
  */
-export function collectDisplacedChannelOwners(
-  registry: PluginManifestRegistry,
+function collectDisplacedOwnersForClaimants(
+  claimantsByChannel: ReadonlyMap<string, PluginManifestRecord[]>,
   policy: ChannelOwnershipPolicy,
 ): DisplacedChannelOwners {
-  const schemaClaimantCounts = new Map<string, number>();
-  for (const record of registry.plugins) {
-    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
-      const claimedId = normalizeClaimedChannelId(channelId);
-      schemaClaimantCounts.set(claimedId, (schemaClaimantCounts.get(claimedId) ?? 0) + 1);
-    }
-  }
-
-  const claimantsByChannel = new Map<string, PluginManifestRecord[]>();
-  for (const record of registry.plugins) {
-    for (const channelId of record.channels) {
-      const claimedId = normalizeClaimedChannelId(channelId);
-      if ((schemaClaimantCounts.get(claimedId) ?? 0) < 2) {
-        continue;
-      }
-      const claimants = claimantsByChannel.get(claimedId) ?? [];
-      claimantsByChannel.set(claimedId, claimants);
-      claimants.push(record);
-    }
-  }
-
   const displaced: DisplacedChannelOwners = new Map();
   for (const [claimedId, claimants] of claimantsByChannel) {
     const activeClaimants = claimants.filter((record) =>
@@ -255,6 +252,50 @@ export function collectDisplacedChannelOwners(
     }
   }
   return displaced;
+}
+
+/**
+ * Schema-plane displacement: a channel counts as contested only when two or more claimants supply
+ * a schema descriptor — with fewer there is no schema contest to settle, and presentation for such
+ * channels stays with origin rank and registry order.
+ */
+function collectDisplacedChannelOwners(
+  registry: PluginManifestRegistry,
+  policy: ChannelOwnershipPolicy,
+): DisplacedChannelOwners {
+  const schemaClaimantCounts = new Map<string, number>();
+  for (const record of registry.plugins) {
+    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
+      const claimedId = normalizeClaimedChannelId(channelId);
+      schemaClaimantCounts.set(claimedId, (schemaClaimantCounts.get(claimedId) ?? 0) + 1);
+    }
+  }
+  const claimantsByChannel = collectChannelClaimants(registry);
+  for (const claimedId of claimantsByChannel.keys()) {
+    if ((schemaClaimantCounts.get(claimedId) ?? 0) < 2) {
+      claimantsByChannel.delete(claimedId);
+    }
+  }
+  return collectDisplacedOwnersForClaimants(claimantsByChannel, policy);
+}
+
+/**
+ * Runtime-plane displacement: a bare claim serves a channel — `channelConfigs` is optional, and a
+ * channel declared without one still registers — so contest is two claimants, descriptors or not.
+ * Gating on schema descriptors here let a fallback with no descriptor keep a channel its
+ * replacement declared it takes, settled by discovery order — the defect the cede exists to close.
+ */
+export function collectRuntimeDisplacedChannelOwners(
+  registry: PluginManifestRegistry,
+  policy: ChannelOwnershipPolicy,
+): DisplacedChannelOwners {
+  const claimantsByChannel = collectChannelClaimants(registry);
+  for (const [claimedId, claimants] of claimantsByChannel) {
+    if (claimants.length < 2) {
+      claimantsByChannel.delete(claimedId);
+    }
+  }
+  return collectDisplacedOwnersForClaimants(claimantsByChannel, policy);
 }
 
 /**

@@ -92,6 +92,7 @@ function writeMultiChannelPlugin(params: {
   rootDir: string;
   id: string;
   channelIds: string[];
+  channelConfigIds?: string[];
   toolName: string;
   preferOver?: Record<string, string[]>;
   registeredChannelIds?: string[];
@@ -103,7 +104,7 @@ function writeMultiChannelPlugin(params: {
     fs.chmodSync(pluginDir, 0o755);
   }
   const channelConfigs = Object.fromEntries(
-    params.channelIds.map((channelId) => [
+    (params.channelConfigIds ?? params.channelIds).map((channelId) => [
       channelId,
       {
         schema: { type: "object" },
@@ -281,6 +282,67 @@ describe("plugin loader preferOver activation", () => {
     );
   });
 
+  // `channelConfigs` is optional per claim: the registry only warns when a declared channel has
+  // no descriptor, and the channel still registers. Displacement gated on schema descriptors read
+  // a bare claim as uncontested, so discovery order settled the one channel the replacement's
+  // declaration exists to take.
+  it.each([
+    { name: "replacement discovered first", replacementFirst: true },
+    { name: "fallback discovered first", replacementFirst: false },
+  ])(
+    "settles a channel the fallback claims without channelConfigs when the $name",
+    ({ replacementFirst }) => {
+      const root = makePluginLoaderTempDir();
+      const fallbackDir = writeMultiChannelPlugin({
+        rootDir: root,
+        id: "zz-fallback",
+        channelIds: ["zzalpha", "zzbeta"],
+        channelConfigIds: ["zzbeta"],
+        toolName: "zz_fallback_tool",
+      });
+      const replacementDir = writeMultiChannelPlugin({
+        rootDir: root,
+        id: "zz-replacement",
+        channelIds: ["zzalpha"],
+        toolName: "zz_replacement_tool",
+        preferOver: { zzalpha: ["zz-fallback"] },
+      });
+      const env = {
+        OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+      };
+      const rawConfig = {
+        channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+        plugins: {
+          load: {
+            paths: replacementFirst ? [replacementDir, fallbackDir] : [fallbackDir, replacementDir],
+          },
+        },
+      };
+      const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        config: autoEnabled.config,
+        activationSourceConfig: rawConfig,
+        autoEnabledReasons: autoEnabled.autoEnabledReasons,
+        env,
+      });
+
+      const owner = (channelId: string) =>
+        registry.channels.find((entry) => entry.plugin.id === channelId)?.pluginId;
+      expect(owner("zzalpha")).toBe("zz-replacement");
+      expect(owner("zzbeta")).toBe("zz-fallback");
+      expect(registry.tools.map((tool) => tool.pluginId).toSorted()).toEqual([
+        "zz-fallback",
+        "zz-replacement",
+      ]);
+      expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(
+        "channel already registered",
+      );
+    },
+  );
+
   // The declaration does not have to live in the manifest. Auto-enable and schema ownership both
   // resolve built-in and external-catalog preferences, so runtime arbitration has to see the same
   // ones or it settles a catalog-declared replacement by discovery order instead.
@@ -350,6 +412,81 @@ describe("plugin loader preferOver activation", () => {
       "zz-replacement",
     ]);
   });
+
+  // Neither claimant has to supply a descriptor at all: a catalog-declared preference between
+  // two bare claims must still cede the channel, or the schemaless pair falls back to discovery
+  // order.
+  it.each([
+    { name: "replacement discovered first", replacementFirst: true },
+    { name: "fallback discovered first", replacementFirst: false },
+  ])(
+    "settles a channel with no channelConfigs on either claimant when the $name",
+    ({ replacementFirst }) => {
+      const root = makePluginLoaderTempDir();
+      const fallbackDir = writeMultiChannelPlugin({
+        rootDir: root,
+        id: "zz-fallback",
+        channelIds: ["zzalpha", "zzbeta"],
+        channelConfigIds: ["zzbeta"],
+        toolName: "zz_fallback_tool",
+      });
+      const replacementDir = writeMultiChannelPlugin({
+        rootDir: root,
+        id: "zz-replacement",
+        channelIds: ["zzalpha"],
+        channelConfigIds: [],
+        toolName: "zz_replacement_tool",
+      });
+      const catalogDir = makePluginLoaderTempDir();
+      const catalogPath = path.join(catalogDir, "catalog.json");
+      fs.writeFileSync(
+        catalogPath,
+        JSON.stringify({
+          entries: [
+            {
+              name: "@openclaw/zz-replacement",
+              openclaw: {
+                plugin: { id: "zz-replacement" },
+                channel: { id: "zzalpha", preferOver: ["zz-fallback"] },
+              },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+      const env = {
+        OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+        OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath,
+      };
+      const rawConfig = {
+        channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+        plugins: {
+          load: {
+            paths: replacementFirst ? [replacementDir, fallbackDir] : [fallbackDir, replacementDir],
+          },
+        },
+      };
+      const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        config: autoEnabled.config,
+        activationSourceConfig: rawConfig,
+        autoEnabledReasons: autoEnabled.autoEnabledReasons,
+        env,
+      });
+
+      const owner = (channelId: string) =>
+        registry.channels.find((entry) => entry.plugin.id === channelId)?.pluginId;
+      expect(owner("zzalpha")).toBe("zz-replacement");
+      expect(owner("zzbeta")).toBe("zz-fallback");
+      expect(registry.tools.map((tool) => tool.pluginId).toSorted()).toEqual([
+        "zz-fallback",
+        "zz-replacement",
+      ]);
+    },
+  );
 
   // `preferOver` names a plugin the way its author wrote it, and a plugin's channel ids are among
   // its aliases. The config layer resolves those spellings, so runtime arbitration has to see the
