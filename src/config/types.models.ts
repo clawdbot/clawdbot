@@ -93,7 +93,7 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     /** Reasoning/thinking payload dialect for provider-compatible APIs. */
     thinkingFormat?: SupportedThinkingFormat;
     /** Provider-accepted reasoning effort labels. */
-    supportedReasoningEfforts?: string[];
+    supportedReasoningEfforts?: readonly string[] | null;
     /** Maps OpenClaw reasoning effort labels to provider-specific labels. */
     reasoningEffortMap?: Record<string, string>;
     /** Reasoning detail block types safe to expose in visible transcripts. */

@@ -127,6 +127,17 @@ describe("clampThinkingLevel", () => {
     expect(clampThinkingLevel(model, "xhigh")).toBe("off");
   });
 
+  it("accepts null compat effort metadata without exposing extended levels", () => {
+    const model = {
+      ...baseOpenAIResponsesModel,
+      compat: { supportedReasoningEfforts: null },
+    } satisfies TestOpenAIResponsesModel;
+
+    expect(getSupportedThinkingLevels(model)).not.toContain("xhigh");
+    expect(getSupportedThinkingLevels(model)).not.toContain("max");
+    expect(clampThinkingLevel(model, "xhigh")).toBe("high");
+  });
+
   it("exposes max when compat declares a native max effort", () => {
     const model = {
       ...baseOpenAICompletionsModel,

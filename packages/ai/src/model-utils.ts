@@ -47,7 +47,7 @@ function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
 
 type OpenAIReasoningCompat = {
   supportsReasoningEffort?: boolean;
-  supportedReasoningEfforts?: string[];
+  supportedReasoningEfforts?: readonly string[] | null;
   reasoningEffortMap?: Record<string, string>;
 };
 
