@@ -59,7 +59,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
             permissionsScroll.frame.isEmpty
         }
         try await Self.waitForLayout(hosting, stage: "Dashboard handoff rendering") {
-            Self.detailForegroundSampleCount(in: hosting) > 50
+            Self.dashboardHandoffButton(in: hosting)?.frame.isEmpty == false
         }
 
         window.orderOut(nil)
@@ -81,24 +81,10 @@ final class SettingsWindowLayoutTests: XCTestCase {
         return matches
     }
 
-    private static func detailForegroundSampleCount(in view: NSView) -> Int {
-        guard let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 0 }
-        view.cacheDisplay(in: view.bounds, to: representation)
-        let width = representation.pixelsWide
-        let height = representation.pixelsHigh
-        var histogram: [UInt16: Int] = [:]
-        var sampleCount = 0
-        for y in stride(from: height / 4, to: height * 3 / 4, by: 4) {
-            for x in stride(from: width * 2 / 5, to: width * 9 / 10, by: 4) {
-                guard let color = representation.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-                let red = UInt16((color.redComponent * 15).rounded())
-                let green = UInt16((color.greenComponent * 15).rounded())
-                let blue = UInt16((color.blueComponent * 15).rounded())
-                histogram[(red << 8) | (green << 4) | blue, default: 0] += 1
-                sampleCount += 1
-            }
+    private static func dashboardHandoffButton(in view: NSView) -> NSButton? {
+        self.descendants(of: NSButton.self, in: view).first { button in
+            button.title == "Open in Dashboard"
         }
-        return sampleCount - (histogram.values.max() ?? sampleCount)
     }
 
     private static func waitForLayout(
