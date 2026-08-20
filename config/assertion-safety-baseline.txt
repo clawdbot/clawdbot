@@ -933,7 +933,6 @@ extensions/openai/embedding-batch.ts	2
 extensions/openai/image-generation-provider.ts	2
 extensions/openai/index.ts	2
 extensions/openai/native-web-search.ts	1
-extensions/openai/openai-chatgpt-auth-identity.ts	1
 extensions/openai/openai-chatgpt-device-code.ts	4
 extensions/openai/openai-chatgpt-oauth-preflight.runtime.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
