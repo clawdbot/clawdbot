@@ -227,7 +227,10 @@ describe("resizable-divider", () => {
     expect(resizeEnded).not.toHaveBeenCalled();
 
     dispatchPointer(document, "pointerup", 220);
-    expect((resizeEnded.mock.lastCall?.[0] as CustomEvent).detail).toEqual({ splitRatio: 0.7 });
+    const endEvent = resizeEnded.mock.lastCall?.[0] as
+      | CustomEvent<{ splitRatio: number }>
+      | undefined;
+    expect(endEvent?.detail).toEqual({ splitRatio: 0.7 });
     expect([...divider.classList]).toEqual([]);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
