@@ -540,6 +540,19 @@ const SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE = new RegExp(
   `${SHELL_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
   "u",
 );
+const SHELL_SUBSTITUTION_COMMAND_START_PATTERN = String.raw`(?:\$\((?!\()|[<>]\()\s*(?:(?:time(?:\s+-p)?(?:\s+--)?|!)(?:\s+|(?=\()))*`;
+const SHELL_COMPOUND_AT_SUBSTITUTION_START_RE = new RegExp(
+  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
+  "u",
+);
+const SHELL_FUNCTION_AT_SUBSTITUTION_START_RE = new RegExp(
+  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
+  "u",
+);
+const SHELL_PAREN_FUNCTION_AT_SUBSTITUTION_START_RE = new RegExp(
+  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
+  "u",
+);
 
 /** Returns whether unquoted shell syntax contains a compound-command introducer. */
 export function hasShellCompoundCommand(command: string): boolean {
@@ -553,7 +566,10 @@ export function hasShellCompoundCommand(command: string): boolean {
   return (
     SHELL_COMPOUND_AT_COMMAND_START_RE.test(syntax) ||
     SHELL_FUNCTION_AT_COMMAND_START_RE.test(syntax) ||
-    SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE.test(syntax)
+    SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE.test(syntax) ||
+    SHELL_COMPOUND_AT_SUBSTITUTION_START_RE.test(syntax) ||
+    SHELL_FUNCTION_AT_SUBSTITUTION_START_RE.test(syntax) ||
+    SHELL_PAREN_FUNCTION_AT_SUBSTITUTION_START_RE.test(syntax)
   );
 }
 
