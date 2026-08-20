@@ -166,36 +166,42 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     openContexts.clear();
   });
 
-  it("uses one compact mobile header while leaving desktop chrome unchanged", async () => {
+  it("keeps mobile status inside the overflow menu while leaving desktop chrome unchanged", async () => {
     const mobile = await createProofContext({ width: 390, height: 844 }, "mobile");
     try {
-      await installMockGateway(mobile.page, { operatorScopes: LIMITED_SCOPES });
+      const gateway = await installMockGateway(mobile.page, { operatorScopes: LIMITED_SCOPES });
       await mobile.page.goto(`${server.baseUrl}chat`);
+      await gateway.emitGatewayEvent("update.available", {
+        updateAvailable: {
+          channel: "stable",
+          currentVersion: "1.0.0",
+          latestVersion: "2.0.0",
+        },
+      });
       const header = mobile.page.locator(".chat-pane__header").first();
-      const status = mobile.page.getByRole("button", { name: "Show limited access details" });
+      const menu = mobile.page.locator(".chat-header-session-menu__trigger");
       await header.waitFor();
-      await status.waitFor();
+      await menu.waitFor();
       expect(await mobile.page.locator(".chat-pane__palette-open").count()).toBe(0);
       expect(await mobile.page.locator(".chat-side-panel-toggle").count()).toBe(0);
-      expect(await mobile.page.locator(".chat-header-session-menu__trigger").count()).toBe(1);
-      const [headerBox, statusBox] = await Promise.all([
-        header.boundingBox(),
-        status.boundingBox(),
-      ]);
-      expect(headerBox).not.toBeNull();
-      expect(statusBox).not.toBeNull();
-      if (headerBox && statusBox) {
-        expect(statusBox.y).toBeGreaterThanOrEqual(headerBox.y);
-        expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(headerBox.y + headerBox.height);
-      }
+      expect(await mobile.page.locator(".scope-upgrade-chip").count()).toBe(0);
+      expect(await mobile.page.locator(".sidebar-attention--floating").count()).toBe(0);
+      expect(await mobile.page.locator(".sidebar-update-card--floating").count()).toBe(0);
+      expect(await mobile.page.locator(".chat-header-session-menu__status-dot").count()).toBe(1);
       await captureProof(mobile.page, "mobile-compact-header.png");
+      await mobile.page.waitForTimeout(500);
+      await menu.click();
+      const status = mobile.page.getByText("Limited access", { exact: true });
+      await status.waitFor();
+      await mobile.page.getByText("Update available v2.0.0", { exact: true }).waitFor();
+      await captureProof(mobile.page, "mobile-status-menu.png");
       await mobile.page.waitForTimeout(500);
       await status.click();
       await mobile.page.getByText("This browser has limited access.", { exact: true }).waitFor();
       await captureProof(mobile.page, "mobile-access-details.png");
       await mobile.page.waitForTimeout(700);
       await mobile.page.getByRole("button", { name: "Collapse limited access banner" }).click();
-      await status.waitFor();
+      await menu.waitFor();
       await mobile.page.waitForTimeout(500);
     } finally {
       await closeProofContext(mobile, "mobile-compact-header");

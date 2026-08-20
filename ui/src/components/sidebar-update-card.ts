@@ -186,8 +186,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
                   ? "sidebar-update-card__action--busy"
                   : ""}"
                 type="button"
-                aria-label=${text}
-                title=${this.canUpdate ? text : t("updates.adminRequired")}
+                title=${this.canUpdate ? nothing : t("updates.adminRequired")}
                 ?disabled=${busy || !this.canUpdate}
                 @click=${() => {
                   if (busy || !this.canUpdate) {
@@ -221,8 +220,6 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
                     <button
                       class="sidebar-update-card__hold"
                       type="button"
-                      aria-label=${t("updates.holdOneHour")}
-                      title=${t("updates.holdOneHour")}
                       ?disabled=${this.holdingCampaignId === campaign.id}
                       @click=${async () => {
                         this.holdingCampaignId = campaign.id;
@@ -230,12 +227,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
                         this.holdingCampaignId = null;
                       }}
                     >
-                      <span class="sidebar-update-card__hold-icon" aria-hidden="true"
-                        >${icons.clock}</span
-                      >
-                      <span class="sidebar-update-card__hold-text"
-                        >${t("updates.holdOneHour")}</span
-                      >
+                      ${t("updates.holdOneHour")}
                     </button>
                   `
                 : nothing}

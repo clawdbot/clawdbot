@@ -9,6 +9,7 @@ import {
   dismissScopeUpgradeBanner,
   hasDismissedScopeUpgradeBanner,
   readScopeUpgradeAvailability,
+  SCOPE_UPGRADE_DETAILS_EVENT,
   type ScopeUpgradeState,
 } from "./device-scope-upgrade.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -145,6 +146,17 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
   private expanded = !hasDismissedScopeUpgradeBanner();
   private compactExpanded = false;
 
+  private readonly showDetails = () => {
+    this.expanded = true;
+    this.compactExpanded = true;
+    this.requestUpdate();
+  };
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener(SCOPE_UPGRADE_DETAILS_EVENT, this.showDetails);
+  }
+
   protected override updated(): void {
     const snapshot = this.props?.snapshot;
     if (!snapshot) {
@@ -159,6 +171,7 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
+    window.removeEventListener(SCOPE_UPGRADE_DETAILS_EVENT, this.showDetails);
     this.controller?.dispose();
     this.controller = undefined;
     super.disconnectedCallback();
@@ -180,18 +193,17 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
       return nothing;
     }
     const compactAvailable = props.compact && !this.compactExpanded;
-    if ((!this.expanded || compactAvailable) && state.phase === "available") {
+    if (compactAvailable && state.phase === "available") {
+      return nothing;
+    }
+    if (!this.expanded && state.phase === "available") {
       return html`<div class="scope-upgrade-chip-row">
         <button
           class="scope-upgrade-chip"
           type="button"
           aria-expanded="false"
           aria-label=${t("connection.scopeUpgrade.showDetails")}
-          @click=${() => {
-            this.expanded = true;
-            this.compactExpanded = true;
-            this.requestUpdate();
-          }}
+          @click=${this.showDetails}
         >
           <span class="scope-upgrade-chip__dot" aria-hidden="true"></span>
           <span class="scope-upgrade-chip__text">${t("connection.scopeUpgrade.status")}</span>

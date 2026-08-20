@@ -10,6 +10,7 @@ import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
+  HeaderMenuStatusAction,
 } from "./chat-header-session-menu.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
@@ -50,6 +51,7 @@ async function mountMenu(
     settings?: UiSettings;
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
+    statusActions?: HeaderMenuStatusAction[];
     ownerOptions?: SessionOwnerOption[];
     selfOwner?: SessionOwnerOption | null;
     currentOwnerId?: string | null;
@@ -78,6 +80,7 @@ async function mountMenu(
       .settings=${options.settings ?? settings()}
       .panelActions=${options.panelActions ?? []}
       .layoutActions=${options.layoutActions ?? []}
+      .statusActions=${options.statusActions ?? []}
       .ownerOptions=${options.ownerOptions ?? []}
       .selfOwner=${options.selfOwner ?? null}
       .currentOwnerId=${options.currentOwnerId ?? null}
@@ -277,6 +280,7 @@ describe("chat header session menu", () => {
 
   it("drills into compact menu groups without rendering side flyouts", async () => {
     const showTasks = vi.fn();
+    const showAccess = vi.fn();
     const onOpenCommandPalette = vi.fn();
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
@@ -302,6 +306,15 @@ describe("chat header session menu", () => {
           onActivate: vi.fn(),
         },
       ],
+      statusActions: [
+        {
+          id: "access",
+          label: "Limited access",
+          icon: icons.shieldQuestion,
+          tone: "warn",
+          onActivate: showAccess,
+        },
+      ],
       ownerOptions: [ada, research],
       selfOwner: ada,
       currentOwnerId: research.id,
@@ -315,6 +328,7 @@ describe("chat header session menu", () => {
     ).map(itemLabel);
     expect(rootLabels).toEqual([
       "Open command palette",
+      "Limited access",
       "Open in",
       "Panels",
       "Layout",
@@ -327,9 +341,14 @@ describe("chat header session menu", () => {
       "Delete…",
     ]);
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
+    expect(
+      menu.querySelector('.chat-header-session-menu__status-dot[data-tone="warn"]'),
+    ).not.toBeNull();
 
     select(menu, "open-command-palette");
     expect(onOpenCommandPalette).toHaveBeenCalledOnce();
+    select(menu, "status:access");
+    expect(showAccess).toHaveBeenCalledOnce();
 
     select(menu, "compact:open-view");
     await menu.updateComplete;

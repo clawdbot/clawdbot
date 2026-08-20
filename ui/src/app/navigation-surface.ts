@@ -36,17 +36,16 @@ export function renderFloatingUpdateCard(params: {
 }) {
   // A stale client must always have a visible refresh action, including during
   // onboarding, even though update-available actions stay hidden there.
-  const showAttention = params.navigationSurfaceHidden && !params.onboarding;
-  const showUpdateCard = params.onboarding
-    ? params.refreshRequired
-    : params.navigationSurfaceHidden;
+  const showAttention = params.navigationSurfaceHidden && !params.onboarding && !params.compact;
+  const showUpdateCard =
+    !params.compact &&
+    (params.onboarding ? params.refreshRequired : params.navigationSurfaceHidden);
   if (!showAttention && !showUpdateCard) {
     return nothing;
   }
   return html`${showAttention
     ? html`<openclaw-sidebar-attention
         class="sidebar-attention--floating"
-        .compact=${params.compact ?? false}
         .onNavigate=${params.onNavigate}
         .onOpenApprovals=${params.onOpenApprovals}
       ></openclaw-sidebar-attention>`

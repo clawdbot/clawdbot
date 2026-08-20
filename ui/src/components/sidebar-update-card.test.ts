@@ -192,10 +192,9 @@ describe("SidebarUpdateCard", () => {
     expect(card?.hasAttribute("role")).toBe(false);
     expect(timer?.getAttribute("aria-live")).toBe("off");
     expect(timer?.textContent).toContain("Updating in 0:54 · v2.0.0");
-    const hold = element.querySelector(".sidebar-update-card__hold");
-    expect(hold?.textContent?.trim()).toBe("Hold 1 h");
-    expect(hold?.getAttribute("aria-label")).toBe("Hold 1 h");
-    expect(hold?.querySelector(".sidebar-update-card__hold-icon svg")).not.toBeNull();
+    expect(element.querySelector(".sidebar-update-card__hold")?.textContent?.trim()).toBe(
+      "Hold 1 h",
+    );
 
     element.updateBusy = true;
     await element.updateComplete;

@@ -1161,22 +1161,6 @@ openclaw-settings-save-indicator {
   stroke-linejoin: round;
 }
 
-.sidebar-attention__count {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: var(--danger);
-  color: white;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 16px;
-  text-align: center;
-}
-
 .sidebar-attention--floating .sidebar-attention {
   margin: 12px 16px 0;
 }
@@ -1266,10 +1250,6 @@ html.openclaw-native-macos
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   white-space: nowrap;
-}
-
-.sidebar-update-card__hold-icon {
-  display: none;
 }
 
 .sidebar-update-card__hold:hover:not(:disabled) {

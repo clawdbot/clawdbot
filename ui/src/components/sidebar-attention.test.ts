@@ -59,11 +59,9 @@ function cronListResponse(jobs: CronJob[]): CronJobsListResult {
 
 type SidebarAttentionElement = HTMLElement & {
   updateComplete: Promise<boolean>;
-  compact: boolean;
   cronJobs: CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
-  onOpenApprovals?: () => void;
   onSummaryChange?: (summary: { count: number; severity: "error" | "warning" | null }) => void;
 };
 
@@ -714,10 +712,7 @@ describe("sidebar attention refresh ownership", () => {
     } as unknown as ApplicationContext);
     vi.stubGlobal("localStorage", createTestStorageMock());
     const summary = vi.fn();
-    const openApprovals = vi.fn();
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
-    element.compact = true;
-    element.onOpenApprovals = openApprovals;
     element.onSummaryChange = summary;
     provider.append(element);
     document.body.append(provider);
@@ -727,28 +722,10 @@ describe("sidebar attention refresh ownership", () => {
     );
     const button = element.querySelector<HTMLButtonElement>(".sidebar-attention__open");
     expect(button?.getAttribute("aria-label")).toBe("v2.0.0");
-    expect(element.querySelector(".sidebar-attention--compact")).not.toBeNull();
-    expect(element.querySelector(".sidebar-attention__count")).toBeNull();
     expect(element.querySelector(".sidebar-attention__label")).toBeNull();
     expect(summary).toHaveBeenLastCalledWith({ count: 1, severity: "warning" });
 
-    overlaySnapshot.approvalQueue = [approval("approval-1")];
-    for (const listener of overlayListeners) {
-      listener();
-    }
-    await waitForFast(() =>
-      expect(element.querySelector(".sidebar-attention__count")?.textContent).toBe("2"),
-    );
-    expect(element.querySelectorAll(".sidebar-attention--compact wa-dropdown-item")).toHaveLength(
-      2,
-    );
-    element
-      .querySelector(".sidebar-attention--compact wa-dropdown")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "1" } } }));
-    expect(openApprovals).toHaveBeenCalledOnce();
-
     overlaySnapshot.updateAvailable = null;
-    overlaySnapshot.approvalQueue = [];
     for (const listener of overlayListeners) {
       listener();
     }
