@@ -14,6 +14,7 @@ import {
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
+  createCodeModeExecDescriptionUpdater,
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
@@ -320,27 +321,21 @@ export function applyCodeModeCatalog(params: {
       directToolNames.has(tool.name) && isDirectVisibleCatalogTool(tool, directToolNames),
     shouldCatalogTool: (tool) => !isCodeModeControlTool(tool),
   });
-  // Only the catalog ref reflects the freshly compacted run catalog. Without it
-  // the real catalog is registered under session keys and resolved later, so
-  // keep the catalog "unknown" (undefined) rather than an empty array that would
-  // wrongly strip MCP/namespace guidance from the exec description.
-  const visibleCatalog = params.catalogRef?.current?.entries;
-  for (const tool of compacted.tools) {
-    if (tool.name === CODE_MODE_EXEC_TOOL_NAME) {
-      tool.description = createCodeModeExecDescription(
-        {
-          config: params.config,
-          runtimeConfig: params.config,
-          agentId: params.agentId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          runId: params.runId,
-          catalogRef: params.catalogRef,
-          codeModeSkills: params.codeModeSkills,
-        },
-        visibleCatalog,
+  const catalogRef = params.catalogRef;
+  const execTool = compacted.tools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
+  if (catalogRef?.current && execTool) {
+    catalogRef.onDispose?.();
+    const descriptionUpdater = createCodeModeExecDescriptionUpdater(execTool);
+    catalogRef.onDispose = descriptionUpdater.dispose;
+    catalogRef.onChange = () => {
+      descriptionUpdater.update(
+        createCodeModeExecDescription(
+          { ...params, runtimeConfig: params.config },
+          catalogRef.current?.entries,
+        ),
       );
-    }
+    };
+    catalogRef.onChange();
   }
   return compacted;
 }

@@ -14,6 +14,7 @@ import { boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
+import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import {
   getSwarmRunByLaunchReplayKey,
@@ -398,6 +399,7 @@ export async function runBridgeRequest(params: {
         const matches = await params.runtime.search(query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
           includeMcp: false,
+          allowedIds: catalogProjection.byId,
         });
         const exact = query.trim().toLowerCase();
         const exactBinding = catalogProjection.bindings.find(
@@ -493,7 +495,13 @@ export async function runBridgeRequest(params: {
               onUpdate: params.onUpdate,
             });
             if (request.catalogId) {
-              return called.result;
+              const guestResult = consumeMcpCodeModeGuestResult(called.result);
+              if (guestResult === undefined) {
+                throw new ToolInputError(
+                  "MCP namespace tool result is missing its owned guest projection.",
+                );
+              }
+              return guestResult;
             }
             return isRecord(called.result) && "details" in called.result
               ? called.result.details

@@ -712,9 +712,12 @@ schema whose hint exposes stable metadata, text, cache state, and nested spill
 metadata; `web_search` declares its exact normalized results/answer/error/raw
 union as a complete quick-index hint. Filesystem contracts return structured
 read text, image, truncation, and optional-not-found outcomes; explicit edit
-change state plus diff/patch data; and apply-patch path summaries. When the
-quick index declares the fields, one cell can compose discovery and delivery
-without a separate inspection turn:
+change state plus diff/patch data; and apply-patch path summaries. Missing
+canonical daily notes (`memory/YYYY-MM-DD.md`) return an optional `not_found`
+result even when `optional` is omitted; other missing paths throw unless
+`optional: true` is explicitly supplied. When the quick index declares the
+fields, one cell can compose discovery and delivery without a separate
+inspection turn:
 
 ```javascript
 const listed = await conversations_list({ query: "build bot" });
@@ -781,11 +784,15 @@ tool metadata:
 
 ```typescript
 type McpToolResult = {
-  content?: unknown[];
+  content: unknown[];
   structuredContent?: unknown;
   isError?: boolean;
-  [key: string]: unknown;
 };
+
+type McpResourcesListResult = { resources: unknown[]; nextCursor?: string };
+type McpResourcesReadResult = { contents: unknown[] };
+type McpPromptsListResult = { prompts: unknown[]; nextCursor?: string };
+type McpPromptsGetResult = { messages: unknown[]; description?: string };
 
 declare namespace MCP.github {
   /** Return this TypeScript-style API header. */
@@ -805,6 +812,15 @@ declare namespace MCP.github {
   }): Promise<McpToolResult>;
 }
 ```
+
+MCP tool calls return their original JSON-safe content blocks, including block
+annotations and block-level `_meta`, plus top-level `structuredContent` and
+`isError` when provided. Top-level MCP `_meta` and private app metadata never
+enter the guest. An MCP application failure with `isError: true` still resolves
+as a result, so guest code can inspect and recover from it. Resource and prompt
+operations instead return their native MCP shapes: `resources.list()` returns
+`resources`, `resources.read()` returns `contents`, `prompts.list()` returns
+`prompts`, and `prompts.get()` returns `messages` with an optional `description`.
 
 Declaration files are virtual, not written under the workspace or state
 directory. For each code-mode `exec` call, OpenClaw builds the run-scoped tool

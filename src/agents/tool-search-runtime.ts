@@ -299,6 +299,10 @@ type CachedToolSearchIndex = {
   >;
   index: ReturnType<typeof buildLexicalIndex<ToolSearchCatalogEntry>>;
 };
+type ToolSearchIndexCache = Map<
+  boolean | NonNullable<CatalogVisibilityOptions["allowedIds"]>,
+  CachedToolSearchIndex
+>;
 
 function matchesCachedToolSearchIndex(
   cached: CachedToolSearchIndex,
@@ -453,10 +457,7 @@ export class ToolSearchRuntime {
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
   private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
-  private readonly searchIndexes = new WeakMap<
-    ToolSearchCatalogSession,
-    Map<boolean, CachedToolSearchIndex>
-  >();
+  private readonly searchIndexes = new WeakMap<ToolSearchCatalogSession, ToolSearchIndexCache>();
 
   constructor(
     private readonly ctx: ToolSearchToolContext,
@@ -480,13 +481,13 @@ export class ToolSearchRuntime {
     if (limit === 1 && exactMatches.length === 1) {
       return exactMatches.slice(0, limit).map((entry) => compactToolSearchCatalogEntry(entry));
     }
-    const includeMcp = options?.includeMcp !== false;
+    const indexKey = options?.allowedIds ?? options?.includeMcp !== false;
     let catalogIndexes = this.searchIndexes.get(catalog);
     if (!catalogIndexes) {
       catalogIndexes = new Map();
       this.searchIndexes.set(catalog, catalogIndexes);
     }
-    let cachedIndex = catalogIndexes.get(includeMcp);
+    let cachedIndex = catalogIndexes.get(indexKey);
     if (!cachedIndex || !matchesCachedToolSearchIndex(cachedIndex, entries)) {
       const indexedEntries = entries.map((entry) => ({
         entry,
@@ -507,7 +508,7 @@ export class ToolSearchRuntime {
           })),
         ),
       };
-      catalogIndexes.set(includeMcp, cachedIndex);
+      catalogIndexes.set(indexKey, cachedIndex);
     }
     const ranked = scoreLexical(cachedIndex.index, tokenizeQuery(query))
       .toSorted(

@@ -41,6 +41,7 @@ export type CatalogSource = "openclaw" | "mcp" | "client";
 export type CatalogTool = AnyAgentTool | ToolDefinition;
 export type CatalogVisibilityOptions = {
   includeMcp?: boolean;
+  allowedIds?: { has(id: string): boolean };
 };
 export type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "catalog";
 export type UnknownToolErrorOptions = {
@@ -128,6 +129,8 @@ export type ToolSearchCatalogSession = {
 
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
+  onChange?: () => void;
+  onDispose?: () => void;
 };
 
 export type CodeModeBridgeMethod = "search" | "describe" | "call";

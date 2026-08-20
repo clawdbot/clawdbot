@@ -291,15 +291,6 @@ function stripReadTruncationContentDetails(
   };
 }
 
-async function executeReadPage(params: {
-  base: AnyAgentTool;
-  toolCallId: string;
-  args: Record<string, unknown>;
-  signal?: AbortSignal;
-}): Promise<AgentToolResult<unknown>> {
-  return await params.base.execute(params.toolCallId, params.args, params.signal);
-}
-
 async function executeReadWithAdaptivePaging(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -335,12 +326,7 @@ async function executeReadWithAdaptivePaging(params: {
     if (next.kind === "line") {
       delete pageArgs.cursor;
     }
-    const pageResult = await executeReadPage({
-      base: params.base,
-      toolCallId: params.toolCallId,
-      args: pageArgs,
-      signal: params.signal,
-    });
+    const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
     firstResult ??= pageResult;
 
     const rawText = getToolResultText(pageResult);
@@ -1023,15 +1009,23 @@ export function createOpenClawReadTool(
         ? normalizeFileToolPathParamsFromKeys(record, ["path"])
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
+      const filePath =
+        typeof normalizedRecord?.path === "string" ? normalizedRecord.path : "<unknown>";
+      const dailyMemoryPath =
+        process.platform === "win32" ? filePath.replace(/\\/g, "/") : filePath;
+      // Daily journals may not exist yet; let the concrete reader own filesystem errors.
+      const implicitlyOptional =
+        normalizedRecord?.optional === undefined &&
+        /^(?:\.\/)*memory\/\d{4}-\d{2}-\d{2}\.md$/u.test(dailyMemoryPath);
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
-        args: normalizedRecord ?? {},
+        args: implicitlyOptional
+          ? { ...normalizedRecord, optional: true }
+          : (normalizedRecord ?? {}),
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
       });
-      const filePath =
-        typeof normalizedRecord?.path === "string" ? normalizedRecord.path : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
       const sanitizedResult = await sanitizeToolResultImages(
