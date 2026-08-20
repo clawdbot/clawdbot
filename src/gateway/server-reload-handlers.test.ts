@@ -5763,26 +5763,38 @@ describe("gateway plugin hot reload handlers", () => {
       stopChannel,
       reloadPlugins,
     });
+    const sourceConfig: OpenClawConfig = {
+      plugins: { enabled: false, allow: ["discord"] },
+    };
 
     try {
-      await applyHotReload(createPluginReloadPlan(), {
-        plugins: {
-          enabled: false,
+      await applyHotReload(
+        createPluginReloadPlan(),
+        {
+          plugins: {
+            enabled: false,
+          },
         },
-      });
+        {
+          sourceConfig,
+          isCurrent: () => true,
+          publish: async (commit) => await commit(),
+        },
+      );
     } finally {
       restoreChannelReloadEnv();
     }
 
     const [reloadParams] = reloadPlugins.mock.calls.at(-1) ?? [];
     const reloadParamsRecord = reloadParams as
-      | { nextConfig?: unknown; changedPaths?: unknown }
+      | { nextConfig?: unknown; sourceConfig?: unknown; changedPaths?: unknown }
       | undefined;
     expect(reloadParamsRecord?.nextConfig).toEqual({
       plugins: {
         enabled: false,
       },
     });
+    expect(reloadParamsRecord?.sourceConfig).toBe(sourceConfig);
     expect(reloadParamsRecord?.changedPaths).toEqual(["plugins.enabled"]);
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
     expect(startChannel).not.toHaveBeenCalled();
