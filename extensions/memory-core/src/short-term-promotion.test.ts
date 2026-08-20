@@ -30,6 +30,7 @@ import {
   deleteShortTermLockEntryIfCurrent,
   withMemoryWorkspaceLock,
 } from "./memory-workspace-lock.js";
+import { isContaminatedDreamingSnippet } from "./short-term-promotion-utils.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -45,7 +46,6 @@ import {
   repairShortTermPromotionArtifacts,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
-import { isContaminatedDreamingSnippet } from "./short-term-promotion-utils.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -604,8 +604,8 @@ describe("short-term promotion", () => {
       "wrapper failed at run (/tmp/openclaw-run/index.js:1:2) during startup",
       "2026-08-05T03:00:00Z ERROR failed to download logs",
       '```json\n{"error":"timeout"}\n```',
-      "OPENAI_API_KEY=sk-proj_123456789abcdefghijklmnop",
-      "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdefghijklmnopqrstuvwxyz.123456789abcd",
+      "OPENAI_API_KEY=sk-proj_123456789abcdefghijklmnop", // pragma: allowlist secret
+      "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdefghijklmnopqrstuvwxyz.123456789abcd", // pragma: allowlist secret
       "uat-client: refresh_token expired for ou_...57cdd, clearing error: need_user_authorization",
       "The job failed with exit code 1; attempt 3/5 failed and retries are exhausted.",
     ];
@@ -1718,20 +1718,17 @@ describe("short-term promotion", () => {
   });
 
   it("does not append non-durable promotion snippets during direct apply", async (workspaceDir) => {
-    const applied = await applyAllCandidates(
-      workspaceDir,
-      [
-        promotionCandidateFixture({
-          key: "memory:memory/2026-04-03.md:1:1",
-          path: "memory/2026-04-03.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "wrapper failed at run (/tmp/openclaw-run/index.js:1:2) during startup",
-          conceptTags: ["assistant"],
-        }),
-      ],
-    );
+    const applied = await applyAllCandidates(workspaceDir, [
+      promotionCandidateFixture({
+        key: "memory:memory/2026-04-03.md:1:1",
+        path: "memory/2026-04-03.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory",
+        snippet: "wrapper failed at run (/tmp/openclaw-run/index.js:1:2) during startup",
+        conceptTags: ["assistant"],
+      }),
+    ]);
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("contamination filter");
