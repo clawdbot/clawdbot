@@ -295,6 +295,40 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it.each([
+    { name: "qr", command: ["qr"] },
+    { name: "clawbot qr", command: ["clawbot", "qr"] },
+  ])("renders conflicting $name options as one canonical JSON document", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        for (const conflict of [
+          {
+            args: ["--limited", "--voice-node"],
+            message: "Use either --limited or --voice-node, not both.",
+          },
+          {
+            args: ["--token", "test-token", "--password", "test-password"],
+            message: "Use either --token or --password, not both.",
+          },
+        ]) {
+          const result = runBuiltCli(tempHome, [...testCase.command, "--json", ...conflict.args], {
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          });
+
+          expect(result.status, result.stderr).toBe(1);
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message: conflict.message },
+          });
+          expect(result.stdout).not.toContain("[openclaw]");
+          expect(result.stderr).toContain(conflict.message);
+        }
+      },
+      { prefix: "openclaw-qr-json-failure-e2e-" },
+    );
+  });
+
   it("returns one canonical document when docs search fails", async () => {
     await withTempHome(
       async (tempHome) => {
