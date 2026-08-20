@@ -188,19 +188,22 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Fetch exact PR head
         id: fetch
         if: ${{ steps.checkout.outcome == 'success' }}
         continue-on-error: true
         env:
+          BASELINE_SHA: ${{ steps.resolve.outputs.baseline_revision }}
           CANDIDATE_SHA: ${{ steps.resolve.outputs.candidate_revision }}
           MANTIS_PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags origin "+refs/pull/${MANTIS_PR_NUMBER}/head:refs/remotes/origin/mantis-preflight"
+          git fetch --no-tags --depth=1 origin "$BASELINE_SHA"
+          git fetch --no-tags --depth=1 origin "+refs/pull/${MANTIS_PR_NUMBER}/head:refs/remotes/origin/mantis-preflight"
+          git cat-file -e "${BASELINE_SHA}^{commit}"
           test "$(git rev-parse refs/remotes/origin/mantis-preflight)" = "$CANDIDATE_SHA"
 
       - name: Classify visible behavior

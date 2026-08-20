@@ -28,7 +28,7 @@ type WorkflowStep = {
   name?: string;
   run?: string;
   uses?: string;
-  with?: Record<string, boolean | string>;
+  with?: Record<string, boolean | number | string>;
 };
 
 type WorkflowJob = {
@@ -345,6 +345,12 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       (step) => step.name === "Checkout preflight refs",
     );
     expect(preflightCheckout?.if).toContain("requires_preflight == 'true'");
+    expect(preflightCheckout?.with?.["fetch-depth"]).toBe(1);
+    const preflightFetch = resolver?.steps?.find((step) => step.name === "Fetch exact PR head");
+    expect(preflightFetch?.run).toContain('git fetch --no-tags --depth=1 origin "$BASELINE_SHA"');
+    expect(preflightFetch?.run).toContain(
+      'git fetch --no-tags --depth=1 origin "+refs/pull/${MANTIS_PR_NUMBER}/head:',
+    );
     const classifier = resolver?.steps?.find((step) => step.name === "Classify visible behavior");
     expect(classifier?.uses).toContain("openai/codex-action@");
     expect(classifier?.with?.sandbox).toBe("read-only");
