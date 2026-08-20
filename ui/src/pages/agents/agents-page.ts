@@ -369,8 +369,7 @@ class AgentsPage
     this.agentSkillsLoading = false;
     this.toolsCatalogLoading = false;
     this.toolsCatalogLoadingAgentId = null;
-    this.toolsEffectiveLoading = false;
-    this.toolsEffectiveLoadingKey = null;
+    resetToolsEffectiveState(this);
     this.cron = {
       ...this.cron,
       cronLoading: false,
