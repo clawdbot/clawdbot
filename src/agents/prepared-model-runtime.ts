@@ -422,8 +422,15 @@ export async function replacePreparedModelRuntimeSnapshotAfterCatalogGenerationM
     await activeRecovery;
     return true;
   }
+  const pendingReplacement = pendingModelRuntimeReplacement;
+  if (pendingReplacement) {
+    await pendingReplacement.promise;
+    return true;
+  }
 
   const key = ownerKey(owner.input);
+  const replacement = createPreparedModelRuntimeReplacement();
+  pendingModelRuntimeReplacement = replacement;
   const staleError = new Error(
     `prepared model runtime catalog generation was invalid for ${owner.input.agentDir}`,
   );
@@ -447,15 +454,23 @@ export async function replacePreparedModelRuntimeSnapshotAfterCatalogGenerationM
       buildTimeoutMs: modelRuntimeBuildTimeoutMs,
     });
     replyDispatchPublication.rebuild(owners.values());
-    notifyPreparedModelRuntimePublication({ phase: "published" });
-  }).catch((error: unknown) => {
-    const refreshError = toStringifiedError(error);
-    notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
-    throw refreshError;
   });
   catalogGenerationRecoveries.set(owner, recovery);
   try {
     await recovery;
+    if (pendingModelRuntimeReplacement === replacement) {
+      pendingModelRuntimeReplacement = undefined;
+      replacement.resolve();
+      notifyPreparedModelRuntimePublication({ phase: "published" });
+    }
+  } catch (error) {
+    const refreshError = toStringifiedError(error);
+    if (pendingModelRuntimeReplacement === replacement) {
+      pendingModelRuntimeReplacement = undefined;
+      replacement.reject(refreshError);
+      notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
+    }
+    throw refreshError;
   } finally {
     if (catalogGenerationRecoveries.get(owner) === recovery) {
       catalogGenerationRecoveries.delete(owner);

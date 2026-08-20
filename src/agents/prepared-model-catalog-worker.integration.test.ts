@@ -36,7 +36,9 @@ import {
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
+  prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
+  registerPreparedModelRuntimePublicationListener,
   type PreparedModelRuntimeInput,
 } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
@@ -836,9 +838,21 @@ describe("prepared model catalog worker boundary", () => {
       loadGatewayModelCatalogSnapshot: loadRecoveredCatalog,
       logGateway: { debug: () => undefined },
     } as unknown as GatewayRequestContext;
-    const recovered = await buildModelsListResult({ context, params: { view: "all" } });
+    let concurrentRead: ReturnType<typeof loadRecoveredCatalog> | undefined;
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "invalidated" && !concurrentRead) {
+        concurrentRead = prepareModelRuntimeSnapshot(input).then(loadRecoveredCatalog);
+      }
+    });
+    const recovered = await buildModelsListResult({ context, params: { view: "all" } }).finally(
+      unregister,
+    );
+    const concurrentRecovered = await concurrentRead;
 
     expect(recovered.models).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v2" }),
+    );
+    expect(concurrentRecovered?.entries).toContainEqual(
       expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v2" }),
     );
   });
