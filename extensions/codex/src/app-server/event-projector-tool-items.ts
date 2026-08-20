@@ -1,6 +1,6 @@
 import {
   inferToolMetaFromArgs,
-  ToolProgressDetailModeInput,
+  type ToolProgressDetailModeInput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   itemName,

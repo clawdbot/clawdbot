@@ -106,7 +106,7 @@ export type AgentConfig = {
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: AgentDefaultsConfig["thinkingDefault"];
   /** Optional per-agent default verbosity level. */
-  verboseDefault?: "off" | "on" | "full" | "plain";
+  verboseDefault?: "off" | "on" | "full";
   /** Optional per-agent tool progress detail mode. */
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   /** Optional per-agent default reasoning visibility. */

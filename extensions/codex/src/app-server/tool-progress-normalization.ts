@@ -5,7 +5,7 @@
 import {
   inferToolMetaFromArgs,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  ToolProgressDetailModeInput,
+  type ToolProgressDetailModeInput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {

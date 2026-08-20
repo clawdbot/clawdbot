@@ -251,8 +251,8 @@ describe("buildChannelProgressDraftLine", () => {
     expect(failed?.text).not.toContain("git status");
     expect(failed?.text).not.toContain("/workspace");
     // Completion/failure replacements keep the sentence-only presentation:
-    // the label mirrors the sentence and no icon/detail/toolName chrome
-    // comes back (status stays as lifecycle metadata for task renderers).
+    // the label mirrors the sentence and no icon/detail/toolName/status
+    // chrome comes back to renderers.
     for (const line of [start, done, failed]) {
       expect(line?.label).toBe(line?.text);
       expect(line?.icon).toBeUndefined();
@@ -275,6 +275,32 @@ describe("buildChannelProgressDraftLine", () => {
     expect(failed?.text).toBe("That step didn't work.");
     expect(failed?.text).not.toContain("exit");
     expect(failed?.text).not.toContain("🛠️");
+  });
+
+  it("renders plain failures sentence-only through the renderer path", () => {
+    // ClawSweeper: the structured line kept status "exit 1", which generic,
+    // Telegram, and Slack renderers compose into the visible text even though
+    // line.text was already the plain sentence. Plain presentation must not
+    // carry renderer-visible lifecycle/exit-code fields.
+    const failed = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        toolCallId: "call-3",
+        name: "exec",
+        phase: "end",
+        exitCode: 1,
+        title: "I'm checking the current state of the project.",
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    expect(failed?.status).toBeUndefined();
+    const rendered = formatChannelProgressDraftText({
+      lines: failed ? [failed] : [],
+      entry: null,
+    });
+    expect(rendered).toContain("I'm checking the current state of the project.");
+    expect(rendered).not.toContain("exit");
+    expect(rendered).not.toContain(": exit 1");
   });
 });
 

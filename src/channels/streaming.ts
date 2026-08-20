@@ -476,6 +476,10 @@ function buildCommandOutputProgressLine(
       ...line,
       text: plainText,
     };
+    // Plain presentation is sentence-only: drop the lifecycle/exit-code status
+    // so generic/Telegram/Slack renderers that compose from line fields cannot
+    // reintroduce "exit N" next to the plain sentence.
+    delete statusLine.status;
     setProgressDraftLineCorrelationKey(statusLine, correlationKey);
     return statusLine;
   }

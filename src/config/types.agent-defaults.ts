@@ -230,14 +230,13 @@ export type AgentDefaultsConfig = {
   /** Default fast-mode policy inherited by agent entries that omit it. */
   fastModeDefault?: FastMode;
   /** Default verbose level when no /verbose directive is present. */
-  verboseDefault?: "off" | "on" | "full" | "plain";
+  verboseDefault?: "off" | "on" | "full";
   /**
    * Detail mode for user-visible tool progress in /verbose and editable progress drafts.
    * - explain: compact human summary (default)
    * - raw: include raw command/detail when available
-   * - plain: non-technical plain-language sentences for mixed audiences
    */
-  toolProgressDetail?: "explain" | "raw" | "plain";
+  toolProgressDetail?: "explain" | "raw";
   /** Default reasoning level when no /reasoning directive is present. */
   reasoningDefault?: "off" | "on" | "stream";
   /** Default elevated level when no /elevated directive is present. */
