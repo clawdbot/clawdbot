@@ -42,6 +42,18 @@ function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): Gatewa
   };
 }
 
+/**
+ * Whether this plugin's manifest declares, for this channel, that it replaces the named plugin.
+ * The declaration is per channel, so a preference for one channel never settles another.
+ */
+function declaresChannelPreferenceOver(
+  record: PluginRecord,
+  channelId: string,
+  otherPluginId: string,
+): boolean {
+  return (record.channelPreferOver?.[channelId] ?? []).includes(otherPluginId);
+}
+
 export function createNetworkRegistrars(state: PluginRegistryState) {
   const { registry, coreGatewayMethods, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
     state;
@@ -348,6 +360,38 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
           existingSetup.enabled = record.enabled;
           existingSetup.rootDir = record.rootDir;
         }
+        return;
+      }
+      // A declared replacement is not a duplicate. Without this the channel goes to whichever
+      // plugin the loader happened to reach first, and the other is marked as a registration
+      // conflict, which drops every tool it registers — punishing a plugin for losing a channel it
+      // still legitimately serves elsewhere.
+      const existingRecord = registry.plugins.find(
+        (candidate) => candidate.id === existingRuntime.pluginId,
+      );
+      if (declaresChannelPreferenceOver(record, id, existingRuntime.pluginId)) {
+        existingRuntime.pluginId = record.id;
+        existingRuntime.plugin = plugin;
+        existingRuntime.pluginName = record.name;
+        existingRuntime.resolveChannelRuntime = resolveChannelRuntime;
+        existingRuntime.origin = record.origin;
+        existingRuntime.source = record.source;
+        existingRuntime.rootDir = record.rootDir;
+        const displacedSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+        if (displacedSetup) {
+          displacedSetup.pluginId = record.id;
+          displacedSetup.plugin = plugin;
+          displacedSetup.pluginName = record.name;
+          displacedSetup.origin = record.origin;
+          displacedSetup.source = record.source;
+          displacedSetup.enabled = record.enabled;
+          displacedSetup.rootDir = record.rootDir;
+        }
+        return;
+      }
+      if (existingRecord && declaresChannelPreferenceOver(existingRecord, id, record.id)) {
+        // The preferred owner already holds the channel. Yield it without a conflict so this
+        // plugin keeps serving the channels nobody contested.
         return;
       }
       pushDiagnostic({

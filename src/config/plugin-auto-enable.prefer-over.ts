@@ -254,8 +254,10 @@ function resolvePreferredOverIds(
 
 /**
  * The channel a candidate speaks for. A candidate that is not channel-configured has no channel of
- * its own, so it stands for its plugin and can only be contested by another candidate for the same
- * plugin — which the caller already skips.
+ * its own, so it stands for its plugin. That pseudo-channel must never be read as a channel claim:
+ * a plugin whose id matches a channel id — the successor naming this file exists to handle — would
+ * otherwise manufacture a claim on that channel from an unrelated tool or provider candidate.
+ * `claimsChannel` reads the manifest instead, for that reason.
  */
 function candidateChannelId(candidate: PluginAutoEnableCandidate): string {
   const channelId =
@@ -291,19 +293,30 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   // off while validation selected the fallback's schema.
   const resolveAlias = createManifestPluginAliasResolver(params.registry);
   const entryChannelId = candidateChannelId(params.entry);
+  // `preferOver` names a plugin the way its author wrote it, which can be a legacy id the manifest
+  // still lists. Startup canonicalizes ids through this resolver, so a raw membership test would
+  // drop the replacement edge for exactly the spellings the alias map exists to accept.
+  const entryPluginId = resolveAlias(params.entry.pluginId);
+  // Ground truth for "claims this channel" is the manifest, the same source
+  // `collectPluginIdsForConfiguredChannel` reads. Deriving it from the candidate list instead would
+  // let a candidate that is not channel-configured stand in for a channel it never declared.
   const claimsChannel = (pluginId: string, channelId: string): boolean =>
-    params.configured.some(
-      (candidate) => candidate.pluginId === pluginId && candidateChannelId(candidate) === channelId,
+    params.registry.plugins.some(
+      (record) =>
+        resolveAlias(record.id) === pluginId &&
+        (record.channels ?? []).some(
+          (declared) => (normalizeChatChannelId(declared) ?? declared) === channelId,
+        ),
     );
 
   for (const other of params.configured) {
-    if (other.pluginId === params.entry.pluginId) {
+    if (resolveAlias(other.pluginId) === entryPluginId) {
       continue;
     }
     if (isPluginPolicyDisabled(params.config, other.pluginId, resolveAlias)) {
       continue;
     }
-    if (!getPreferredOverIds(other).includes(params.entry.pluginId)) {
+    if (!getPreferredOverIds(other).some((id) => resolveAlias(id) === entryPluginId)) {
       continue;
     }
     // A declaration is made FOR one channel, and it means one of two things depending on whether
@@ -317,10 +330,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     // Only the declarer claims it: the named plugin is a predecessor being succeeded outright, not
     // a rival for a shared channel, so the preference is not channel-bound.
     const declaredChannelId = candidateChannelId(other);
-    if (
-      declaredChannelId !== entryChannelId &&
-      claimsChannel(params.entry.pluginId, declaredChannelId)
-    ) {
+    if (declaredChannelId !== entryChannelId && claimsChannel(entryPluginId, declaredChannelId)) {
       continue;
     }
     return true;
@@ -329,12 +339,16 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
 }
 
 /**
- * Whether every channel this plugin was a candidate for has a preferred replacement.
+ * Whether every candidate this plugin was raised under is superseded.
  *
- * Suppression is decided per channel, but the disablement it triggers writes
+ * Suppression is decided per candidate, but the disablement it triggers writes
  * `plugins.entries.<id>.enabled = false`, which is plugin-wide. A plugin serving channels X and Y
  * that is superseded only on Y must stay enabled or X loses its only claimant, so the plugin-wide
- * write is withheld until no channel still needs it.
+ * write is withheld until no candidate still needs it.
+ *
+ * This bites in the rival case, where the declaration is channel-bound. A successor declaration is
+ * not channel-bound, so it supersedes every candidate of the plugin it names and the plugin-wide
+ * write still lands — which is the established behavior for replacing a predecessor outright.
  */
 export function isPluginSupersededOnEveryConfiguredChannel(params: {
   config: OpenClawConfig;

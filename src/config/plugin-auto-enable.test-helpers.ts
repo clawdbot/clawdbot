@@ -48,6 +48,7 @@ export function makeRegistry(
     providers?: string[];
     cliBackends?: string[];
     origin?: PluginOrigin;
+    legacyPluginIds?: string[];
     configSchema?: Record<string, unknown>;
     channelConfigs?: Record<
       string,
@@ -60,6 +61,7 @@ export function makeRegistry(
     plugins: plugins.map((plugin) => ({
       id: plugin.id,
       channels: plugin.channels,
+      legacyPluginIds: plugin.legacyPluginIds,
       activation: plugin.activation,
       autoEnableWhenConfiguredProviders: plugin.autoEnableWhenConfiguredProviders,
       modelSupport: plugin.modelSupport,

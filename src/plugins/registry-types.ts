@@ -491,6 +491,13 @@ export type PluginRecord = {
   toolNames: string[];
   hookNames: string[];
   channelIds: string[];
+  /**
+   * Manifest `preferOver` ids per channel this plugin claims. Channel registration reads it to
+   * settle a contested channel by declaration instead of by discovery order, so the plugin that
+   * loses a channel it declared a preference against is not treated as a duplicate-registration
+   * conflict (which would drop every tool it registers).
+   */
+  channelPreferOver?: Readonly<Record<string, readonly string[]>>;
   cliBackendIds: string[];
   providerIds: string[];
   syntheticAuthRefs?: string[];

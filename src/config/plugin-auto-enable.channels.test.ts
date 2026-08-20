@@ -675,7 +675,50 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.plugins?.entries?.["zz-replacement"]?.enabled).toBe(true);
       // zzbeta has no other claimant, so disabling the fallback plugin-wide takes that channel
       // down with it.
-      expect(result.config.plugins?.entries?.["zz-fallback"]?.enabled).not.toBe(false);
+      expect(result.config.plugins?.entries?.["zz-fallback"]?.enabled).toBe(true);
+    });
+
+    it("does not let a non-channel candidate stand in for a channel claim", () => {
+      // `zz-replacement` succeeds the `zzlegacy` plugin outright: it declares the preference for
+      // channel `zzlegacy`, which that plugin does not claim — it serves `zzother`. A candidate
+      // that is not channel-configured must not turn that into a same-channel rivalry just because
+      // the plugin id matches the channel id.
+      const run = (
+        candidates: Parameters<typeof materializePluginAutoEnableCandidates>[0]["candidates"],
+      ) =>
+        materializePluginAutoEnableCandidates({
+          config: {
+            channels: { zzlegacy: { someKey: "value" }, zzother: { someKey: "value" } },
+          },
+          candidates,
+          env: makeIsolatedEnv(),
+          manifestRegistry: makeRegistry([
+            {
+              id: "zz-replacement",
+              channels: ["zzlegacy"],
+              channelConfigs: {
+                zzlegacy: { schema: { type: "object" }, preferOver: ["zzlegacy"] },
+              },
+            },
+            { id: "zzlegacy", channels: ["zzother"] },
+          ]),
+        });
+
+      const withoutToolCandidate = run([
+        { pluginId: "zz-replacement", kind: "channel-configured", channelId: "zzlegacy" },
+        { pluginId: "zzlegacy", kind: "channel-configured", channelId: "zzother" },
+      ]);
+      const withToolCandidate = run([
+        { pluginId: "zz-replacement", kind: "channel-configured", channelId: "zzlegacy" },
+        { pluginId: "zzlegacy", kind: "channel-configured", channelId: "zzother" },
+        { pluginId: "zzlegacy", kind: "plugin-tool-configured" },
+      ]);
+
+      // One unrelated tool candidate must not flip the plugin-wide outcome.
+      expect(withToolCandidate.config.plugins?.entries?.zzlegacy?.enabled).toBe(
+        withoutToolCandidate.config.plugins?.entries?.zzlegacy?.enabled,
+      );
+      expect(withToolCandidate.config.plugins?.entries?.zzlegacy?.enabled).toBe(false);
     });
 
     it("auto-enables imessage when only imessage is configured", () => {

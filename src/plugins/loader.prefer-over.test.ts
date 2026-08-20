@@ -87,6 +87,83 @@ function writeChannelToolPlugin(params: {
   return pluginDir;
 }
 
+function writeMultiChannelPlugin(params: {
+  rootDir: string;
+  id: string;
+  channelIds: string[];
+  toolName: string;
+  preferOver?: Record<string, string[]>;
+}): string {
+  const pluginDir = path.join(params.rootDir, params.id);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  if (process.platform !== "win32") {
+    fs.chmodSync(pluginDir, 0o755);
+  }
+  const channelConfigs = Object.fromEntries(
+    params.channelIds.map((channelId) => [
+      channelId,
+      {
+        schema: { type: "object" },
+        ...(params.preferOver?.[channelId] ? { preferOver: params.preferOver[channelId] } : {}),
+      },
+    ]),
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: params.id,
+        channels: params.channelIds,
+        contracts: { tools: [params.toolName] },
+        channelConfigs,
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  const registrations = params.channelIds
+    .map(
+      (channelId) => `api.registerChannel({
+          plugin: {
+            id: ${JSON.stringify(channelId)},
+            meta: {
+              id: ${JSON.stringify(channelId)},
+              label: ${JSON.stringify(channelId)},
+              selectionLabel: ${JSON.stringify(channelId)},
+              docsPath: ${JSON.stringify(`/channels/${channelId}`)},
+              blurb: "fixture channel",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => [],
+              resolveAccount: () => ({ accountId: "default" }),
+            },
+            outbound: { deliveryMode: "direct" },
+          },
+        });`,
+    )
+    .join("\n        ");
+  fs.writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `module.exports = {
+      id: ${JSON.stringify(params.id)},
+      register(api) {
+        ${registrations}
+        api.registerTool({
+          name: ${JSON.stringify(params.toolName)},
+          description: "fixture",
+          parameters: { type: "object", properties: {} },
+          execute() { return { content: [{ type: "text", text: "ok" }] }; },
+        }, { name: ${JSON.stringify(params.toolName)} });
+      },
+    };`,
+    "utf-8",
+  );
+  return pluginDir;
+}
+
 afterEach(() => {
   clearPluginLoaderCache();
   resetPluginRuntimeStateForTest();
@@ -138,6 +215,65 @@ describe("plugin loader preferOver activation", () => {
     expect(registry.tools.map((tool) => tool.pluginId)).toEqual(["openclaw-qqbot"]);
     expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(
       "plugin tool name conflict",
+    );
+  });
+
+  // A replacement that only claims zzalpha must not decide zzbeta, and the plugin that yields
+  // zzalpha must keep its tools. Before the loader read the declaration, discovery order decided
+  // the channel: one order stripped the fallback's tools, the other handed zzalpha to the fallback
+  // and blocked the replacement instead.
+  it.each([
+    { name: "replacement discovered first", replacementFirst: true },
+    { name: "fallback discovered first", replacementFirst: false },
+  ])("settles a contested channel by declaration when the $name", ({ replacementFirst }) => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: {
+        load: {
+          paths: replacementFirst ? [replacementDir, fallbackDir] : [fallbackDir, replacementDir],
+        },
+      },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    const owner = (channelId: string) =>
+      registry.channels.find((entry) => entry.plugin.id === channelId)?.pluginId;
+    // The declaration settles zzalpha; zzbeta was never contested.
+    expect(owner("zzalpha")).toBe("zz-replacement");
+    expect(owner("zzbeta")).toBe("zz-fallback");
+    // Yielding a channel is not a duplicate registration, so neither plugin loses its tools.
+    expect(registry.tools.map((tool) => tool.pluginId).toSorted()).toEqual([
+      "zz-fallback",
+      "zz-replacement",
+    ]);
+    expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(
+      "channel already registered",
     );
   });
 

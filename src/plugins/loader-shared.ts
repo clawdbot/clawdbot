@@ -29,6 +29,7 @@ import {
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
+import { resolveManifestChannelPreferOverIds } from "./manifest-channel-preference.js";
 import {
   isPluginManifestInstallOwnerAmbiguous,
   resolvePluginManifestInstallOwner,
@@ -288,6 +289,24 @@ export function pushPluginValidationError(params: {
   });
 }
 
+/**
+ * Every channel this manifest declares a replacement preference for. Only channels that actually
+ * declare one are recorded, so the common case carries nothing. Channel registration needs the
+ * declaration at load time: without it a contested channel is settled by discovery order.
+ */
+function collectManifestChannelPreferOver(
+  record: PluginManifestRecord,
+): Record<string, readonly string[]> | undefined {
+  const byChannel: Record<string, readonly string[]> = {};
+  for (const channelId of record.channels ?? []) {
+    const preferOver = resolveManifestChannelPreferOverIds(record, channelId);
+    if (preferOver.length > 0) {
+      byChannel[channelId] = [...preferOver];
+    }
+  }
+  return Object.keys(byChannel).length > 0 ? byChannel : undefined;
+}
+
 /** Builds the common manifest-backed record shape used by runtime and CLI loaders. */
 export function createManifestPluginRecord(params: {
   candidate: PluginCandidate;
@@ -319,6 +338,7 @@ export function createManifestPluginRecord(params: {
     activationState: params.activationState,
     syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
     channelIds: manifestRecord.channels,
+    channelPreferOver: collectManifestChannelPreferOver(manifestRecord),
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,

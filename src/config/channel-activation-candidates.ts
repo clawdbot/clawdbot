@@ -16,6 +16,7 @@ import {
 } from "../channels/plugins/configured-state.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
+import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js";
@@ -55,19 +56,25 @@ export function collectPluginIdsForConfiguredChannel(
     return builtInId ? [builtInId] : [];
   }
 
-  const claimIds = new Set(claims.map((claim) => claim.plugin.id));
+  // `preferOver` is written by a plugin author, so it can name a claimant by a legacy id the
+  // manifest still lists. Comparing the raw value against canonical claimant ids drops the
+  // replacement edge entirely, and the id would also enter the candidate set as a plugin that does
+  // not exist. Startup canonicalizes ids through this same resolver.
+  const resolveAlias = createManifestPluginAliasResolver(registry);
+  const claimIds = new Set(claims.map((claim) => resolveAlias(claim.plugin.id)));
   if (builtInId) {
-    claimIds.add(builtInId);
+    claimIds.add(resolveAlias(builtInId));
   }
   const preferredIds = new Set<string>();
   for (const claim of claims) {
     for (const preferredOverId of claim.preferOver) {
-      if (claimIds.has(preferredOverId)) {
+      const canonicalPreferredOverId = resolveAlias(preferredOverId);
+      if (claimIds.has(canonicalPreferredOverId)) {
         // Keep both sides as candidates. The preferOver filter later disables
         // the lower-priority plugin unless the preferred plugin is explicitly
         // disabled/denied, preserving fallback to bundled channel support.
-        preferredIds.add(claim.plugin.id);
-        preferredIds.add(preferredOverId);
+        preferredIds.add(resolveAlias(claim.plugin.id));
+        preferredIds.add(canonicalPreferredOverId);
       }
     }
   }
