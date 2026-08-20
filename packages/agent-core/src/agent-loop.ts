@@ -31,6 +31,8 @@ import {
   appendInterruptedTurnMessage,
   createFailureMessage,
   createInterruptedTurnMessage,
+  isAcceptedYieldToolAbort,
+  isHandoffAbortError,
   isTurnHandoffAbort,
   normalizeCoreContextMessages,
 } from "./turn-interruption.js";
@@ -1496,6 +1498,23 @@ async function prepareToolCallExecution(
             if (implementationStartError) {
               throw implementationStartError.error;
             }
+            // Defense-in-depth: if the signal carries the accepted yield-handoff
+            // marker and the error is an AbortError (e.g. from the wrapper
+            // pre-check or race), preserve the handoff instead of rewriting it
+            // as a tool error. The wrapper pre-check already exempts this case;
+            // this guard catches any residual path. A genuine tool failure
+            // (non-AbortError) stays an error even when the signal has the marker.
+            if (
+              isAcceptedYieldToolAbort(signal, prepared.toolCall.name) &&
+              error instanceof Error &&
+              error.name === "AbortError"
+            ) {
+              return {
+                result: { content: [{ type: "text", text: "Turn yielded." }], details: {} },
+                isError: false,
+                executionStarted,
+              };
+            }
             return {
               result: createErrorToolResult(coerceErrorMessage(error)),
               isError: true,
@@ -1608,8 +1627,17 @@ async function finalizeExecutedToolCall(
         isError = afterResult.isError ?? isError;
       }
     } catch (error) {
-      result = createErrorToolResult(coerceErrorMessage(error));
-      isError = true;
+      // Preserve an accepted handoff only for a causally identified abort:
+      // the hook threw the signal's own reason object (e.g., via
+      // signal.throwIfAborted()) or an Error wrapping it as cause. A genuine
+      // hook failure or an unrelated AbortError must remain an error.
+      if (
+        !isAcceptedYieldToolAbort(batch.signal, prepared.toolCall.name) ||
+        !isHandoffAbortError(error, batch.signal)
+      ) {
+        result = createErrorToolResult(coerceErrorMessage(error));
+        isError = true;
+      }
     }
   }
 
@@ -1667,6 +1695,15 @@ async function finalizeToolCallOutcome(
       isError: afterResult.isError ?? finalized.isError,
     };
   } catch (error) {
+    // An accepted handoff must keep the finalized outcome intact, but only
+    // for a causally identified abort; a genuine hook failure or an unrelated
+    // AbortError stays an error.
+    if (
+      isAcceptedYieldToolAbort(batch.signal, finalized.toolCall.name) &&
+      isHandoffAbortError(error, batch.signal)
+    ) {
+      return finalized;
+    }
     const errorResult = createErrorToolResult(coerceErrorMessage(error));
     return {
       ...finalized,

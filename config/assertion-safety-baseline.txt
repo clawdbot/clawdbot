@@ -1479,7 +1479,6 @@ packages/agent-core/src/harness/session/session.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	17
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
-packages/agent-core/src/turn-interruption.ts	1
 packages/ai/src/api-registry.ts	3
 packages/ai/src/env-api-keys.ts	10
 packages/ai/src/internal/anthropic-inline-images.ts	1
