@@ -244,6 +244,10 @@ jobs:
           sudo usermod -aG mantis-proof "$recorder_user"
           sudo useradd --system --create-home --home-dir /var/lib/mantis-sut \
             --shell /usr/sbin/nologin --gid mantis-proof mantis-sut
+          session_root="/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo install -d -m 2770 -o mantis-sut -g mantis-proof "$session_root"
+          sudo setfacl -m "u:${recorder_user}:rwx,u:mantis-sut:rwx" "$session_root"
+          sudo setfacl -d -m "u:${recorder_user}:rwx,u:mantis-sut:rwx" "$session_root"
           "$node_bin" "$corepack_bin" pnpm --version >/dev/null
           cat >"${RUNNER_TEMP}/mantis-pnpm" <<EOF
           #!/usr/bin/env bash
@@ -597,11 +601,6 @@ jobs:
             | sudo install -m 0400 -o mantis-sut -g mantis-proof /dev/stdin \
                 "$sut_credential_dir/credential.json"
           rm -f "$credential_dir/payload.json"
-          sudo install -d -m 2770 -o mantis-sut -g mantis-proof "$session_root"
-          # New observer sockets inherit mantis-sut rw; the lane's readiness probe
-          # verifies the cross-UID connection before any scenario action can run.
-          sudo setfacl -m "u:$(id -un):rwx,u:mantis-sut:rwx" "$session_root"
-          sudo setfacl -d -m "u:$(id -un):rwx,u:mantis-sut:rwx" "$session_root"
           {
             echo "state_dir=$credential_dir/user-driver"
             echo "sut_credential_dir=$sut_credential_dir"
@@ -994,7 +993,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for private_root in "$SESSION_ROOT" "$SUT_CREDENTIAL_DIR"; do
+          session_root="${SESSION_ROOT:-/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
+          for private_root in "$session_root" "$SUT_CREDENTIAL_DIR"; do
             [[ -n "$private_root" ]] || continue
             [[ "$private_root" == /tmp/openclaw-mantis-*-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} ]]
             sudo rm -rf --one-file-system "$private_root"

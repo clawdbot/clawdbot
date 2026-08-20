@@ -204,6 +204,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowStep("Remove private Mantis runtime state").if).toBe(
       "${{ always() && steps.abandoned_cleanup.outputs.safe_to_release == 'true' }}",
     );
+    expect(workflowStep("Remove private Mantis runtime state").run).toContain(
+      "SESSION_ROOT:-/tmp/openclaw-mantis-proof-sessions-",
+    );
 
     const returnArtifactsStep = workflowStep("Return proof artifacts to the runner");
     expect(returnArtifactsStep.if).toBe(
@@ -456,6 +459,12 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
     expect(installRun).toContain(
       'cd "/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+    );
+    expect(installRun).toContain(
+      'sudo install -d -m 2770 -o mantis-sut -g mantis-proof "$session_root"',
+    );
+    expect(installRun.indexOf("sudo install -d -m 2770")).toBeLessThan(
+      installRun.indexOf("/usr/local/bin/openclaw-telegram-desktop-recorder --help"),
     );
     expect(installRun).not.toContain("dangerouslyAllowAllBuilds");
     expect(installRun).not.toContain("ffmpeg-static");
