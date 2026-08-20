@@ -406,6 +406,87 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], identifier);
   });
 
+  it("preserves the current branch type in unconstrained primitive unions", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const schema = {
+      anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
+    };
+    const renderValue = (value: unknown, defaultValue?: unknown) => {
+      render(
+        renderTextInput({
+          schema: defaultValue === undefined ? schema : { ...schema, default: defaultValue },
+          value,
+          path: ["providerOptions", "deepgram", "temperature"],
+          hints: {},
+          unsupported: new Set(),
+          disabled: false,
+          inputType: "text",
+          onPatch,
+        }),
+        container,
+      );
+      return expectElement(
+        container.querySelector<HTMLInputElement>("input[type='text']"),
+        "mixed primitive union input",
+      );
+    };
+
+    let input = renderValue(42);
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+    onPatch.mockClear();
+    input = renderValue("42");
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], "43");
+
+    onPatch.mockClear();
+    input = renderValue(undefined);
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+    onPatch.mockClear();
+    input = renderValue(undefined, 42);
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+    onPatch.mockClear();
+    input = renderValue(undefined, "42");
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], "43");
+
+    onPatch.mockClear();
+    input = renderValue("false");
+    input.value = "true";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(
+      ["providerOptions", "deepgram", "temperature"],
+      "true",
+    );
+
+    onPatch.mockClear();
+    input = renderValue(false);
+    input.value = "true";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], true);
+
+    onPatch.mockClear();
+    const identifier = "1048113311314608148";
+    input = renderValue(undefined);
+    input.value = identifier;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(
+      ["providerOptions", "deepgram", "temperature"],
+      identifier,
+    );
+  });
+
   it("does not commit a clear while a number input holds partial numeric text", () => {
     // Browsers report value === "" with validity.badInput while the user is
     // mid-keystroke ("0." on the way to "0.5"). Committing undefined here

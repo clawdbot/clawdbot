@@ -179,7 +179,7 @@ describe("config form array integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [identifier]);
     onPatch.mockClear();
     await addDraftValue("1e5");
-    expect(onPatch).toHaveBeenCalledWith(["allowFrom"], ["1e5"]);
+    expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [100_000]);
     container.remove();
   });
 

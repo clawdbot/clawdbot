@@ -94,22 +94,6 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
     const stringNumberUnion =
       variants.some((variant) => schemaType(variant) === "string") &&
       variants.some((variant) => ["number", "integer"].includes(schemaType(variant) ?? ""));
-    if (stringNumberUnion) {
-      try {
-        const parsed = JSON.parse(this.draftValue) as unknown;
-        if (typeof parsed === "string" && isSupportedConfigValueValid(schema, parsed)) {
-          return { ok: true, value: parsed };
-        }
-      } catch {
-        // Unquoted string-capable input is handled by the raw fallback below.
-      }
-    }
-    if (
-      (valueType === "string" || stringNumberUnion) &&
-      isSupportedConfigValueValid(schema, this.draftValue)
-    ) {
-      return { ok: true, value: this.draftValue };
-    }
     if (valueType === "string") {
       return { ok: true, value: this.draftValue };
     }
@@ -123,13 +107,20 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       const parsed = JSON.parse(this.draftValue) as unknown;
       if (typeof parsed === "number") {
         const coerced = coerceConfigFormNumberString(this.draftValue, false);
-        return typeof coerced === "number"
-          ? { ok: true, value: coerced }
+        if (typeof coerced === "number") {
+          return { ok: true, value: coerced };
+        }
+        // JSON.parse has already rounded unsafe integer spellings. Preserve
+        // the source text only when the union accepts it as a string.
+        return stringNumberUnion && isSupportedConfigValueValid(schema, this.draftValue)
+          ? { ok: true, value: this.draftValue }
           : { ok: false, message: t("configForm.invalidNumber") };
       }
       return { ok: true, value: parsed };
     } catch {
-      return { ok: false, message: t("configForm.invalidJson") };
+      return stringNumberUnion && isSupportedConfigValueValid(schema, this.draftValue)
+        ? { ok: true, value: this.draftValue }
+        : { ok: false, message: t("configForm.invalidJson") };
     }
   }
 

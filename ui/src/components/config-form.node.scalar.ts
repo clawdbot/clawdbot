@@ -98,40 +98,68 @@ function syncScalarInputIdentity(
 function coerceTextInputValue(
   value: string,
   schema: ConfigNodeRenderParams["schema"],
+  currentValue?: unknown,
 ): string | number | boolean {
   const trimmed = value.trim();
+  const variants = schema.anyOf ?? schema.oneOf ?? [];
+  const stringCandidateValid = isSupportedConfigValueValid(schema, value);
   const booleanCandidate = trimmed === "true" ? true : trimmed === "false" ? false : undefined;
-  if (
-    booleanCandidate !== undefined &&
-    (schema.anyOf ?? schema.oneOf ?? []).some(
-      (variant) =>
-        (schemaType(variant) === "boolean" ||
-          typeof variant.const === "boolean" ||
-          variant.enum?.some((entry) => typeof entry === "boolean")) &&
-        isSupportedConfigValueValid(variant, booleanCandidate),
-    ) &&
-    isSupportedConfigValueValid(schema, booleanCandidate)
-  ) {
-    return booleanCandidate;
+  if (booleanCandidate !== undefined && isSupportedConfigValueValid(schema, booleanCandidate)) {
+    let booleanBranchValid = false;
+    let explicitBooleanBranchValid = false;
+    for (const variant of variants) {
+      const booleanBranch =
+        schemaType(variant) === "boolean" ||
+        typeof variant.const === "boolean" ||
+        variant.enum?.some((entry) => typeof entry === "boolean");
+      if (!booleanBranch || !isSupportedConfigValueValid(variant, booleanCandidate)) {
+        continue;
+      }
+      booleanBranchValid = true;
+      explicitBooleanBranchValid ||=
+        Object.is(variant.const, booleanCandidate) ||
+        Boolean(variant.enum?.some((entry) => Object.is(entry, booleanCandidate)));
+    }
+    if (
+      booleanBranchValid &&
+      (typeof currentValue !== "string" || explicitBooleanBranchValid || !stringCandidateValid)
+    ) {
+      return booleanCandidate;
+    }
   }
-  if (isSupportedConfigValueValid(schema, value)) {
-    return value;
-  }
-  for (const variant of schema.anyOf ?? schema.oneOf ?? []) {
+  let numberCandidate: number | undefined;
+  for (const variant of variants) {
     const type = schemaType(variant);
     if (type !== "number" && type !== "integer") {
       continue;
     }
     const candidate = coerceConfigFormNumberString(value, type === "integer");
     if (typeof candidate === "number" && isSupportedConfigValueValid(schema, candidate)) {
-      return candidate;
+      numberCandidate = candidate;
+      break;
     }
+  }
+  if (typeof currentValue === "number" && numberCandidate !== undefined) {
+    return numberCandidate;
+  }
+  if (typeof currentValue === "string" && stringCandidateValid) {
+    return value;
+  }
+  if (numberCandidate !== undefined) {
+    return numberCandidate;
+  }
+  if (stringCandidateValid) {
+    return value;
   }
   return value;
 }
 
-function stringConstraintMessage(value: string, schema: ConfigNodeRenderParams["schema"]): string {
-  return isSupportedConfigValueValid(schema, coerceTextInputValue(value, schema))
+function stringConstraintMessage(
+  value: string,
+  schema: ConfigNodeRenderParams["schema"],
+  currentValue?: unknown,
+): string {
+  return isSupportedConfigValueValid(schema, coerceTextInputValue(value, schema, currentValue))
     ? ""
     : t("configForm.invalidString");
 }
@@ -140,8 +168,11 @@ function shouldClearOptionalEmpty(
   value: string,
   schema: ConfigNodeRenderParams["schema"],
   isRequired: boolean,
+  currentValue?: unknown,
 ): boolean {
-  return value === "" && !isRequired && Boolean(stringConstraintMessage(value, schema));
+  return (
+    value === "" && !isRequired && Boolean(stringConstraintMessage(value, schema, currentValue))
+  );
 }
 
 function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams["schema"]): string {
@@ -234,6 +265,7 @@ export function renderTextInput(
     : isStructuredValue
       ? jsonValue(value)
       : (value ?? "");
+  const effectiveValue = value !== undefined ? value : schema.default;
   const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
   const isPhonePresentation = hint?.presentation === "phone-number";
   const phonePresentation =
@@ -263,8 +295,16 @@ export function renderTextInput(
       return;
     }
     const raw = target.value;
-    const optionalEmpty = shouldClearOptionalEmpty(raw, schema, params.isRequired === true);
-    setControlValidity(target, optionalEmpty ? "" : stringConstraintMessage(raw, schema));
+    const optionalEmpty = shouldClearOptionalEmpty(
+      raw,
+      schema,
+      params.isRequired === true,
+      effectiveValue,
+    );
+    setControlValidity(
+      target,
+      optionalEmpty ? "" : stringConstraintMessage(raw, schema, effectiveValue),
+    );
   };
   const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
     if (onPatch(path, candidate) !== false) {
@@ -318,11 +358,13 @@ export function renderTextInput(
           );
           return;
         }
-        if (shouldClearOptionalEmpty(raw, schema, params.isRequired === true)) {
+        if (shouldClearOptionalEmpty(raw, schema, params.isRequired === true, effectiveValue)) {
           setControlValidity(target, "");
           commitScalarValue(target, undefined);
-        } else if (setControlValidity(target, stringConstraintMessage(raw, schema))) {
-          commitScalarValue(target, coerceTextInputValue(raw, schema));
+        } else if (
+          setControlValidity(target, stringConstraintMessage(raw, schema, effectiveValue))
+        ) {
+          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue));
         }
       }}
       @change=${(event: Event) => {
@@ -331,27 +373,29 @@ export function renderTextInput(
         }
         const target = event.target as HTMLInputElement;
         const raw = target.value;
-        const rawMessage = stringConstraintMessage(raw, schema);
+        const rawMessage = stringConstraintMessage(raw, schema, effectiveValue);
         if (!rawMessage && !isPhonePresentation) {
           setControlValidity(target, "");
-          commitScalarValue(target, coerceTextInputValue(raw, schema));
+          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue));
           return;
         }
         const normalized = raw.trim();
-        if (shouldClearOptionalEmpty(normalized, schema, params.isRequired === true)) {
+        if (
+          shouldClearOptionalEmpty(normalized, schema, params.isRequired === true, effectiveValue)
+        ) {
           target.value = normalized;
           setControlValidity(target, "");
           commitScalarValue(target, undefined);
           return;
         }
-        const normalizedMessage = stringConstraintMessage(normalized, schema);
+        const normalizedMessage = stringConstraintMessage(normalized, schema, effectiveValue);
         if (normalizedMessage) {
           setControlValidity(target, rawMessage);
           return;
         }
         target.value = normalized;
         setControlValidity(target, "");
-        commitScalarValue(target, coerceTextInputValue(normalized, schema));
+        commitScalarValue(target, coerceTextInputValue(normalized, schema, effectiveValue));
       }}
     />
   `;
