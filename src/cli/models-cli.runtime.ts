@@ -30,7 +30,12 @@ export function rejectAgentScopedModelCommand(
   // that does not exist. Reject the flag outright instead of silently accepting a
   // no-op (an unvalidated/invalid agent id otherwise passes through unchecked).
   const agent = resolveOptionFromCommand<string>(command, "agent");
-  if (!agent) {
+  // Blank ("") is present-but-empty, not absence: resolveOptionFromCommand returns
+  // undefined only for an unset option, while an explicit `--agent ""` resolves to
+  // "". Reject it like a populated value so the empty string cannot bypass the guard
+  // and reach a global handler — mirrors resolveModelsTargetAgent's
+  // undefined-vs-blank check (src/commands/models/shared.ts).
+  if (agent === undefined) {
     return;
   }
   throw new Error(

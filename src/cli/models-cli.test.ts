@@ -465,6 +465,20 @@ describe("models cli", () => {
     await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
   });
 
+  // A blank `--agent ""` is present-but-empty, not omitted: resolveOptionFromCommand
+  // returns undefined only for an unset option while an explicit empty value
+  // resolves to "". The global-only guard must reject it like a populated value —
+  // otherwise the empty string bypasses the guard and reaches the global handler
+  // silently (mirrors resolveModelsTargetAgent's undefined-vs-blank distinction).
+  it.each([
+    { label: "set", args: ["models", "--agent", "", "set", "anthropic/claude-sonnet-4-6"] },
+    { label: "set-image", args: ["models", "--agent", "", "set-image", "openai/gpt-image-1"] },
+    { label: "aliases list", args: ["models", "--agent", "", "aliases", "list"] },
+    { label: "scan", args: ["models", "--agent", "", "scan", "--no-probe", "--no-input"] },
+  ])("rejects blank --agent for models $label", async ({ args }) => {
+    await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
+  });
+
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();
