@@ -665,6 +665,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await rawEditorBefore.waitFor();
     await expect.poll(() => rawEditorBefore.inputValue()).toContain(`"${configProofIdentifier}"`);
     await expect.poll(() => rawEditorBefore.inputValue()).toContain(configProofPrefixBefore);
+    await rawEditorBefore.scrollIntoViewIfNeeded();
     await captureChromiumScreenshot(connected.page, "01-real-config-id-before.png");
 
     const settingsUrl = new URL("settings/communications", allowedUi.baseUrl);
@@ -701,6 +702,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await rawEditor.waitFor();
     await expect.poll(() => rawEditor.inputValue()).toContain(`"${configProofIdentifier}"`);
     await expect.poll(() => rawEditor.inputValue()).toContain(configProofPrefixAfter);
+    await rawEditor.scrollIntoViewIfNeeded();
 
     const proof = {
       configSetRequests: configSetCount() - configSetCountBefore,
