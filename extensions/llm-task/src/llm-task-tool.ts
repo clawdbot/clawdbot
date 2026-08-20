@@ -61,19 +61,6 @@ function resolveLlmTaskModelRef(params: {
     };
   }
 
-  // When the caller supplied an explicit provider, trust it and only strip a
-  // duplicate provider prefix from the model id. Do NOT re-parse the model
-  // string as a full provider/model ref, because model ids like
-  // "openai/gpt-oss-20b" contain a slash that would be misread as a provider
-  // separator (resolving to provider=openai instead of the explicit provider).
-  const explicitProvider = normalizeOptionalString(params.explicitProvider);
-  if (explicitProvider) {
-    return {
-      provider: explicitProvider,
-      model: stripDuplicateProviderPrefix(explicitProvider, rawModel),
-    };
-  }
-
   const cfg = params.api.config;
   const aliasIndex = cfg
     ? buildModelAliasIndex({
@@ -87,6 +74,25 @@ function resolveLlmTaskModelRef(params: {
     defaultProvider,
     aliasIndex,
   });
+  // Preserve configured aliases before applying the explicit-provider fallback.
+  // Otherwise an explicit provider would turn an alias such as "gemini-flash"
+  // into a literal model id instead of its configured target.
+  if (resolved?.alias) {
+    return resolved.ref;
+  }
+
+  // When the caller supplied an explicit provider and the model is not an alias,
+  // trust it and only strip a duplicate provider prefix from the model id. Do not
+  // accept the parser's provider for model ids such as "openai/gpt-oss-20b": the
+  // slash belongs to the model id and would otherwise replace the explicit provider.
+  const explicitProvider = normalizeOptionalString(params.explicitProvider);
+  if (explicitProvider) {
+    return {
+      provider: explicitProvider,
+      model: stripDuplicateProviderPrefix(explicitProvider, rawModel),
+    };
+  }
+
   if (!resolved) {
     return {
       provider: params.provider,

@@ -282,6 +282,34 @@ describe("llm-task tool (json-only)", () => {
     expect(call.model).toBe("groq/openai/gpt-oss-20b");
   });
 
+  it("resolves configured model aliases before applying an explicit provider", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        config: {
+          agents: {
+            defaults: {
+              workspace: "/tmp",
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "google/gemini-3-flash-preview": { alias: "gemini-flash" },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await tool.execute("id", {
+      prompt: "x",
+      provider: "groq",
+      model: "gemini-flash",
+    });
+
+    const call = firstIsolatedCompletionCall();
+    expect(call.model).toBe("google/gemini-3-flash-preview");
+  });
+
   it("resolves configured model aliases before dispatching isolated completion", async () => {
     mockIsolatedCompletionJson({ ok: true });
     const tool = createLlmTaskTool(
