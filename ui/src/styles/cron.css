@@ -697,6 +697,46 @@
   cursor: var(--cursor-action);
 }
 
+.cron-trigger-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--accent-2);
+  vertical-align: middle;
+}
+
+.cron-trigger-icon svg,
+.cron-trigger-summary svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  fill: none;
+}
+
+.cron-trigger-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: var(--space-2);
+  color: var(--accent-2);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.cron-trigger-summary svg {
+  width: 13px;
+  height: 13px;
+}
+
+.cron-trigger-script {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  line-height: 1.5;
+  white-space: pre;
+}
+
 .cron-advanced > .settings-section__desc {
   margin: var(--space-2) 0 0;
 }

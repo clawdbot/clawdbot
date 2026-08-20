@@ -226,27 +226,36 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
         },
       ),
       list: vi.fn(async () => jobs),
-      listPage: vi.fn(async (opts?: { agentId?: string; limit?: number; offset?: number }) => {
-        const requestedAgentId = opts?.agentId?.trim().toLowerCase();
-        const filteredJobs = requestedAgentId
-          ? jobs.filter((job) => (job.agentId ?? "main").trim().toLowerCase() === requestedAgentId)
-          : jobs;
-        const total = filteredJobs.length;
-        const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
-        const defaultLimit = total === 0 ? 50 : total;
-        const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-        const pageJobs = filteredJobs.slice(offset, offset + limit);
-        const nextOffset = offset + pageJobs.length;
-        return {
-          jobs: pageJobs,
-          snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
-          total,
-          offset,
-          limit,
-          hasMore: nextOffset < total,
-          nextOffset: nextOffset < total ? nextOffset : null,
-        };
-      }),
+      listPage: vi.fn(
+        async (opts?: {
+          agentId?: string;
+          limit?: number;
+          offset?: number;
+          trigger?: "all" | "conditional" | "unconditional";
+        }) => {
+          const requestedAgentId = opts?.agentId?.trim().toLowerCase();
+          const filteredJobs = requestedAgentId
+            ? jobs.filter(
+                (job) => (job.agentId ?? "main").trim().toLowerCase() === requestedAgentId,
+              )
+            : jobs;
+          const total = filteredJobs.length;
+          const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
+          const defaultLimit = total === 0 ? 50 : total;
+          const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
+          const pageJobs = filteredJobs.slice(offset, offset + limit);
+          const nextOffset = offset + pageJobs.length;
+          return {
+            jobs: pageJobs,
+            snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
+            total,
+            offset,
+            limit,
+            hasMore: nextOffset < total,
+            nextOffset: nextOffset < total ? nextOffset : null,
+          };
+        },
+      ),
     },
     logGateway: {
       info: vi.fn(),
@@ -925,13 +934,17 @@ describe("cron method validation", () => {
     });
   });
 
-  it("keeps unscoped cron.list agentId filtering global for operator callers", async () => {
+  it("forwards unscoped cron.list filters for operator callers", async () => {
     const context = createCronContext(createCronJob({ agentId: "worker" }));
 
-    const { respond } = await invokeCron("cron.list", { agentId: "worker" }, { context });
+    const { respond } = await invokeCron(
+      "cron.list",
+      { agentId: "worker", trigger: "conditional" },
+      { context },
+    );
 
     expect(context.cron.listPage).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "worker" }),
+      expect.objectContaining({ agentId: "worker", trigger: "conditional" }),
     );
     expect(respond).toHaveBeenCalledWith(
       true,
