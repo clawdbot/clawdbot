@@ -657,6 +657,16 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       .locator("openclaw-app-shell")
       .waitFor({ timeout: controlUiSettleTimeoutMs });
 
+    const rawSettingsUrl = new URL("settings/advanced", allowedUi.baseUrl);
+    rawSettingsUrl.searchParams.set("section", "env");
+    expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
+    await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
+    const rawEditorBefore = connected.page.locator(".config-raw-field textarea");
+    await rawEditorBefore.waitFor();
+    await expect.poll(() => rawEditorBefore.inputValue()).toContain(`"${configProofIdentifier}"`);
+    await expect.poll(() => rawEditorBefore.inputValue()).toContain(configProofPrefixBefore);
+    await captureChromiumScreenshot(connected.page, "01-real-config-id-before.png");
+
     const settingsUrl = new URL("settings/communications", allowedUi.baseUrl);
     settingsUrl.searchParams.set("section", "messages");
     expect((await connected.page.goto(settingsUrl.toString()))?.status()).toBe(200);
@@ -685,13 +695,12 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await connected.page
       .locator("openclaw-app-shell")
       .waitFor({ timeout: controlUiSettleTimeoutMs });
-    const rawSettingsUrl = new URL("settings/advanced", allowedUi.baseUrl);
-    rawSettingsUrl.searchParams.set("section", "env");
     expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
     await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
     const rawEditor = connected.page.locator(".config-raw-field textarea");
     await rawEditor.waitFor();
     await expect.poll(() => rawEditor.inputValue()).toContain(`"${configProofIdentifier}"`);
+    await expect.poll(() => rawEditor.inputValue()).toContain(configProofPrefixAfter);
 
     const proof = {
       configSetRequests: configSetCount() - configSetCountBefore,
@@ -707,7 +716,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       "utf8",
     );
     console.info(`[real-config-id-proof] ${JSON.stringify(proof)}`);
-    await captureChromiumScreenshot(connected.page, "03-real-config-id-preserved.png");
+    await captureChromiumScreenshot(connected.page, "02-real-config-id-after.png");
     expect(connected.errors).toEqual([]);
     await closeConnectedContext(connected.context);
   });
