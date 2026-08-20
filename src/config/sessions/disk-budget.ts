@@ -853,6 +853,7 @@ export async function enforceSessionDiskBudget(params: {
           entry,
           preserveKeys: params.preserveKeys,
           preserveRecentMs: params.maintenance.preserveRecentMs,
+          reclaimMaintenanceArchives: true,
         })
       ) {
         continue;

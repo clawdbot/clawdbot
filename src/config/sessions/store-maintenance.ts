@@ -14,6 +14,7 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import type { SessionCreatedActor } from "./session-entry-provenance.js";
 import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
@@ -28,6 +29,12 @@ const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
 // Conversation history stays in SQLite until physical main-file + WAL + artifact usage crosses
 // this budget. Cleanup then extracts historical sessions oldest-first before reclaiming rows.
 const DEFAULT_SESSION_MAX_DISK_BYTES = 10 * 1024 * 1024 * 1024;
+const SESSION_MAINTENANCE_ARCHIVE_ACTOR_ID = "session-maintenance";
+const SESSION_MAINTENANCE_ARCHIVE_ACTOR: SessionCreatedActor = {
+  type: "system",
+  id: SESSION_MAINTENANCE_ARCHIVE_ACTOR_ID,
+  label: "Session maintenance",
+};
 const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
 const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
 const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
@@ -457,6 +464,7 @@ export function archiveStaleDashboardEntries(
       continue;
     }
     entry.archivedAt = now;
+    entry.archivedBy = { ...SESSION_MAINTENANCE_ARCHIVE_ACTOR };
     opts.onArchived?.({ key, entry });
     archived += 1;
   }
@@ -545,14 +553,30 @@ function isProtectedSessionMaintenanceEntry(
   return chatType === "group" || chatType === "channel" || chatType === "thread";
 }
 
+function isMaintenanceArchivedSessionEntry(entry: SessionEntry | undefined): boolean {
+  return (
+    entry?.archivedAt !== undefined &&
+    entry.archivedBy?.type === "system" &&
+    entry.archivedBy.id === SESSION_MAINTENANCE_ARCHIVE_ACTOR_ID
+  );
+}
+
 export function shouldPreserveMaintenanceEntry(params: {
   key: string;
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
   preserveRecentMs?: number | null;
+  reclaimMaintenanceArchives?: boolean;
 }): boolean {
-  // Archived and pinned sessions are user-retained; only an explicit user action may release them.
-  if (params.entry?.archivedAt !== undefined || params.entry?.pinnedAt !== undefined) {
+  // Pinned and user-archived sessions are user-retained; only an explicit user action may release
+  // them. Maintenance-archived sessions skip age pruning but yield to entry-cap and disk pressure.
+  if (params.entry?.pinnedAt !== undefined) {
+    return true;
+  }
+  if (
+    params.entry?.archivedAt !== undefined &&
+    !(params.reclaimMaintenanceArchives === true && isMaintenanceArchivedSessionEntry(params.entry))
+  ) {
     return true;
   }
   // A model lock is durable harness ownership, not merely a UI restriction.
@@ -588,6 +612,7 @@ function selectSessionEntryCapVictims(
         entry: store[key],
         preserveKeys,
         preserveRecentMs,
+        reclaimMaintenanceArchives: true,
       }),
   );
   const victimCount = Math.min(overflow, eligibleKeys.length);

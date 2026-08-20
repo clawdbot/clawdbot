@@ -263,10 +263,15 @@ Recent-session protection does not change managed-worktree garbage collection;
 durable dashboard sessions auto-archive after 7 days of inactivity by default,
 while other session types still require an explicit archive action.
 
-Archived and pinned sessions are user-protected and exempt from every automatic
-maintenance path, including age pruning, entry caps, model-run cleanup, and
-disk-budget eviction. They remain protected until you unarchive, unpin, or
-explicitly delete them.
+Pinned sessions and sessions you archived yourself are user-protected and exempt
+from every automatic maintenance path, including age pruning, entry caps,
+model-run cleanup, and disk-budget eviction. They remain protected until you
+unarchive, unpin, or explicitly delete them. Dashboard sessions that
+`archiveDashboardAfter` archived automatically (shown as archived by "Session
+maintenance") are exempt from age pruning, but the entry cap and the disk budget
+reclaim them oldest-first like any other unprotected row, so a growing backlog
+of auto-archived sessions can never force the cap to evict your current
+conversations.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with

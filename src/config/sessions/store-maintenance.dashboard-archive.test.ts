@@ -1,7 +1,13 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
   archiveStaleDashboardEntries,
+  capEntryCount,
+  pruneStaleEntries,
   resolveMaintenanceConfigFromInput,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -43,6 +49,11 @@ describe("archiveStaleDashboardEntries", () => {
       }),
     ).toBe(1);
     expect(store[staleKey]?.archivedAt).toBe(now);
+    expect(store[staleKey]?.archivedBy).toEqual({
+      type: "system",
+      id: "session-maintenance",
+      label: "Session maintenance",
+    });
     expect(store[activeKey]?.archivedAt).toBeUndefined();
     expect(store[preservedKey]?.archivedAt).toBeUndefined();
   });
@@ -118,5 +129,108 @@ describe("dashboard archive maintenance ordering", () => {
     });
 
     expect(store[dashboardKey]?.archivedAt).toBeUndefined();
+  });
+});
+
+describe("maintenance-archived sessions under pressure", () => {
+  const maintenanceArchive = { type: "system", id: "session-maintenance" } as const;
+
+  it("entry cap reclaims maintenance archives oldest-first but keeps user archives", () => {
+    const now = 40 * DAY_MS;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:dashboard:user-archived": entry(now - 20 * DAY_MS, {
+        archivedAt: now - 15 * DAY_MS,
+      }),
+      "agent:main:dashboard:human-archived": entry(now - 20 * DAY_MS, {
+        archivedAt: now - 15 * DAY_MS,
+        archivedBy: { type: "human", id: "profile-1" },
+      }),
+      "agent:main:dashboard:stale-1": entry(now - 12 * DAY_MS),
+      "agent:main:dashboard:stale-2": entry(now - 11 * DAY_MS),
+      "agent:main:dashboard:stale-3": entry(now - 10 * DAY_MS),
+      "agent:main:dashboard:live": entry(now),
+    };
+
+    expect(archiveStaleDashboardEntries(store, 7 * DAY_MS, { nowMs: now })).toBe(3);
+    expect(capEntryCount(store, 4, { log: false })).toBe(2);
+    expect(Object.keys(store).toSorted()).toEqual([
+      "agent:main:dashboard:human-archived",
+      "agent:main:dashboard:live",
+      "agent:main:dashboard:stale-3",
+      "agent:main:dashboard:user-archived",
+    ]);
+  });
+
+  it("age pruning keeps maintenance archives", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:dashboard:old": entry(Date.now() - 45 * DAY_MS, {
+        archivedAt: Date.now() - 38 * DAY_MS,
+        archivedBy: { ...maintenanceArchive },
+      }),
+    };
+
+    expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(0);
+    expect(store).toHaveProperty("agent:main:dashboard:old");
+  });
+
+  it("keeps the newest conversation when auto-archived rows alone exceed maxEntries", async () => {
+    const now = Date.now();
+    const liveKey = "agent:main:dashboard:live";
+    const store: Record<string, SessionEntry> = { [liveKey]: entry(now) };
+    for (let index = 0; index < 6; index += 1) {
+      store[`agent:main:dashboard:stale-${index}`] = entry(now - (10 + index) * DAY_MS);
+    }
+    let report: { archived: number; capped: number } | undefined;
+
+    await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      maintenanceConfig: resolveMaintenanceConfigFromInput({ maxEntries: 4, maxDiskBytes: false }),
+      onMaintenanceApplied: (applied) => {
+        report = { archived: applied.archived, capped: applied.capped };
+      },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: artifacts(),
+    });
+
+    expect(report).toEqual({ archived: 6, capped: 3 });
+    expect(Object.keys(store).toSorted()).toEqual([
+      liveKey,
+      "agent:main:dashboard:stale-0",
+      "agent:main:dashboard:stale-1",
+      "agent:main:dashboard:stale-2",
+    ]);
+  });
+
+  it("disk budget evicts maintenance archives before user archives and active work", async () => {
+    await withTestDir({ prefix: "openclaw-dashboard-archive-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const maintenanceArchivedKey = "agent:main:dashboard:auto-archived";
+      const userArchivedKey = "agent:main:dashboard:user-archived";
+      const activeKey = "agent:main:main";
+      const store: Record<string, SessionEntry> = {
+        [maintenanceArchivedKey]: entry(1, {
+          archivedAt: 2,
+          archivedBy: { ...maintenanceArchive },
+          displayName: "m".repeat(2000),
+        }),
+        [userArchivedKey]: entry(2, { archivedAt: 3, displayName: "u".repeat(2000) }),
+        [activeKey]: entry(3),
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: { maxDiskBytes: 1000, highWaterBytes: 500 },
+        warnOnly: false,
+      });
+
+      expect(result?.removedEntries).toBe(1);
+      expect(store[maintenanceArchivedKey]).toBeUndefined();
+      expect(store).toHaveProperty(userArchivedKey);
+      expect(store).toHaveProperty(activeKey);
+    });
   });
 });
