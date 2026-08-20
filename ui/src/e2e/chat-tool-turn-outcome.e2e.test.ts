@@ -37,6 +37,7 @@ async function captureToolActivityProof(page: import("playwright").Page, name: s
 type DisclosureFrame = {
   expanded: boolean;
   mountedBodies: number;
+  rowHeight: number;
   rowTop: number;
   scrollHeight: number;
   scrollTop: number;
@@ -56,9 +57,12 @@ async function toggleDisclosureWithFrameTrace(
     const frames: DisclosureFrame[] = [];
     const sample = () => {
       frames.push({
-        expanded: button.getAttribute("aria-expanded") === "true",
+        expanded: button.matches("summary")
+          ? button.closest("details")?.hasAttribute("open") === true
+          : button.getAttribute("aria-expanded") === "true",
         mountedBodies: row.querySelectorAll(".chat-tool-msg-body, .chat-activity-group__body")
           .length,
+        rowHeight: row.getBoundingClientRect().height,
         rowTop: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
         scrollHeight: thread.scrollHeight,
         scrollTop: thread.scrollTop,
@@ -90,6 +94,14 @@ function expectStableDisclosureFrames(frames: DisclosureFrame[], label = "disclo
   const initial = frames[0];
   expect(initial).toBeDefined();
   expect(frames.at(-1)?.expanded, `${label} state`).toBe(!initial!.expanded);
+  expect(
+    frames.some(
+      (frame) =>
+        Math.abs(frame.rowHeight - initial!.rowHeight) > 0.5 ||
+        frame.scrollHeight !== initial!.scrollHeight,
+    ),
+    `${label} resize`,
+  ).toBe(true);
   expect(
     Math.max(...frames.map((frame) => Math.abs(frame.rowTop - initial!.rowTop))),
     `${label} geometry`,
@@ -659,6 +671,79 @@ suite.define(() => {
     if (artifactDir) {
       await video?.saveAs(path.join(artifactDir, "raw-details-geometry.webm"));
     }
+    for (const [label, frames] of Object.entries(traces)) {
+      expectStableDisclosureFrames(frames, label);
+    }
+  });
+
+  it("keeps message and JSON disclosures anchored in a long transcript", async () => {
+    const context = await suite.browser.newContext({
+      reducedMotion: "reduce",
+      viewport: { height: 600, width: 900 },
+    });
+    const page = await context.newPage();
+    const transcriptPrefix = Array.from({ length: 12 }, (_, index) => [
+      {
+        role: "user",
+        content: `Earlier sibling-disclosure prompt ${index + 1}.`,
+        timestamp: index * 2 + 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Earlier sibling-disclosure response ${index + 1}.` }],
+        timestamp: index * 2 + 2,
+      },
+    ]).flat();
+    await installMockGateway(page, {
+      historyMessages: [
+        ...transcriptPrefix,
+        {
+          role: "user",
+          content: `User disclosure anchor marker. ${"A wrapped prompt line that must remain visually anchored. ".repeat(24)}`,
+          timestamp: 100,
+        },
+        {
+          role: "assistant",
+          content: JSON.stringify({
+            marker: "json-disclosure-anchor-marker",
+            rows: Array.from(
+              { length: 30 },
+              (_, index) => `JSON disclosure proof row ${index + 1}`,
+            ),
+          }),
+          timestamp: 101,
+        },
+        {
+          role: "user",
+          content: "Keep both sibling disclosures above this final exchange.",
+          timestamp: 102,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Both sibling disclosures are ready." }],
+          timestamp: 103,
+        },
+      ],
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await waitForChatScrollIdle(page);
+    const userToggle = page
+      .locator(".chat-message-disclosure")
+      .filter({ hasText: "User disclosure anchor marker" })
+      .locator(".chat-message-disclosure__toggle");
+    const jsonSummary = page
+      .locator(".chat-json-collapse")
+      .filter({ hasText: "json-disclosure-anchor-marker" })
+      .locator("summary");
+    await userToggle.waitFor();
+    await jsonSummary.waitFor();
+    const traces: Record<string, DisclosureFrame[]> = {};
+    traces.userMessageExpand = await toggleDisclosureWithFrameTrace(page, userToggle);
+    traces.userMessageCollapse = await toggleDisclosureWithFrameTrace(page, userToggle);
+    traces.jsonExpand = await toggleDisclosureWithFrameTrace(page, jsonSummary);
+    traces.jsonCollapse = await toggleDisclosureWithFrameTrace(page, jsonSummary);
+    await context.close();
     for (const [label, frames] of Object.entries(traces)) {
       expectStableDisclosureFrames(frames, label);
     }

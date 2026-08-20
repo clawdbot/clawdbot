@@ -144,11 +144,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private readonly captureDisclosureResize = (event: Event) => {
     const target = event.target;
     const disclosure =
-      target instanceof Element
-        ? target.closest(
-            ".chat-tool-row__toggle, .chat-tool-msg-summary[aria-expanded], .chat-activity-group__summary, .chat-tool-card__raw-toggle",
-          )
-        : null;
+      target instanceof Element ? target.closest("button[aria-expanded], summary") : null;
     const row = disclosure?.closest<HTMLElement>(".chat-virtual-row") ?? null;
     if (!row) {
       return;
