@@ -2784,6 +2784,30 @@ describe("loadChatHistory filtering", () => {
     expect(secondState.chatMessages).toEqual(firstState.chatMessages);
   });
 
+  it("returns the original shared request revision to a later pane consumer", async () => {
+    const startup = createDeferred<HistoryResult>();
+    const request = vi.fn(() => startup.promise);
+    const client = createTestClient(request);
+    const firstState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:main",
+      sessions: { canonicalListRevision: 7 },
+    });
+    const secondState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:main",
+      sessions: { canonicalListRevision: 8 },
+    });
+
+    const firstLoad = loadChatHistory(firstState, { startup: true });
+    const secondLoad = loadChatHistory(secondState, { startup: true });
+
+    expect(request).toHaveBeenCalledOnce();
+    startup.resolve(createAssistantHistory("shared revision"));
+    const [firstResult, secondResult] = await Promise.all([firstLoad, secondLoad]);
+
+    expect(firstResult).toMatchObject({ sourceCanonicalListRevision: 7 });
+    expect(secondResult).toMatchObject({ sourceCanonicalListRevision: 7 });
+  });
+
   it("keeps startup requests separate for different pane sessions", async () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
     const client = createTestClient(request);

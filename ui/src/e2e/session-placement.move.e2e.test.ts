@@ -288,24 +288,66 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
+      await page.evaluate(() => {
+        const state = { returnedOnline: false, seenOffline: false };
+        const inspect = () => {
+          const labels = new Set(
+            [...document.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+          );
+          if (labels.has("Device offline")) {
+            state.seenOffline = true;
+          }
+          if (state.seenOffline && labels.has("Runs on device")) {
+            state.returnedOnline = true;
+          }
+        };
+        new MutationObserver(inspect).observe(document.body, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+        (
+          globalThis as typeof globalThis & {
+            runnerFreshnessPresentation?: typeof state;
+          }
+        ).runnerFreshnessPresentation = state;
+        inspect();
+      });
       const listCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([offline]));
-      await Promise.all(
-        Array.from({ length: 3 }, () =>
-          gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" }),
-        ),
-      );
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
-        .toBeGreaterThan(listCount);
-      await page.getByRole("button", { name: "Device offline" }).waitFor();
+      await gateway.deferNext("sessions.list");
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
+      await gateway.waitForRequest("sessions.list", { after: listCount });
+      await gateway.resolveDeferred("sessions.list", chatSessionListResponse([offline]));
+
+      await page.getByRole("button", { name: "Open split view" }).click();
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+      await expect.poll(() => panes.count()).toBe(2);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
       await gateway.resolveDeferred("chat.startup");
-      await page.getByText("Deferred available startup transcript settled.").waitFor();
-      await page.getByRole("button", { name: "Device offline" }).waitFor();
+      await expect
+        .poll(() => page.getByText("Deferred available startup transcript settled.").count())
+        .toBe(2);
+      for (const pane of await panes.all()) {
+        await pane.getByRole("button", { name: "Device offline" }).waitFor();
+      }
       expect(await page.getByRole("button", { name: "Runs on device" }).count()).toBe(0);
-      await page.getByRole("button", { name: "Device offline" }).click();
-      await page
+      expect(
+        await page.evaluate(
+          () =>
+            (
+              globalThis as typeof globalThis & {
+                runnerFreshnessPresentation?: {
+                  returnedOnline: boolean;
+                  seenOffline: boolean;
+                };
+              }
+            ).runnerFreshnessPresentation,
+        ),
+      ).toEqual({ returnedOnline: false, seenOffline: true });
+      await panes.last().getByRole("button", { name: "Device offline" }).click();
+      await panes
+        .last()
         .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
         .waitFor();
       await capture(page, "07-stale-startup-keeps-offline.png");
