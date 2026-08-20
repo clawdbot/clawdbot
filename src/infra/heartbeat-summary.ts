@@ -97,37 +97,17 @@ export function resolveHeartbeatSummaryForAgent(
   const defaults = cfg.agents?.defaults?.heartbeat;
   const overrides = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
   const merged = defaults || overrides ? { ...defaults, ...overrides } : undefined;
-  const enabled = isHeartbeatEnabledForAgent(cfg, agentId);
-
-  if (!enabled) {
-    return {
-      enabled: false,
-      every: "disabled",
-      everyMs: null,
-      prompt: resolveHeartbeatPromptText(merged?.prompt),
-      target: merged?.target ?? DEFAULT_HEARTBEAT_TARGET,
-      model: merged?.model,
-      session: merged?.session,
-      ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-    };
-  }
-
-  const every = merged?.every ?? DEFAULT_HEARTBEAT_EVERY;
   const everyMs = resolveHeartbeatIntervalMs(cfg, undefined, merged);
-  const prompt = resolveHeartbeatPromptText(merged?.prompt);
-  const target = merged?.target ?? DEFAULT_HEARTBEAT_TARGET;
-  const model = merged?.model;
-  const session = merged?.session;
-  const ackMaxChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
+  const enabled = isHeartbeatEnabledForAgent(cfg, agentId) && everyMs !== null;
 
   return {
-    enabled: true,
-    every,
-    everyMs,
-    prompt,
-    target,
-    model,
-    session,
-    ackMaxChars,
+    enabled,
+    every: enabled ? (merged?.every ?? DEFAULT_HEARTBEAT_EVERY) : "disabled",
+    everyMs: enabled ? everyMs : null,
+    prompt: resolveHeartbeatPromptText(merged?.prompt),
+    target: merged?.target ?? DEFAULT_HEARTBEAT_TARGET,
+    model: merged?.model,
+    session: merged?.session,
+    ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   };
 }

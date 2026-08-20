@@ -232,7 +232,11 @@ export async function collectGatewayHealthSnapshot(params: {
   );
   const heartbeatSummaryAgent =
     (configuredHeartbeatAgentId
-      ? agents.find((agent) => agent.agentId === normalizeAgentId(configuredHeartbeatAgentId))
+      ? agents.find(
+          (agent) =>
+            agent.heartbeat.enabled &&
+            agent.agentId === normalizeAgentId(configuredHeartbeatAgentId),
+        )
       : undefined) ??
     agents.find((agent) => agent.heartbeat.enabled) ??
     summaryAgent;
