@@ -434,7 +434,13 @@ export async function startPluginServices(params: {
           `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
         );
         // A failed start can already own resources; revoke events only after its cleanup runs.
-        await stopService(runningService);
+        // Bound the cleanup: callers await startPluginServices without a timeout, so a hung
+        // stop here would wedge plugin reload/startup forever.
+        await stopService(
+          runningService,
+          undefined,
+          Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+        );
       }
     }
     params.startupTrace?.detail?.("sidecars.plugin-services.summary", [
