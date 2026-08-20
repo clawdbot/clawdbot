@@ -4,11 +4,11 @@ import {
   normalizeBuiltInProviderModelId,
   stripSelfProviderModelPrefix,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
+import { asFiniteNumber } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef } from "../../agents/model-ref-shared.js";
-import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
+import type { UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -17,7 +17,6 @@ import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { modelKey } from "../../shared/model-key.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import {
@@ -25,12 +24,12 @@ import {
   isIsolatedAgentRuntimeRequest,
   runIsolatedAgentRuntimeCompletion,
 } from "./runtime-llm-isolated.js";
+import { buildUsage } from "./runtime-llm-usage.runtime.js";
 import type {
   LlmCompleteCaller,
   LlmCompleteErrorCode,
   LlmCompleteParams,
   LlmCompleteResult,
-  LlmCompleteUsage,
   PluginRuntimeCore,
   RuntimeLogger,
 } from "./types-core.js";
@@ -209,56 +208,6 @@ function buildMessages(params: {
             timestamp: now,
           },
     );
-}
-
-function readFiniteNonNegativeNumber(value: unknown): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0 });
-}
-
-function readExplicitCostUsd(raw: unknown): number | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const cost = (raw as { cost?: unknown }).cost;
-  if (typeof cost === "number") {
-    return readFiniteNonNegativeNumber(cost);
-  }
-  if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
-    return undefined;
-  }
-  return (
-    readFiniteNonNegativeNumber((cost as { total?: unknown; totalUsd?: unknown }).totalUsd) ??
-    readFiniteNonNegativeNumber((cost as { total?: unknown }).total)
-  );
-}
-
-function buildUsage(params: {
-  rawUsage: unknown;
-  normalized: NormalizedUsage | undefined;
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-}): LlmCompleteUsage {
-  const costConfig = resolveModelCostConfig({
-    provider: params.provider,
-    model: params.model,
-    config: params.cfg,
-  });
-  const costUsd =
-    readExplicitCostUsd(params.rawUsage) ??
-    estimateUsageCost({ usage: params.normalized, cost: costConfig });
-  return {
-    ...(params.normalized?.input !== undefined ? { inputTokens: params.normalized.input } : {}),
-    ...(params.normalized?.output !== undefined ? { outputTokens: params.normalized.output } : {}),
-    ...(params.normalized?.cacheRead !== undefined
-      ? { cacheReadTokens: params.normalized.cacheRead }
-      : {}),
-    ...(params.normalized?.cacheWrite !== undefined
-      ? { cacheWriteTokens: params.normalized.cacheWrite }
-      : {}),
-    ...(params.normalized?.total !== undefined ? { totalTokens: params.normalized.total } : {}),
-    ...(costUsd !== undefined ? { costUsd } : {}),
-  };
 }
 
 function finalizeCompletion(params: {

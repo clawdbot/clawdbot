@@ -169,11 +169,15 @@ const OPENAI_GPT_56_THINKING_LEVEL_MAP = {
   xhigh: "xhigh",
   max: "max",
 } as const;
+// Placeholder zeros for models whose backend exposes no per-token price.
+// pricingUnavailable marks them as unknown (not a confirmed $0) so usage
+// reporting omits cost instead of claiming confident zero spend.
 const OPENAI_UNKNOWN_MODEL_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
+  pricingUnavailable: true,
 } satisfies ModelDefinitionConfig["cost"];
 
 const OPENAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
@@ -562,7 +566,7 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
   };
 }
 
-async function buildOpenAICodexLiveProviderConfig(params: {
+export async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;

@@ -797,7 +797,9 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
           models: [
             expect.objectContaining({
               id: "claude-sonnet-4-6",
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              // Missing manifest rates default to placeholder zeros marked as
+              // unknown pricing, not a confirmed free $0.
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, pricingUnavailable: true },
             }),
           ],
         }),

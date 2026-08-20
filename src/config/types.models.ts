@@ -168,6 +168,15 @@ export type ModelDefinitionConfig = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    /**
+     * Pricing provenance marker owned by catalog/runtime producers: `true`
+     * means the provider exposes no real price and the rates above are
+     * placeholder zeros (unknown), not a confirmed free/$0 price. Not
+     * accepted in user config (strict schema); user models express unknown
+     * pricing by omitting cost rates and defaulting derives this marker.
+     * Consumers must not treat marked entries as known-zero pricing.
+     */
+    pricingUnavailable?: boolean;
     /** Optional tiered pricing.  When present, cost calculation uses
      *  per-tier rates instead of the flat rates above.  Prices are
      *  USD / million tokens; ranges are half-open `[start, end)` on the

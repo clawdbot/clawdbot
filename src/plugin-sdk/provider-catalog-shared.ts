@@ -154,11 +154,22 @@ function cloneManifestCatalogTieredCost(
 }
 
 function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig["cost"] {
+  // A manifest row without rates carries no pricing information: the zero
+  // defaults below are placeholder zeros (unknown), not a confirmed free
+  // price. The marker keeps that provenance through models.json and the
+  // usage boundary, or such rows report a confident $0.
+  const hasRates =
+    cost.input !== undefined ||
+    cost.output !== undefined ||
+    cost.cacheRead !== undefined ||
+    cost.cacheWrite !== undefined ||
+    (cost.tieredPricing !== undefined && cost.tieredPricing.length > 0);
   return {
     input: cost.input ?? 0,
     output: cost.output ?? 0,
     cacheRead: cost.cacheRead ?? 0,
     cacheWrite: cost.cacheWrite ?? 0,
+    ...(!hasRates ? { pricingUnavailable: true } : {}),
     ...(cost.tieredPricing
       ? { tieredPricing: cost.tieredPricing.map(cloneManifestCatalogTieredCost) }
       : {}),

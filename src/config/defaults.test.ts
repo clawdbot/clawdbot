@@ -10,6 +10,7 @@ import {
   applyAgentDefaults,
   applyContextPruningDefaults,
   applyMessageDefaults,
+  applyModelDefaults,
 } from "./defaults.js";
 
 const mocks = vi.hoisted(() => ({
@@ -136,6 +137,93 @@ describe("config defaults", () => {
 
     expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(0);
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+  });
+
+  it("preserves pricingUnavailable provenance through model defaults", () => {
+    const next = applyModelDefaults({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://chatgpt.com/backend-api",
+            models: [
+              {
+                id: "gpt-unknown",
+                name: "gpt-unknown",
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  pricingUnavailable: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    const model = next.models?.providers?.openai?.models?.find(
+      (entry) => entry.id === "gpt-unknown",
+    );
+    // Placeholder-zero pricing must keep its unknown-pricing provenance
+    // through config materialization, or it turns back into a confident $0.
+    expect(model?.cost).toMatchObject({ pricingUnavailable: true });
+  });
+
+  it("marks an omitted model cost block as pricingUnavailable through model defaults", () => {
+    const next = applyModelDefaults({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com",
+            models: [
+              { id: "gpt-no-cost", name: "gpt-no-cost" },
+              { id: "gpt-empty-cost", name: "gpt-empty-cost", cost: {} },
+              {
+                id: "gpt-empty-tiers",
+                name: "gpt-empty-tiers",
+                cost: { tieredPricing: [] },
+              },
+              {
+                id: "gpt-free",
+                name: "gpt-free",
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+              {
+                id: "gpt-partial",
+                name: "gpt-partial",
+                cost: { input: 0.5 },
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    const models = next.models?.providers?.openai?.models ?? [];
+    // An omitted or rate-less cost block defaults to all-zero rates; those
+    // defaults are unknown pricing, not a confirmed free price, so the
+    // materialized entry must carry the marker or downstream consumers
+    // report a confident $0. An empty tieredPricing list carries no rates —
+    // normalization drops it — so it is unknown pricing too.
+    expect(models.find((entry) => entry.id === "gpt-no-cost")?.cost).toMatchObject({
+      pricingUnavailable: true,
+    });
+    expect(models.find((entry) => entry.id === "gpt-empty-cost")?.cost).toMatchObject({
+      pricingUnavailable: true,
+    });
+    expect(models.find((entry) => entry.id === "gpt-empty-tiers")?.cost).toMatchObject({
+      pricingUnavailable: true,
+    });
+    // Explicitly configured all-zero pricing stays unmarked: confirmed free.
+    const explicitFree = models.find((entry) => entry.id === "gpt-free")?.cost;
+    expect(explicitFree).toMatchObject({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(explicitFree).not.toHaveProperty("pricingUnavailable");
+    // A block with at least one configured rate is known pricing.
+    expect(models.find((entry) => entry.id === "gpt-partial")?.cost).not.toHaveProperty(
+      "pricingUnavailable",
+    );
   });
 });
 

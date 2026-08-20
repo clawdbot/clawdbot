@@ -22,6 +22,11 @@ export type ModelCostConfig = {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /**
+   * Pricing provenance marker: `true` means the rates are placeholder zeros
+   * (provider exposes no price), not a confirmed free/$0 price.
+   */
+  pricingUnavailable?: boolean;
   tieredPricing?: PricingTier[];
 };
 
@@ -69,6 +74,7 @@ export function normalizeModelCostConfig(cost: RawModelCostConfig): ModelCostCon
     output: cost.output,
     cacheRead: cost.cacheRead,
     cacheWrite: cost.cacheWrite,
+    ...(cost.pricingUnavailable === true ? { pricingUnavailable: true } : {}),
     ...(normalizedTiers ? { tieredPricing: normalizedTiers } : {}),
   };
 }

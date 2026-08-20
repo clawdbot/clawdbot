@@ -1001,6 +1001,33 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("marks live-discovered Codex models without pricing as pricingUnavailable", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async (params) => ({
+      response: Response.json({
+        models: [{ slug: "gpt-5.5-omega-unlisted", visibility: "list" }],
+      }),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "oauth-token",
+      fetchGuard,
+    });
+
+    const model = provider?.models.find((entry) => entry.id === "gpt-5.5-omega-unlisted");
+    // The Codex backend exposes no per-token price and this model has no
+    // manifest fallback, so the catalog must mark placeholder zeros as
+    // unknown pricing rather than a confident free $0.
+    expect(model?.cost).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      pricingUnavailable: true,
+    });
+  });
+
   it("rejects Platform-only aliases while preserving GPT-5.6 ChatGPT capabilities", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({

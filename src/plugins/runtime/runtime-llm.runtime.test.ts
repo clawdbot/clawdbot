@@ -133,7 +133,7 @@ function primeCompletionMocks() {
       cacheRead: 5,
       cacheWrite: 2,
       total: 25,
-      cost: { total: 0.0042 },
+      cost: { total: 0.0042, totalOrigin: "provider-billed" },
     },
   });
 }

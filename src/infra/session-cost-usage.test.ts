@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyModelDefaults } from "../config/defaults.js";
 import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
@@ -778,14 +779,14 @@ describe("session cost usage", () => {
     });
   });
 
-  it("counts token usage for a configured all-zero model as missing because pricing is still unknown", async () => {
+  it("counts token usage for a configured unmarked all-zero model as a confirmed $0", async () => {
     const root = await makeSessionCostRoot("cost-configured-zero-unknown");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    // Same shape of turn, with a configured all-zero cost block. After config defaults,
-    // omitted cost and explicit all-zero cost are indistinguishable, so a zero-rate
-    // token-burning turn is still safer to report as missing than as complete $0 spend.
+    // Same shape of turn, with a configured all-zero cost block. Without the
+    // pricingUnavailable marker this is a confirmed free model (e.g. Ollama's
+    // explicit zeros), so the turn reports a known $0 instead of missing cost.
     const entry = {
       type: "message",
       timestamp: new Date().toISOString(),
@@ -826,6 +827,59 @@ describe("session cost usage", () => {
         },
       },
     } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ config });
+      expect(summary.totals.totalTokens).toBe(23287);
+      expect(summary.totals.totalCost).toBe(0);
+      // Unmarked all-zero pricing is a confirmed free model, not unknown:
+      // it must not be surfaced as missing cost.
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
+  it("counts token usage for a configured model with an omitted cost block as missing", async () => {
+    const root = await makeSessionCostRoot("cost-configured-omitted-unknown");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "custom",
+        model: "no-cost-model",
+        usage: {
+          input: 881,
+          output: 6,
+          cacheRead: 22400,
+          cacheWrite: 0,
+          totalTokens: 23287,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    // Mirror the materialize flow: a model declared without a cost block gets
+    // default zero rates, but those defaults are unknown pricing — the
+    // materialized entry must carry the marker so the rollup reports the turn
+    // as missing cost instead of a confident $0.
+    const config = applyModelDefaults({
+      models: {
+        providers: {
+          custom: {
+            models: [{ id: "no-cost-model" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
 
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary({ config });
@@ -925,6 +979,81 @@ describe("session cost usage", () => {
       const logs = await loadSessionLogs({ sessionId: "sess-top-level-provider", config });
       expect(logs?.[0]?.tokens).toBe(15_000);
       expect(logs?.[0]?.cost).toBeCloseTo(expectedCost, 8);
+    });
+  });
+
+  it("omits adapter-default zero costs in session detail logs only for unknown pricing", async () => {
+    const root = await makeSessionCostRoot("cost-session-logs-unknown-pricing");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-pricing-origin.jsonl");
+    const assistantEntry = (
+      timestamp: string,
+      provider: string,
+      model: string,
+      totalOrigin?: string,
+    ) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        provider,
+        model,
+        message: {
+          role: "assistant",
+          content: "ok",
+          usage: {
+            input: 10_000,
+            output: 5_000,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 15_000,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+              ...(totalOrigin ? { totalOrigin } : {}),
+            },
+          },
+        },
+      });
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-pricing-origin" }),
+        assistantEntry("2026-02-05T12:00:00.000Z", "codex-like", "m-unknown"),
+        assistantEntry("2026-02-05T12:01:00.000Z", "free-provider", "m-free"),
+        assistantEntry("2026-02-05T12:02:00.000Z", "codex-like", "m-unknown", "provider-billed"),
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const config = {
+      models: {
+        providers: {
+          "codex-like": {
+            models: [{ id: "m-unknown", cost: { ...zeroCost, pricingUnavailable: true } }],
+          },
+          "free-provider": {
+            models: [{ id: "m-free", cost: { ...zeroCost } }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const logs = await loadSessionLogs({ sessionId: "sess-pricing-origin", config });
+      expect(logs).toHaveLength(3);
+      // Unknown pricing: the recorded adapter-default $0 is not a real price,
+      // so the detail log omits the cost like the session rollup does.
+      expect(logs?.[0]?.cost).toBeUndefined();
+      // Confirmed-free pricing keeps the numeric $0.
+      expect(logs?.[1]?.cost).toBe(0);
+      // A provider-billed recorded $0 stays authoritative even under the marker.
+      expect(logs?.[2]?.cost).toBe(0);
     });
   });
 

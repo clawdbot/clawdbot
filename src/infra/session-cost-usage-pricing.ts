@@ -163,20 +163,15 @@ export const applyCostTotal = (
   totals.totalCost += costTotal;
 };
 
-// A resolved cost config only counts as "known" pricing when it carries at least one
-// positive per-token rate (or tiered pricing). An all-zero config is indistinguishable
-// from "pricing unknown": e.g. codex models ship cost {input:0,output:0,...} in the
-// generated models.json because the Codex backend exposes no per-token price. Treating
-// such a config as a real $0 makes usage-cost report confident zero spend, which
-// silently blinds every budget/spike safeguard that keys off totalCost.
+// A resolved cost config counts as "known" pricing unless it is explicitly
+// marked pricingUnavailable at the catalog boundary (placeholder zeros for
+// providers that expose no price, e.g. codex model/list). Unmarked all-zero
+// configs (e.g. Ollama's explicit free pricing, user-configured zeros) are a
+// confirmed $0, matching the runtime completion path — one contract for both
+// runtime emission and session aggregation. Missing pricing must never be
+// reported as a confident $0, which would blind budget/spike safeguards.
 const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): boolean => {
-  if (!cost) {
-    return false;
-  }
-  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
-    return true;
-  }
-  return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
+  return cost !== undefined && cost !== null && cost.pricingUnavailable !== true;
 };
 
 const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined): boolean =>
@@ -198,6 +193,21 @@ export const shouldRecomputeRecordedZeroCost = (params: {
   params.costTotal === 0 &&
   !shouldPreserveRecordedZeroCost(params.costBreakdown) &&
   isModelPricingKnown(params.cost) &&
+  computeUsageTokenTotals(params.usage).totalTokens > 0;
+
+// Unknown pricing plus an adapter-default recorded zero is not a confirmed
+// $0: the recorded total must be dropped so detail logs and rollups both omit
+// the cost instead of showing a confident $0. Kept as one shared predicate so
+// every session projection applies the same known-versus-unknown decision.
+export const shouldClearRecordedZeroCost = (params: {
+  cost: ReturnType<typeof resolveModelCostConfig>;
+  costBreakdown: CostBreakdown | undefined;
+  costTotal: number | undefined;
+  usage: NormalizedUsage;
+}): boolean =>
+  !isModelPricingKnown(params.cost) &&
+  !shouldPreserveRecordedZeroCost(params.costBreakdown) &&
+  (params.costTotal === undefined || params.costTotal === 0) &&
   computeUsageTokenTotals(params.usage).totalTokens > 0;
 
 export type UsageCostResolver = (params: {
@@ -235,17 +245,17 @@ export function parseUsageCostTranscriptEntry(
     return entry;
   }
   const cost = resolveCost({ provider: entry.provider, model: entry.model });
-  const usageTotals = computeUsageTokenTotals(entry.usage);
-  const pricingKnown = isModelPricingKnown(cost);
   const preserveRecordedZeroCost = shouldPreserveRecordedZeroCost(entry.costBreakdown);
   if (cost?.tieredPricing && cost.tieredPricing.length > 0 && !preserveRecordedZeroCost) {
     entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
     entry.costBreakdown = undefined;
   } else if (
-    !pricingKnown &&
-    !preserveRecordedZeroCost &&
-    (entry.costTotal === undefined || entry.costTotal === 0) &&
-    usageTotals.totalTokens > 0
+    shouldClearRecordedZeroCost({
+      cost,
+      costBreakdown: entry.costBreakdown,
+      costTotal: entry.costTotal,
+      usage: entry.usage,
+    })
   ) {
     entry.costTotal = undefined;
     entry.costBreakdown = undefined;

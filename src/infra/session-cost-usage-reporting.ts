@@ -34,6 +34,7 @@ import {
   extractCostBreakdown,
   parseTimestamp,
   parseUsageCostTranscriptEntry,
+  shouldClearRecordedZeroCost,
   shouldRecomputeRecordedZeroCost,
 } from "./session-cost-usage-pricing.js";
 import { createUsageDayKeyFormatter } from "./session-cost-usage-projection.js";
@@ -459,6 +460,17 @@ export async function loadSessionLogs(params: {
               (typeof parsed.model === "string" ? parsed.model : undefined),
           });
           if (
+            shouldClearRecordedZeroCost({
+              usage,
+              cost: costConfig,
+              costBreakdown: breakdown,
+              costTotal: breakdown?.total,
+            })
+          ) {
+            // Unknown pricing with an adapter-default recorded zero is not a
+            // confirmed $0: omit the cost, matching the session rollup path.
+            cost = undefined;
+          } else if (
             breakdown?.total !== undefined &&
             !shouldRecomputeRecordedZeroCost({
               usage,
