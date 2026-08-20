@@ -1487,6 +1487,44 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
+  it("migrates legacy Claude CLI model maps and allowlists when the primary is canonical", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            models: {
+              "claude-cli/claude-opus-4-7": { alias: "Opus" },
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+            modelPolicy: {
+              allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": {
+        alias: "Opus",
+        agentRuntime: { id: "claude-cli" },
+      },
+      "anthropic/claude-sonnet-4-6": {
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
+    });
+    expect(res.changes).toContain(
+      "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
+    );
+    expect(res.changes).toContain(
+      "Moved agents.defaults.modelPolicy.allow legacy runtime refs to canonical provider refs.",
+    );
+  });
+
   it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {
     const res = normalizeCompatibilityConfigValues(
       legacyConfig({

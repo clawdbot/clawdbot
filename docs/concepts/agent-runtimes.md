@@ -171,9 +171,11 @@ CLI backend aliases differ from embedded harness ids. Preferred Claude CLI form:
 }
 ```
 
-Legacy refs such as `claude-cli/claude-opus-4-7` remain supported for
-compatibility, but new config should keep the provider/model canonical and
-put the execution backend in provider/model runtime policy.
+Legacy refs such as `claude-cli/claude-opus-4-7` are accepted as compatibility
+input, but new config should keep the provider/model canonical and put the
+execution backend in provider/model runtime policy. Run `openclaw doctor --fix`
+to rewrite persisted legacy model selections, model-map keys, and explicit
+`modelPolicy.allow` entries to that canonical shape.
 
 Legacy `codex-cli/*` refs are different: doctor migrates them to `openai/*` so
 they run through the Codex app-server harness instead of preserving a Codex
