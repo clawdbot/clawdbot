@@ -39,6 +39,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
@@ -316,11 +317,19 @@ export function getSessionDefaults(
         defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: options?.allowPluginNormalization,
       });
+  const catalogEntry = modelCatalog
+    ? findModelCatalogEntry(modelCatalog, {
+        provider: resolved.provider,
+        modelId: resolved.model,
+      })
+    : undefined;
   const contextTokens =
     resolveContextTokensForModel({
       cfg,
       provider: resolved.provider,
       model: resolved.model,
+      modelContextTokens: catalogEntry?.contextTokens,
+      modelContextWindow: catalogEntry?.contextWindow,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
@@ -662,7 +671,7 @@ export async function projectSessionPatchResult(params: {
       agentId: params.targetAgentId,
     }).path,
     key: params.canonicalKey,
-    entry: params.entry,
+    entry: projectPublicSessionEntry(params.entry),
     resolved: {
       modelProvider: displayModel.provider,
       model: displayModel.model,

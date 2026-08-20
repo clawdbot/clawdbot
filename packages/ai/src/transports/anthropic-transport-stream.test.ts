@@ -764,7 +764,10 @@ describe("anthropic transport stream", () => {
     );
 
     const result = await runTransportStream(
-      makeAnthropicTransportModel(),
+      makeAnthropicTransportModel({
+        provider: "pioneer",
+        baseUrl: "https://bedrock-compatible.example/v1",
+      }),
       {
         messages: [{ role: "user", content: "run date" }],
       } as AnthropicStreamContext,
@@ -1993,6 +1996,7 @@ describe("anthropic transport stream", () => {
           delta: { stop_reason: "tool_use" },
           usage: { input_tokens: 10, output_tokens: 5 },
         },
+        { type: "message_stop" },
       ]),
     );
 
@@ -2016,6 +2020,148 @@ describe("anthropic transport stream", () => {
       maxSafe: 9007199254740991,
       nested: { ids: ["9007199254740993", "-9007199254740992"] },
     });
+  });
+
+  it("rejects malformed terminal tool JSON before completing any sibling call", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_malformed_tools", usage: { input_tokens: 2, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "call_valid", name: "read", input: {} },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: '{"path":"README.md"}' },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "tool_use", id: "call_invalid", name: "read", input: {} },
+        },
+        {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "input_json_delta", partial_json: '{"path":"SECRET.md"' },
+        },
+        { type: "content_block_stop", index: 1 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { input_tokens: 2, output_tokens: 2 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "read" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Provider completed tool call with malformed JSON arguments");
+    expect(result.errorMessage).not.toContain("SECRET.md");
+    expect(eventTypes).not.toContain("toolcall_end");
+    expect(eventTypes).not.toContain("done");
+  });
+
+  it("rejects an active tool call that never receives content_block_stop", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_unsealed", usage: { input_tokens: 2, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "call_unsealed", name: "read", input: {} },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: '{"path":"README.md"' },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { input_tokens: 2, output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "read" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(eventTypes.at(-1)).toBe("error");
+    expect(eventTypes).not.toContain("toolcall_end");
+    expect(eventTypes).not.toContain("done");
+    expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
+  });
+
+  it("uses seeded Anthropic tool input when no argument deltas arrive", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_seeded_tool", usage: { input_tokens: 2, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "call_seeded",
+            name: "read",
+            input: { path: "README.md" },
+          },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { input_tokens: 2, output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "read" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "toolCall", arguments: { path: "README.md" } }),
+    );
   });
 
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {

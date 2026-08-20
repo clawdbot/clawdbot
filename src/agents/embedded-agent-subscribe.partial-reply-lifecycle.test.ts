@@ -96,4 +96,57 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
       `assistant partial reply callback failed: ${String(callbackError)}`,
     );
   });
+
+  it("queue-only drain is not blocked by a stalled partial reply callback", async () => {
+    // Timeout salvage drains only the serialized event chain — the queue whose handlers mutate the assistant
+    // text buffer. A stalled onPartialReply transport callback is external
+    // fan-out and cannot change the buffered text, so it must not hold an
+    // already-aborted run in settlement. Pre-fix, the salvage path used
+    // waitForPendingEvents, which also awaits pendingPartialReplyTasks; a
+    // stalled callback would block the drain until the bounded liveness
+    // deadline (120s) elapsed.
+    const onPartialReply = vi.fn(() => new Promise<void>(() => {}));
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-stalled-partial-callback",
+      onPartialReply,
+    });
+
+    // First delta fires the partial-reply callback (stalled, never resolves).
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "partial " },
+    });
+    await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce());
+
+    // A second delta queues behind the first on the serialized event chain.
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "answer" },
+    });
+
+    // Queue-only drain completes promptly: the event chain is null once both
+    // deltas are processed, regardless of the stalled fan-out callback.
+    await expect(
+      Promise.race([
+        subscription.waitForPendingEvents({ includePartialReplies: false }).then(() => "drained"),
+        new Promise<"timeout">((resolve) => {
+          setTimeout(() => resolve("timeout"), 1000);
+        }),
+      ]),
+    ).resolves.toBe("drained");
+
+    // The broad join still observes the stalled callback (proving the two
+    // drains are genuinely distinct and the queue-only split is meaningful).
+    const broad = Promise.race([
+      subscription.waitForPendingEvents().then(() => "drained"),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 1000);
+      }),
+    ]);
+    await expect(broad).resolves.toBe("timeout");
+
+    subscription.unsubscribe();
+  });
 });

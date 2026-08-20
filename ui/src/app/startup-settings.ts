@@ -5,7 +5,7 @@ import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,
-} from "../../../src/gateway/control-ui-contract.js";
+} from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import type { UiSettings } from "./settings.ts";
 

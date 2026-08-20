@@ -250,3 +250,11 @@ export function assertSecretOwnerAvailable(
     throw new SecretSurfaceUnavailableError(owner);
   }
 }
+
+/** Returns whether an owner is available without activating or resolving its secrets. */
+export function isSecretOwnerAvailable(
+  ownerKind: DegradedSecretOwner["ownerKind"],
+  ownerId: string,
+): boolean {
+  return findActiveDegradedSecretOwner(ownerKind, ownerId) === undefined;
+}

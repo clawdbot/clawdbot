@@ -176,7 +176,7 @@ export async function runNonInteractiveLocalSetup(params: {
 }) {
   const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "local" as const;
-  const selectedAgentId = resolveOnboardingAgentTarget(baseConfig).agentId;
+  const preCreationAgentId = resolveOnboardingAgentTarget(baseConfig).agentId;
 
   const requestedWorkspaceDir = resolveNonInteractiveWorkspaceDir({
     opts,
@@ -205,7 +205,7 @@ export async function runNonInteractiveLocalSetup(params: {
   }
   // Workspace defaults are already staged above; provider discovery must use
   // that requested owner before first-agent creation is allowed to write.
-  const authTarget = resolveOnboardingAgentTarget(nextConfig, selectedAgentId);
+  const authTarget = resolveOnboardingAgentTarget(nextConfig, preCreationAgentId);
 
   const inferredAuthChoice = opts.authChoice
     ? undefined
@@ -283,7 +283,7 @@ export async function runNonInteractiveLocalSetup(params: {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
 
-  const finalTarget = resolveOnboardingAgentTarget(nextConfig, selectedAgentId);
+  const finalTarget = resolveOnboardingAgentTarget(nextConfig, created.agentId);
   await ensureOnboardingAgentWorkspace(finalTarget, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
@@ -324,9 +324,9 @@ export async function runNonInteractiveLocalSetup(params: {
           installed: false,
           skippedReason: daemonInstall.skippedReason,
         };
-    if (!daemonInstall.installed && !opts.skipHealth) {
-      // Treat a failed requested daemon install as setup failure when health is
-      // expected; otherwise later probes would fail with less actionable output.
+    if (!daemonInstall.installed) {
+      // Skipping the health probe must not turn a requested install failure
+      // into successful onboarding.
       logNonInteractiveOnboardingFailure({
         opts,
         runtime,

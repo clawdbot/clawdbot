@@ -173,7 +173,9 @@ export function createService(
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
+      | "now"
       | "nodeTunnelManager"
+      | "nodeDesktopCarrier"
       | "placementStore"
       | "workerCredentialTtlMs"
     >
@@ -294,6 +296,36 @@ export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEn
     from: bootstrapping.state,
     to: "ready",
     patch: readyPatch(environmentId),
+  });
+}
+
+export function seedReadyNodeDesktop(
+  environmentId: string,
+  desktop: WorkerDesktopEndpoint = DESKTOP,
+) {
+  const intent = testState.store.createIntent({
+    environmentId,
+    providerId: "fake",
+    profileId: "development",
+    profileSnapshot: { settings: { region: "test", desktop: true } },
+    provisionOperationId: `provision:${environmentId}`,
+  });
+  const provisioning = testState.store.transition({
+    environmentId,
+    from: intent.state,
+    to: "provisioning",
+  });
+  return testState.store.transition({
+    environmentId,
+    from: provisioning.state,
+    to: "ready",
+    patch: {
+      leaseId: `lease:${environmentId}`,
+      nodeDeviceId: `node:${environmentId}`,
+      sshEndpoint: null,
+      desktop,
+      ...readyPatch(environmentId),
+    },
   });
 }
 

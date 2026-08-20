@@ -38,9 +38,7 @@ const MODEL_OVERRIDE_DEPENDENT_FIELDS = new Set<keyof SessionEntry>([
   "thinkingLevel",
 ]);
 
-const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["thinkingLevel"] as const satisfies ReadonlyArray<
-  keyof SessionEntry
->;
+const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["thinkingLevel"] as const;
 
 const MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS = [
   "abortedLastRun",

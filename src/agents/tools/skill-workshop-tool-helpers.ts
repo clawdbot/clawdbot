@@ -2,6 +2,7 @@ import {
   inspectSkillProposal,
   resolvePendingSkillProposal,
 } from "../../skills/workshop/service.js";
+import { PROPOSAL_DRAFT_FILE } from "../../skills/workshop/store-record.js";
 import type {
   SkillProposalReadResult,
   SkillProposalRecord,
@@ -115,7 +116,7 @@ export function proposalResult(
       kind: proposal.record.kind,
       skillName: proposal.record.target.skillName,
       skillKey: proposal.record.target.skillKey,
-      proposalFile: proposal.record.draftFile,
+      proposalFile: PROPOSAL_DRAFT_FILE,
       supportFileCount: proposal.record.supportFiles?.length ?? 0,
       targetSkillFile: proposal.record.target.skillFile,
       scanState: proposal.record.scan.state,

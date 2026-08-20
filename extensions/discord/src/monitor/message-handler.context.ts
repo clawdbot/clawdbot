@@ -480,7 +480,9 @@ export async function buildDiscordMessageProcessContext(params: {
                 );
                 return isContextAborted(abortSignal)
                   ? []
-                  : await toInboundMediaFactsWithMetadata(referencedReplyMediaList);
+                  : await toInboundMediaFactsWithMetadata(referencedReplyMediaList, {
+                      messageId: replyContext.id,
+                    });
               },
             }
           : undefined,

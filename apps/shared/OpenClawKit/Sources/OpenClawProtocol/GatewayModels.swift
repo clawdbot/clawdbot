@@ -206,6 +206,14 @@ public enum SessionDiffScope: String, Codable, Sendable {
     case commit = "commit"
 }
 
+public enum WorktreePreservationReason: String, Codable, Sendable {
+    case ownerMismatch = "owner-mismatch"
+    case busy = "busy"
+    case foreignLock = "foreign-lock"
+    case snapshotFailed = "snapshot-failed"
+    case cleanupFailed = "cleanup-failed"
+}
+
 public enum TaskSuggestionResolution: String, Codable, Sendable {
     case dismissed = "dismissed"
     case accepted = "accepted"
@@ -231,6 +239,17 @@ public enum SystemChangeSource: String, Codable, Sendable {
 public enum AgentKind: String, Codable, Sendable {
     case agent = "agent"
     case system = "system"
+}
+
+public enum GitHubIdentitySource: String, Codable, Sendable {
+    case systemDetected = "system-detected"
+    case systemConfigured = "system-configured"
+    case agentOverride = "agent-override"
+}
+
+public enum GitHubIdentityScope: String, Codable, Sendable {
+    case system = "system"
+    case agent = "agent"
 }
 
 public enum MemoryMigrationItemStatus: String, Codable, Sendable {
@@ -3125,6 +3144,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let channel: String
     public let action: String
     public let params: [String: AnyCodable]
+    public let reply: AnyCodable?
     public let accountid: String?
     public let requesteraccountid: String?
     public let requestersenderid: String?
@@ -3141,6 +3161,7 @@ public struct MessageActionParams: Codable, Sendable {
         channel: String,
         action: String,
         params: [String: AnyCodable],
+        reply: AnyCodable? = nil,
         accountid: String? = nil,
         requesteraccountid: String? = nil,
         requestersenderid: String? = nil,
@@ -3156,6 +3177,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.channel = channel
         self.action = action
         self.params = params
+        self.reply = reply
         self.accountid = accountid
         self.requesteraccountid = requesteraccountid
         self.requestersenderid = requestersenderid
@@ -3173,6 +3195,7 @@ public struct MessageActionParams: Codable, Sendable {
         case channel
         case action
         case params
+        case reply
         case accountid = "accountId"
         case requesteraccountid = "requesterAccountId"
         case requestersenderid = "requesterSenderId"
@@ -6763,6 +6786,140 @@ public struct SessionsObserverVisibilityResult: Codable, Sendable {
     }
 }
 
+public struct SessionGitHubPublishParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let idempotencykey: String
+    public let title: String?
+    public let body: String?
+
+    public init(
+        sessionkey: String? = nil,
+        idempotencykey: String,
+        title: String? = nil,
+        body: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.idempotencykey = idempotencykey
+        self.title = title
+        self.body = body
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case idempotencykey = "idempotencyKey"
+        case title
+        case body
+    }
+}
+
+public struct SessionGitHubPublicationRequested: Codable, Sendable {
+    public let requestid: String
+    public let status: String
+    public let message: String
+
+    public init(
+        requestid: String,
+        status: String,
+        message: String)
+    {
+        self.requestid = requestid
+        self.status = status
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case status
+        case message
+    }
+}
+
+public struct SessionGitHubPublicationPublishing: Codable, Sendable {
+    public let requestid: String
+    public let status: String
+    public let message: String
+
+    public init(
+        requestid: String,
+        status: String,
+        message: String)
+    {
+        self.requestid = requestid
+        self.status = status
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case status
+        case message
+    }
+}
+
+public struct SessionGitHubPublicationPublished: Codable, Sendable {
+    public let requestid: String
+    public let status: String
+    public let url: String
+    public let repository: String
+    public let branch: String
+    public let headcommit: String
+
+    public init(
+        requestid: String,
+        status: String,
+        url: String,
+        repository: String,
+        branch: String,
+        headcommit: String)
+    {
+        self.requestid = requestid
+        self.status = status
+        self.url = url
+        self.repository = repository
+        self.branch = branch
+        self.headcommit = headcommit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case status
+        case url
+        case repository
+        case branch
+        case headcommit = "headCommit"
+    }
+}
+
+public struct SessionGitHubPublicationFailed: Codable, Sendable {
+    public let requestid: String
+    public let status: String
+    public let code: AnyCodable
+    public let message: String
+    public let nextaction: String
+
+    public init(
+        requestid: String,
+        status: String,
+        code: AnyCodable,
+        message: String,
+        nextaction: String)
+    {
+        self.requestid = requestid
+        self.status = status
+        self.code = code
+        self.message = message
+        self.nextaction = nextaction
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case status
+        case code
+        case message
+        case nextaction = "nextAction"
+    }
+}
+
 public struct SessionSharingIdentity: Codable, Sendable {
     public let type: AnyCodable
     public let id: String
@@ -9857,6 +10014,62 @@ public struct SessionsDeleteParams: Codable, Sendable {
         case expectedsessionupdatedat = "expectedSessionUpdatedAt"
         case emitlifecyclehooks = "emitLifecycleHooks"
         case archivedonly = "archivedOnly"
+    }
+}
+
+public struct PreservedSessionWorktree: Codable, Sendable {
+    public let id: String
+    public let branch: String
+    public let path: String
+    public let reason: WorktreePreservationReason
+
+    public init(
+        id: String,
+        branch: String,
+        path: String,
+        reason: WorktreePreservationReason)
+    {
+        self.id = id
+        self.branch = branch
+        self.path = path
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case branch
+        case path
+        case reason
+    }
+}
+
+public struct SessionsDeleteResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let deleted: Bool
+    public let archived: [String]
+    public let worktreepreserved: PreservedSessionWorktree?
+
+    public init(
+        ok: Bool,
+        key: String,
+        deleted: Bool,
+        archived: [String],
+        worktreepreserved: PreservedSessionWorktree? = nil)
+    {
+        self.ok = ok
+        self.key = key
+        self.deleted = deleted
+        self.archived = archived
+        self.worktreepreserved = worktreepreserved
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case deleted
+        case archived
+        case worktreepreserved = "worktreePreserved"
     }
 }
 
@@ -14780,67 +14993,153 @@ public struct ToolsCatalogParams: Codable, Sendable {
     }
 }
 
-public struct ToolsGitHubStatusParams: Codable, Sendable {
-    public let agentid: String
+public struct GitHubAuthor: Codable, Sendable {
+    public let name: String?
+    public let email: String?
 
     public init(
-        agentid: String)
+        name: String? = nil,
+        email: String? = nil)
+    {
+        self.name = name
+        self.email = email
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case email
+    }
+}
+
+public struct GitHubIdentityFacts: Codable, Sendable {
+    public let source: GitHubIdentitySource
+    public let credentialkind: AnyCodable
+    public let credentialstate: AnyCodable
+    public let account: AnyCodable
+    public let gitauthor: [String: AnyCodable]
+    public let evidence: AnyCodable
+    public let accessexpiresatms: AnyCodable
+    public let refreshstate: AnyCodable
+    public let oauthscopes: [String]
+    public let repositorygrants: String
+
+    public init(
+        source: GitHubIdentitySource,
+        credentialkind: AnyCodable,
+        credentialstate: AnyCodable,
+        account: AnyCodable,
+        gitauthor: [String: AnyCodable],
+        evidence: AnyCodable,
+        accessexpiresatms: AnyCodable,
+        refreshstate: AnyCodable,
+        oauthscopes: [String],
+        repositorygrants: String)
+    {
+        self.source = source
+        self.credentialkind = credentialkind
+        self.credentialstate = credentialstate
+        self.account = account
+        self.gitauthor = gitauthor
+        self.evidence = evidence
+        self.accessexpiresatms = accessexpiresatms
+        self.refreshstate = refreshstate
+        self.oauthscopes = oauthscopes
+        self.repositorygrants = repositorygrants
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case credentialkind = "credentialKind"
+        case credentialstate = "credentialState"
+        case account
+        case gitauthor = "gitAuthor"
+        case evidence
+        case accessexpiresatms = "accessExpiresAtMs"
+        case refreshstate = "refreshState"
+        case oauthscopes = "oauthScopes"
+        case repositorygrants = "repositoryGrants"
+    }
+}
+
+public struct GitHubSelectedIdentity: Codable, Sendable {
+    public let scope: GitHubIdentityScope
+    public let configured: Bool
+    public let identity: AnyCodable
+
+    public init(
+        scope: GitHubIdentityScope,
+        configured: Bool,
+        identity: AnyCodable)
+    {
+        self.scope = scope
+        self.configured = configured
+        self.identity = identity
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case configured
+        case identity
+    }
+}
+
+public struct ToolsGitHubStatusParams: Codable, Sendable {
+    public let agentid: String
+    public let selectedscope: GitHubIdentityScope
+
+    public init(
+        agentid: String,
+        selectedscope: GitHubIdentityScope)
     {
         self.agentid = agentid
+        self.selectedscope = selectedscope
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case selectedscope = "selectedScope"
     }
 }
 
 public struct ToolsGitHubStatusResult: Codable, Sendable {
     public let agentid: String
-    public let source: AnyCodable
-    public let credentialstate: AnyCodable
-    public let account: AnyCodable
-    public let gitauthor: [String: AnyCodable]
-    public let evidence: AnyCodable
+    public let selectedscope: GitHubIdentityScope
+    public let selected: GitHubSelectedIdentity
+    public let effective: GitHubIdentityFacts
 
     public init(
         agentid: String,
-        source: AnyCodable,
-        credentialstate: AnyCodable,
-        account: AnyCodable,
-        gitauthor: [String: AnyCodable],
-        evidence: AnyCodable)
+        selectedscope: GitHubIdentityScope,
+        selected: GitHubSelectedIdentity,
+        effective: GitHubIdentityFacts)
     {
         self.agentid = agentid
-        self.source = source
-        self.credentialstate = credentialstate
-        self.account = account
-        self.gitauthor = gitauthor
-        self.evidence = evidence
+        self.selectedscope = selectedscope
+        self.selected = selected
+        self.effective = effective
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
-        case source
-        case credentialstate = "credentialState"
-        case account
-        case gitauthor = "gitAuthor"
-        case evidence
+        case selectedscope = "selectedScope"
+        case selected
+        case effective
     }
 }
 
 public struct ToolsGitHubManagedConfigureParams: Codable, Sendable {
-    public let scope: AnyCodable
+    public let scope: GitHubIdentityScope
     public let agentid: String
     public let mode: String
     public let secretname: String
-    public let gitauthor: [String: AnyCodable]?
+    public let gitauthor: GitHubAuthor?
 
     public init(
-        scope: AnyCodable,
+        scope: GitHubIdentityScope,
         agentid: String,
         mode: String,
         secretname: String,
-        gitauthor: [String: AnyCodable]? = nil)
+        gitauthor: GitHubAuthor? = nil)
     {
         self.scope = scope
         self.agentid = agentid
@@ -14859,12 +15158,12 @@ public struct ToolsGitHubManagedConfigureParams: Codable, Sendable {
 }
 
 public struct ToolsGitHubInheritConfigureParams: Codable, Sendable {
-    public let scope: AnyCodable
+    public let scope: GitHubIdentityScope
     public let agentid: String
     public let mode: String
 
     public init(
-        scope: AnyCodable,
+        scope: GitHubIdentityScope,
         agentid: String,
         mode: String)
     {
@@ -14877,6 +15176,228 @@ public struct ToolsGitHubInheritConfigureParams: Codable, Sendable {
         case scope
         case agentid = "agentId"
         case mode
+    }
+}
+
+public struct ToolsGitHubAuthorizeStartParams: Codable, Sendable {
+    public let scope: GitHubIdentityScope
+    public let agentid: String
+
+    public init(
+        scope: GitHubIdentityScope,
+        agentid: String)
+    {
+        self.scope = scope
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case agentid = "agentId"
+    }
+}
+
+public struct ToolsGitHubAuthorizeStartResult: Codable, Sendable {
+    public let requestid: String
+    public let usercode: String
+    public let verificationuri: String
+    public let expiresinms: Int
+    public let pollafterms: Int
+
+    public init(
+        requestid: String,
+        usercode: String,
+        verificationuri: String,
+        expiresinms: Int,
+        pollafterms: Int)
+    {
+        self.requestid = requestid
+        self.usercode = usercode
+        self.verificationuri = verificationuri
+        self.expiresinms = expiresinms
+        self.pollafterms = pollafterms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case usercode = "userCode"
+        case verificationuri = "verificationUri"
+        case expiresinms = "expiresInMs"
+        case pollafterms = "pollAfterMs"
+    }
+}
+
+public struct ToolsGitHubAuthorizePollParams: Codable, Sendable {
+    public let requestid: String
+
+    public init(
+        requestid: String)
+    {
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct ToolsGitHubAuthorizePendingResult: Codable, Sendable {
+    public let status: String
+    public let retryafterms: Int
+
+    public init(
+        status: String,
+        retryafterms: Int)
+    {
+        self.status = status
+        self.retryafterms = retryafterms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case retryafterms = "retryAfterMs"
+    }
+}
+
+public struct ToolsGitHubAuthorizeSlowDownResult: Codable, Sendable {
+    public let status: String
+    public let retryafterms: Int
+
+    public init(
+        status: String,
+        retryafterms: Int)
+    {
+        self.status = status
+        self.retryafterms = retryafterms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case retryafterms = "retryAfterMs"
+    }
+}
+
+public struct ToolsGitHubAuthorizeAccessDeniedResult: Codable, Sendable {
+    public let status: String
+
+    public init(
+        status: String)
+    {
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+    }
+}
+
+public struct ToolsGitHubAuthorizeExpiredResult: Codable, Sendable {
+    public let status: String
+
+    public init(
+        status: String)
+    {
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+    }
+}
+
+public struct ToolsGitHubAuthorizeIncorrectDeviceCodeResult: Codable, Sendable {
+    public let status: String
+
+    public init(
+        status: String)
+    {
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+    }
+}
+
+public struct ToolsGitHubAuthorizeNetworkErrorResult: Codable, Sendable {
+    public let status: String
+    public let retryafterms: Int
+
+    public init(
+        status: String,
+        retryafterms: Int)
+    {
+        self.status = status
+        self.retryafterms = retryafterms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case retryafterms = "retryAfterMs"
+    }
+}
+
+public struct ToolsGitHubAuthorizeFailedResult: Codable, Sendable {
+    public let status: String
+    public let reason: AnyCodable
+
+    public init(
+        status: String,
+        reason: AnyCodable)
+    {
+        self.status = status
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case reason
+    }
+}
+
+public struct ToolsGitHubAuthorizeSuccessResult: Codable, Sendable {
+    public let status: String
+    public let githubstatus: ToolsGitHubStatusResult
+
+    public init(
+        status: String,
+        githubstatus: ToolsGitHubStatusResult)
+    {
+        self.status = status
+        self.githubstatus = githubstatus
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case githubstatus = "githubStatus"
+    }
+}
+
+public struct ToolsGitHubAuthorizeCancelParams: Codable, Sendable {
+    public let requestid: String
+
+    public init(
+        requestid: String)
+    {
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct ToolsGitHubAuthorizeCancelResult: Codable, Sendable {
+    public let cancelled: Bool
+
+    public init(
+        cancelled: Bool)
+    {
+        self.cancelled = cancelled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cancelled
     }
 }
 
@@ -21122,6 +21643,43 @@ public enum SecretStoreEntry: Codable, Sendable {
     }
 }
 
+public enum SessionGitHubPublicationResult: Codable, Sendable {
+    case requested(SessionGitHubPublicationRequested)
+    case publishing(SessionGitHubPublicationPublishing)
+    case published(SessionGitHubPublicationPublished)
+    case failed(SessionGitHubPublicationFailed)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "requested": self = try .requested(SessionGitHubPublicationRequested(from: decoder))
+        case "publishing": self = try .publishing(SessionGitHubPublicationPublishing(from: decoder))
+        case "published": self = try .published(SessionGitHubPublicationPublished(from: decoder))
+        case "failed": self = try .failed(SessionGitHubPublicationFailed(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown SessionGitHubPublicationResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .requested(let value): try value.encode(to: encoder)
+        case .publishing(let value): try value.encode(to: encoder)
+        case .published(let value): try value.encode(to: encoder)
+        case .failed(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
 public enum SessionPlacement: Codable, Sendable {
     case local(LocalSessionPlacement)
     case requested(RequestedSessionPlacement)
@@ -21343,6 +21901,55 @@ public enum ToolsGitHubConfigureParams: Codable, Sendable {
         switch self {
         case .managed(let value): try value.encode(to: encoder)
         case .inherit(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum ToolsGitHubAuthorizePollResult: Codable, Sendable {
+    case pending(ToolsGitHubAuthorizePendingResult)
+    case slowDown(ToolsGitHubAuthorizeSlowDownResult)
+    case accessDenied(ToolsGitHubAuthorizeAccessDeniedResult)
+    case expired(ToolsGitHubAuthorizeExpiredResult)
+    case incorrectDeviceCode(ToolsGitHubAuthorizeIncorrectDeviceCodeResult)
+    case networkError(ToolsGitHubAuthorizeNetworkErrorResult)
+    case failed(ToolsGitHubAuthorizeFailedResult)
+    case success(ToolsGitHubAuthorizeSuccessResult)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "pending": self = try .pending(ToolsGitHubAuthorizePendingResult(from: decoder))
+        case "slow_down": self = try .slowDown(ToolsGitHubAuthorizeSlowDownResult(from: decoder))
+        case "access_denied": self = try .accessDenied(ToolsGitHubAuthorizeAccessDeniedResult(from: decoder))
+        case "expired": self = try .expired(ToolsGitHubAuthorizeExpiredResult(from: decoder))
+        case "incorrect_device_code": self = try .incorrectDeviceCode(ToolsGitHubAuthorizeIncorrectDeviceCodeResult(from: decoder))
+        case "network_error": self = try .networkError(ToolsGitHubAuthorizeNetworkErrorResult(from: decoder))
+        case "failed": self = try .failed(ToolsGitHubAuthorizeFailedResult(from: decoder))
+        case "success": self = try .success(ToolsGitHubAuthorizeSuccessResult(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown ToolsGitHubAuthorizePollResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .pending(let value): try value.encode(to: encoder)
+        case .slowDown(let value): try value.encode(to: encoder)
+        case .accessDenied(let value): try value.encode(to: encoder)
+        case .expired(let value): try value.encode(to: encoder)
+        case .incorrectDeviceCode(let value): try value.encode(to: encoder)
+        case .networkError(let value): try value.encode(to: encoder)
+        case .failed(let value): try value.encode(to: encoder)
+        case .success(let value): try value.encode(to: encoder)
         }
     }
 }

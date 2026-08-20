@@ -33,6 +33,7 @@ export {
   buildMemoryReadResultFromSlice,
   DEFAULT_MEMORY_READ_LINES,
   DEFAULT_MEMORY_READ_MAX_CHARS,
+  type LegacyMemoryReadResult,
   type MemoryReadResult,
 } from "./host/read-file-shared.js";
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";

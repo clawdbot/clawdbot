@@ -959,8 +959,10 @@ describe("setupWizardCommand", () => {
   });
 
   it.each([
+    ["--agent-name", { agentName: "robby" }],
     ["--tui", { tui: true }],
     ["--skip-ui", { skipUi: true }],
+    ["--suppress-gateway-token-output", { suppressGatewayTokenOutput: true }],
   ])("keeps %s on guided onboarding", async (_label, opts) => {
     const runtime = makeRuntime();
 

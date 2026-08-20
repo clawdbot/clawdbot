@@ -2062,13 +2062,14 @@ describe("memory index", () => {
     await fs.mkdir(mediaDir, { recursive: true });
     await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
     await fs.writeFile(path.join(mediaDir, "meeting.wav"), Buffer.from("wav"));
+    await fs.writeFile(path.join(mediaDir, "oversized.png"), Buffer.alloc(32, 1));
     await fs.writeFile(path.join(fixture.paths.memory, "default-diagram.png"), Buffer.from("png"));
 
     const cfg = createCfg({
       provider: "gemini",
       model: "gemini-embedding-2-preview",
       extraPaths: [mediaDir],
-      multimodal: { enabled: true, modalities: ["image", "audio"] },
+      multimodal: { enabled: true, modalities: ["image", "audio"], maxFileBytes: 16 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -2091,6 +2092,44 @@ describe("memory index", () => {
 
     const audioResults = await manager.search("audio");
     expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
+
+    await manager.close?.();
+    const statusManager = await getFreshManager(cfg, "status", true);
+    try {
+      const status = statusManager.status();
+      expect(status.sourceCounts?.find((entry) => entry.source === "memory")?.eligible).toBe(
+        status.files,
+      );
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
+  it("detects offline source edits only for explicit diagnostic status", async () => {
+    const cfg = createCfg({});
+    const indexedManager = await getFreshManager(cfg);
+    await indexedManager.sync({ reason: "test", force: true });
+    await indexedManager.close?.();
+
+    const sourcePath = path.join(fixture.paths.memory, "2026-01-12.md");
+    const edited = "# Offline edit\n\nThis changed outside the gateway.\n";
+    await fs.writeFile(sourcePath, edited);
+
+    const ordinaryStatus = await getFreshManager(cfg, "status");
+    expect(ordinaryStatus.status().sourceCounts?.[0]?.eligible).toBeUndefined();
+    await ordinaryStatus.close?.();
+
+    const diagnosticStatus = await getFreshManager(cfg, "status", true);
+    try {
+      expect(diagnosticStatus.status().dirty).toBe(true);
+      const db = Reflect.get(diagnosticStatus, "db") as DatabaseSync;
+      const indexed = db
+        .prepare("SELECT hash FROM memory_index_sources WHERE path = ? AND source = 'memory'")
+        .get("memory/2026-01-12.md") as { hash: string } | undefined;
+      expect(indexed?.hash).not.toBe(hashText(edited));
+    } finally {
+      await diagnosticStatus.close?.();
+    }
   });
 
   it("reports vector availability after probe", async () => {
@@ -2366,9 +2405,7 @@ describe("memory index", () => {
     }
   });
 
-  it("status-purpose manager detects unindexed session transcripts as dirty", async () => {
-    // Regression test for #97814: plain openclaw memory status (purpose: status)
-    // must report dirty=true when session files exist without index rows.
+  it("diagnostic status uses canonical session discovery for dirty state and counts", async () => {
     const cfg = createCfg({ sources: ["sessions"], sessionMemory: true });
     const stateDirName = ".state-status-dirty-test";
     fixture.setStateDir(path.join(fixture.paths.workspace, stateDirName));
@@ -2384,11 +2421,14 @@ describe("memory index", () => {
         ],
       });
 
-      const manager = await getFreshManager(cfg, "status");
+      const manager = await getFreshManager(cfg, "status", true);
       trackManager(manager);
 
       const result = manager.status();
       expect(result.dirty).toBe(true);
+      expect(result.sourceCounts).toEqual([
+        expect.objectContaining({ source: "sessions", eligible: 1 }),
+      ]);
     } finally {
       fixture.restoreStateDir();
     }
@@ -2454,7 +2494,7 @@ describe("memory index", () => {
         }),
       ).resolves.toBe(true);
 
-      const statusManager = await getFreshManager(cfg, "status");
+      const statusManager = await getFreshManager(cfg, "status", true);
       trackManager(statusManager);
       expect(statusManager.status().dirty).toBe(true);
 

@@ -1,12 +1,10 @@
 import type {
   ProviderCatalogContext,
   ProviderPrepareDynamicModelContext,
-  UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discoverLlamaServerProvider,
-  listLlamaServerCatalog,
   prepareLlamaServerDynamicModels,
   resolveLlamaServerDynamicModel,
 } from "./provider.js";
@@ -39,8 +37,6 @@ function model() {
     },
     status: "sleeping" as const,
     failed: false,
-    buildInfo: "b10000-test",
-    totalSlots: 2,
   };
 }
 
@@ -51,9 +47,7 @@ function success() {
       origin: "http://localhost:8080",
       inferenceBaseUrl: "http://localhost:8080/v1",
     },
-    health: "ready" as const,
     models: [model()],
-    fetchedAt: 1000,
   };
 }
 
@@ -70,7 +64,7 @@ function catalogContext(): ProviderCatalogContext {
   };
 }
 
-describe("llama-server provider catalog", () => {
+describe("llama-server provider discovery", () => {
   beforeEach(() => {
     discoverMock.mockReset();
     runtimeApiKeyMock.mockReset();
@@ -94,7 +88,7 @@ describe("llama-server provider catalog", () => {
     const ctx = catalogContext();
     ctx.config.models = {
       providers: {
-        "llama-server": {
+        "llama-cpp": {
           baseUrl: "http://localhost:8080/v1",
           headers: { Authorization: "Bearer proxy-key" },
           models: [],
@@ -125,7 +119,7 @@ describe("llama-server provider catalog", () => {
     const ctx = catalogContext();
     ctx.config.models = {
       providers: {
-        "llama-server": {
+        "llama-cpp": {
           baseUrl: "http://localhost:8080/v1",
           models: [model().config],
         },
@@ -135,30 +129,6 @@ describe("llama-server provider catalog", () => {
     await expect(discoverLlamaServerProvider(ctx)).resolves.toMatchObject({
       provider: { models: [expect.objectContaining({ id: "org/model:Q4" })] },
     });
-  });
-
-  it("projects router state into unified catalog warnings", async () => {
-    discoverMock.mockResolvedValue(success());
-    const ctx = {
-      ...catalogContext(),
-      includeLive: true,
-    } as UnifiedModelCatalogProviderContext;
-
-    await expect(listLlamaServerCatalog(ctx)).resolves.toEqual([
-      expect.objectContaining({
-        kind: "text",
-        provider: "llama-server",
-        model: "org/model:Q4",
-        source: "live",
-        warnings: ["llama-server model is sleeping"],
-        capabilities: expect.objectContaining({
-          contextWindow: 16384,
-          status: "sleeping",
-          buildInfo: "b10000-test",
-          totalSlots: 2,
-        }),
-      }),
-    ]);
   });
 
   it("scopes dynamic catalogs by agent runtime and auth profile", async () => {
@@ -175,7 +145,7 @@ describe("llama-server provider catalog", () => {
     discoverMock.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
     const base = {
       config: {},
-      provider: "llama-server",
+      provider: "llama-cpp",
       modelId: "org/model:Q4",
       modelRegistry: {},
       providerConfig: {
@@ -216,7 +186,7 @@ describe("llama-server provider catalog", () => {
       (_, index) =>
         ({
           config: {},
-          provider: "llama-server",
+          provider: "llama-cpp",
           modelId: "org/model:Q4",
           modelRegistry: {},
           agentRuntimeId: `runtime-${index}`,
@@ -237,11 +207,64 @@ describe("llama-server provider catalog", () => {
     });
   });
 
+  it("keeps dynamic snapshots separate when only the endpoint changes", async () => {
+    discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce({
+      ...success(),
+      models: [{ ...model(), config: { ...model().config, name: "second endpoint" } }],
+    });
+    const base = {
+      config: {},
+      provider: "llama-cpp",
+      modelId: "org/model:Q4",
+      modelRegistry: {},
+      agentRuntimeId: "endpoint-runtime",
+      authProfileId: "endpoint-profile",
+    };
+    const first = {
+      ...base,
+      providerConfig: { baseUrl: "http://localhost:8080/v1", api: "openai-completions" },
+    } as unknown as ProviderPrepareDynamicModelContext;
+    const second = {
+      ...base,
+      providerConfig: { baseUrl: "http://localhost:8081/v1", api: "openai-completions" },
+    } as unknown as ProviderPrepareDynamicModelContext;
+
+    await prepareLlamaServerDynamicModels(first);
+    await prepareLlamaServerDynamicModels(second);
+
+    expect(resolveLlamaServerDynamicModel(first)?.name).toBe("org/model:Q4");
+    expect(resolveLlamaServerDynamicModel(second)?.name).toBe("second endpoint");
+  });
+
+  it("clears a scope snapshot when its refresh cannot discover the server", async () => {
+    discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce({
+      kind: "unreachable",
+      endpoint: { origin: "http://localhost:8080", inferenceBaseUrl: "http://localhost:8080/v1" },
+      error: new Error("offline"),
+    });
+    const ctx = {
+      config: {},
+      provider: "llama-cpp",
+      modelId: "org/model:Q4",
+      modelRegistry: {},
+      agentRuntimeId: "failed-refresh-runtime",
+      providerConfig: {
+        baseUrl: "http://localhost:8080/v1",
+        api: "openai-completions",
+      },
+    } as unknown as ProviderPrepareDynamicModelContext;
+
+    await prepareLlamaServerDynamicModels(ctx);
+    expect(resolveLlamaServerDynamicModel(ctx)).toMatchObject({ id: "org/model:Q4" });
+    await prepareLlamaServerDynamicModels(ctx);
+    expect(resolveLlamaServerDynamicModel(ctx)).toBeUndefined();
+  });
+
   it("refreshes and resolves dynamic model ids containing slashes", async () => {
     discoverMock.mockResolvedValue(success());
     const ctx = {
       config: {},
-      provider: "llama-server",
+      provider: "llama-cpp",
       modelId: "org/model:Q4",
       modelRegistry: {},
       providerConfig: {
@@ -253,7 +276,7 @@ describe("llama-server provider catalog", () => {
     await prepareLlamaServerDynamicModels(ctx);
 
     expect(resolveLlamaServerDynamicModel(ctx)).toMatchObject({
-      provider: "llama-server",
+      provider: "llama-cpp",
       id: "org/model:Q4",
       baseUrl: "http://localhost:8080/v1",
       api: "openai-completions",

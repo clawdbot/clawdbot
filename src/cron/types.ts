@@ -215,7 +215,17 @@ export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" };
 
-/** Execution result persisted on cron state, run logs, and isolated turn results. */
+/** Closed producer-authored facts allowed in operator-facing failure notifications. */
+export type CronFailureNotificationDetail =
+  | { kind: "command-exit"; exitCode: number }
+  | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
+  | {
+      kind: "script-failure";
+      source: "payload" | "trigger";
+      code: CronTriggerFailureCode;
+    };
+
+/** Execution result used to author persisted state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
@@ -224,6 +234,8 @@ export type CronRunOutcome = {
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;
+  /** Transient internal detail; never project into persisted or public cron events. */
+  failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
   sessionId?: string;
   sessionKey?: string;

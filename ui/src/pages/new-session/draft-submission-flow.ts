@@ -333,7 +333,7 @@ export class DraftSubmissionFlow {
   }
 
   cloudDisabledReason(): string | undefined {
-    const runtimeReason = this.cloudRuntimeUnsupportedReason();
+    const runtimeReason = this.place.modelControl.cloudRuntimeUnsupportedReason();
     if (runtimeReason) {
       return runtimeReason;
     }
@@ -724,13 +724,10 @@ export class DraftSubmissionFlow {
   private placement = () => resolveDraftSessionPlacement(this.pendingPlacement, this.place);
 
   private cloudRuntimeUnsupportedReason(): string | undefined {
-    const runtime = this.place.modelControl.resolveAgentRuntime({
-      agent: this.place.selectedAgent(),
-      context: this.read().context,
-    });
-    return runtime?.cloudPlacementSupported === false
-      ? t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id })
-      : undefined;
+    const profile = this.gateway.cloudProfiles.find(
+      (candidate) => candidate.id === this.place.cloudProfileId,
+    );
+    return this.place.modelControl.cloudRuntimeUnsupportedReason(profile);
   }
 
   private applyRecoveryDraft(recovery: SessionPlacementRecovery) {

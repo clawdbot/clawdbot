@@ -5,6 +5,7 @@ import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
+import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
@@ -92,6 +93,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   let agentHarness = modelSetup.agentHarness;
   let pluginHarnessOwnsTransport = modelSetup.pluginHarnessOwnsTransport;
   let runtimeModel = model;
+  let preparedThinkingCapabilityReady = false;
   const resolveEffectiveModel = (candidate: typeof runtimeModel) =>
     resolveEmbeddedRunEffectiveModel({
       runParams: params,
@@ -113,9 +115,23 @@ export async function prepareEmbeddedRunRuntime(input: {
   let effectiveModel = initialResolvedRuntimeModel.effectiveModel;
   const applyResolvedRuntimeModel = (
     candidate: typeof runtimeModel,
-    resolved = resolveEffectiveModel(candidate),
+    resolvedCandidate?: ReturnType<typeof resolveEffectiveModel>,
   ) => {
-    runtimeModel = candidate;
+    const preparedThinkingCompat = preparedThinkingCapabilityReady
+      ? resolvePreparedModelThinkingCompat({
+          capability: params.modelThinkingCapability,
+          model: candidate,
+          agentRuntime: agentHarness.id,
+        })
+      : undefined;
+    const resolvedModel = preparedThinkingCompat
+      ? { ...candidate, compat: { ...candidate.compat, ...preparedThinkingCompat } }
+      : candidate;
+    const resolved =
+      resolvedModel === candidate && resolvedCandidate
+        ? resolvedCandidate
+        : resolveEffectiveModel(resolvedModel);
+    runtimeModel = resolvedModel;
     effectiveModel = resolved.effectiveModel;
     contextTokenBudget = resolved.contextTokenBudget;
     authoredContextTokenCap = resolved.authoredContextTokenCap;
@@ -190,6 +206,8 @@ export async function prepareEmbeddedRunRuntime(input: {
     preparedAuthAttempts,
   } = preparedAuthPlan;
   let { activePreparedAuthPlan } = preparedAuthPlan;
+  preparedThinkingCapabilityReady = true;
+  applyResolvedRuntimeModel(runtimeModel);
   const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
   const profileCandidates = preparedAuthAttempts.map((attempt) => attempt.profileId);
   const forwardedPluginHarnessProfileId = pluginHarnessOwnsTransport

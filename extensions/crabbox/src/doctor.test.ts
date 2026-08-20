@@ -105,7 +105,7 @@ describe("Crabbox worker doctor", () => {
     }
   });
 
-  it("detects and removes only stale Crabbox desktop settings", async () => {
+  it("accepts desktop-capable AWS and Hetzner profiles", async () => {
     const probe = vi
       .spyOn(doctorRuntime, "probeCrabboxVersion")
       .mockResolvedValue({ status: "supported", version: "0.41.6" });
@@ -118,76 +118,22 @@ describe("Crabbox worker doctor", () => {
             install: "npm",
             settings: { binary: process.execPath, class: "fast", desktop: true, ttl: "12h" },
           },
-          secondary: {
+          hetzner: {
             provider: " CRABBOX ",
-            settings: { binary: process.execPath, desktop: true, idleTimeout: "30m" },
+            settings: {
+              binary: process.execPath,
+              provider: "hetzner",
+              desktop: true,
+              idleTimeout: "30m",
+            },
           },
-          disabled: {
-            provider: "crabbox",
-            settings: { binary: process.execPath, desktop: false },
-          },
-          absent: { provider: "crabbox", settings: { binary: process.execPath } },
-          malformed: {
-            provider: "crabbox",
-            settings: { binary: process.execPath, desktop: "true" },
-          },
-          other: { provider: "device", settings: { desktop: true } },
         },
       },
     } as const;
-    const before = structuredClone(cfg);
     const check = captureCrabboxDoctorCheck();
     try {
-      const findings = await check.detect({ cfg } as never);
-      expect(findings).toEqual([
-        expect.objectContaining({
-          checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
-          severity: "warning",
-          message: expect.stringContaining("node transport no longer supports desktop profiles"),
-          ocPath: "cloudWorkers.profiles.aws.settings.desktop",
-          target: "aws",
-          fixHint: expect.stringContaining("openclaw doctor --fix"),
-        }),
-        expect.objectContaining({
-          ocPath: "cloudWorkers.profiles.secondary.settings.desktop",
-          target: "secondary",
-        }),
-      ]);
-
-      const repaired = await check.repair!({ cfg, dryRun: true } as never, findings);
-      expect(cfg).toEqual(before);
-      expect(repaired.config).toEqual({
-        cloudWorkers: {
-          desktop: true,
-          profiles: {
-            aws: {
-              provider: "crabbox",
-              install: "npm",
-              settings: { binary: process.execPath, class: "fast", ttl: "12h" },
-            },
-            secondary: {
-              provider: " CRABBOX ",
-              settings: { binary: process.execPath, idleTimeout: "30m" },
-            },
-            disabled: {
-              provider: "crabbox",
-              settings: { binary: process.execPath, desktop: false },
-            },
-            absent: { provider: "crabbox", settings: { binary: process.execPath } },
-            malformed: {
-              provider: "crabbox",
-              settings: { binary: process.execPath, desktop: "true" },
-            },
-            other: { provider: "device", settings: { desktop: true } },
-          },
-        },
-      });
-      expect(repaired.changes).toHaveLength(2);
-
-      await expect(check.repair!({ cfg: repaired.config } as never, findings)).resolves.toEqual({
-        config: repaired.config,
-        changes: [],
-      });
+      await expect(check.detect({ cfg } as never)).resolves.toEqual([]);
+      expect(probe).toHaveBeenCalledOnce();
     } finally {
       probe.mockRestore();
     }

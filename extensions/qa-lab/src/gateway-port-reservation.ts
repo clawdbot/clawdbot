@@ -2,13 +2,15 @@
 type QaGatewayPortServer = {
   once(event: "error", listener: (error: Error) => void): void;
   off(event: "error", listener: (error: Error) => void): void;
+  on(event: "connection", listener: (socket: { destroy(): void }) => void): void;
   listen(port: number, host: string, listener: () => void): void;
   address(): { port: number } | string | null;
   close(callback?: (error?: Error) => void): void;
 };
 
-export async function reserveQaGatewayPort(createServer: () => QaGatewayPortServer) {
-  const server = createServer();
+export async function reserveQaGatewayPort(server: QaGatewayPortServer) {
+  // Reject probes so release cannot wait on accepted sockets.
+  server.on("connection", (socket) => socket.destroy());
   const port = await new Promise<number>((resolve, reject) => {
     const handleError = (error: Error) => {
       server.close(() => {});

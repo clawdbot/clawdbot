@@ -266,6 +266,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   ...prefixExtensionPackageBoundaryPaths(
     omitExtensionPackageBoundaryPaths(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS, [
       "openclaw/plugin-sdk/channel-secret-basic-runtime",
+      "openclaw/plugin-sdk/channel-secret-owner-runtime",
       "openclaw/plugin-sdk/channel-secret-tts-runtime",
       "@openclaw/matrix/test-api.js",
       "@openclaw/discord/api.js",

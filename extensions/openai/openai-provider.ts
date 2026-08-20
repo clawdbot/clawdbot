@@ -875,6 +875,17 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
 ] satisfies Parameters<typeof resolveFamilyForwardCompatModel>[0]["cases"];
 
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
+  const modelId = normalizeLowercaseStringOrEmpty(ctx.modelId);
+  if (
+    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
+    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
+    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
+  ) {
+    const exactModel = ctx.modelRegistry.find(PROVIDER_ID, ctx.modelId);
+    if (exactModel) {
+      return exactModel;
+    }
+  }
   return resolveFamilyForwardCompatModel({
     providerId: PROVIDER_ID,
     ctx,

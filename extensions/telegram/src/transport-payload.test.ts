@@ -9,6 +9,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.js";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { telegramPlugin } from "./channel.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { setTelegramRuntime } from "./runtime.js";
@@ -34,6 +36,26 @@ const cfg = {
   channels: { telegram: { botToken: TOKEN } },
   session: { store: "/tmp/openclaw-telegram-transport-payload-test.json" },
 } satisfies OpenClawConfig;
+
+function directMessagesMessage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    message_id: 41,
+    date: 1_700_000_000,
+    chat: {
+      id: DIRECT_CHAT_ID,
+      type: "supergroup",
+      title: "Channel Direct Messages",
+      is_direct_messages: true,
+    },
+    direct_messages_topic: {
+      topic_id: DIRECT_TOPIC_ID,
+      user: { id: 700, is_bot: false, first_name: "Subscriber" },
+    },
+    from: { id: 700, is_bot: false, first_name: "Subscriber" },
+    text: "button",
+    ...overrides,
+  };
+}
 
 function installTelegramStateRuntimeForTest(): void {
   setTelegramRuntime({
@@ -181,6 +203,46 @@ describe("Telegram topic transport payloads", () => {
     expect(request && hasMultipartField(request, "document")).toBe(true);
   });
 
+  it("round-trips direct-topic conversation custody into the canonical Bot API field", async () => {
+    const inbound = await buildTelegramMessageContextForTest({
+      message: directMessagesMessage(),
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+    });
+    expect(inbound?.ctxPayload.SessionKey).toContain(
+      `telegram:group:${DIRECT_CHAT_ID}:direct-topic:${DIRECT_TOPIC_ID}`,
+    );
+    const directRef = telegramPlugin.messaging?.resolveInboundConversation?.({
+      to: inbound?.ctxPayload.OriginatingTo,
+      isGroup: true,
+    });
+    expect(directRef?.conversationId).toBe(`${DIRECT_CHAT_ID}:direct-topic:${DIRECT_TOPIC_ID}`);
+    if (!directRef?.conversationId) {
+      throw new Error("expected direct-topic conversation reference");
+    }
+    const persistedRef = structuredClone({
+      conversationId: directRef.conversationId,
+      parentConversationId: directRef.parentConversationId,
+    });
+    const target = telegramPlugin.messaging?.resolveDeliveryTarget?.(persistedRef);
+    if (!target?.to) {
+      throw new Error("expected persisted direct-topic delivery target");
+    }
+    installTelegramStateRuntimeForTest();
+    await sendMessageTelegram(target.to, "roundtrip", {
+      cfg,
+      token: TOKEN,
+      api: bot.api,
+      messageThreadId: target.threadId ? Number(target.threadId) : undefined,
+    });
+
+    const request = requests.find((candidate) => candidate.method === "sendMessage");
+    expect(request && parseJsonBody(request)).toMatchObject({
+      direct_messages_topic_id: DIRECT_TOPIC_ID,
+    });
+    expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
+  });
+
   it("serializes local rich delivery through the canonical direct topic field", async () => {
     const richCfg = {
       ...cfg,
@@ -219,26 +281,13 @@ describe("Telegram topic transport payloads", () => {
   });
 
   it("serializes callback replies through only the canonical direct topic field", async () => {
-    const callbackMessage = {
-      message_id: 41,
-      date: 1_700_000_000,
-      chat: {
-        id: DIRECT_CHAT_ID,
-        type: "supergroup",
-        title: "Channel Direct Messages",
-        is_direct_messages: true,
-      },
+    const callbackMessage = directMessagesMessage({
       message_thread_id: 999,
-      direct_messages_topic: {
-        topic_id: DIRECT_TOPIC_ID,
-        user: { id: 700, is_bot: false, first_name: "Subscriber" },
-      },
-      text: "button",
-    } as Message;
+    }) as unknown as Message;
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
     });
 
     await actions.replyToCallbackChat("callback reply");

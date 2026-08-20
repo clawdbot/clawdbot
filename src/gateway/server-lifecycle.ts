@@ -84,7 +84,9 @@ export async function prepareGatewayLifecycle(params: {
     residentRegistry,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
+    nodeDesktopObserveAvailable,
     bindDeviceNodeControl,
+    bindWorkerNodeDesktopControl,
     workerPlacementRuntime,
     lifecycle,
   } = runtime;
@@ -133,7 +135,7 @@ export async function prepareGatewayLifecycle(params: {
     },
   });
   const nodeDesktopService =
-    desktopSessionRegistry && nodeDesktopStreamBroker
+    nodeDesktopObserveAvailable && desktopSessionRegistry && nodeDesktopStreamBroker
       ? (await import("./desktop/node-source.js")).createNodeDesktopService({
           getConfig: getRuntimeConfig,
           nodeRegistry,
@@ -143,6 +145,7 @@ export async function prepareGatewayLifecycle(params: {
       : undefined;
   nodeDesktopServiceRef.current = nodeDesktopService;
   bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
+  bindWorkerNodeDesktopControl?.(nodeWorkerSupervisorTransport);
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,

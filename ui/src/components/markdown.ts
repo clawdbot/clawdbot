@@ -1,5 +1,6 @@
 // Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
+import { CONTROL_UI_ROOT_PUBLIC_ASSETS } from "../../../src/gateway/control-ui-root-assets.js";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
@@ -309,20 +310,15 @@ const APP_RESOURCE_ROOT_SEGMENTS = new Set([
   "__openclaw__",
   "_next",
   "api",
-  "apple-touch-icon.png",
   "assets",
   "avatar",
-  "favicon-32.png",
-  "favicon.ico",
-  "favicon.svg",
   "manifest.json",
-  "manifest.webmanifest",
   "media",
   "res",
   "socket.io",
-  "sw.js",
   "static",
   "ws",
+  ...CONTROL_UI_ROOT_PUBLIC_ASSETS,
 ]);
 const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs"],

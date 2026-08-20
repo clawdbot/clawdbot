@@ -576,7 +576,7 @@ Periodic heartbeat runs.
 
 ### `agents.defaults.systemAgent`
 
-Selects the agent whose model and credentials own ambient OpenClaw system-agent and Custodian consults. It is also the fallback owner when `models.list`, `models.authStatus`, `skills.status`, or `doctor.memory.status` omits `agentId`:
+Selects the agent whose model and credentials own ambient OpenClaw system work: system-agent and Custodian consults, and the fallback owner whenever an ambient path omits `agentId`. That includes `models.list`, `models.authStatus`, `skills.status`, and `doctor.memory.status`, the default agent directory and workspace behind auth, model-catalog, and doctor resolution, outbound channel bootstrap and queued-delivery recovery, unscoped main-session routing, Talk relay ownership, and first-run onboarding:
 
 ```json5
 {
@@ -588,7 +588,7 @@ Selects the agent whose model and credentials own ambient OpenClaw system-agent 
 }
 ```
 
-An explicit request `agentId` always wins. Other agent-scoped methods do not use this setting as a general default. Delegated consults with a requesting agent keep that requester as their owner. When `systemAgent.agentId` is absent, a sole configured agent resolves implicitly; the four reads above and ambient consults in a multi-agent fleet fail with an actionable error. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
+An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a retained legacy default owner, and finally the sole configured agent. Delegated consults with a requesting agent keep that requester as their owner. The four reads above opt in individually; other agent-scoped Gateway methods, such as `tools.*`, `commands.*`, chat history, and session-catalog reads, do not use this setting as a general default. Surfaces that pick one agent's view also keep requiring an explicit choice, because silently adopting this owner would hide the other agents: `openclaw sessions` (add `--agent <id>` or `--all-agents`), `openclaw hooks` status, `openclaw models`, stored session lookup by id, and TUI startup. Ambient work in an ownerless multi-agent fleet fails with an actionable error, except queued-delivery recovery, which records the failing delivery and keeps draining the rest of the queue. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
 
 ### `agents.defaults.compaction`
 
@@ -600,7 +600,7 @@ An explicit request `agentId` always wins. Other agent-scoped methods do not use
         enabled: false, // disable embedded proactive auto-compaction (default: true)
         mode: "safeguard", // default | safeguard
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
-        thinkingLevel: "low", // optional compaction-only thinking override
+        thinkingLevel: "low", // default; use "inherit" to reuse the session level
         timeoutSeconds: 180,
         keepRecentTokens: 50000,
         recentTurnsPreserve: 3,
@@ -627,7 +627,7 @@ An explicit request `agentId` always wins. Other agent-scoped methods do not use
 - `enabled`: when `false`, disables threshold-driven auto-compaction inside the embedded agent runtime. OpenClaw's preflight and overflow-recovery compaction paths and manual `/compact` remain available. Default: `true`.
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
-- `thinkingLevel`: optional thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`). It overrides the session's current thinking level and is clamped to the selected compaction model/runtime. Leave unset to inherit the session level. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
+- `thinkingLevel`: thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, `ultra`, or `inherit`). It defaults to `low`; set `inherit` to reuse the session's current thinking level. The selected level is clamped to the compaction model/runtime. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Default: `20000`.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.

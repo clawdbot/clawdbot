@@ -99,12 +99,10 @@ const dashboardTitleGenerationMocks = vi.hoisted(() => ({
 }));
 
 const dashboardTitleScheduleMocks = vi.hoisted(() => ({
-  actual: undefined as ScheduleChatDashboardSessionTitle | undefined,
   schedule: vi.fn<ScheduleChatDashboardSessionTitle>(),
 }));
 
 const sessionTranscriptReaderMocks = vi.hoisted(() => ({
-  actual: undefined as ReadSessionMessageCountAsync | undefined,
   readCount: vi.fn<ReadSessionMessageCountAsync>(),
 }));
 
@@ -136,15 +134,11 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
 
 vi.mock("./server-methods/chat-send-background.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./server-methods/chat-send-background.js")>();
-  dashboardTitleScheduleMocks.actual = actual.scheduleChatDashboardSessionTitle;
-  dashboardTitleScheduleMocks.schedule.mockImplementation(actual.scheduleChatDashboardSessionTitle);
   return { ...actual, scheduleChatDashboardSessionTitle: dashboardTitleScheduleMocks.schedule };
 });
 
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
-  sessionTranscriptReaderMocks.actual = actual.readSessionMessageCountAsync;
-  sessionTranscriptReaderMocks.readCount.mockImplementation(actual.readSessionMessageCountAsync);
   return { ...actual, readSessionMessageCountAsync: sessionTranscriptReaderMocks.readCount };
 });
 
@@ -159,20 +153,32 @@ beforeAll(async () => {
   gitWorkspaceTemplateRoot = await fs.realpath(
     await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-session-git-template-")),
   );
-  const workspace = createGitWorkspace(gitWorkspaceTemplateRoot);
-  await Promise.all([
-    import("./server-methods/chat-send-background.js"),
-    import("./session-transcript-readers.js"),
-    workspace,
-  ]);
-  gitWorkspaceTemplate = await workspace;
+  gitWorkspaceTemplate = await createGitWorkspace(gitWorkspaceTemplateRoot);
 });
 
 afterAll(async () => {
   await fs.rm(gitWorkspaceTemplateRoot, { recursive: true, force: true });
 });
 
-beforeEach(() => {
+// Read the real implementations back here rather than capturing them inside the
+// mock factories: Vitest runs a factory on first import of the mocked module, and
+// this project is `isolate: false`, so on a warm module graph a factory can still
+// be unrun when the first `beforeEach` fires.
+async function actualDashboardTitleScheduler(): Promise<ScheduleChatDashboardSessionTitle> {
+  const actual = await vi.importActual<typeof import("./server-methods/chat-send-background.js")>(
+    "./server-methods/chat-send-background.js",
+  );
+  return actual.scheduleChatDashboardSessionTitle;
+}
+
+async function actualSessionMessageCountReader(): Promise<ReadSessionMessageCountAsync> {
+  const actual = await vi.importActual<typeof import("./session-transcript-readers.js")>(
+    "./session-transcript-readers.js",
+  );
+  return actual.readSessionMessageCountAsync;
+}
+
+beforeEach(async () => {
   sessionDiffBaselineMocks.captureGate = undefined;
   sessionDiffBaselineMocks.captureStarted = undefined;
   sessionDiffBaselineMocks.capture.mockClear();
@@ -182,15 +188,11 @@ beforeEach(() => {
   dashboardTitleGenerationMocks.generate.mockReset();
   dashboardTitleGenerationMocks.generate.mockResolvedValue("Generated Dashboard Title");
   dashboardTitleScheduleMocks.schedule.mockReset();
-  if (!dashboardTitleScheduleMocks.actual) {
-    throw new Error("actual dashboard title scheduler was not loaded");
-  }
-  dashboardTitleScheduleMocks.schedule.mockImplementation(dashboardTitleScheduleMocks.actual);
+  dashboardTitleScheduleMocks.schedule.mockImplementation(await actualDashboardTitleScheduler());
   sessionTranscriptReaderMocks.readCount.mockReset();
-  if (!sessionTranscriptReaderMocks.actual) {
-    throw new Error("actual session transcript reader was not loaded");
-  }
-  sessionTranscriptReaderMocks.readCount.mockImplementation(sessionTranscriptReaderMocks.actual);
+  sessionTranscriptReaderMocks.readCount.mockImplementation(
+    await actualSessionMessageCountReader(),
+  );
 });
 
 async function makeNonGitTempDir(prefix: string): Promise<string> {

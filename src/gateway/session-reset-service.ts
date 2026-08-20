@@ -15,8 +15,7 @@ import {
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
+  resolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import {
   clearBootstrapSnapshot,
@@ -122,9 +121,7 @@ import {
 } from "./worker-environments/session-placement-lifecycle.js";
 
 function resolveLifecycleAgentId(cfg: OpenClawConfig, agentId?: string): string {
-  return normalizeAgentId(
-    agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg),
-  );
+  return normalizeAgentId(agentId ?? resolveAmbientOwnerAgentId(cfg));
 }
 
 type McpRunEndWatcherState = {
@@ -1581,6 +1578,10 @@ export async function performGatewaySessionReset(params: {
             subagentRole: currentEntry?.subagentRole,
             subagentControlScope: currentEntry?.subagentControlScope,
             label: currentEntry?.label,
+            icon: currentEntry?.icon,
+            category: currentEntry?.category,
+            boardFace: currentEntry?.boardFace,
+            visibility: currentEntry?.visibility,
             displayName: currentEntry?.displayName,
             delivery: currentEntry?.delivery,
             pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,

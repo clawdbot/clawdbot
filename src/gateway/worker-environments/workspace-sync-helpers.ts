@@ -337,6 +337,14 @@ export function validateWorkspaceSyncRequest(request: WorkerWorkspaceSyncRequest
   if (!Number.isSafeInteger(request.generation) || request.generation < 0) {
     throw new Error("Worker workspace generation must be a non-negative safe integer");
   }
+  for (const value of [request.gitAuthor?.name, request.gitAuthor?.email]) {
+    if (
+      value !== undefined &&
+      (!value.trim() || value.length > 256 || value.includes("\u0000") || /[\r\n]/u.test(value))
+    ) {
+      throw new Error("Worker workspace Git author metadata is invalid");
+    }
+  }
 }
 
 export function parseRemoteWorkspaceSetup(

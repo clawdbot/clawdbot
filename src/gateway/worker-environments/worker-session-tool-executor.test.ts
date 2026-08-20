@@ -32,6 +32,7 @@ const gatewayRuntimeIdentity = vi.hoisted(() => vi.fn());
 const dispatchChild = vi.hoisted(() => vi.fn());
 const spawnCallerIdentity = vi.hoisted(() => vi.fn());
 const spawnArgs = vi.hoisted(() => vi.fn());
+const githubPublicationRequest = vi.hoisted(() => vi.fn());
 const scopedSessionAccess = vi.hoisted(() =>
   vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
 );
@@ -167,7 +168,11 @@ describe("worker session tool topology", () => {
         ownerEpoch: SOURCE.ownerEpoch,
       },
     });
-    placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send", "sessions_spawn"]);
+    placements.authorizeWorkerTurnTools(sourceClaim, [
+      "sessions_send",
+      "sessions_spawn",
+      "github_publish",
+    ]);
     delegatedAuthorities = [];
     const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
     delegatedAuthorities.push(claimAgentRunDelegatedAuthority(sourceOperationalRun));
@@ -198,6 +203,12 @@ describe("worker session tool topology", () => {
     dispatchChild.mockReset();
     spawnCallerIdentity.mockReset();
     spawnArgs.mockReset();
+    githubPublicationRequest.mockReset();
+    githubPublicationRequest.mockResolvedValue({
+      requestId: "publication-1",
+      status: "requested",
+      message: "Publication was accepted.",
+    });
     scopedSessionAccess.mockClear();
     childSessionKey = undefined;
     spawnOrder = [];
@@ -234,6 +245,7 @@ describe("worker session tool topology", () => {
     execute = createWorkerSessionToolExecutor({
       placements,
       dispatchChild,
+      githubPublication: { requestForClaim: githubPublicationRequest },
       environments: {
         get: (environmentId: string) => {
           if (environmentId === SOURCE.environmentId) {
@@ -270,6 +282,67 @@ describe("worker session tool topology", () => {
         },
       } as never,
     });
+  });
+
+  it("records publication intent with the exact claim and no credential fields", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+
+    const result = await execute({
+      identity,
+      toolName: "github_publish",
+      request: {
+        toolCallId: "publish-cloud-work",
+        title: "Publish the cloud fix",
+      },
+    });
+
+    expect(JSON.parse(result.resultJson)).toMatchObject({
+      details: { requestId: "publication-1", status: "requested" },
+    });
+    expect(githubPublicationRequest).toHaveBeenCalledWith({
+      claim: sourceClaim,
+      sessionKey: SOURCE.sessionKey,
+      agentId: SOURCE.agentId,
+      idempotencyKey: "publish-cloud-work",
+      title: "Publish the cloud fix",
+      assertCurrent: expect.any(Function),
+    });
+    expect(JSON.stringify(githubPublicationRequest.mock.calls)).not.toContain("token");
+  });
+
+  it("revalidates publication authority after awaited Gateway work", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    githubPublicationRequest.mockImplementationOnce(async (request) => {
+      placements.closeWorkerTurnToolAdmission(sourceClaim);
+      request.assertCurrent?.();
+      return {
+        requestId: "unreachable",
+        status: "requested",
+        message: "unreachable",
+      };
+    });
+
+    await expect(
+      execute({
+        identity,
+        toolName: "github_publish",
+        request: { toolCallId: "publish-lost-authority" },
+      }),
+    ).rejects.toThrow("Worker session tool authority changed");
+  });
+
+  it("rejects publication when the exact turn was not granted the tool", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send"]);
+
+    await expect(
+      execute({
+        identity,
+        toolName: "github_publish",
+        request: { toolCallId: "publish-without-authority" },
+      }),
+    ).rejects.toThrow("Worker session tool authority changed");
+    expect(githubPublicationRequest).not.toHaveBeenCalled();
   });
 
   afterEach(async () => {
@@ -437,7 +510,7 @@ describe("worker session tool topology", () => {
       sessionSpawnContext: {
         inheritedToolPolicy: {
           version: 1,
-          allow: ["sessions_spawn", "sessions_send"],
+          allow: ["sessions_spawn", "sessions_send", "github_publish"],
           deny: [],
         },
       },

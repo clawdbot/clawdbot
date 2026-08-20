@@ -1465,7 +1465,7 @@ export async function getMemoryWikiPage(input: {
       from: fromLine,
       lines: lineCount,
     });
-    if (result.path === relPath && result.text === "" && result.from === undefined) {
+    if (result.status === "not_found") {
       continue;
     }
     return {

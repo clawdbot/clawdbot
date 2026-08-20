@@ -69,7 +69,6 @@ function createFixture() {
     getLastAssistantUsage: vi.fn(() => undefined),
     getLastCompactionTokensAfter: vi.fn(() => undefined),
     getLastToolError: vi.fn(() => undefined),
-    getLastToolRecovery: vi.fn(() => undefined),
     getLatestMcpAppChannelView: vi.fn(() => undefined),
     getLatestMcpConnectAction: vi.fn(() => undefined),
     getMessagingToolSentMediaUrls: vi.fn(() => []),

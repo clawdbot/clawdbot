@@ -112,6 +112,13 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
     sessionKey: string;
     agentId: string;
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
+  prepareAcceptedWorkspacePublication?: (
+    claim: import("./placement-store.js").WorkerSessionTurnClaim,
+  ) => Promise<void>;
+  publishAcceptedWorkspace?: (
+    claim: import("./placement-store.js").WorkerSessionTurnClaim,
+  ) => Promise<void>;
+  resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
 };
 
 function requireProvisionedEnvironment(
@@ -165,6 +172,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
     recoverPlacementMoves: () => recoverPlacementMoves(),
     workspaceOperations: options.workspaceOperations,
+    ...(options.prepareAcceptedWorkspacePublication
+      ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
+      : {}),
+    ...(options.publishAcceptedWorkspace
+      ? { publishAcceptedWorkspace: options.publishAcceptedWorkspace }
+      : {}),
   });
 
   const reportTransition = (
@@ -263,10 +276,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       });
       ownerEpoch = credential.ownerEpoch;
       const tunnel = await environments.startTunnel({ environmentId, ownerEpoch });
+      const gitAuthor = options.resolveGitAuthor?.(request.agentId);
       const synced = await tunnel.syncWorkspace({
         localPath,
         sessionId: request.sessionId,
         generation: placement.generation,
+        ...(gitAuthor ? { gitAuthor } : {}),
       });
       placement = placements.transition({
         sessionId: request.sessionId,

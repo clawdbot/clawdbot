@@ -19,12 +19,13 @@ Channel plugins can register a contextual presenter behind the same core tool. I
 
 In Control UI sessions, a Canvas widget can also be pinned to the session dashboard. Set `pin: true` in the tool call, or use **Pin to dashboard** on an existing transcript widget. Pinned HTML runs behind the same dedicated-origin, double-iframe sandbox host used by MCP Apps; the browser never resolves a widget data binding inside the untrusted frame.
 
-For browser embedding, the wrapper document injects four small host bridges around the widget code:
+For browser embedding, the wrapper document injects five small host bridges around the widget code:
 
-- A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (160 to 1200 pixels).
+- A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (48 to 1200 pixels).
 - A host bridge defines the legacy `sendPrompt(text)` helper plus the structured `openclaw.prompt`, `openclaw.state`, `openclaw.data`, and `openclaw.cron` APIs. Inline chat prompts retain their private message channel; dashboard APIs use a view-ticket-bound request channel. See [Interactive widgets](#interactive-widgets) and [Dashboard capabilities](#dashboard-capabilities).
 - A theme bridge listens for the Control UI's current design tokens and applies them as CSS variables, on load and again on every theme change.
 - A snapshot bridge renders the current widget document as a PNG when the embedding chat requests an export.
+- A chat-host bridge hides embedded scrollbar chrome when the widget runs inline while preserving scrolling behavior.
 
 Everything else stays inside the frame: the document runs in an opaque origin with a strict Content Security Policy, so widget scripts cannot reach the Control UI, the Gateway, or the network.
 

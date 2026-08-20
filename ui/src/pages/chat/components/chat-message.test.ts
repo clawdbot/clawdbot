@@ -385,9 +385,13 @@ function createAssistantCanvasBlock(params: {
   url?: string;
   preferredHeight?: number;
   presentationTarget?: "assistant_message" | "tool_card";
+  mcpApp?: { viewId: string };
 }) {
   const viewId = `cv_inline_${params.suffix}`;
-  const preview = createCanvasPreview({ ...params, viewId });
+  const preview = {
+    ...createCanvasPreview({ ...params, viewId }),
+    ...(params.mcpApp ? { mcpApp: params.mcpApp } : {}),
+  };
   return {
     type: "canvas",
     preview,
@@ -3109,6 +3113,51 @@ describe("grouped chat rendering", () => {
     container.remove();
   });
 
+  it("renders an expanded orphan tool result without a nested disclosure", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          createToolResultMessage("call-orphan", "read", "Orphan tool output", {
+            id: "orphan-tool-result",
+          }),
+          "tool",
+        ),
+      ],
+      { isToolMessageExpanded: () => true },
+    );
+
+    expect(container.querySelector(".chat-tool-msg-body .chat-tool-msg-summary")).toBeNull();
+    expect(container.querySelectorAll(".chat-tool-card__block code")).toHaveLength(1);
+    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
+      "Orphan tool output",
+    );
+  });
+
+  it("keeps text visible beside an orphan tool-result image", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          createToolResultMessage("call-image", "image", [
+            { type: "text", text: "Generated image" },
+            { type: "image", data: "cG5n", mimeType: "image/png", alt: "Generated preview" },
+          ]),
+          "tool",
+        ),
+      ],
+      { isToolMessageExpanded: () => true },
+    );
+
+    expect(container.querySelector(".chat-text")?.textContent).toContain("Generated image");
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe("data:image/png;base64,cG5n");
+    expect(container.querySelector(".chat-tool-msg-body .chat-tool-msg-summary")).not.toBeNull();
+  });
+
   it("collapses an inline tool call while keeping matching tool output visible", () => {
     const container = document.createElement("div");
     const groups = [
@@ -5452,6 +5501,30 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector(".chat-group.tool .chat-tool-msg-summary__names")?.textContent,
     ).toBe("canvas_render");
+  });
+
+  it("keeps MCP App raw details reachable from its widget menu", () => {
+    const container = document.createElement("div");
+    const canvas = createAssistantCanvasBlock({
+      suffix: "mcp-raw",
+      mcpApp: { viewId: "view-mcp-raw" },
+    });
+    renderAssistantMessage(container, createAssistantMessage([canvas]), {
+      sessionKey: "agent:main:main",
+    });
+
+    const dropdown = expectElement(container, "wa-dropdown", HTMLElement);
+    expect(dropdown.querySelectorAll("wa-dropdown-item")).toHaveLength(1);
+    dropdown.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "raw-details" } },
+      }),
+    );
+    expect(
+      container
+        .querySelector(".chat-tool-card__widget-raw .chat-tool-card__raw-toggle")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 
   it("opens generic tool details instead of a canvas preview from tool rows", () => {

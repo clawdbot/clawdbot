@@ -86,7 +86,7 @@ describe("secrets configure plan helpers", () => {
     );
     expect(openaiCandidate?.type).toBe("auth-profiles.api_key.key");
     expect(openaiCandidate?.agentId).toBe("main");
-    expect(openaiCandidate?.configFile).toBe("auth-profiles.json");
+    expect(openaiCandidate?.configFile).toBe("auth-profile-store");
     expect(openaiCandidate?.authProfileProvider).toBe("openai");
   });
 

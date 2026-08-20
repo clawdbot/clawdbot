@@ -30,6 +30,18 @@ export function hasResolvedThinkingCatalogEntry(params: {
   return entry?.reasoning !== undefined;
 }
 
+/** Reuses prepared capability facts for plugin runtimes even when the manifest is partial. */
+export function needsThinkHydration(
+  catalog: readonly ThinkingCatalogEntry[] | undefined,
+  provider: string,
+  model: string,
+  agentRuntime: string,
+): boolean {
+  return (
+    agentRuntime !== "openclaw" || !hasResolvedThinkingCatalogEntry({ catalog, provider, model })
+  );
+}
+
 export function normalizeThinkingCatalogProviders<T extends ThinkingCatalogEntry>(
   catalog: readonly T[],
 ): T[] {

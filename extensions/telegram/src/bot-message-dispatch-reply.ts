@@ -14,8 +14,9 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   applyTextToPayload,
   deliverFinalAnswerText,
-  emitPreviewFinalizedHook,
+  handlePreviewFinalizedResult,
   normalizeDeliveryPayload,
+  registerTelegramQuestionDeliveryForMessage,
   sendPayload,
 } from "./bot-message-dispatch-delivery.js";
 import {
@@ -427,8 +428,19 @@ export async function deliverReply(
             onPlatformSendDispatch: info.onPlatformSendDispatch,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
           });
-    if (segment.lane === "answer" && info.kind !== "final" && result.kind === "preview-finalized") {
-      await emitPreviewFinalizedHook(turn, result);
+    const finalizedPreview =
+      segment.lane === "answer" &&
+      info.kind !== "final" &&
+      (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial");
+    if (finalizedPreview) {
+      await handlePreviewFinalizedResult(turn, result);
+    }
+    if (segment.lane === "answer" && info.kind === "tool" && result.kind === "preview-updated") {
+      const messageId = turn.answerLane.stream?.messageId();
+      const text = turn.answerLane.stream?.lastDeliveredText?.();
+      if (typeof messageId === "number" && text) {
+        registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, { messageId, text });
+      }
     }
     if (segment.lane === "answer" && info.kind === "block" && result.kind === "preview-updated") {
       turn.activeAnswerBlockDelivery = {
@@ -539,7 +551,7 @@ export function handleReplyError(
       scopeKey: buildTelegramErrorScopeKey({
         accountId: turn.context.route.accountId,
         chatId: turn.context.chatId,
-        threadId: turn.context.threadSpec.id,
+        threadSpec: turn.context.threadSpec,
       }),
       cooldownMs: errorPolicy.cooldownMs,
       errorMessage: String(err),

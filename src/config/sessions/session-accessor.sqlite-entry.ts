@@ -1,5 +1,8 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -186,13 +189,17 @@ export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEn
     : undefined;
 }
 
-/** Lists persisted session keys from the data-version-validated entry snapshot. */
+/** Lists persisted session keys without materializing their entry JSON. */
 export function listSessionEntryKeysReadOnly(
   scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
 ): string[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    return [...readSessionEntrySnapshot(database, resolved, scope.readConsistency).keys];
+    const db = getSessionKysely(database.db);
+    return executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("session_nodes").select("session_key").orderBy("session_key"),
+    ).rows.map((row) => row.session_key);
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];
 }

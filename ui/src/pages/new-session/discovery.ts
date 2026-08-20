@@ -4,6 +4,7 @@ import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-c
 import type {
   EnvironmentStatus,
   RuntimeTargetIssue,
+  WorkerExecutionMode,
   WorkerSlotSummary,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 
@@ -25,6 +26,7 @@ export type DraftCloudProfile = {
   id: string;
   providerId: string;
   trust?: "persistent" | "disposable";
+  executionMode?: WorkerExecutionMode;
   machines?: DraftMachineOption[];
 };
 
@@ -92,6 +94,7 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         id?: unknown;
         providerId?: unknown;
         trust?: unknown;
+        executionMode?: unknown;
         machines?: unknown;
       };
       const id = normalizeOptionalString(profile.id);
@@ -103,8 +106,14 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         profile.trust === "persistent" || profile.trust === "disposable"
           ? profile.trust
           : undefined;
+      const executionMode: WorkerExecutionMode | undefined =
+        profile.executionMode === "worker-turn" || profile.executionMode === "remote-exec"
+          ? profile.executionMode
+          : undefined;
       const machines = readDraftMachineOptions(profile.machines);
-      return [{ id, providerId, trust, ...(machines.length > 0 ? { machines } : {}) }];
+      return [
+        { id, providerId, trust, executionMode, ...(machines.length > 0 ? { machines } : {}) },
+      ];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

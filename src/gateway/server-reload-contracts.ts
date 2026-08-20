@@ -183,6 +183,7 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
   "assertRestartReady" | "createHealthMonitor" | "logReload"
 > & {
+  configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;

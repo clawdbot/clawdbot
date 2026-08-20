@@ -139,6 +139,9 @@ function createApplicationTheme(
     get mode() {
       return settings.themeMode;
     },
+    get resolvedMode() {
+      return resolveTheme(settings.theme, settings.themeMode).endsWith("light") ? "light" : "dark";
+    },
     get serverSelection() {
       return serverSelection;
     },

@@ -248,6 +248,47 @@ function activityAlignmentHtml() {
   `;
 }
 
+function completedWorkSpacingHtml() {
+  return `
+    <div class="chat-thread" role="log">
+      <div class="chat-thread-inner chat-thread-inner--virtual">
+        <div class="chat-virtual-sizer" style="height: 400px;">
+          <div class="chat-virtual-row" data-spacing-row="prompt">
+            <div class="chat-group user chat-group--with-footer">
+              <div class="chat-group-messages">
+                <div class="chat-bubble"><div class="chat-text">Prompt</div></div>
+              </div>
+              <div class="chat-group-footer"><span class="chat-sender-name">You</span></div>
+            </div>
+          </div>
+          <div class="chat-virtual-row" data-spacing-row="work">
+            <div class="chat-group tool chat-group--work">
+              <div class="chat-group-messages">
+                <div class="chat-activity-group chat-work-group">
+                  <button class="chat-inline-disclosure chat-activity-group__summary" type="button">
+                    <span class="chat-tool-disclosure__content">
+                      <span class="chat-activity-group__label">Worked for 10s</span>
+                    </span>
+                  </button>
+                  <div class="chat-work-group__separator"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="chat-virtual-row" data-spacing-row="reply">
+            <div class="chat-group assistant chat-group--with-footer">
+              <div class="chat-group-messages">
+                <div class="chat-bubble"><div class="chat-text">Final reply</div></div>
+              </div>
+              <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function chatFooterActionsHtml() {
   return `
     <div class="chat-group-footer-actions">
@@ -596,14 +637,14 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
 async function openBrowserPage(
   width: number,
   height: number,
-  options: { isolated?: boolean } = {},
+  options: { hasTouch?: boolean; isolated?: boolean } = {},
 ): Promise<Page> {
   sharedBrowser ??= await chromium.launch({
     executablePath: chromiumExecutablePath,
     headless: true,
   });
   if (options.isolated) {
-    return await sharedBrowser.newPage({ viewport: { width, height } });
+    return await sharedBrowser.newPage({ hasTouch: options.hasTouch, viewport: { width, height } });
   }
   // Static setContent fixtures do not mutate context-owned storage or routes,
   // so they can share one context while their pages remain concurrent.
@@ -1225,6 +1266,46 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it.each([
+    { label: "desktop", width: 1366, hasTouch: false, expectedGap: 9 },
+    { label: "narrow touch", width: 430, hasTouch: true, expectedGap: 23 },
+    { label: "wide touch", width: 1366, hasTouch: true, expectedGap: 23 },
+  ])("balances completed-work spacing on $label", async ({ width, hasTouch, expectedGap }) => {
+    const page = await openBrowserPage(width, 720, { hasTouch, isolated: true });
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${completedWorkSpacingHtml()}</body></html>`,
+      );
+      await waitForLayoutSettled(page, "[data-spacing-row], .chat-group--work");
+
+      const gaps = await page.evaluate(() => {
+        const rows = [...document.querySelectorAll<HTMLElement>("[data-spacing-row]")];
+        let offset = 0;
+        for (const row of rows) {
+          row.style.transform = `translateY(${offset}px)`;
+          offset += row.getBoundingClientRect().height;
+        }
+        const prompt = document.querySelector<HTMLElement>(
+          '[data-spacing-row="prompt"] .chat-group',
+        )!;
+        const summary = document.querySelector<HTMLElement>(".chat-work-group > button")!;
+        const separator = document.querySelector<HTMLElement>(".chat-work-group__separator")!;
+        const reply = document.querySelector<HTMLElement>(
+          '[data-spacing-row="reply"] .chat-group',
+        )!;
+        return {
+          after: reply.getBoundingClientRect().top - separator.getBoundingClientRect().bottom,
+          before: summary.getBoundingClientRect().top - prompt.getBoundingClientRect().bottom,
+        };
+      });
+
+      expect(gaps.before).toBeCloseTo(expectedGap, 0);
+      expect(gaps.after).toBeCloseTo(expectedGap, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("insets only the bundled logo inside the unchanged avatar box", async () => {
     const page = await openBrowserPage(430, 720);
     try {
@@ -1359,9 +1440,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             <div class="chat-group assistant chat-group--with-footer">
               <div class="chat-group-messages">
                 <div class="chat-bubble">
-                  <div class="chat-tool-card__preview" data-content-kind="mcp-app">
-                    <div class="chat-tool-card__preview-panel">
-                      <mcp-app-view style="display:block;width:100%;height:320px"></mcp-app-view>
+                  <div class="chat-tool-card__widget-host">
+                    <div class="chat-tool-card__preview" data-content-kind="mcp-app">
+                      <div class="chat-tool-card__preview-panel">
+                        <mcp-app-view style="display:block;width:100%;height:320px"></mcp-app-view>
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -250,6 +250,7 @@ describe("scanStatusJsonFast", () => {
       cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",
+      inspectSources: true,
     });
   });
 

@@ -266,10 +266,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     return this.dockLayout.restoreOpenState();
   }
 
-  clearTerminalPanelResizeListeners(): void {
-    this.dockLayout.clearResizeListeners();
-  }
-
   private handleGlobalKey(event: KeyboardEvent): void {
     // Ctrl+` toggles the terminal, matching common IDE shells.
     if (isTerminalPanelShortcut(event)) {

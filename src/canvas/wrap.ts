@@ -52,7 +52,7 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --border:#1e2028;--border-strong:#2e3040;
 --accent:#ff5c5c;--accent-fill:#d13c3c;--accent-fg:#ffffff;
 --ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;--info:#3b82f6}}
-*{box-sizing:border-box}html,body{margin:0}
+*{box-sizing:border-box}html,body{margin:0}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
 body{font:14px/1.5 var(--font-body);color:var(--text)}
 h1,h2,h3{margin:0 0 8px;color:var(--text-strong);font-weight:600}
 h1{font-size:18px}h2{font-size:16px}h3{font-size:14px}
@@ -177,6 +177,10 @@ export function buildWidgetDocument(
     'const value=typeof raw==="string"?raw.trim():"";' +
     'if(value&&value.length<=256)set("--"+key,value);else rm("--"+key);}' +
     'if(data.mode==="light"||data.mode==="dark")set("color-scheme",data.mode);});})();</script>';
+  const chatHostBridge =
+    "<script>(()=>{if(!window.parent||window.parent===window)return;" +
+    'addEventListener("message",event=>{if(event.source===window.parent&&event.data?.type==="openclaw:widget-chat-host")' +
+    'document.documentElement.classList.add("openclaw-chat-host");});})();</script>';
   /*
    * Snapshot requests come from the embedding parent and replies return only
    * there. Capture the response channel and rendering primitives before widget
@@ -240,5 +244,5 @@ export function buildWidgetDocument(
     : "'none'";
   const scriptSources = options.scriptOrigins?.length ? ` ${options.scriptOrigins.join(" ")}` : "";
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
 }

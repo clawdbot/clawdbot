@@ -937,7 +937,10 @@ function loadAuthProfileStoreForAgent(
   if (asStore) {
     const legacySources = listLegacyAuthProfileSources({ agentDir: effectiveAgentDir });
     const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
-    if (credentialSources.length > 0) {
+    // A populated canonical store already owns this agent's credentials, so a
+    // retired file beside it is unarchived bytes rather than pending migration.
+    // Only an empty store means the credentials still live solely in that file.
+    if (credentialSources.length > 0 && Object.keys(asStore.profiles).length === 0) {
       const migrationError = new AuthProfileMigrationRequiredError({
         agentDir: effectiveAgentDir,
         sources: credentialSources,

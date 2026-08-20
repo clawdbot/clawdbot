@@ -48,6 +48,7 @@ type CrabboxProfile = {
 const CRABBOX_FALLBACK_MACHINE_CLASSES = ["standard", "fast", "large", "beast"] as const;
 const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
 const MAX_CRABBOX_MACHINE_OPTIONS = 32;
+const CRABBOX_DESKTOP_PROVIDERS = new Set(["aws", "hetzner"]);
 
 export type CrabboxMachineShape = Readonly<{
   class: string;
@@ -143,6 +144,11 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (desktop !== undefined && typeof desktop !== "boolean") {
     throw new WorkerProviderError("Crabbox profile desktop must be a boolean");
   }
+  if (desktop && !CRABBOX_DESKTOP_PROVIDERS.has(provider)) {
+    throw new WorkerProviderError(
+      "Crabbox desktop profiles support only AWS and coordinator-backed Hetzner",
+    );
+  }
   return {
     binary,
     class: machineClass,
@@ -235,7 +241,7 @@ export function buildCrabboxWarmupArgs(
     "--keep=true",
   ];
   if (profile.desktop) {
-    args.push("--desktop", "--browser");
+    args.push("--desktop", "--browser", "--desktop-env", "xfce");
   }
   return args;
 }

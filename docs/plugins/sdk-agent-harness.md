@@ -319,8 +319,8 @@ For operator setup, model prefix examples, and Codex-only configs, see
 
 The Codex plugin enforces the minimum app-server version documented in
 [Codex Harness](/plugins/codex-harness). It checks the initialize handshake and
-blocks older or unversioned servers, so OpenClaw only runs against the protocol
-surface it has tested.
+blocks older, malformed, or unversioned servers. Admission permits startup to
+continue; it does not prove later runtime or capability operations will succeed.
 
 ### Tool-result middleware
 
@@ -373,6 +373,15 @@ the prompt, deliver it through OpenClaw's blocking reply path, and normalize
 choice/free-form answers back into the runtime's native response shape. The
 helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
+
+For schema-backed forms and literal URL confirmation, use the
+`agentHarnessStructuredInput` runtime surface from the same subpath. It
+snapshots bounded own data without invoking accessors, compiles supported
+primitive fields into Gateway questions, and executes them with batching,
+secret-input, timeout, and cancellation fencing. Harnesses keep ownership of
+their protocol envelope and must pass the exact turn signal and active-owner
+check; `run(...)` returns an answered, declined, cancelled, or unsupported
+outcome for the adapter to translate.
 
 Each prepared attempt also receives a versioned `params.hostCapabilities`
 object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,

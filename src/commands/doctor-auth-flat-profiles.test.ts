@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listAuthProfileStoresRequiringMigration } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { assertAuthProfileMigrationReady } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js";
 import {
   loadPersistedAuthProfileStore,
@@ -780,12 +780,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     ).toEqual({ eligible: false, reasonCode: "unresolved_ref" });
     expect(fs.existsSync(authPath)).toBe(false);
     expectMigratedArchive(authPath);
-    expect(
-      listAuthProfileStoresRequiringMigration({
-        agentDirs: [state.agentDir()],
-        env: state.env,
-      }),
-    ).toEqual([]);
+    expect(() => assertAuthProfileMigrationReady(state.agentDir())).not.toThrow();
   });
 
   it("imports valid profiles when one legacy OAuth sidecar ref is unresolved", async () => {
@@ -844,12 +839,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     });
     expect(fs.existsSync(authPath)).toBe(false);
     expectMigratedArchive(authPath);
-    expect(
-      listAuthProfileStoresRequiringMigration({
-        agentDirs: [state.agentDir()],
-        env: state.env,
-      }),
-    ).toEqual([]);
+    expect(() => assertAuthProfileMigrationReady(state.agentDir())).not.toThrow();
   });
 
   it("keeps existing SQLite credentials when importing stale JSON", async () => {
@@ -2474,6 +2464,62 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
           .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
           .get(sessionKey),
       ).toEqual({ entry_valid: 0 });
+    } finally {
+      verifier.close();
+    }
+  });
+
+  it("ignores retained Codex window metadata when preview and repair both skip its tombstone", async () => {
+    const state = await makeTestState();
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry(
+      { storePath, sessionKey, env: state.env },
+      { sessionId: "retained-codex-window", updatedAt: 10 },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    const database = new DatabaseSync(sqlitePath);
+    database
+      .prepare("UPDATE session_nodes SET entry_json = '{}' WHERE session_key = ?")
+      .run(sessionKey);
+    database
+      .prepare("UPDATE session_nodes SET entry_valid = -1 WHERE session_key = ?")
+      .run(sessionKey);
+    database
+      .prepare(
+        "UPDATE session_windows SET agent_harness_id = 'codex', model_provider = 'openai-codex', model = 'gpt-5.5' WHERE session_key = ?",
+      )
+      .run(sessionKey);
+    database.close();
+
+    const preview = await maybeRepairCodexSessionRoutes({
+      cfg: {},
+      env: state.env,
+      shouldRepair: false,
+    });
+    const repair = await maybeRepairCodexSessionRoutes({
+      cfg: {},
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    expect(preview).toMatchObject({ warnings: [], changes: [], repairedSessions: 0 });
+    expect(repair).toMatchObject({ warnings: [], changes: [], repairedSessions: 0 });
+    const verifier = new DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(
+        verifier
+          .prepare("SELECT entry_json, entry_valid FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey),
+      ).toEqual({ entry_json: "{}", entry_valid: -1 });
+      expect(
+        verifier
+          .prepare(
+            "SELECT agent_harness_id, model_provider, model FROM session_windows WHERE session_key = ?",
+          )
+          .get(sessionKey),
+      ).toEqual({ agent_harness_id: "codex", model_provider: "openai-codex", model: "gpt-5.5" });
     } finally {
       verifier.close();
     }

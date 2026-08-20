@@ -2707,6 +2707,19 @@ button.chat-pr__diff {
   box-shadow: var(--focus-ring);
 }
 
+.chat-pr__publication-outcome {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chat-pr__publication-outcome[data-state="failed"] {
+  color: var(--danger);
+}
+
 .chat-pr__dismiss {
   display: grid;
   padding: 2px;

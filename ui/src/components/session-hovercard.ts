@@ -12,6 +12,16 @@ import { renderSessionProgressCard } from "./session-progress-card.ts";
 
 const MAX_VISIBLE_PULL_REQUESTS = 3;
 
+type SessionHovercardAvatarAuth = {
+  authTokens: readonly string[];
+  authReady: boolean;
+};
+
+let channelAvatarElementLoad: Promise<unknown> | undefined;
+function ensureChannelAvatarElement(): void {
+  channelAvatarElementLoad ??= import("./channel-avatar.ts");
+}
+
 function pullRequestStateLabel(state: ControlUiSessionPullRequest["state"]): string {
   return t(`sessionHovercard.states.${state}`);
 }
@@ -59,13 +69,19 @@ function renderDiffStats(item: { additions?: number; deletions?: number; changed
   </span>`;
 }
 
-function renderHeader(row: SidebarRecentSession | undefined) {
+function renderHeader(
+  row: SidebarRecentSession | undefined,
+  channelAvatarAuth: SessionHovercardAvatarAuth | undefined,
+) {
   if (!row) {
     return nothing;
   }
   const owner = row.owner?.actor ?? row.createdActor;
   const ownerLabel = owner?.label?.trim() || owner?.id?.trim();
   const initials = owner ? sessionOwnerInitials(owner) : "";
+  const avatarFallback = initials
+    ? html`<span class="session-hovercard__avatar-fallback" aria-hidden="true">${initials}</span>`
+    : nothing;
   const created = formatRelativeTimestamp(row.startedAt, { fallback: "" });
   const updated = formatRelativeTimestamp(row.updatedAt, { fallback: "" });
   const metadata = [
@@ -73,10 +89,21 @@ function renderHeader(row: SidebarRecentSession | undefined) {
     created ? t("sessionHovercard.created", { time: created }) : undefined,
     updated ? t("sessionHovercard.updated", { time: updated }) : undefined,
   ].filter((value): value is string => Boolean(value));
+  if (row.channelAvatarUrl) {
+    ensureChannelAvatarElement();
+  }
   return html`<header class="session-hovercard__header">
-    ${initials
-      ? html`<span class="session-hovercard__avatar" aria-hidden="true">${initials}</span>`
-      : nothing}
+    ${row.channelAvatarUrl
+      ? html`<openclaw-channel-avatar
+          class="session-hovercard__avatar"
+          .routeUrl=${row.channelAvatarUrl}
+          .authTokens=${channelAvatarAuth?.authTokens ?? []}
+          .authReady=${channelAvatarAuth?.authReady ?? false}
+          .fallback=${avatarFallback}
+        ></openclaw-channel-avatar>`
+      : initials
+        ? html`<span class="session-hovercard__avatar" aria-hidden="true">${initials}</span>`
+        : nothing}
     <span class="session-hovercard__heading">
       <span class="session-hovercard__title">${row.label}</span>
       ${metadata.length > 0
@@ -155,6 +182,7 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
 
 export function renderSessionHovercard(input: {
   row?: SidebarRecentSession;
+  channelAvatarAuth?: SessionHovercardAvatarAuth;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
 }) {
@@ -168,7 +196,8 @@ export function renderSessionHovercard(input: {
     return nothing;
   }
   return html`<div class="session-hovercard">
-    ${renderHeader(input.row)} ${renderPullRequestDetails(input.pullRequests)}
+    ${renderHeader(input.row, input.channelAvatarAuth)}
+    ${renderPullRequestDetails(input.pullRequests)}
     ${input.progressCard
       ? html`<div class="session-hovercard__divider" role="presentation"></div>
           ${renderSessionProgressCard(input.progressCard, "hovercard")}`

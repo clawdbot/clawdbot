@@ -26,7 +26,7 @@ import {
   enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
   parseApprovalRequestedEvent,
-  parseExecApprovalResolved,
+  parseApprovalResolvedEvent,
   resolveApprovalRequest,
   type ExecApprovalPromptState,
 } from "./exec-approval.ts";
@@ -441,16 +441,10 @@ export function createApplicationOverlays(
       publish();
       return;
     }
-    if (
-      event.event === "exec.approval.resolved" ||
-      event.event === "plugin.approval.resolved" ||
-      event.event === "openclaw.approval.resolved"
-    ) {
-      const resolved = parseExecApprovalResolved(event.payload);
-      if (resolved) {
-        clearResolvedExecApprovalPrompt(promptState, resolved.id);
-        publish();
-      }
+    const resolvedApproval = parseApprovalResolvedEvent(event.event, event.payload);
+    if (resolvedApproval) {
+      clearResolvedExecApprovalPrompt(promptState, resolvedApproval.id);
+      publish();
     }
   });
   synchronizeGateway(gateway.snapshot);

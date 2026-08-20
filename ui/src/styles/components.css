@@ -1678,7 +1678,9 @@ select.input {
   color: var(--muted);
 }
 
-.lazy-view-error__action {
+.lazy-view-error__actions {
+  display: flex;
+  gap: 8px;
   margin-top: 8px;
 }
 

@@ -115,6 +115,37 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     });
   });
 
+  it("preserves route-only final and progress metadata without fabricating message ids", async () => {
+    const sendText = vi.fn(
+      async (request: {
+        onDeliveryResult?: (result: ChannelMessageOutboundBridgeResult) => Promise<void> | void;
+      }) => {
+        await request.onDeliveryResult?.({ messageId: "", toJid: "progress-route" });
+        return { chatId: "final-route" };
+      },
+    );
+    const onDeliveryResult = vi.fn();
+    const adapter = createChannelMessageAdapterFromOutbound({ outbound: { sendText } });
+
+    const result = await adapter.send?.text?.({
+      cfg,
+      to: "room-1",
+      text: "hello",
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledWith({
+      toJid: "progress-route",
+      receipt: expect.objectContaining({ platformMessageIds: [], parts: [] }),
+    });
+    expect(onDeliveryResult.mock.calls[0]?.[0]).not.toHaveProperty("messageId");
+    expect(result).toMatchObject({
+      chatId: "final-route",
+      receipt: { platformMessageIds: [], parts: [] },
+    });
+    expect(result).not.toHaveProperty("messageId");
+  });
+
   it("preserves target-only routing metadata without fabricating delivery identity", async () => {
     const target = { kind: "channel" as const, id: "route-only" };
     const adapter = createChannelMessageAdapterFromOutbound({
@@ -232,6 +263,24 @@ describe("createChannelMessageAdapterFromOutbound", () => {
         mediaUrl: "file:///tmp/a.png",
       }),
     ).resolves.toEqual({ messageId: "legacy-id", receipt });
+  });
+
+  it("preserves an authoritative empty receipt with routing metadata", async () => {
+    const receipt: MessageReceipt = {
+      platformMessageIds: [],
+      parts: [],
+      threadId: "canonical-thread",
+      sentAt: 123,
+    };
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: vi.fn(async () => ({ messageId: "", toJid: "route-only", receipt })),
+      },
+    });
+
+    await expect(
+      adapter.send?.text?.({ cfg, to: "room-1", text: "hello", threadId: "requested-thread" }),
+    ).resolves.toEqual({ toJid: "route-only", receipt });
   });
 
   it.each([

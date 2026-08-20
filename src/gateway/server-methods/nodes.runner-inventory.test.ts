@@ -4,10 +4,6 @@ import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src
 import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
-  NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE,
-  NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
-  NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
-  NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import {
@@ -453,7 +449,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       nodeRegistry: runtime.nodeRegistry,
       client: legacyClient,
       declaration: {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE],
+        protocolFeatures: ["node-worker-supervisor-v1"],
         workerRuns: LEGACY_WORKER_RUNS,
       },
     });
@@ -525,22 +521,29 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     [
       "v2 build-shaped",
       {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE],
+        protocolFeatures: ["node-worker-supervisor-v2"],
         workerRuns: { ...LEGACY_WORKER_RUNS, bundlePrewarm: 1 },
       },
     ],
     [
       "v3 execution-context",
       {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE],
+        protocolFeatures: ["node-worker-supervisor-v3"],
         workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
       },
     ],
     [
       "v4 binary-capacity",
       {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE],
+        protocolFeatures: ["node-worker-supervisor-v4"],
         workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
+      },
+    ],
+    [
+      "v5 exact-capacity",
+      {
+        protocolFeatures: ["node-worker-supervisor-v5"],
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
       },
     ],
   ] as const)("routes the shipped %s inventory to update recovery", async (_name, declaration) => {

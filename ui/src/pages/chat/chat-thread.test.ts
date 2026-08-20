@@ -2221,18 +2221,21 @@ describe("buildCachedChatItems", () => {
     expect(groupAt(groups, 0).messages).toHaveLength(1);
   });
 
-  it("collapses consecutive duplicate text messages into one rendered item with a count", () => {
+  it("collapses two distinct persisted rows with identical text into one rendered item", () => {
     const groups = messageGroups({
       messages: [
-        assistantMessage([{ type: "text", text: "Same update" }], 1),
-        assistantMessage([{ type: "text", text: "Same update" }], 2),
-        assistantMessage([{ type: "text", text: "Same update" }], 3),
+        assistantMessage([{ type: "text", text: "Same update" }], 1, {
+          __openclaw: { seq: 7 },
+        }),
+        assistantMessage([{ type: "text", text: "Same update" }], 2, {
+          __openclaw: { seq: 8 },
+        }),
       ],
     });
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBe(3);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBe(2);
   });
 
   it.each([

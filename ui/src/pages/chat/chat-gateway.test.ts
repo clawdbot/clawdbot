@@ -855,6 +855,34 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStreamSegments).toEqual([]);
   });
 
+  it("replaces an exact keyed final-answer stream with the persisted terminal", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user],
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Final answer.", ts: 2, itemId: "final-answer-1" }];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
+      }),
+    ).toBe("final");
+
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
   it("preserves an already-recorded stream boundary for a persisted steer", () => {
     const state = createState({
       sessionKey: "main",

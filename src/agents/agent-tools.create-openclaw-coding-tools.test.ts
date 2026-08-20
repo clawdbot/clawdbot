@@ -189,39 +189,84 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().webSearchEnabled).toBe(false);
   });
 
-  it("reads node-hosted skill content through the assembled workspace-only read tool", async () => {
-    const locator = "node://node-1/skills/pond/SKILL.md";
-    const tools = createOpenClawCodingTools({
-      config: { tools: { fs: { workspaceOnly: true } } },
-      skillsSnapshot: {
-        prompt: "",
-        skills: [{ name: "pond" }],
-        resolvedSkills: [
-          {
-            name: "pond",
-            description: "Pond skill",
-            filePath: locator,
-            baseDir: "node://node-1/skills/pond",
-            readContent: "# Pond\nassembled-marker",
-            source: "openclaw-node",
-            sourceInfo: {
-              source: "openclaw-node",
-              path: locator,
-              scope: "temporary",
-              origin: "top-level",
+  it.each([
+    {
+      name: "fitting node",
+      backend: "node",
+      content: "# Pond\nassembled-marker",
+      oversized: false,
+    },
+    {
+      name: "multi-page node",
+      backend: "node",
+      content: `${"ok\n".repeat(2_100)}done`,
+      oversized: false,
+    },
+    {
+      name: "oversized node",
+      backend: "node",
+      content: `# Pond\n${"x".repeat(33 * 1024)}`,
+      oversized: true,
+    },
+    { name: "fitting local", backend: "local", content: "# Pond\nlocal-marker", oversized: false },
+    {
+      name: "oversized local",
+      backend: "local",
+      content: `# Pond\n${"x".repeat(33 * 1024)}`,
+      oversized: true,
+    },
+  ])(
+    "serves $name skill instructions whole or refuses them",
+    async ({ backend, content, oversized }) => {
+      const virtual = backend === "node";
+      const baseDir = virtual
+        ? "node://node-1/skills/pond"
+        : tempDirs.make("openclaw-assembled-local-skill-");
+      const locator = virtual ? `${baseDir}/SKILL.md` : path.join(baseDir, "SKILL.md");
+      if (!virtual) {
+        await fs.writeFile(locator, content, "utf8");
+      }
+      const tools = createOpenClawCodingTools({
+        config: { tools: { fs: { workspaceOnly: true } } },
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "pond" }],
+          resolvedSkills: [
+            {
+              name: "pond",
+              description: "Pond skill",
+              filePath: locator,
+              baseDir,
+              ...(virtual ? { readContent: content } : {}),
+              source: virtual ? "openclaw-node" : "test",
+              sourceInfo: {
+                source: virtual ? "openclaw-node" : "test",
+                path: locator,
+                scope: "temporary",
+                origin: "top-level",
+              },
+              disableModelInvocation: false,
             },
-            disableModelInvocation: false,
-          },
-        ],
-      },
-    });
+          ],
+        },
+      });
 
-    const result = await requireTool(tools, "read").execute("node-skill-read", {
-      path: locator,
-    });
+      const result = await requireTool(tools, "read").execute("whole-skill-read", {
+        path: locator,
+      });
 
-    expect(JSON.stringify(result)).toContain("assembled-marker");
-  });
+      if (oversized) {
+        expect(extractToolText(result)).toMatch(
+          /(?:cannot|omitted|exceeds).*whole|whole.*(?:cannot|exceeds)|partially served/i,
+        );
+        expect(extractToolText(result)).not.toContain("# Pond");
+        expect(Buffer.byteLength(extractToolText(result), "utf8")).toBeLessThanOrEqual(32 * 1024);
+        return;
+      }
+
+      expect(extractToolText(result)).toBe(content);
+    },
+  );
 
   const testConfig: OpenClawConfig = {};
 
@@ -1102,6 +1147,40 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("process")).toBe(false);
     expect(names.has("apply_patch")).toBe(false);
     expect(names.has("message")).toBe(false);
+  });
+
+  it("continues oversized data through the assembled shell-disabled read tool", async () => {
+    const workspaceDir = tempDirs.make("openclaw-read-no-shell-");
+    const original = JSON.stringify({ generated: "x".repeat(52 * 1024) });
+    await fs.writeFile(path.join(workspaceDir, "generated.json"), original, "utf8");
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("process")).toBe(false);
+    const read = requireTool(tools, "read");
+    expect(read.description).not.toMatch(/\b(?:bash|sed|head)\b/);
+
+    const result = await read.execute("read-no-shell", { path: "generated.json" });
+    const text = extractToolText(result);
+    const continuation = (result.details as { continuation?: { cursor?: number } }).continuation;
+    expect(text).not.toMatch(/\b(?:bash|sed|head)\b/);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(continuation?.cursor).toBeGreaterThan(0);
+    expect(text).toContain(`cursor=${continuation?.cursor}`);
+    const next = await read.execute("read-no-shell-next", {
+      path: "generated.json",
+      cursor: continuation?.cursor,
+    });
+    expect(extractToolText(next)).toBe(original.slice(continuation?.cursor));
   });
 
   it("passes plugin suppression into OpenClaw tool construction plans", () => {
@@ -2733,6 +2812,37 @@ function extractToolText(result: unknown): string {
 }
 
 describe("createOpenClawCodingTools read behavior", () => {
+  it("protects materialized sandbox skill identities when no skill snapshot exists", async () => {
+    const root = tempDirs.make("openclaw-sandbox-skill-whole-");
+    const relativePath = "skills/demo/SKILL.md";
+    const filePath = path.join(root, relativePath);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "# Demo\ncomplete instructions", "utf8");
+    const sandbox = createAgentToolsSandboxContext({
+      workspaceDir: root,
+      fsBridge: createHostSandboxFsBridge(root),
+    });
+    const tools = createOpenClawCodingTools({
+      sandbox,
+      skillUsagePaths: [
+        {
+          readPath: `/workspace/${relativePath}`,
+          skillFile: filePath,
+          skillName: "demo",
+          skillSource: "workspace",
+        },
+      ],
+    });
+    const read = requireTool(tools, "read");
+
+    expect(extractToolText(await read.execute("sandbox-skill", { path: relativePath }))).toBe(
+      "# Demo\ncomplete instructions",
+    );
+    await expect(
+      read.execute("sandbox-skill-window", { path: `/workspace/${relativePath}`, cursor: 0 }),
+    ).rejects.toThrow(/whole|partial|window/i);
+  });
+
   it("reads exact node skill locators without sending them to the filesystem backend", async () => {
     const locator = "node://node-1/skills/pond/SKILL.md";
     const execute = vi.fn(async () => {
@@ -2752,6 +2862,11 @@ describe("createOpenClawCodingTools read behavior", () => {
     const result = await tool.execute("node-skill-read", { path: locator });
 
     expect(extractToolText(result)).toContain("remote-marker");
+    for (const window of [{ offset: 1 }, { limit: 1 }, { cursor: 0 }]) {
+      await expect(
+        tool.execute("whole-skill-window", { path: locator, ...window }),
+      ).rejects.toThrow(/whole|partial|window/i);
+    }
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -2914,9 +3029,33 @@ describe("createOpenClawCodingTools read behavior", () => {
       expect(text).toContain("line-0001");
       expect(text).toContain("[Read output capped at 32KB for this call. Use offset=");
       expect(text).not.toContain("line-8000");
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    { name: "without an explicit limit", args: {} },
+    { name: "with an explicit line limit", args: { limit: 1 } },
+  ])("caps the first read page including its notice $name", async ({ args }) => {
+    const root = tempDirs.make("openclaw-read-first-page-cap-");
+    const original = "é🦞".repeat(9 * 1024);
+    await fs.writeFile(path.join(root, "unicode.txt"), original, "utf8");
+    const read = createSandboxedReadTool({ root, bridge: createHostSandboxFsBridge(root) });
+
+    const result = await read.execute("read-first-page-cap", { path: "unicode.txt", ...args });
+    const text = extractToolText(result);
+    const details = result.details as {
+      continuation?: { kind: string; offset: number; cursor: number };
+    };
+
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(details.continuation).toMatchObject({ kind: "cursor", offset: 1 });
+    expect(text).toContain(`cursor=${details.continuation?.cursor}`);
+    expect(text.replace(/\n\n\[Read output capped[^\]]*\]$/, "")).toBe(
+      original.slice(0, details.continuation?.cursor),
+    );
   });
 
   it("describes explicit offsets beyond EOF", async () => {
@@ -3032,6 +3171,7 @@ describe("createOpenClawCodingTools read behavior", () => {
           firstLineExceedsLimit: false,
           content: "hidden duplicate payload",
         },
+        continuation: { kind: "line", offset: 2 },
       },
     };
     const baseRead: AgentTool = {

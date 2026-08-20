@@ -75,12 +75,11 @@ beforeEach(() => {
 
 afterEach(() => {
   clearEmbeddingProviders();
-  clearEmbeddingProviders();
   setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   vi.clearAllMocks();
 });
 
-function registerTextProviders(): ProviderPlugin[] {
+function captureTextRegistration(): { providers: ProviderPlugin[] } {
   const providers: ProviderPlugin[] = [];
   llamaCppPlugin.register(
     createTestPluginApi({
@@ -93,12 +92,12 @@ function registerTextProviders(): ProviderPlugin[] {
       registerProvider: (provider) => providers.push(provider),
     }),
   );
-  return providers;
+  return { providers };
 }
 
 function registerTextProvider(): ProviderPlugin {
   return expectDefined(
-    registerTextProviders().find((provider) => provider.id === LLAMA_CPP_PROVIDER_ID),
+    captureTextRegistration().providers.find((provider) => provider.id === LLAMA_CPP_PROVIDER_ID),
     "llama.cpp provider",
   );
 }
@@ -139,13 +138,6 @@ function configuredOptions() {
 }
 
 describe("llama.cpp provider plugin", () => {
-  it("registers managed and external providers once", () => {
-    expect(registerTextProviders().map((provider) => provider.id)).toEqual([
-      "llama-cpp",
-      "llama-server",
-    ]);
-  });
-
   it("keeps pre-managed installed provider imports loadable without reviving the old runtime", async () => {
     await expect(createLocalEmbeddingProvider({}, {})).rejects.toThrow(
       "The legacy in-process llama.cpp embedding runtime is retired",
@@ -155,16 +147,28 @@ describe("llama.cpp provider plugin", () => {
   });
 
   it("uses the normal OpenAI-compatible text transport", () => {
-    expect(registerTextProvider()).toEqual(
+    const { providers } = captureTextRegistration();
+    const provider = expectDefined(providers[0], "llama.cpp provider");
+
+    expect(providers.map((registered) => registered.id)).toEqual([LLAMA_CPP_PROVIDER_ID]);
+    expect(provider).toEqual(
       expect.objectContaining({
         id: LLAMA_CPP_PROVIDER_ID,
         label: "llama.cpp",
         normalizeToolSchemas: expect.any(Function),
         inspectToolSchemas: expect.any(Function),
-        auth: [expect.objectContaining({ id: "local" })],
+        auth: expect.arrayContaining([
+          expect.objectContaining({ id: "local" }),
+          expect.objectContaining({ id: "existing-server" }),
+        ]),
       }),
     );
-    expect(registerTextProvider()).not.toHaveProperty("createStreamFn");
+    expect(provider.auth.map((method) => method.id)).toEqual(["local", "existing-server"]);
+    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual([
+      "llama-cpp",
+      "llama-cpp-existing-server",
+    ]);
+    expect(provider).not.toHaveProperty("createStreamFn");
   });
 
   it("registers local embeddings through the generic provider contract", () => {

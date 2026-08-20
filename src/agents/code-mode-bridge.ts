@@ -7,6 +7,7 @@ import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
+import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
@@ -29,7 +30,6 @@ import {
   type CollectorCompletionResult,
 } from "./tools/agents-wait-tool.js";
 import { ToolInputError } from "./tools/common.js";
-import { resolveEligibleNodeFromList } from "./tools/nodes-utils.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";

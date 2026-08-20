@@ -49,7 +49,10 @@ import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
+import {
+  resolveAdmittedRunActiveAssertion,
+  resolvePreparedRunAdmission,
+} from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -780,28 +783,29 @@ export async function prepareCliRunContext(
     });
     return openClawHistoryMessages;
   };
+  const promptBuildHookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir,
+    modelProviderId: params.provider,
+    modelId,
+    trigger: params.trigger,
+    ...buildAgentHookContextChannelFields(params),
+  };
+  const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
   const promptBuildHookResult = await (async () => {
     if (skipsTurnPreparation) {
       return undefined;
     }
-    const hookRunner = getGlobalHookRunner();
     try {
       return await resolvePromptBuildHookResult({
         config: params.config ?? getRuntimeConfig(),
         prompt: params.prompt,
         messages: await loadOpenClawHistoryMessages(),
-        hookCtx: {
-          runId: params.runId,
-          agentId: sessionAgentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir,
-          modelProviderId: params.provider,
-          modelId,
-          trigger: params.trigger,
-          ...buildAgentHookContextChannelFields(params),
-        },
-        hookRunner,
+        hookCtx: promptBuildHookContext,
+        hookRunner: promptBuildHookRunner,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
       });
     } catch (error) {
@@ -1077,6 +1081,38 @@ export async function prepareCliRunContext(
       )
     : hookFilteredProjectedTools;
   const promptTools = bundleMcpEnabled ? projectedTools : [];
+  const authorizedPromptBuildResult = await (async () => {
+    const toolAuthorityFingerprint = params.toolAuthorityFingerprint;
+    if (!promptBuildHookRunner || !toolAuthorityFingerprint) {
+      return undefined;
+    }
+    const admittedParams = await admitPreparedParams(params);
+    params = admittedParams;
+    const assertHostActive = resolveAdmittedRunActiveAssertion(
+      admittedParams.admittedRunContext,
+      admittedParams.abortSignal,
+    );
+    if (!assertHostActive) {
+      return undefined;
+    }
+    try {
+      return await promptBuildHookRunner.runAuthorizedPromptBuild(
+        {
+          prompt: params.prompt,
+          messages: await loadOpenClawHistoryMessages(),
+        },
+        promptBuildHookContext,
+        {
+          toolAuthorityFingerprint,
+          activeToolNames: promptTools.map((tool) => tool.name),
+          assertHostActive,
+        },
+      );
+    } catch (error) {
+      cliBackendLog.warn(`authorized CLI prompt-build hook failed: ${String(error)}`);
+      return undefined;
+    }
+  })();
   const messageToolAvailable = promptTools.some(
     (tool) => normalizeToolPolicyName(tool.name) === "message",
   );
@@ -1558,11 +1594,23 @@ export async function prepareCliRunContext(
     if (!skipsTurnPreparation) {
       try {
         const hookResult = promptBuildHookResult;
-        if (hookResult?.prependContext) {
-          preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
+        const prependContext = [
+          hookResult?.prependContext,
+          authorizedPromptBuildResult?.prependContext,
+        ]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n");
+        const appendContext = [
+          hookResult?.appendContext,
+          authorizedPromptBuildResult?.appendContext,
+        ]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n");
+        if (prependContext) {
+          preparedPrompt = `${prependContext}\n\n${preparedPrompt}`;
         }
-        if (hookResult?.appendContext) {
-          preparedPrompt = `${preparedPrompt}\n\n${hookResult.appendContext}`;
+        if (appendContext) {
+          preparedPrompt = `${preparedPrompt}\n\n${appendContext}`;
         }
         const hookSystemPrompt = hookResult?.systemPrompt?.trim();
         if (hookSystemPrompt) {
