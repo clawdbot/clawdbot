@@ -594,7 +594,7 @@ suite.define(() => {
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      const indicator = page.locator(".chat-reading-indicator");
+      const indicator = page.locator(".chat-working-indicator");
       await indicator.waitFor({ timeout: 10_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
       await page.locator(".chat-working-indicator").evaluate(async (element) => {
@@ -630,7 +630,7 @@ suite.define(() => {
         const sample = () => {
           const originalRow = Reflect.get(window, "__openclawPendingWorkingRow");
           const currentRow = document
-            .querySelector(".chat-reading-indicator")
+            .querySelector(".chat-working-indicator")
             ?.closest<HTMLElement>(".chat-virtual-row");
           const rect = currentRow?.getBoundingClientRect();
           samples.push({
@@ -713,7 +713,7 @@ suite.define(() => {
         state: "delta",
       });
 
-      await page.getByText(response).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread-inner").getByText(response).waitFor({ timeout: 10_000 });
       await indicator.waitFor({ timeout: 10_000 });
       const streamingLayout = await pendingRow.evaluate(
         (row, visibleResponse) => ({
@@ -947,7 +947,8 @@ suite.define(() => {
         sessionKey: "main",
         state: "delta",
       });
-      await page.getByText("I will inspect the file.").waitFor({ timeout: 10_000 });
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText("I will inspect the file.").waitFor({ timeout: 10_000 });
 
       await gateway.emitGatewayEvent("agent", {
         data: {
@@ -981,20 +982,26 @@ suite.define(() => {
         .poll(() => page.locator(".chat-bubble.streaming code.language-ts").textContent())
         .toContain("const answer = 42;");
 
-      const visibleOrder = await page.locator(".chat-thread").evaluate((thread: Element) => {
-        return Array.from(thread.querySelectorAll(".chat-group")).flatMap((group: Element) => {
-          const text = group.textContent ?? "";
-          if (text.includes("I will inspect the file.")) {
+      const composedGroup = transcript
+        .locator(".chat-group.assistant")
+        .filter({ hasText: "I will inspect the file." });
+      expect(await composedGroup.count()).toBe(1);
+      const visibleOrder = await composedGroup.evaluate((group: Element) =>
+        Array.from(group.querySelectorAll(".chat-bubble")).flatMap((bubble: Element) => {
+          if ((bubble.textContent ?? "").includes("I will inspect the file.")) {
             return ["assistant stream"];
           }
-          if (group.querySelector('[data-message-id^="tool:assistant:call-read"]')) {
+          if (bubble.matches('[data-message-id^="tool:assistant:call-read"]')) {
             return ["tool card"];
           }
+          if ((bubble.textContent ?? "").includes("const answer = 42;")) {
+            return ["assistant continuation"];
+          }
           return [];
-        });
-      });
+        }),
+      );
 
-      expect(visibleOrder).toEqual(["assistant stream", "tool card"]);
+      expect(visibleOrder).toEqual(["assistant stream", "tool card", "assistant continuation"]);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -111,6 +111,7 @@ type RenderMessageGroupOptions = {
   rewindDisabled?: boolean;
   activeContinuation?: ActiveContinuation;
   turnRecap?: TurnRecap;
+  frameContent?: unknown;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -236,6 +237,7 @@ function shouldAnimateUserTurnEntry(messageKey: string, message: unknown): boole
 export function renderActivityGroup(
   groups: readonly MessageGroup[],
   opts: RenderMessageGroupOptions,
+  presentation: "standalone" | "continuation" = "standalone",
 ) {
   const firstGroup = groups[0];
   if (!firstGroup || opts.showToolCalls === false) {
@@ -271,65 +273,68 @@ export function renderActivityGroup(
         reviewer,
       })
     : "";
-  return html`
-    <div
-      class="chat-group tool chat-group--activity chat-group--with-footer"
-      data-chat-row-key=${firstGroup.key}
-    >
-      <div class="chat-group-messages">
-        <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
-          <button
-            class="chat-inline-disclosure chat-activity-group__summary"
-            type="button"
-            aria-expanded=${String(activityExpanded)}
-            aria-controls=${activityBodyId}
-            @pointerenter=${syncToolDisclosureOverflow}
-            @focus=${syncToolDisclosureOverflow}
-            @click=${(event: MouseEvent) => {
-              if (shouldToggleSelectableDisclosure(event)) {
-                opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
-              }
-            }}
+  const content = html`
+    <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
+      <button
+        class="chat-inline-disclosure chat-activity-group__summary"
+        type="button"
+        aria-expanded=${String(activityExpanded)}
+        aria-controls=${activityBodyId}
+        @pointerenter=${syncToolDisclosureOverflow}
+        @focus=${syncToolDisclosureOverflow}
+        @click=${(event: MouseEvent) => {
+          if (shouldToggleSelectableDisclosure(event)) {
+            opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
+          }
+        }}
+      >
+        <span class="chat-activity-group__icon">${icons.listTree}</span>
+        <span class="chat-tool-disclosure__content">
+          <span class="chat-activity-group__label" title=${groupSummaryLabel}
+            >${groupSummaryLabel}</span
           >
-            <span class="chat-activity-group__icon">${icons.listTree}</span>
-            <span class="chat-tool-disclosure__content">
-              <span class="chat-activity-group__label" title=${groupSummaryLabel}
-                >${groupSummaryLabel}</span
-              >
-            </span>
-            ${reviewOutcome
-              ? html`<span
-                  class="chat-activity-group__review-status"
-                  data-outcome=${reviewOutcome}
-                  role="img"
-                  aria-label=${reviewAriaLabel}
-                  >${reviewOutcome === "denied"
-                    ? icons.shieldX
-                    : reviewOutcome === "reviewing"
-                      ? icons.shieldQuestion
-                      : icons.shieldCheck}</span
-                >`
-              : nothing}
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
-          </button>
-          <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
-            ${activityExpanded
-              ? groups.map((group) =>
-                  group.messages.map((item, index) =>
-                    renderGroupedMessage(
-                      item.message,
-                      item.key,
-                      buildGroupedMessageRenderOptions(group, item, index, opts),
-                      opts.onOpenSidebar,
-                    ),
-                  ),
-                )
-              : nothing}
-          </div>
-        </div>
+        </span>
+        ${reviewOutcome
+          ? html`<span
+              class="chat-activity-group__review-status"
+              data-outcome=${reviewOutcome}
+              role="img"
+              aria-label=${reviewAriaLabel}
+              >${reviewOutcome === "denied"
+                ? icons.shieldX
+                : reviewOutcome === "reviewing"
+                  ? icons.shieldQuestion
+                  : icons.shieldCheck}</span
+            >`
+          : nothing}
+        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+      </button>
+      <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
+        ${activityExpanded
+          ? groups.map((group) =>
+              group.messages.map((item, index) =>
+                renderGroupedMessage(
+                  item.message,
+                  item.key,
+                  buildGroupedMessageRenderOptions(group, item, index, opts),
+                  opts.onOpenSidebar,
+                ),
+              ),
+            )
+          : nothing}
       </div>
     </div>
   `;
+  return presentation === "continuation"
+    ? content
+    : html`
+        <div
+          class="chat-group tool chat-group--activity chat-group--with-footer"
+          data-chat-row-key=${firstGroup.key}
+        >
+          <div class="chat-group-messages">${content}</div>
+        </div>
+      `;
 }
 
 export function resolveMessageGroupSenderLabel(
@@ -358,6 +363,50 @@ export function resolveMessageGroupSenderLabel(
             )
           ? t("chat.workspaceConflict.eventSender")
           : normalizedRole;
+}
+
+export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessageGroupOptions) {
+  if (normalizeRoleForGrouping(group.role) === "tool") {
+    const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
+    if (
+      group.messages.length > 1 ||
+      cards.length > 1 ||
+      cards.some((card) => readToolApprovalReviews(card.details).length > 0)
+    ) {
+      return renderActivityGroup([group], opts, "continuation");
+    }
+  }
+  const who = resolveMessageGroupSenderLabel(group, opts);
+  return group.messages.map((item, index) => {
+    const actionDetails = resolveMessageActionDetails({
+      message: item.message,
+      messageId: item.key,
+      canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
+      getAssistantMessageExpansion: opts.getAssistantMessageExpansion,
+      onReply: opts.onReply,
+      senderLabel: who,
+    });
+    if (
+      actionDetails?.shouldFetchFullMessage &&
+      actionDetails.messageId &&
+      opts.loadFullAssistantMessage &&
+      opts.onToggleAssistantMessageExpanded
+    ) {
+      const expansion = opts.getAssistantMessageExpansion?.(actionDetails.messageId);
+      if (
+        !expansion ||
+        (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
+      ) {
+        opts.onToggleAssistantMessageExpanded(actionDetails.messageId);
+      }
+    }
+    return renderGroupedMessage(
+      item.message,
+      item.key,
+      buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
+      opts.onOpenSidebar,
+    );
+  });
 }
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
@@ -428,7 +477,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     }
   }
   const lastMessageIndex = group.messages.length - 1;
-  const ownsRunFrame = group.runId !== undefined;
+  const ownsRunFrame = opts.frameContent !== undefined;
   const runFrameActive = ownsRunFrame && Boolean(group.isStreaming || opts.activeContinuation);
   const lastMessage = group.messages[lastMessageIndex]?.message;
   const runFrameHasTerminalAssistant =
@@ -505,7 +554,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               </div>
             `
           : nothing}
-        ${group.messages.map((item, index) => {
+        ${opts.frameContent ??
+        group.messages.map((item, index) => {
           const actionDetails = messageActionDetails[index];
           return html`
             ${renderGroupedMessage(

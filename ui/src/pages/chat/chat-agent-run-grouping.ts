@@ -1,121 +1,164 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import type {
+  ActivityRunRenderItem,
+  CompletedTurnRenderItem,
+  StreamRunRenderItem,
+  WorkGroupRenderItem,
+} from "./chat-thread-grouping.ts";
+import { assistantGroupIsForwardedBoundary, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 
-export type StreamRunRenderItem = {
-  kind: "stream-run";
+type AgentRunFramePart =
+  | MessageGroup
+  | WorkGroupRenderItem
+  | ActivityRunRenderItem
+  | StreamRunRenderItem;
+
+type AgentRunFrameRenderItem = {
+  kind: "agent-run-frame";
   key: string;
-  runId?: string;
-  parts: Array<
-    Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" }>
-  >;
+  runId: string;
+  boundaryId: string;
+  state: "active" | "terminal";
+  parts: AgentRunFramePart[];
 };
 
-type AgentRunPart = MessageGroup | StreamRunRenderItem;
+type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
-function composableRunId(item: AgentRunPart): string | undefined {
-  if (item.kind === "group" && (item.role === "assistant" || item.role === "tool")) {
-    if (
-      chatItemStartsUserTurn(item) ||
-      item.messages.some(({ message }) => asRecord(message)?.stopReason === "error")
-    ) {
-      return undefined;
-    }
+function itemGroups(item: AgentRunFramePart): MessageGroup[] {
+  if (item.kind === "group") {
+    return [item];
+  }
+  if (item.kind === "work-group" || item.kind === "activity-run") {
+    return item.groups;
+  }
+  return [];
+}
+
+function itemRunId(item: AgentRunFramePart): string | undefined {
+  if (item.kind === "stream-run") {
     return item.runId;
   }
-  return item.kind === "stream-run" ? item.runId : undefined;
+  const groups = itemGroups(item);
+  const runIds = new Set(groups.map((group) => group.runId).filter((value) => value !== undefined));
+  return groups.length > 0 && runIds.size === 1 && groups.every((group) => group.runId)
+    ? runIds.values().next().value
+    : undefined;
 }
 
-function streamMessage(part: Extract<StreamRunRenderItem["parts"][number], { kind: "stream" }>) {
-  return {
-    key: part.key,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: part.text }],
-      timestamp: part.startedAt,
-    },
-  };
+function itemHasError(item: AgentRunFramePart): boolean {
+  return itemGroups(item).some((group) =>
+    group.messages.some(({ message }) => asRecord(message)?.stopReason === "error"),
+  );
 }
 
-/** Compose one authoritative run into the existing MessageGroup owner. */
-export function coalesceAgentRunGroups(
-  items: Array<ChatItem | MessageGroup | StreamRunRenderItem>,
-): Array<ChatItem | MessageGroup | StreamRunRenderItem> {
-  const result: Array<ChatItem | MessageGroup | StreamRunRenderItem> = [];
+function itemIsActive(item: AgentRunFramePart): boolean {
+  if (item.kind === "stream-run") {
+    return item.parts.some(
+      (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
+    );
+  }
+  return itemGroups(item).some((group) => group.isStreaming);
+}
+
+function itemBoundaryId(item: AgentRunFramePart): string | undefined {
+  return item.kind === "stream-run" ? item.boundaryId : undefined;
+}
+
+function groupBoundaryId(group: MessageGroup): string | undefined {
+  const firstMessage = group.messages[0]?.message;
+  const identity = readSessionMessageIdentity(firstMessage);
+  if (group.role === "user" && identity?.runId) {
+    return `send:${identity.runId}`;
+  }
+  if (!chatItemStartsUserTurn(group)) {
+    return undefined;
+  }
+  return identity?.id ? `entry:${identity.id}` : undefined;
+}
+
+function isExternalBoundary(group: MessageGroup): boolean {
+  return group.role === "user" || assistantGroupIsForwardedBoundary(group);
+}
+
+function itemBoundaryGroup(item: AgentRunFramePart): MessageGroup | undefined {
+  const first = itemGroups(item)[0];
+  return first && chatItemStartsUserTurn(first) ? first : undefined;
+}
+
+function frameKey(runId: string, boundaryId: string): string {
+  return `agent-run:${JSON.stringify([runId, boundaryId])}`;
+}
+
+export function agentRunFrameGroups(frame: AgentRunFrameRenderItem): MessageGroup[] {
+  return frame.parts.flatMap(itemGroups);
+}
+
+export function agentRunFrameTerminalAssistant(
+  frame: AgentRunFrameRenderItem,
+): MessageGroup | undefined {
+  const last = frame.parts.at(-1);
+  return last?.kind === "group" && last.role === "assistant" ? last : undefined;
+}
+
+/** Wrap semantic work/activity rows in one run-owned presentation frame. */
+export function coalesceAgentRunFrames(
+  items: AgentRunFrameInput[],
+  opts: { searchActive?: boolean } = {},
+): Array<AgentRunFrameInput | AgentRunFrameRenderItem> {
+  if (opts.searchActive) {
+    return items;
+  }
+  const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
+  let boundaryId: string | undefined;
   let runId: string | undefined;
-  let parts: AgentRunPart[] = [];
+  let parts: AgentRunFramePart[] = [];
   const flush = () => {
-    const first = parts[0];
-    if (!first || !runId) {
+    if (!runId || !boundaryId || parts.length === 0) {
       return;
     }
-    if (parts.length === 1) {
-      result.push(first);
-    } else {
-      const messages: MessageGroup["messages"] = [];
-      const status: StreamRunRenderItem["parts"] = [];
-      let assistant: MessageGroup | undefined;
-      let firstGroupKey: string | undefined;
-      let timestamp = Number.POSITIVE_INFINITY;
-      let isStreaming = false;
-      let statusKey: string | undefined;
-      let hasAssistantStream = false;
-      for (const part of parts) {
-        if (part.kind === "group") {
-          firstGroupKey ??= part.key;
-          assistant ??= part.role === "assistant" ? part : undefined;
-          messages.push(...part.messages);
-          timestamp = Math.min(timestamp, part.timestamp);
-          isStreaming ||= part.isStreaming;
-          continue;
-        }
-        statusKey ??= part.key;
-        for (const stream of part.parts) {
-          timestamp = Math.min(timestamp, stream.startedAt);
-          if (stream.kind === "stream") {
-            messages.push(streamMessage(stream));
-            hasAssistantStream = true;
-            isStreaming ||= stream.isStreaming;
-          } else {
-            status.push(stream);
-          }
-        }
-      }
-      result.push({
-        kind: "group",
-        key: firstGroupKey ?? first.key,
-        role: assistant || hasAssistantStream ? "assistant" : "tool",
-        senderLabel: assistant?.senderLabel,
-        replyToSender: assistant?.replyToSender,
-        messages,
-        timestamp,
-        isStreaming,
-        runId,
-      });
-      if (statusKey && status.length > 0) {
-        result.push({ kind: "stream-run", key: statusKey, parts: status, runId });
-      }
-    }
-    runId = undefined;
+    result.push({
+      kind: "agent-run-frame",
+      key: frameKey(runId, boundaryId),
+      runId,
+      boundaryId,
+      state: parts.some(itemIsActive) ? "active" : "terminal",
+      parts,
+    });
     parts = [];
+    runId = undefined;
   };
   for (const item of items) {
-    if (item.kind !== "group" && item.kind !== "stream-run") {
+    const candidate = item as AgentRunFramePart;
+    const boundaryGroup = itemBoundaryGroup(candidate);
+    if (boundaryGroup) {
+      flush();
+      const nextBoundaryId = groupBoundaryId(boundaryGroup);
+      if (isExternalBoundary(boundaryGroup) || !nextBoundaryId) {
+        result.push(item);
+        boundaryId = nextBoundaryId;
+        continue;
+      }
+      boundaryId = nextBoundaryId;
+    }
+    const candidateBoundaryId = itemBoundaryId(candidate);
+    if (candidateBoundaryId && candidateBoundaryId !== boundaryId) {
+      flush();
+      boundaryId = candidateBoundaryId;
+    }
+    const candidateRunId = itemRunId(candidate);
+    if (!boundaryId || !candidateRunId || itemHasError(candidate)) {
       flush();
       result.push(item);
+      boundaryId = undefined;
       continue;
     }
-    const itemRunId = composableRunId(item);
-    if (!itemRunId) {
-      flush();
-      result.push(item);
-      continue;
-    }
-    if (runId && runId !== itemRunId) {
+    if (runId && runId !== candidateRunId) {
       flush();
     }
-    runId = itemRunId;
-    parts.push(item);
+    runId = candidateRunId;
+    parts.push(candidate);
   }
   flush();
   return result;

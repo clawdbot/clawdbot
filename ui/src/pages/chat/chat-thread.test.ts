@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
+import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -1165,6 +1166,14 @@ describe("coalesceActivityRuns", () => {
     expect(appended.key).toBe(initial.key);
   });
 
+  it("keeps adjacent tool activity from different runs separate", () => {
+    const groups = projectedToolGroups();
+    const first = { ...groups[0]!, runId: "run-1" };
+    const second = { ...groups[1]!, runId: "run-2" };
+
+    expect(coalesceActivityRuns([first, second])).toEqual([first, second]);
+  });
+
   it("treats every non-tool item as a hard presentation boundary", () => {
     const groups = projectedToolGroups();
     const userBoundary: MessageGroup = {
@@ -1562,6 +1571,12 @@ describe("buildCachedChatItems working spark", () => {
       coalesceStreamRuns(pendingItems).find((item) => item.kind === "stream-run"),
       "pending stream run",
     );
+    const pendingFrame = expectDefined(
+      coalesceAgentRunFrames(coalesceStreamRuns(pendingItems)).find(
+        (item) => item.kind === "agent-run-frame",
+      ),
+      "pending agent run frame",
+    );
 
     const acknowledgedItems = buildCachedChatItems(
       createProps({
@@ -1580,12 +1595,19 @@ describe("buildCachedChatItems working spark", () => {
       coalesceStreamRuns(acknowledgedItems).find((item) => item.kind === "stream-run"),
       "acknowledged stream run",
     );
+    const acknowledgedFrame = expectDefined(
+      coalesceAgentRunFrames(coalesceStreamRuns(acknowledgedItems)).find(
+        (item) => item.kind === "agent-run-frame",
+      ),
+      "acknowledged agent run frame",
+    );
 
     expect(acknowledgedIndicator).toMatchObject({
       key: pendingIndicator.key,
       startedAt: pendingIndicator.startedAt,
     });
     expect(acknowledgedRun.key).toBe(pendingRun.key);
+    expect(acknowledgedFrame.key).toBe(pendingFrame.key);
 
     const streamingItems = buildCachedChatItems(
       createProps({
@@ -1639,6 +1661,34 @@ describe("buildCachedChatItems working spark", () => {
 
     expect(nextRunIndicator.key).not.toBe(pendingIndicator.key);
     expect(otherSessionIndicator.key).not.toBe(pendingIndicator.key);
+  });
+
+  it("keeps a future queued send from replacing the active stream run identity", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        sessionKey: "agent:main:active-with-future-queue",
+        runId: "active-run",
+        runWorking: true,
+        stream: "Current run output.",
+        queue: [
+          {
+            id: "future-send",
+            text: "Run this next.",
+            createdAt: 2_000,
+            sendRunId: "future-run",
+            sendState: "waiting-idle",
+            sendSubmittedAtMs: 1,
+          },
+        ],
+      }),
+    );
+
+    expect(items.find((item) => item.kind === "stream" && item.isStreaming)).toMatchObject({
+      runId: "active-run",
+    });
+    expect(items.find((item) => item.kind === "reading-indicator")).toMatchObject({
+      runId: "active-run",
+    });
   });
 
   it("keeps client and engine run identities separate", () => {

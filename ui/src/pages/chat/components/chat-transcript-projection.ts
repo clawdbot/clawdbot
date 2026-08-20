@@ -16,9 +16,11 @@ import {
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
+  agentRunFrameGroups,
+  agentRunFrameTerminalAssistant,
   assistantMessageExpansionSignature,
   buildCachedChatItems,
-  coalesceAgentRunGroups,
+  coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
@@ -39,6 +41,8 @@ import {
   getChatMediaRenderVersion,
   renderActivityGroup,
   renderMessageGroup,
+  renderMessageGroupContent,
+  renderStreamGroupParts,
   renderStreamGroup,
   renderWorkGroupSummary,
   type MessageReplyTarget,
@@ -69,7 +73,7 @@ type ChatTranscriptProjection = {
   renderRows: (overlay?: unknown) => TemplateResult;
 };
 
-type ChatRenderItem = ReturnType<typeof coalesceActivityRuns>[number];
+type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 const CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS = 500;
 
 type LoadedReplySource = {
@@ -109,19 +113,63 @@ function projectResolvedReplyPreview(
 function latestTranscriptAnnouncement(
   items: readonly ChatRenderItem[],
 ): TranscriptAnnouncement | null {
+  const announcement = (key: string, text: string): TranscriptAnnouncement => ({
+    key,
+    text: truncateUtf16Safe(text, CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS),
+  });
+  const groupText = (group: MessageGroup): string | null => {
+    if (group.role.toLowerCase() !== "assistant") {
+      return null;
+    }
+    for (let index = group.messages.length - 1; index >= 0; index -= 1) {
+      const text = extractTextCached(group.messages[index]?.message)?.trim();
+      if (text) {
+        return text;
+      }
+    }
+    return null;
+  };
   for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
     const item = items[itemIndex];
-    if (!item || item.kind !== "group" || item.role.toLowerCase() !== "assistant") {
+    if (!item) {
       continue;
     }
-    for (let messageIndex = item.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-      const message = item.messages[messageIndex]?.message;
-      const text = extractTextCached(message)?.trim();
+    if (item.kind === "agent-run-frame") {
+      for (let partIndex = item.parts.length - 1; partIndex >= 0; partIndex -= 1) {
+        const part = item.parts[partIndex];
+        if (!part) {
+          continue;
+        }
+        if (part.kind === "stream-run") {
+          for (let index = part.parts.length - 1; index >= 0; index -= 1) {
+            const streamPart = part.parts[index];
+            if (streamPart?.kind === "stream" && streamPart.text.trim()) {
+              return announcement(item.key, streamPart.text.trim());
+            }
+          }
+          continue;
+        }
+        const groups = part.kind === "group" ? [part] : part.groups;
+        for (let index = groups.length - 1; index >= 0; index -= 1) {
+          const group = groups[index];
+          const text = group ? groupText(group) : null;
+          if (text) {
+            return announcement(item.key, text);
+          }
+        }
+      }
+      continue;
+    }
+    const groups =
+      item.kind === "group"
+        ? [item]
+        : item.kind === "work-group" || item.kind === "activity-run"
+          ? item.groups.toReversed()
+          : [];
+    for (const group of groups) {
+      const text = groupText(group);
       if (text) {
-        return {
-          key: item.key,
-          text: truncateUtf16Safe(text, CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS),
-        };
+        return announcement(item.key, text);
       }
     }
   }
@@ -137,6 +185,9 @@ function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown
   }
   if (item.kind === "activity-run") {
     return [item.key, ...item.groups];
+  }
+  if (item.kind === "agent-run-frame") {
+    return [item.key, item.state, ...item.parts];
   }
   return [item];
 }
@@ -428,6 +479,17 @@ export function projectChatTranscript(
   // memoizing across usage patches.
   const workingUsageKey = `usage:${props.runOutputTokens ?? ""}`;
   const liveStatusSignature = (item: ChatRenderItem): string => {
+    if (item.kind === "agent-run-frame") {
+      const hasWorkingIndicator = item.parts.some(
+        (part) =>
+          part.kind === "stream-run" &&
+          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
+      );
+      const recap = turnRecapByGroupKey.get(item.key);
+      return `${hasWorkingIndicator ? workingUsageKey : ""}|${
+        recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
+      }`;
+    }
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
     }
@@ -481,6 +543,90 @@ export function projectChatTranscript(
       }
       return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
     }
+    if (item.kind === "agent-run-frame") {
+      const groups = agentRunFrameGroups(item);
+      const statusOnly =
+        groups.length === 0 &&
+        item.parts.every(
+          (part) =>
+            part.kind === "stream-run" &&
+            part.parts.every((streamPart) => streamPart.kind === "reading-indicator"),
+        );
+      if (statusOnly) {
+        return renderStreamGroup(
+          item.parts.flatMap((part) => (part.kind === "stream-run" ? part.parts : [])),
+          {
+            ...streamGroupOptions,
+            questionPrompts,
+            startupPhase: props.startupStatus?.phase,
+            waitingApproval: props.waitingApproval,
+            runOutputTokens: props.runOutputTokens,
+          },
+        );
+      }
+      const firstAssistant = groups.find((group) => group.role === "assistant");
+      const terminalAssistant = agentRunFrameTerminalAssistant(item);
+      const representative = terminalAssistant ?? firstAssistant ?? groups[0];
+      const streamStarts = item.parts.flatMap((part) =>
+        part.kind === "stream-run" ? part.parts.map((streamPart) => streamPart.startedAt) : [],
+      );
+      const shell: MessageGroup = {
+        key: item.key,
+        kind: "group",
+        role: "assistant",
+        senderLabel: firstAssistant?.senderLabel,
+        replyToSender: firstAssistant?.replyToSender,
+        messages: terminalAssistant?.messages ?? representative?.messages ?? [],
+        timestamp: Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
+        isStreaming: item.state === "active",
+        runId: item.runId,
+      };
+      const shellOptions = renderGroupOptions(shell);
+      const renderFrameGroup = (group: MessageGroup) =>
+        renderMessageGroupContent(group, renderGroupOptions(group));
+      const frameContent = item.parts.map((part) => {
+        if (part.kind === "stream-run") {
+          return renderStreamGroupParts(
+            part.parts,
+            {
+              ...streamGroupOptions,
+              questionPrompts,
+              startupPhase: props.startupStatus?.phase,
+              waitingApproval: props.waitingApproval,
+              runOutputTokens: props.runOutputTokens,
+            },
+            "continuation",
+          );
+        }
+        if (part.kind === "work-group") {
+          const workExpanded = expandedToolCards.get(part.key) ?? false;
+          return html`
+            ${renderWorkGroupSummary(part, {
+              expanded: workExpanded,
+              onToggle: () => {
+                setExpansionState(expandedToolCards, part.key, !workExpanded);
+                requestUpdate();
+              },
+              presentation: "continuation",
+            })}
+            ${workExpanded ? part.groups.map(renderFrameGroup) : nothing}
+          `;
+        }
+        if (part.kind === "activity-run") {
+          return renderActivityGroup(
+            part.groups,
+            renderGroupOptions(part.groups[0]!),
+            "continuation",
+          );
+        }
+        return renderFrameGroup(part);
+      });
+      return renderMessageGroup(shell, {
+        ...shellOptions,
+        frameContent,
+        turnRecap: turnRecapByGroupKey.get(item.key),
+      });
+    }
     if (item.kind === "group") {
       return renderGroupItem(item);
     }
@@ -491,14 +637,15 @@ export function projectChatTranscript(
     }
     return nothing;
   });
-  const collapsedItems = coalesceActivityRuns(
-    collapseCompletedTurnWork(coalesceAgentRunGroups(coalesceStreamRuns(chatItems)), {
+  const semanticItems = coalesceActivityRuns(
+    collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
       sessionKey: props.sessionKey,
       runWorking: Boolean(props.runWorking),
       searchActive: searchFiltering,
     }),
     { searchActive: searchFiltering },
   );
+  const collapsedItems = coalesceAgentRunFrames(semanticItems, { searchActive: searchFiltering });
   // Watch/settle on actual indicator visibility (not runWorking): queued
   // sends show the claw before the run starts, and the recap must never
   // stack under a visible working row.
@@ -538,28 +685,37 @@ export function projectChatTranscript(
     return false;
   });
   for (const item of transcriptItems) {
-    if (item.kind !== "group") {
+    const groups =
+      item.kind === "agent-run-frame"
+        ? agentRunFrameGroups(item)
+        : item.kind === "group"
+          ? [item]
+          : [];
+    const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
+    if (!firstGroup) {
       continue;
     }
-    const senderLabel = resolveMessageGroupSenderLabel(item, {
+    const senderLabel = resolveMessageGroupSenderLabel(firstGroup, {
       assistantName: props.assistantName,
       userId: props.userId,
       userName: props.userName,
       userAvatar: props.userAvatar,
     });
-    for (const source of item.messages) {
-      const sourceMessageId = persistedMessageEntryId(source.message);
-      const text = resolveMessageReplyText(source.message);
-      if (sourceMessageId && text) {
-        loadedReplySources.set(sourceMessageId, {
-          rowKey: item.key,
-          preview: {
-            messageId: source.key,
-            sourceMessageId,
-            senderLabel,
-            text,
-          },
-        });
+    for (const group of groups) {
+      for (const source of group.messages) {
+        const sourceMessageId = persistedMessageEntryId(source.message);
+        const text = resolveMessageReplyText(source.message);
+        if (sourceMessageId && text) {
+          loadedReplySources.set(sourceMessageId, {
+            rowKey: item.key,
+            preview: {
+              messageId: source.key,
+              sourceMessageId,
+              senderLabel,
+              text,
+            },
+          });
+        }
       }
     }
   }
@@ -570,6 +726,13 @@ export function projectChatTranscript(
   if (turnRecap !== null) {
     const lastItem = transcriptItems.at(-1);
     if (lastItem?.kind === "group" && assistantGroupCanOwnActiveRunStatus(lastItem)) {
+      turnRecapByGroupKey.set(lastItem.key, turnRecap);
+      turnRecapOwnerKey = lastItem.key;
+    } else if (
+      lastItem?.kind === "agent-run-frame" &&
+      lastItem.state === "terminal" &&
+      agentRunFrameTerminalAssistant(lastItem)
+    ) {
       turnRecapByGroupKey.set(lastItem.key, turnRecap);
       turnRecapOwnerKey = lastItem.key;
     }

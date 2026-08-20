@@ -122,8 +122,15 @@ export type ChatItem =
       startedAt: number;
       isStreaming: boolean;
       runId?: string;
+      boundaryId?: string;
     }
-  | { kind: "reading-indicator"; key: string; startedAt: number; runId?: string }
+  | {
+      kind: "reading-indicator";
+      key: string;
+      startedAt: number;
+      runId?: string;
+      boundaryId?: string;
+    }
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {

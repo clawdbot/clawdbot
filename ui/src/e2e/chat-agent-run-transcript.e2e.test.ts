@@ -30,6 +30,7 @@ suite.define(() => {
     const page = await context.newPage();
     const firstRunId = "run-composed-first";
     const secondRunId = "run-composed-second";
+    const toolOnlyRunId = "run-tool-only";
     await installMockGateway(page, {
       historyMessages: [
         transcriptMessage("user", "Create the launch card.", `${firstRunId}:user`, "user-1", 1),
@@ -118,11 +119,25 @@ suite.define(() => {
           "assistant-4",
           10,
         ),
+        transcriptMessage("user", "Check without replying.", `${toolOnlyRunId}:user`, "user-3", 11),
+        {
+          ...transcriptMessage(
+            "toolResult",
+            [{ type: "text", text: "Tool-only result" }],
+            toolOnlyRunId,
+            "tool-result-3",
+            12,
+          ),
+          toolCallId: "call-tool-only",
+          toolName: "read",
+          runId: toolOnlyRunId,
+        },
       ],
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText("Caption ready for the second run.", { exact: true }).waitFor();
+    const transcript = page.locator(".chat-thread-inner");
+    await transcript.getByText("Caption ready for the second run.", { exact: true }).waitFor();
 
     const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
     if (artifactDir) {
@@ -134,10 +149,14 @@ suite.define(() => {
     }
 
     const assistantGroups = page.locator(".chat-group.assistant");
-    expect(await assistantGroups.count()).toBe(2);
-    const firstRun = assistantGroups.first();
+    expect(await assistantGroups.count()).toBe(3);
+    const firstRun = assistantGroups.filter({
+      hasText: "I’ll create the launch card and check the existing style first.",
+    });
+    expect(await firstRun.count()).toBe(1);
     expect(await firstRun.locator(".chat-sender-name").count()).toBe(1);
     expect(await firstRun.locator(".chat-group-footer-actions").count()).toBe(1);
+    expect(await firstRun.locator(".chat-message-actions-row").count()).toBe(0);
     expect(await firstRun.locator(".chat-group-footer-actions button").count()).toBe(2);
     expect(
       await firstRun
@@ -161,6 +180,11 @@ suite.define(() => {
     expect(
       await firstRun.getByText("Caption ready for the second run.", { exact: true }).count(),
     ).toBe(0);
+    const toolOnlyRun = page.locator(
+      `.chat-group.assistant[data-chat-row-key*="${toolOnlyRunId}"]`,
+    );
+    expect(await toolOnlyRun.count()).toBe(1);
+    expect(await toolOnlyRun.locator(".chat-group-footer-actions").count()).toBe(0);
 
     await context.close();
   });

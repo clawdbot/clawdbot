@@ -13,8 +13,7 @@ import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
-import { buildChatItems } from "./chat-thread-build.ts";
-import type { BuildChatItemsProps } from "./chat-thread-build.types.ts";
+import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import {
   getOrCreateSessionCacheValue,
@@ -29,7 +28,11 @@ export {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
-export { coalesceAgentRunGroups } from "./chat-agent-run-grouping.ts";
+export {
+  agentRunFrameGroups,
+  agentRunFrameTerminalAssistant,
+  coalesceAgentRunFrames,
+} from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
@@ -131,13 +134,15 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.text === next.text &&
         previous.startedAt === next.startedAt &&
         previous.isStreaming === next.isStreaming &&
-        previous.runId === next.runId
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
       );
     case "reading-indicator":
       return (
         previous.kind === "reading-indicator" &&
         previous.startedAt === next.startedAt &&
-        previous.runId === next.runId
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
       );
     case "question":
       return (
