@@ -167,8 +167,8 @@ runtime_resource_args=(
 
 proxy_resource_args=(
   --cpus 1
-  --memory 256m
-  --memory-swap 256m
+  --memory 512m
+  --memory-swap 512m
 )
 
 blocked_networks=(
@@ -792,8 +792,10 @@ case "$command" in
     write_root_attestation "$runtime_parent/attestations/$lane.json" "$lane" "$attested_sha"
     success_marker="$(jq -er '.mockResponseText | strings' "$input_file")"
     telegram_bot_token="$(jq -er '.telegramBotToken | strings' "$input_file")"
+    telegram_chat_id="$(jq -er '.telegramChatId | strings' "$input_file")"
     telegram_bot_id="${telegram_bot_token%%:*}"
     [[ "$telegram_bot_id" =~ ^[1-9][0-9]*$ ]] || die "invalid Telegram bot token"
+    [[ "$telegram_chat_id" =~ ^-?[1-9][0-9]*$ ]] || die "invalid Telegram proof chat"
     telegram_alias_token="${telegram_bot_id}:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     export SUCCESS_MARKER="$success_marker"
     export TELEGRAM_BOT_TOKEN="$telegram_alias_token"
@@ -872,6 +874,7 @@ case "$command" in
       --mount "type=bind,src=$telegram_proxy_script,dst=/opt/mantis/telegram-bot-api-proxy.mjs,readonly" \
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       --env TELEGRAM_PROXY_ALIAS_TOKEN="$telegram_alias_token" \
+      --env TELEGRAM_PROXY_CHAT_ID="$telegram_chat_id" \
       --env TELEGRAM_PROXY_UPSTREAM_TOKEN="$telegram_bot_token" \
       "$image" node /opt/mantis/telegram-bot-api-proxy.mjs >/dev/null
     "$docker_bin" network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"

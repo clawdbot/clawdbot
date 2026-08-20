@@ -986,6 +986,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"',
     );
     expect(wrapper).toContain('--env TELEGRAM_PROXY_UPSTREAM_TOKEN="$telegram_bot_token"');
+    expect(wrapper).toContain('--env TELEGRAM_PROXY_CHAT_ID="$telegram_chat_id"');
     expect(wrapper).toContain('export TELEGRAM_BOT_TOKEN="$telegram_alias_token"');
     expect(wrapper).not.toContain('export TELEGRAM_BOT_TOKEN="$telegram_bot_token"');
     expect(wrapper).toContain('remove_container_or_fail "${1}-telegram-proxy"');

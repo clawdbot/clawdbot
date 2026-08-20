@@ -172,6 +172,7 @@ describe("telegram user Crabbox proof log polling", () => {
         TELEGRAM_BOT_TOKEN: "telegram-burner-token",
       },
       gatewayPort: 19042,
+      groupId: "-100123456789",
       mockPort: 19043,
       mockResponseText: "streamed response",
       repoRoot,
@@ -194,6 +195,7 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(fs.statSync(spec.inputPath).mode & 0o777).toBe(0o600);
     expect(JSON.parse(fs.readFileSync(spec.inputPath, "utf8"))).toEqual({
       mockResponseText: "streamed response",
+      telegramChatId: "-100123456789",
       telegramBotToken: "telegram-burner-token",
     });
   });

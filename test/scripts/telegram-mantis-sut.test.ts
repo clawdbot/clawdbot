@@ -1,8 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  drainSutUpdates,
   runSutContainerAction,
   waitForLog,
   writeSutConfig,
@@ -10,8 +11,52 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllGlobals());
 
 describe("Telegram Mantis SUT", () => {
+  it("does not replace an existing bot-wide Telegram webhook", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            result: { pending_update_count: 0, url: "https://example.invalid/webhook" },
+          }),
+          { headers: { "content-type": "application/json" }, status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(drainSutUpdates("123:test", "-100123456789")).rejects.toThrow(
+      "refusing to replace bot-wide delivery",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not drain pending updates from another Telegram chat", async () => {
+    const methods: string[] = [];
+    const results: unknown[] = [
+      { pending_update_count: 1, url: "" },
+      [{ message: { chat: { id: -100999 }, message_id: 1 }, update_id: 10 }],
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const method = String(input).split("/").at(-1) ?? "";
+        methods.push(method);
+        return new Response(JSON.stringify({ ok: true, result: results.shift() }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      }),
+    );
+
+    await expect(drainSutUpdates("123:test", "-100123456789")).rejects.toThrow(
+      "pending updates outside the leased proof chat",
+    );
+    expect(methods).toEqual(["getWebhookInfo", "getUpdates"]);
+  });
+
   it("keeps stderr when a container action is terminated", () => {
     expect(() =>
       runSutContainerAction("stop", "openclaw-telegram-sut-test", "/tmp/runtime", () => ({
@@ -200,6 +245,7 @@ describe("Telegram Mantis SUT", () => {
       channels: { telegram: Record<string, unknown> };
     };
     expect(config.channels.telegram.apiRoot).toBe("http://telegram-api-proxy:8080");
+    expect(config.channels.telegram.commands).toEqual({ native: false, nativeSkills: false });
     expect(config.channels.telegram).not.toHaveProperty("replyToMode");
   });
 });

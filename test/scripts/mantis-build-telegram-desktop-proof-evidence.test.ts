@@ -1,6 +1,5 @@
 // Mantis Build Telegram Desktop Proof Evidence tests cover mantis build telegram desktop proof evidence script behavior.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeTelegramDesktopProofEvidence } from "../../scripts/mantis/build-telegram-desktop-proof-evidence.mts";
@@ -8,22 +7,16 @@ import {
   loadEvidenceManifest,
   renderEvidenceComment,
 } from "../../scripts/mantis/publish-pr-evidence.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeLane(
   name: "baseline" | "candidate",
   sha: string,
   options: { diagnosticOnly?: boolean; status?: "pass" | "fail"; withGif?: boolean } = {},
 ) {
-  const repo = mkdtempSync(path.join(tmpdir(), `mantis-telegram-${name}-repo-`));
-  tempDirs.push(repo);
+  const repo = tempDirs.make(`mantis-telegram-${name}-repo-`);
   const outputDir = path.join(repo, ".artifacts", "qa-e2e", name);
   mkdirSync(outputDir, { recursive: true });
   const gif = path.join(outputDir, "telegram-user-crabbox-session-motion-telegram-window.gif");
@@ -66,8 +59,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     const candidateSha = "b".repeat(40);
     const baseline = makeLane("baseline", baselineSha);
     const candidate = makeLane("candidate", candidateSha);
-    const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-proof-"));
-    tempDirs.push(outputDir);
+    const outputDir = tempDirs.make("mantis-telegram-proof-");
 
     const result = writeTelegramDesktopProofEvidence([
       "--output-dir",
@@ -139,8 +131,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     const candidateSha = "b".repeat(40);
     const baseline = makeLane("baseline", baselineSha);
     const candidate = makeLane("baseline", baselineSha);
-    const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-proof-mismatch-"));
-    tempDirs.push(outputDir);
+    const outputDir = tempDirs.make("mantis-telegram-proof-mismatch-");
 
     expect(() =>
       writeTelegramDesktopProofEvidence([
@@ -167,8 +158,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     const candidateSha = "b".repeat(40);
     const baseline = makeLane("baseline", baselineSha);
     const candidate = makeLane("candidate", candidateSha, { status: "fail", withGif: false });
-    const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-failure-proof-"));
-    tempDirs.push(outputDir);
+    const outputDir = tempDirs.make("mantis-telegram-failure-proof-");
 
     const { manifest } = writeTelegramDesktopProofEvidence([
       "--output-dir",
@@ -205,8 +195,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     const candidateSha = "b".repeat(40);
     const baseline = makeLane("baseline", baselineSha, { diagnosticOnly: true });
     const candidate = makeLane("candidate", candidateSha);
-    const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-startup-failure-"));
-    tempDirs.push(outputDir);
+    const outputDir = tempDirs.make("mantis-telegram-startup-failure-");
 
     const { manifest } = writeTelegramDesktopProofEvidence([
       "--output-dir",
