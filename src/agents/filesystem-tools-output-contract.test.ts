@@ -47,7 +47,10 @@ describe("filesystem tool output contracts", () => {
     }
     expect(text.details).toEqual({ kind: "text", content: "ordinary text\n" });
     expect(image.details).toMatchObject({ kind: "image", mimeType: "image/png" });
-    expect(truncated.details).toMatchObject({ kind: "truncated" });
+    expect(truncated.details).toMatchObject({
+      kind: "truncated",
+      truncation: { totalBytes: DEFAULT_MAX_BYTES + 1 },
+    });
     expect(notFound.details).toEqual({
       kind: "not_found",
       status: "not_found",
@@ -55,7 +58,7 @@ describe("filesystem tool output contracts", () => {
       optional: true,
     });
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; totalBytes: number; totalLines: number; truncated: true; truncatedBy: "lines" | "bytes" } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
+      '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; totalBytes: number; totalLines: number; truncated: true; truncatedBy: "lines" | "bytes" } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
     );
   });
 

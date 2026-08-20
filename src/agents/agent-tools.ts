@@ -579,6 +579,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     readOnly,
     sandbox,
     skillsSnapshot: options?.skillsSnapshot,
+    skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
     modelContextWindowTokens: options?.modelContextWindowTokens,
     imageSanitization,
     memoryWriteProvenance,
