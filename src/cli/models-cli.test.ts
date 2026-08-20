@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
+  modelsAliasesAddCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAliasesRemoveCommand: vi.fn().mockResolvedValue(undefined),
+  modelsScanCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
@@ -24,6 +28,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const {
+  modelsAliasesAddCommand,
+  modelsAliasesListCommand,
+  modelsAliasesRemoveCommand,
   modelsAuthAddCommand,
   modelsAuthListCommand,
   modelsAuthLoginCommand,
@@ -34,6 +41,7 @@ const {
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsScanCommand,
   modelsSetCommand,
   modelsSetImageCommand,
   modelsStatusCommand,
@@ -64,9 +72,9 @@ vi.mock("../commands/models/auth-order.js", () => ({
   modelsAuthOrderSetCommand: mocks.modelsAuthOrderSetCommand,
 }));
 vi.mock("../commands/models/aliases.js", () => ({
-  modelsAliasesAddCommand: mocks.noopAsync,
-  modelsAliasesListCommand: mocks.noopAsync,
-  modelsAliasesRemoveCommand: mocks.noopAsync,
+  modelsAliasesAddCommand: mocks.modelsAliasesAddCommand,
+  modelsAliasesListCommand: mocks.modelsAliasesListCommand,
+  modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
 vi.mock("../commands/models/fallbacks.js", () => ({
   modelsFallbacksAddCommand: mocks.noopAsync,
@@ -81,7 +89,7 @@ vi.mock("../commands/models/image-fallbacks.js", () => ({
   modelsImageFallbacksRemoveCommand: mocks.noopAsync,
 }));
 vi.mock("../commands/models/scan.js", () => ({
-  modelsScanCommand: mocks.noopAsync,
+  modelsScanCommand: mocks.modelsScanCommand,
 }));
 vi.mock("../commands/models/set.js", () => ({
   modelsSetCommand: mocks.modelsSetCommand,
@@ -93,6 +101,10 @@ vi.mock("../commands/models/set-image.js", () => ({
 describe("models cli", () => {
   beforeEach(() => {
     mocks.modelsListCommand.mockClear();
+    modelsAliasesAddCommand.mockClear();
+    modelsAliasesListCommand.mockClear();
+    modelsAliasesRemoveCommand.mockClear();
+    modelsScanCommand.mockClear();
     modelsAuthAddCommand.mockClear();
     modelsAuthListCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
@@ -441,10 +453,47 @@ describe("models cli", () => {
       args: ["models", "--agent", "poe", "set-image", "openai/gpt-image-1"],
       command: modelsSetImageCommand,
     },
+    {
+      label: "aliases list",
+      args: ["models", "--agent", "poe", "aliases", "list"],
+      command: modelsAliasesListCommand,
+    },
+    {
+      label: "aliases add",
+      args: ["models", "--agent", "poe", "aliases", "add", "zzz", "soraka/grok-4.6"],
+      command: modelsAliasesAddCommand,
+    },
+    {
+      label: "aliases remove",
+      args: ["models", "--agent", "poe", "aliases", "remove", "zzz"],
+      command: modelsAliasesRemoveCommand,
+    },
+    {
+      label: "scan",
+      args: ["models", "--agent", "poe", "scan", "--no-probe", "--no-input"],
+      command: modelsScanCommand,
+    },
   ])("rejects parent --agent for models $label", async ({ args, command }) => {
     await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
 
     expect(command).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "aliases list",
+      args: ["models", "aliases", "list"],
+      command: modelsAliasesListCommand,
+    },
+    {
+      label: "scan",
+      args: ["models", "scan", "--no-probe", "--no-input"],
+      command: modelsScanCommand,
+    },
+  ])("still runs models $label without --agent", async ({ args, command }) => {
+    await runModelsCommand(args);
+
+    expect(command).toHaveBeenCalled();
   });
 
   it("shows help for models auth without error exit", async () => {

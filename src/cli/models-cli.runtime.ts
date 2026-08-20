@@ -20,16 +20,31 @@ export function resolveModelAgentOption(
   );
 }
 
-export function rejectAgentScopedModelWrite(
+/**
+ * `models` subcommands that only ever read or write global model config.
+ * The value describes the scope so the rejection message stays accurate per command.
+ */
+const GLOBAL_ONLY_MODEL_COMMAND_SCOPE = {
+  set: "updates global model defaults",
+  "set-image": "updates global model defaults",
+  scan: "updates global model defaults",
+  "aliases list": "reads global model aliases",
+  "aliases add": "updates global model aliases",
+  "aliases remove": "updates global model aliases",
+} as const;
+
+export type GlobalOnlyModelCommandName = keyof typeof GLOBAL_ONLY_MODEL_COMMAND_SCOPE;
+
+export function rejectAgentScopedModelCommand(
   command: Command,
-  commandName: "set" | "set-image",
+  commandName: GlobalOnlyModelCommandName,
 ): void {
-  // Write commands update global defaults; accepting --agent here would imply per-agent mutation.
+  // These commands only touch global defaults; accepting --agent here would imply per-agent scope.
   const agent = resolveOptionFromCommand<string>(command, "agent");
   if (!agent) {
     return;
   }
   throw new Error(
-    `openclaw models ${commandName} does not support --agent; it only updates global model defaults. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
+    `openclaw models ${commandName} does not support --agent; it only ${GLOBAL_ONLY_MODEL_COMMAND_SCOPE[commandName]}. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
   );
 }
