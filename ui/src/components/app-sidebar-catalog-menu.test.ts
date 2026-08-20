@@ -18,7 +18,7 @@ describe("SidebarCatalogMenuController", () => {
 
     controller.open(
       {
-        key: "catalog:codex:gateway%3Alocal:thread-1",
+        key: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
         agentId: "main",
         routeId: "chat",
         navigation: {},
