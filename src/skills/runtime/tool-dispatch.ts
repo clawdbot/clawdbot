@@ -179,6 +179,10 @@ export function resolveSkillDispatchTools(
     config: params.cfg,
     allowGatewaySubagentBinding: true,
     sandboxed: sandboxRuntime.sandboxed,
+    sessionPermissionPolicy:
+      params.sessionEntry?.permissionMode && params.sessionEntry?.sessionRoot
+        ? { mode: params.sessionEntry.permissionMode, root: params.sessionEntry.sessionRoot }
+        : undefined,
     requesterAgentIdOverride: params.agentId,
     requesterSenderId: params.senderId,
     senderIsOwner: params.senderIsOwner,

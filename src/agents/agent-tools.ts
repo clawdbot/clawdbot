@@ -770,6 +770,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
             runSessionKey: options?.runSessionKey,
+            sessionPermissionPolicy: options?.sessionPermissionPolicy,
+            execOverrides: options?.exec
+              ? {
+                  ...(options.exec.security ? { security: options.exec.security } : {}),
+                  ...(options.exec.ask ? { ask: options.exec.ask } : {}),
+                  ...(options.exec.node ? { node: options.exec.node } : {}),
+                  ...(options.exec.host ? { host: options.exec.host } : {}),
+                }
+              : undefined,
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
             ),

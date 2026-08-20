@@ -21,7 +21,8 @@ import {
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { isTerminalTaskStatus } from "../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
-import { resolveExecDefaults } from "../exec-defaults.js";
+import { resolveExecDefaults, type ExecPolicyOverrides } from "../exec-defaults.js";
+import type { PreparedSessionPermissionPolicy } from "../tool-fs-policy.types.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -117,6 +118,19 @@ type TerminalToolOptions = {
   requestTerminalApproval?: TerminalApprovalRequester;
   /** Deny approval-requiring terminal opens without creating approval events. */
   nonInteractiveApproval?: boolean;
+  /**
+   * Prepared session permission policy. When set, the terminal inherits the
+   * same hard short-circuit the exec tool enforces (read-only → deny,
+   * guarded → ask), so a restricted session cannot open a host PTY even when
+   * the global exec policy is permissive.
+   */
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
+  /**
+   * Per-run exec policy overrides (security/ask/host) the exec tool already
+   * applies. Forwarded to resolveExecDefaults so a run-level deny/ask override
+   * is honored by terminal opens, not just by the exec tool.
+   */
+  execOverrides?: ExecPolicyOverrides;
   lookupTaskByRunIdForChildSession?: (
     runId: string,
     childSessionKey: string,
@@ -136,6 +150,8 @@ type TerminalExecPolicyResolver = (params: {
   execApprovals?: ExecApprovalsFile;
   agentId: string;
   sessionKey: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
+  execOverrides?: ExecPolicyOverrides;
 }) => TerminalExecPolicy;
 
 type TerminalApprovalRequester = (params: {
@@ -163,6 +179,16 @@ function resolveTerminalExecPolicyDefault(
     execApprovals: params.execApprovals ?? loadExecApprovals(),
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    // Carry the prepared session permission through so the terminal inherits
+    // the same hard short-circuit (read-only → deny, guarded → ask) the exec
+    // tool applies. Without this, a restricted session can still open a host
+    // PTY when the global exec policy is permissive.
+    ...(params.sessionPermissionPolicy
+      ? { sessionEntry: { permissionMode: params.sessionPermissionPolicy.mode } }
+      : {}),
+    // Carry per-run exec overrides (security/ask/host) the exec tool already
+    // applies, so a run-level deny/ask override is honored by terminal opens.
+    ...(params.execOverrides ? { execOverrides: params.execOverrides } : {}),
   });
   return { mode: defaults.mode, security: defaults.security, ask: defaults.ask };
 }
@@ -329,6 +355,8 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           execApprovals: opts.execApprovals,
           agentId,
           sessionKey: agentSessionKey,
+          sessionPermissionPolicy: opts.sessionPermissionPolicy,
+          execOverrides: opts.execOverrides,
         });
         if (execPolicy.mode === "deny" || execPolicy.security === "deny") {
           throw new ToolInputError(

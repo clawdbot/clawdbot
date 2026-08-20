@@ -9,10 +9,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
+import type { ExecPolicyOverrides } from "./exec-defaults.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
+import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 
 export type OpenClawToolsOptions = {
@@ -46,6 +48,17 @@ export type OpenClawToolsOptions = {
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  /**
+   * Prepared session permission policy forwarded to the terminal tool so agent
+   * terminal opens inherit the same exec restriction (read-only → deny,
+   * guarded → ask) the exec tool enforces, even when global exec is permissive.
+   */
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
+  /**
+   * Per-run exec policy overrides forwarded to the terminal tool so a run-level
+   * deny/ask override is honored by terminal opens, not just by the exec tool.
+   */
+  execOverrides?: ExecPolicyOverrides;
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
   /** Capabilities declared by the gateway client that originated this run. */

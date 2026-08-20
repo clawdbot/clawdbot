@@ -176,6 +176,7 @@ describe("terminal exec-policy enforcement", () => {
       const tool = createTerminalTool({
         agentId: "main",
         agentSessionKey: "agent:main:main",
+        sessionId: "main-session-id",
         getGatewayContext: () => context,
       });
 
@@ -268,6 +269,7 @@ describe("terminal exec-policy enforcement", () => {
       const tool = createTerminalTool({
         agentId: "main",
         agentSessionKey: "agent:main:main",
+        sessionId: "main-session-id",
         getGatewayContext: () => context,
       });
 

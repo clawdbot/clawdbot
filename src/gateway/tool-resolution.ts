@@ -322,6 +322,9 @@ export function resolveGatewayScopedTools(params: {
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
+    sessionPermissionPolicy: params.execSession?.permissionMode
+      ? { mode: params.execSession.permissionMode, root: workspaceDir ?? "" }
+      : undefined,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,
       providerProfilePolicy,

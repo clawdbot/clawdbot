@@ -1060,6 +1060,13 @@ async function createCodexSideToolBridge(input: {
       }),
       config: input.params.cfg,
       preparedModelRuntime: input.params.preparedModelRuntime,
+      sessionPermissionPolicy:
+        input.params.sessionEntry?.permissionMode && input.params.sessionEntry?.sessionRoot
+          ? {
+              mode: input.params.sessionEntry.permissionMode,
+              root: input.params.sessionEntry.sessionRoot,
+            }
+          : undefined,
       abortSignal: input.signal,
       modelProvider: runtimeModel.provider,
       modelId: input.params.model,
