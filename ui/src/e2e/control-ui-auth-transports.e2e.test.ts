@@ -651,7 +651,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       .locator("openclaw-app-shell")
       .waitFor({ timeout: controlUiSettleTimeoutMs });
 
-    const settingsUrl = new URL("settings/advanced", allowedUi.baseUrl);
+    const settingsUrl = new URL("settings/communications", allowedUi.baseUrl);
     settingsUrl.searchParams.set("section", "messages");
     expect((await connected.page.goto(settingsUrl.toString()))?.status()).toBe(200);
     const prefix = connected.page.getByRole("textbox", {
