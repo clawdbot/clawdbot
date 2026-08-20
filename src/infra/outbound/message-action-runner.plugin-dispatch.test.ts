@@ -96,6 +96,69 @@ describe("runMessageAction plugin dispatch", () => {
       expect(handleScopedAction).not.toHaveBeenCalled();
     });
 
+    it("uses the selected operation-local plugin for broadcast target resolution", async () => {
+      const resolveTarget = vi.fn(async ({ input }: { input: string }) => ({
+        to: `user:${input}`,
+        kind: "user" as const,
+      }));
+      const handleScopedAction = vi.fn(async () => jsonResult({ ok: true }));
+      const scopedPlugin = createGatewayActionPlugin({
+        pluginId: "operation-local",
+        label: "Operation Local",
+        blurb: "Operation-local broadcast target resolution test plugin.",
+        actions: ["send"],
+        gatewayActions: [],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+            resolveTarget,
+          },
+        },
+        handleAction: handleScopedAction,
+      });
+
+      setActivePluginRegistry(createTestRegistry([]));
+      mocks.resolveOutboundChannelPlugin.mockReturnValue(scopedPlugin);
+      mocks.executeSendAction.mockResolvedValue({
+        handledBy: "core",
+        payload: { ok: true },
+        sendResult: {
+          channel: "operation-local",
+          to: "user:plugin-alias",
+          via: "direct",
+          mediaUrl: null,
+        },
+      });
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            "operation-local": {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "broadcast",
+        params: {
+          channel: "operation-local",
+          targets: ["plugin-alias"],
+          message: "hello",
+        },
+        dryRun: true,
+      });
+
+      expect(result).toMatchObject({
+        kind: "broadcast",
+        action: "broadcast",
+        payload: {
+          results: [{ channel: "operation-local", to: "user:plugin-alias", ok: true }],
+        },
+      });
+      expect(resolveTarget).toHaveBeenCalledWith(
+        expect.objectContaining({ input: "plugin-alias", normalized: "plugin-alias" }),
+      );
+      expect(handleScopedAction).not.toHaveBeenCalled();
+    });
+
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));
       vi.clearAllMocks();

@@ -8,7 +8,7 @@ import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { ChannelId } from "../../channels/plugins/types.public.js";
+import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
@@ -114,26 +114,24 @@ async function handleBroadcastAction(
   if (input.broadcastAccountPlan && input.broadcastAccountPlan.accountId !== explicitAccountId) {
     throw new Error("Broadcast account plan does not match the requested account.");
   }
-  const targetChannels =
+  const targetChannels: Array<{ channel: ChannelId; plugin?: ChannelPlugin }> =
     channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
       ? [
-          (
-            await resolveMessageChannelSelection({
-              cfg: input.cfg,
-              channel: channelHint,
-              fallbackChannel: input.toolContext?.currentChannelProvider,
-              agentId: input.agentId,
-            })
-          ).channel,
+          await resolveMessageChannelSelection({
+            cfg: input.cfg,
+            channel: channelHint,
+            fallbackChannel: input.toolContext?.currentChannelProvider,
+            agentId: input.agentId,
+          }),
         ]
       : input.broadcastAccountPlan
-        ? input.broadcastAccountPlan.candidateChannels
+        ? input.broadcastAccountPlan.candidateChannels.map((channel) => ({ channel }))
         : await (async () => {
             const configured = await listConfiguredMessageChannels(input.cfg);
             if (configured.length === 0) {
               throw new Error("Broadcast requires at least one configured channel.");
             }
-            return configured;
+            return configured.map((channel) => ({ channel }));
           })();
   if (targetChannels.length === 0) {
     throw new Error("Broadcast requires at least one configured channel.");
@@ -149,7 +147,7 @@ async function handleBroadcastAction(
   }> = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
   let attemptIndex = 0;
-  for (const targetChannel of targetChannels) {
+  for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
     throwIfAborted(input.abortSignal);
     for (const target of rawTargets) {
       throwIfAborted(input.abortSignal);
@@ -164,6 +162,7 @@ async function handleBroadcastAction(
         const resolved = await resolveMessageTarget({
           cfg: input.cfg,
           channel: targetChannel,
+          channelPlugin: targetChannelPlugin,
           action: "send",
           args: targetArgs,
           accountId: targetAccountId,
@@ -214,7 +213,8 @@ async function handleBroadcastAction(
   }
   return {
     kind: "broadcast",
-    channel: targetChannels[0] ?? normalizeOptionalLowercaseString(channelHint) ?? "unknown",
+    channel:
+      targetChannels[0]?.channel ?? normalizeOptionalLowercaseString(channelHint) ?? "unknown",
     action: "broadcast",
     handledBy: input.dryRun ? "dry-run" : "core",
     payload: { results },
