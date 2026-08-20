@@ -54,6 +54,19 @@ const REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>(
   REVIEWED_CODEX_SOURCE_LAYOUTS.flatMap((layout) => [...layout]),
 );
 
+const REVIEWED_LEGACY_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+  ["@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],
+  ["@openclaw/opencode-provider:dangerous-exec:session-catalog.ts", 1],
+]);
+const REVIEWED_CURRENT_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>();
+const REVIEWED_PLUGIN_RUNNER_SOURCE_LAYOUTS: ReadonlyArray<ReadonlyMap<string, number>> = [
+  REVIEWED_LEGACY_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS,
+  REVIEWED_CURRENT_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS,
+];
+const REVIEWED_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>(
+  REVIEWED_PLUGIN_RUNNER_SOURCE_LAYOUTS.flatMap((layout) => [...layout]),
+);
+
 // Generated chunks can contain multiple reviewed execution sites. Counts are
 // part of the contract so an added or missing site fails the release scan.
 const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<string, number>([
@@ -144,16 +157,41 @@ function resolveReviewedCodexSourceLayout(
   });
 }
 
+function resolveReviewedPluginRunnerSourceLayout(
+  reviewedCriticalFindings: readonly string[],
+): string[] | undefined {
+  const observedSourceFindings = reviewedCriticalFindings
+    .filter((key) => REVIEWED_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS.has(key))
+    .toSorted();
+  return REVIEWED_PLUGIN_RUNNER_SOURCE_LAYOUTS.map(expandReviewedFindingCounts).find((layout) => {
+    const expectedSourceFindings = layout.toSorted();
+    return (
+      expectedSourceFindings.length === observedSourceFindings.length &&
+      expectedSourceFindings.every((key, index) => key === observedSourceFindings[index])
+    );
+  });
+}
+
 function requiredReviewedFindingsForPackage(
   packageName: string,
   reviewedCriticalFindings: readonly string[],
+  allReviewedCriticalFindings: readonly string[],
 ): string[] {
   const commonFindings = [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS].flatMap(
     ([key, count]) =>
       key.startsWith(`${packageName}:`) ? Array.from({ length: count }, () => key) : [],
   );
+  const runnerSourceLayout = resolveReviewedPluginRunnerSourceLayout(allReviewedCriticalFindings);
+  if (!runnerSourceLayout) {
+    throw new Error(
+      "reviewed plugin runner source findings must match exactly one complete known layout.",
+    );
+  }
+  const runnerSourceFindings = runnerSourceLayout.filter((key) =>
+    key.startsWith(`${packageName}:`),
+  );
   if (packageName !== "@openclaw/codex") {
-    return commonFindings;
+    return [...commonFindings, ...runnerSourceFindings];
   }
   const sourceLayout = resolveReviewedCodexSourceLayout(reviewedCriticalFindings);
   if (!sourceLayout) {
@@ -161,13 +199,14 @@ function requiredReviewedFindingsForPackage(
       "@openclaw/codex: reviewed source findings must match exactly one complete known layout.",
     );
   }
-  return [...commonFindings, ...sourceLayout];
+  return [...commonFindings, ...sourceLayout, ...runnerSourceFindings];
 }
 
 function isReviewedPublishableCriticalFinding(key: string): boolean {
   return (
     REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.has(key) ||
     REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS.has(key) ||
+    REVIEWED_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS.has(key) ||
     OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS.has(key)
   );
 }
@@ -357,12 +396,13 @@ describe("publishable plugin npm package install security scan", () => {
     const publishablePackageNames = new Set(
       publishablePluginPackages.map((plugin) => plugin.packageName),
     );
+    const reviewedFindingKeys = [
+      ...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.keys(),
+      ...REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS.keys(),
+      ...REVIEWED_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS.keys(),
+    ];
     const missingPackages = [
-      ...new Set(
-        [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.keys()].map((key) =>
-          key.slice(0, key.indexOf(":")),
-        ),
-      ),
+      ...new Set(reviewedFindingKeys.map((key) => key.slice(0, key.indexOf(":")))),
     ].filter((packageName) => !publishablePackageNames.has(packageName));
 
     expect(missingPackages.toSorted()).toStrictEqual([]);
@@ -471,6 +511,50 @@ describe("publishable plugin npm package install security scan", () => {
     expect(resolveReviewedCodexSourceLayout([relocatedFinding])).toBeUndefined();
   });
 
+  it("accepts either complete reviewed plugin runner source layout", () => {
+    const legacyLayout = expandReviewedFindingCounts(
+      REVIEWED_LEGACY_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS,
+    );
+    const currentLayout = expandReviewedFindingCounts(
+      REVIEWED_CURRENT_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS,
+    );
+
+    expect(resolveReviewedPluginRunnerSourceLayout(legacyLayout)).toEqual(legacyLayout);
+    expect(resolveReviewedPluginRunnerSourceLayout(currentLayout)).toEqual(currentLayout);
+  });
+
+  const invalidPluginRunnerSourceLayouts: Array<[name: string, findings: string[]]> = [
+    ["partial legacy Codex-only", ["@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts"]],
+    [
+      "mixed transition OpenCode-only",
+      ["@openclaw/opencode-provider:dangerous-exec:session-catalog.ts"],
+    ],
+    [
+      "duplicate occurrence",
+      [
+        ...expandReviewedFindingCounts(
+          REVIEWED_LEGACY_PLUGIN_RUNNER_SOURCE_CRITICAL_FINDING_COUNTS,
+        ),
+        "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts",
+      ],
+    ],
+  ];
+
+  test.each(invalidPluginRunnerSourceLayouts)(
+    "rejects a %s plugin runner source layout",
+    (_name, findings) => {
+      expect(resolveReviewedPluginRunnerSourceLayout(findings)).toBeUndefined();
+    },
+  );
+
+  test.each([
+    "@openclaw/codex:dangerous-exec:src/relocated/node-cli-sessions.ts",
+    "@openclaw/opencode-provider:dangerous-exec:src/session-catalog.ts",
+    "@openclaw/codex:dangerous-exec:src/future-runner.ts",
+  ])("does not review an unknown or relocated plugin runner finding: %s", (finding) => {
+    expect(isReviewedPublishableCriticalFinding(finding)).toBe(false);
+  });
+
   test.concurrent.each(publishablePluginPackages)(
     "keeps $packageName files clear of unexpected critical hits",
     async (plugin) => {
@@ -479,8 +563,15 @@ describe("publishable plugin npm package install security scan", () => {
         throw new Error(`Missing package scan result for ${plugin.packageName}`);
       }
       expect(result.unexpectedCriticalFindings.toSorted()).toStrictEqual([]);
+      const allReviewedCriticalFindings = [...scanResultsByPackageName.values()].flatMap(
+        (scanResult) => scanResult.reviewedCriticalFindings,
+      );
       const expectedReviewedCriticalFindings = [
-        ...requiredReviewedFindingsForPackage(plugin.packageName, result.reviewedCriticalFindings),
+        ...requiredReviewedFindingsForPackage(
+          plugin.packageName,
+          result.reviewedCriticalFindings,
+          allReviewedCriticalFindings,
+        ),
         ...result.expectedReviewedCriticalFindings,
       ];
 
