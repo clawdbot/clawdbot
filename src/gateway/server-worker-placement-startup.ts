@@ -14,6 +14,7 @@ import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
+import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-reconcile-guard.js";
@@ -79,6 +80,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
     agentId: string;
     runId: string;
   }) => Promise<void>;
+  getSessionChangeContext?: () => Parameters<typeof emitSessionsChanged>[0] | undefined;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
   warn: (message: string) => void;
 };
@@ -344,6 +346,16 @@ export function createGatewayWorkerPlacementRuntime(
       onActivated: (request) => {
         if (request.deviceId) {
           void nodeWorkspaceRetention.schedule(request.deviceId);
+        }
+      },
+      onRecoveredMoveTransition: (placement) => {
+        const context = params.getSessionChangeContext?.();
+        if (context) {
+          emitSessionsChanged(context, {
+            reason: "move",
+            sessionKey: placement.sessionKey,
+            agentId: placement.agentId,
+          });
         }
       },
       runMoveBarrier,

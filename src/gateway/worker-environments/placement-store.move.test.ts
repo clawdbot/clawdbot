@@ -8,7 +8,10 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { createWorkerPlacementMoveService } from "./placement-move-service.js";
-import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type {
+  WorkerSessionPlacementIdentity,
+  WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -523,6 +526,134 @@ describe("worker session placement moves", () => {
     expect(store.getPlacementMove(SESSION.sessionId)).toBeUndefined();
   });
 
+  it("reports a persisted abandonment only after a later sweep completes its durable local placement", async () => {
+    const active = advanceToActive();
+    seedAttachedEnvironment({
+      environmentId: active.environmentId,
+      sessionId: active.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
+    const begun = store.beginPlacementMove({
+      sessionId: active.sessionId,
+      source: {
+        generation: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+      abandonSource: true,
+    });
+    const reconciling = store.startReconcile({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: begun.placement.generation,
+    });
+    const recoveryError = "Worker result abandoned by forced operator teardown";
+    const failed = store.fail({
+      sessionId: active.sessionId,
+      expectedGeneration: reconciling.generation,
+      recoveryError,
+    });
+    const recoveredTransitions = vi.fn((placement: WorkerSessionPlacementRecord) => {
+      expect(store.get(active.sessionId)).toEqual(placement);
+      expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
+      throw new Error("session subscriber reporting failed");
+    });
+    const abandonSource = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("device teardown is still pending"))
+      .mockImplementationOnce(async () =>
+        store.completeAbandonedPlacementMoveSourceToLocal({
+          operationId: begun.intent.operationId,
+          sessionId: active.sessionId,
+          expectedGeneration: failed.generation,
+          expectedRecoveryError: recoveryError,
+        }),
+      );
+    const moves = createWorkerPlacementMoveService({
+      placements: store,
+      environments: { get: () => undefined },
+      runMoveBarrier: async ({ begin }) => begin(),
+      dispatch: vi.fn(),
+      reclaimSource: vi.fn(),
+      validateAbandonSource: vi.fn(),
+      abandonSource,
+      resolveDestination: vi.fn(),
+      onRecoveredTransition: recoveredTransitions,
+    });
+
+    await moves.recoverAll();
+
+    expect(store.get(active.sessionId)).toEqual(failed);
+    expect(store.getPlacementMove(active.sessionId)?.lastError).toBe(
+      "device teardown is still pending",
+    );
+    expect(recoveredTransitions).not.toHaveBeenCalled();
+
+    await moves.recoverAll();
+
+    expect(recoveredTransitions).toHaveBeenCalledOnce();
+    expect(recoveredTransitions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: active.sessionId,
+        sessionKey: active.sessionKey,
+        agentId: active.agentId,
+        state: "local",
+        generation: failed.generation + 1,
+      }),
+    );
+    expect(abandonSource).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports an ordinary reconciled move only after its Gateway placement is durable", async () => {
+    const active = advanceToActive();
+    seedAttachedEnvironment({
+      environmentId: active.environmentId,
+      sessionId: active.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
+    const begun = store.beginPlacementMove({
+      sessionId: active.sessionId,
+      source: {
+        generation: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+    });
+    const reconciling = store.startReconcile({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: begun.placement.generation,
+    });
+    const recoveredTransitions = vi.fn((placement: WorkerSessionPlacementRecord) => {
+      expect(store.get(active.sessionId)).toEqual(placement);
+      expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
+    });
+    const moves = createWorkerPlacementMoveService({
+      placements: store,
+      environments: { get: () => undefined },
+      runMoveBarrier: async ({ begin }) => begin(),
+      dispatch: vi.fn(),
+      reclaimSource: vi.fn(),
+      validateAbandonSource: vi.fn(),
+      abandonSource: vi.fn(),
+      resolveDestination: vi.fn(),
+      onRecoveredTransition: recoveredTransitions,
+    });
+
+    await moves.recoverAll();
+
+    expect(recoveredTransitions).toHaveBeenCalledOnce();
+    expect(recoveredTransitions).toHaveBeenCalledWith(
+      expect.objectContaining({ state: "local", generation: reconciling.generation + 1 }),
+    );
+    await moves.recoverAll();
+    expect(recoveredTransitions).toHaveBeenCalledOnce();
+  });
+
   it("fails a pending profile move after restart loses request authority", async () => {
     const source = advanceToActive();
     seedAttachedEnvironment({
@@ -555,6 +686,10 @@ describe("worker session placement moves", () => {
       throw new Error("failed destination must not reclaim the old source");
     });
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    const recoveredTransitions = vi.fn((placement: WorkerSessionPlacementRecord) => {
+      expect(restartedStore.get(source.sessionId)).toEqual(placement);
+      expect(restartedStore.getPlacementMove(source.sessionId)).toBeUndefined();
+    });
     const moves = createWorkerPlacementMoveService({
       placements: restartedStore,
       environments: { get: () => undefined },
@@ -565,6 +700,7 @@ describe("worker session placement moves", () => {
       abandonSource: vi.fn(async () => {
         throw new Error("unexpected source abandonment");
       }),
+      onRecoveredTransition: recoveredTransitions,
       resolveDestination: async (_identity, target) => {
         if (target.kind !== "profile") {
           throw new Error("expected profile move target");
@@ -581,6 +717,14 @@ describe("worker session placement moves", () => {
 
     expect(reclaimSource).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
+    expect(recoveredTransitions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: "failed",
+        generation: local.generation + 1,
+        recoveryError:
+          "Cloud worker move request authority expired after Gateway restart; retry move",
+      }),
+    );
     expect(restartedStore.get(source.sessionId)).toMatchObject({
       state: "failed",
       generation: local.generation + 1,

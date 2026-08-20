@@ -99,6 +99,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
     target: WorkerPlacementMoveRequest["target"],
   ) => Promise<WorkerPlacementMoveDestination | undefined>;
   onActivated?: (request: WorkerPlacementDispatchRequest) => void;
+  onRecoveredMoveTransition?: (placement: WorkerDispatchPlacement) => void;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspacePath: (params: {
     sessionId: string;
@@ -621,6 +622,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     validateAbandonSource: abandonment.validateAbandonSource,
     abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,
+    onRecoveredTransition: (placement) =>
+      reportTransition(options.onRecoveredMoveTransition, placement),
   });
   recoverPlacementMoves = moveService.recoverAll;
 

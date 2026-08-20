@@ -204,6 +204,7 @@ export async function prepareGatewayKernelState(params: {
             placements: workerEnvironmentStartup.placementStore,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,
+            getSessionChangeContext: () => pluginGatewayContext.current,
             persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
               // Placement runtime starts before chat state exists; moves invoke this only after startup.
               const text = connectionState.chatRunState.resolveBuffer(runId).text;
