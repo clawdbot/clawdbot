@@ -222,6 +222,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         env: {} as NodeJS.ProcessEnv,
         explicitProviders: {},
         providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 1_000,
         onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
       }),
     ).rejects.toThrow("provider catalog timed out after provider-defined retry window");
