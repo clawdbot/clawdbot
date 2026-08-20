@@ -522,6 +522,35 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
+  it("allows an incomplete daily-memory turn to use the host-owned cumulative guard", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      allowGuardedDailyMemoryFallback: true,
+      result: {
+        payloads: [{ isError: true, text: "Agent couldn't generate a response." }],
+        meta: {
+          durationMs: 42,
+          replayInvalid: true,
+          toolSummary: {
+            calls: 1,
+          },
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent couldn't generate a response.",
+            fallbackSafe: false,
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      reason: "format",
+      code: "incomplete_result",
+      preserveResultOnExhaustion: true,
+    });
+  });
+
   it("does not trust fallback-safe metadata over concrete outbound delivery evidence", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",

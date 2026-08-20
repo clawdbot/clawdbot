@@ -576,9 +576,16 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.sessionEntry?.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionId).toBe("session-rotated");
     expect(runEmbeddedAgentEntryMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: { kind: "memory-flush-maintenance" } }),
+    );
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(requireModelFallbackCall().userLockedAuthProfileId).toBe("anthropic:work");
     const flushCall = requireEmbeddedAgentCall();
+    expect(flushCall.preparedRunAdmission).toBeDefined();
+    expect(
+      resolveMemoryFlushAppendEnforcement(flushCall.preparedRunAdmission!.operationalRunInstance),
+    ).toBeTypeOf("function");
     expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
     expect(flushCall.transcriptPrompt).toBe("");
     expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
@@ -620,6 +627,20 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.sessionId).toBe("session-rotated");
     expect(persisted.compactionCount).toBe(2);
     expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
+  });
+
+  it("keeps non-daily plugin memory flushes out of guarded result fallback", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      ...createMemoryFlushPlan(),
+      systemPrompt: "Write memory to memory/sidecar.md.",
+      relativePath: "memory/sidecar.md",
+    }));
+
+    await runProjectedCompaction(true);
+
+    expect(runEmbeddedAgentEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: { kind: "maintenance" } }),
+    );
   });
 
   it("does not rotate or increment for an incomplete projected compaction end", async () => {

@@ -1,7 +1,12 @@
 export const DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS = 800;
-export const DAILY_MEMORY_FLUSH_MAX_APPEND_LINES = 3;
+const DAILY_MEMORY_FLUSH_MAX_APPEND_LINES = 3;
 export const DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES = 16 * 1024 * 1024;
 const DAILY_MEMORY_FLUSH_MAX_LINE_CHARS = 500;
+const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
+
+export function isDailyMemoryPath(relativePath: string): boolean {
+  return DAILY_MEMORY_PATH_RE.test(relativePath);
+}
 
 export type PreparedMemoryFlushAppend = {
   status: "accepted";

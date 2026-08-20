@@ -65,7 +65,8 @@ type RunEntryBehavior =
       kind: "command-rpc";
       hasCommittedSideEffect: () => boolean;
     }
-  | { kind: "maintenance" };
+  | { kind: "maintenance" }
+  | { kind: "memory-flush-maintenance" };
 
 type RunEntrySessionOverride =
   | { kind: "preserve" }
@@ -460,6 +461,8 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
                 provider,
                 model,
                 ...deliveryEvidence,
+                allowGuardedDailyMemoryFallback:
+                  params.behavior.kind === "memory-flush-maintenance",
               });
               const effectiveClassification =
                 params.behavior.kind === "followup-delivery"

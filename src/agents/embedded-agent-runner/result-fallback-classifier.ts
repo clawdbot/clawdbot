@@ -200,6 +200,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   result: unknown;
   hasDirectlySentBlockReply?: boolean;
   hasBlockReplyPipelineOutput?: boolean;
+  /** The daily-memory host guard makes replay bounded even after its append commits. */
+  allowGuardedDailyMemoryFallback?: boolean;
 }): ModelFallbackResultClassification {
   if (!isEmbeddedAgentRunResult(params.result)) {
     return null;
@@ -213,10 +215,17 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   const incompleteTurn = params.result.meta.error?.kind === "incomplete_turn";
-  if (incompleteTurn && params.result.meta.error?.fallbackSafe !== true) {
+  if (
+    incompleteTurn &&
+    params.result.meta.error?.fallbackSafe !== true &&
+    params.allowGuardedDailyMemoryFallback !== true
+  ) {
     return null;
   }
-  const fallbackSafeIncompleteTurn = incompleteTurn;
+  const fallbackSafeIncompleteTurn =
+    incompleteTurn &&
+    (params.result.meta.error?.fallbackSafe === true ||
+      params.allowGuardedDailyMemoryFallback === true);
   if (params.result.meta.replayInvalid === true && !fallbackSafeIncompleteTurn) {
     return null;
   }

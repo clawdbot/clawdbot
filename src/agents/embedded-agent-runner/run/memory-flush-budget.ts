@@ -9,7 +9,7 @@ type MemoryFlushAppendCommit<T> = Readonly<{
   commit: () => Promise<T>;
 }>;
 
-export type MemoryFlushAppendEnforcement = <T>(request: MemoryFlushAppendCommit<T>) => Promise<T>;
+type MemoryFlushAppendEnforcement = <T>(request: MemoryFlushAppendCommit<T>) => Promise<T>;
 
 const memoryFlushAppendEnforcementByRun = new WeakMap<
   OperationalRunInstanceRef,

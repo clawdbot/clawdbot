@@ -17,6 +17,7 @@ import { initializeMemoryFlushAppendBudget } from "../../agents/embedded-agent-r
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import {
   DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES,
+  isDailyMemoryPath,
   memoryFlushAppendRejected,
 } from "../../agents/memory-flush-append.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
@@ -1431,6 +1432,9 @@ export async function runMemoryFlushIfNeeded(params: {
     preparedRunAdmission,
   } = preparedAttempt;
   initializeMemoryFlushAppendBudget(preparedRunAdmission.operationalRunInstance);
+  const memoryFlushBehaviorKind = isDailyMemoryPath(memoryFlushWritePath)
+    ? "memory-flush-maintenance"
+    : "maintenance";
   let memoryCompactionCompleted = false;
   let memoryFlushWroteTarget = false;
   let postCompactionSessionId: string | undefined;
@@ -1483,7 +1487,7 @@ export async function runMemoryFlushIfNeeded(params: {
             cfg: params.cfg,
           }),
       },
-      behavior: { kind: "maintenance" },
+      behavior: { kind: memoryFlushBehaviorKind },
       sessionOverride: { kind: "preserve" },
       abortSignal,
       runCandidate: async (provider, model, runOptions) => {

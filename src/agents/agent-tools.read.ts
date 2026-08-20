@@ -45,6 +45,7 @@ import {
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
   DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES,
+  isDailyMemoryPath,
   memoryFlushAppendRejected,
   prepareDailyMemoryFlushAppend,
   type PreparedMemoryFlushAppend,
@@ -124,7 +125,6 @@ type ReadTruncationDetails = {
 
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing (?:lines|part of line) [^\]]*|Read output capped [^\]]*|\d+ more lines? in file\. [^\]]*)\]\s*$/;
-const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
 const DAILY_MEMORY_FLUSH_LOCK_OPTIONS = {
   retries: { retries: 10, factor: 1, minTimeout: 10, maxTimeout: 100, randomize: true },
   stale: 30_000,
@@ -336,7 +336,7 @@ function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
     .trim()
     .replace(/\\/g, "/")
     .replace(/^\.\/+/, "");
-  return DAILY_MEMORY_PATH_RE.test(normalized) ? normalized : undefined;
+  return isDailyMemoryPath(normalized) ? normalized : undefined;
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -889,7 +889,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
-      if (!DAILY_MEMORY_PATH_RE.test(options.relativePath)) {
+      if (!isDailyMemoryPath(options.relativePath)) {
         await appendMemoryFlushContent({
           absolutePath: allowedAbsolutePath,
           root: options.root,

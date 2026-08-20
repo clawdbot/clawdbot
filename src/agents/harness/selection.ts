@@ -747,7 +747,10 @@ function withoutInternalHarnessAuthority(
 }
 
 function prepareHarnessFinalizationParams(
-  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+  params: EmbeddedRunAttemptParams & {
+    systemAgentTool?: SystemAgentToolOptions;
+    memoryFlushAppendBudget?: unknown;
+  },
   builtIn: boolean,
 ): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
   import("./types.js").AgentHarnessAttemptParamsV2
@@ -757,7 +760,7 @@ function prepareHarnessFinalizationParams(
     memoryFlushAppendBudget: _memoryFlushAppendBudget,
     systemAgentTool: _systemAgentTool,
     ...withoutCapabilities
-  } = params as typeof params & { memoryFlushAppendBudget?: unknown };
+  } = params;
   if (builtIn) {
     return withoutCapabilities;
   }
