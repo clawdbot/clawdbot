@@ -19,6 +19,7 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
+import { stripInheritedAgentLocations } from "./agent-exec-config-isolation.js";
 
 const AGENT_EXEC_MESSAGE_MAX_BYTES = 4 * 1024 * 1024;
 const AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS = 600;
@@ -292,40 +293,6 @@ function normalizeCodeMode(
  * it was pointed at, a one-shot turn never bootstraps, and explicit flags
  * outrank whatever the resolved config says.
  */
-/**
- * Drops inherited state and workspace location overrides, which outrank the
- * facts this invocation owns. `session.store` and `agentDir` can redirect state
- * outside the invocation root, where its lock or temporary cleanup cannot own
- * it; a native harness `runtime.acp.cwd` can make the turn edit the wrong repo.
- * `agents.bindings[].acp.cwd` needs no equivalent because exec runs no channel,
- * so no binding matches.
- */
-function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
-  const { session, ...root } = base;
-  const { store: _store, ...sessionWithoutStore } = session ?? {};
-  const withoutSessionStore = session ? { ...root, session: sessionWithoutStore } : base;
-  const entries = withoutSessionStore.agents?.entries;
-  if (!entries) {
-    return withoutSessionStore;
-  }
-  return {
-    ...withoutSessionStore,
-    agents: {
-      ...withoutSessionStore.agents,
-      entries: Object.fromEntries(
-        Object.entries(entries).map(([id, entry]) => {
-          const { agentDir: _agentDir, runtime, ...rest } = entry;
-          if (runtime?.type !== "acp" || runtime.acp?.cwd === undefined) {
-            return [id, { ...rest, ...(runtime ? { runtime } : {}) }];
-          }
-          const { cwd: _cwd, ...acp } = runtime.acp;
-          return [id, { ...rest, runtime: { ...runtime, acp } }];
-        }),
-      ),
-    },
-  } as OpenClawConfig;
-}
-
 function buildExecRunOverlay(params: {
   base: OpenClawConfig;
   cwd: string;
@@ -335,7 +302,8 @@ function buildExecRunOverlay(params: {
   // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
   // defaults would let an inherited entry silently run the turn against a
   // different repository. Override every configured entry as well.
-  const entries = Object.keys(params.base.agents?.entries ?? {});
+  const entries = params.base.agents?.entries;
+  const list = entries === undefined ? params.base.agents?.list : undefined;
   return {
     agents: {
       defaults: {
@@ -343,9 +311,15 @@ function buildExecRunOverlay(params: {
         skipBootstrap: true,
         ...(params.opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
       },
-      ...(entries.length > 0
-        ? { entries: Object.fromEntries(entries.map((id) => [id, { workspace: params.cwd }])) }
-        : {}),
+      ...(entries !== undefined
+        ? {
+            entries: Object.fromEntries(
+              Object.keys(entries).map((id) => [id, { workspace: params.cwd }]),
+            ),
+          }
+        : list !== undefined
+          ? { list: list.map((entry) => Object.assign({}, entry, { workspace: params.cwd })) }
+          : {}),
     },
     // This process exits after one turn, so live skill invalidation cannot be
     // observed and would leave Chokidar retaining the otherwise-finished CLI.

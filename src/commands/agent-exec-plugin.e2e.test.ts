@@ -50,7 +50,7 @@ async function writeHarnessPlugin(
             : { supported: false },
           async runAttempt(params) {
             const text = params.agentId === "beta"
-              ? "SELECTED_AGENT_OK agent=" + params.agentId + " workspace=" + params.workspaceDir
+              ? "SELECTED_AGENT_OK agent=" + params.agentId + " workspace=" + params.workspaceDir + " agentDir=" + params.agentDir
               : "PLUGIN_HARNESS_OK";
             const assistant = {
               role: "assistant",
@@ -146,18 +146,21 @@ function buildExecProofConfig(): OpenClawConfig {
 function buildSelectedAgentExecProofConfig(params: {
   alphaWorkspace: string;
   betaWorkspace: string;
+  betaAgentDir: string;
 }): OpenClawConfig {
   return {
     ...buildExecProofConfig(),
     agents: {
       ownership: "explicit",
-      entries: {
-        alpha: { workspace: params.alphaWorkspace },
-        beta: {
+      list: [
+        { id: "alpha", workspace: params.alphaWorkspace },
+        {
+          id: "beta",
           workspace: params.betaWorkspace,
+          agentDir: params.betaAgentDir,
           model: "exec-proof/proof-model",
         },
-      },
+      ],
     },
   };
 }
@@ -169,9 +172,15 @@ async function writeConfig(
   await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config), "utf8");
 }
 
-function buildCliSource(args: string[]): string {
+function buildCliSource(args: string[], runtimeConfig?: OpenClawConfig): string {
   return `
     import { runMainOrRootHelp } from "./src/entry.ts";
+    ${
+      runtimeConfig
+        ? `const { setRuntimeConfigSnapshot } = await import("./src/config/io.ts");
+    setRuntimeConfigSnapshot(${JSON.stringify(runtimeConfig)});`
+        : ""
+    }
     await runMainOrRootHelp(${JSON.stringify(["node", "openclaw", ...args])});
   `;
 }
@@ -195,25 +204,33 @@ describe("agent exec installed plugin isolation", () => {
     const stateDir = tempDirs.make("openclaw-agent-exec-selected-plugin-e2e-");
     const alphaWorkspace = path.join(stateDir, "workspaces", "alpha");
     const betaWorkspace = path.join(stateDir, "workspaces", "beta");
+    const betaAgentDir = path.join(stateDir, "persistent-agents", "beta");
     const overrideWorkspace = path.join(stateDir, "workspaces", "override");
     await Promise.all(
-      [alphaWorkspace, betaWorkspace, overrideWorkspace].map((dir) =>
+      [alphaWorkspace, betaWorkspace, betaAgentDir, overrideWorkspace].map((dir) =>
         fs.mkdir(dir, { recursive: true }),
       ),
     );
-    const config = buildSelectedAgentExecProofConfig({ alphaWorkspace, betaWorkspace });
+    const config = buildSelectedAgentExecProofConfig({
+      alphaWorkspace,
+      betaWorkspace,
+      betaAgentDir,
+    });
     await writeHarnessPlugin(stateDir, config);
     await writeConfig(stateDir, config);
-    const source = buildCliSource([
-      "agent",
-      "exec",
-      "prove selected agent",
-      "--agent",
-      "beta",
-      "--cwd",
-      overrideWorkspace,
-      "--json",
-    ]);
+    const source = buildCliSource(
+      [
+        "agent",
+        "exec",
+        "prove selected agent",
+        "--agent",
+        "beta",
+        "--cwd",
+        overrideWorkspace,
+        "--json",
+      ],
+      config,
+    );
 
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
@@ -226,13 +243,23 @@ describe("agent exec installed plugin isolation", () => {
       },
     );
     expect(stdout, stderr).not.toBe("");
-    expect(JSON.parse(stdout)).toMatchObject({
+    const output = JSON.parse(stdout) as { final: string } & Record<string, unknown>;
+    expect(output).toMatchObject({
       ok: true,
       status: "ok",
-      final: `SELECTED_AGENT_OK agent=beta workspace=${overrideWorkspace}`,
       model: "proof-model",
       provider: "exec-proof",
     });
+    const finalPrefix = `SELECTED_AGENT_OK agent=beta workspace=${overrideWorkspace} agentDir=`;
+    expect(output.final.startsWith(finalPrefix)).toBe(true);
+    const isolatedAgentDir = output.final.slice(finalPrefix.length);
+    expect(path.resolve(isolatedAgentDir)).not.toBe(path.resolve(betaAgentDir));
+    expect(path.basename(isolatedAgentDir)).toBe("agent");
+    expect(path.basename(path.dirname(isolatedAgentDir))).toBe("beta");
+    expect(path.basename(path.dirname(path.dirname(isolatedAgentDir)))).toBe("agents");
+    expect(path.basename(path.dirname(path.dirname(path.dirname(isolatedAgentDir))))).toMatch(
+      /^openclaw-agent-exec-/u,
+    );
   });
 
   it("runs an operator-installed harness without retaining run state", async () => {
