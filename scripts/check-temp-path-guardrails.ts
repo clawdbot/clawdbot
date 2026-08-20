@@ -21,6 +21,9 @@ const WEAK_RANDOM_SAME_LINE_PATTERN =
 const PATH_JOIN_CALL_PATTERN = /path\s*\.\s*join\s*\(/u;
 const OS_TMPDIR_CALL_PATTERN = /os\s*\.\s*tmpdir\s*\(/u;
 const FILE_READ_CONCURRENCY = 24;
+// Repository growth can push the tracked runtime file list past Node's 1 MiB default.
+// Keep the guard bounded while leaving enough headroom for large checkouts.
+const GIT_FILE_LIST_MAX_BUFFER = 16 * 1024 * 1024;
 const DEFAULT_GUARDRAIL_SKIP_PATTERNS = [
   /\.test\.tsx?$/,
   /\.test-helpers\.tsx?$/,
@@ -212,6 +215,7 @@ function hasDynamicTmpdirJoin(source: string): boolean {
 function listTrackedRuntimeSourceFiles(repoRoot: string): string[] {
   const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", "src", "extensions"], {
     encoding: "utf8",
+    maxBuffer: GIT_FILE_LIST_MAX_BUFFER,
     stdio: ["ignore", "pipe", "inherit"],
   });
   return stdout
