@@ -1,4 +1,0 @@
-interface:
-  display_name: "Prototype OpenClaw TUI"
-  short_description: "Compare isolated OpenClaw TUI variants in tmux"
-  default_prompt: "Use $prototype-openclaw-tui to isolate an OpenClaw Clack or Pi TUI surface with fixture data and compare multiple interactive variants in tmux."

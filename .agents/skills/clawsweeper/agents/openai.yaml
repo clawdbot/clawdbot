@@ -1,4 +1,0 @@
-interface:
-  display_name: "ClawSweeper"
-  short_description: "Inspect ClawSweeper issue/PR reports, queue health, and Actions runs."
-  default_prompt: "Review recent ClawSweeper issue/PR reports, queue health, and Actions runs."

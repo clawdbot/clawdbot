@@ -1,6 +1,0 @@
-/** Test-only registry type projections. */
-import type { PluginRegistry } from "./registry.js";
-
-export * from "./registry.js";
-
-export type PluginProviderRegistration = PluginRegistry["providers"][number];

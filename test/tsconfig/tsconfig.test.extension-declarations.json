@@ -1,7 +1,0 @@
-{
-  "extends": "./tsconfig.core.test.shard.json",
-  "compilerOptions": {
-    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/test-extension-declarations.tsbuildinfo"
-  },
-  "include": ["../../extensions/**/*.d.ts"]
-}

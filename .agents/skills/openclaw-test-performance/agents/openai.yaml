@@ -1,6 +1,0 @@
-interface:
-  display_name: "OpenClaw Test Performance"
-  short_description: "Benchmark tests, plugin suites, CPU, RSS, and heap growth"
-  default_prompt: "Use $openclaw-test-performance to reassess OpenClaw test and plugin-suite performance, collect wall/import/CPU/RSS metrics, investigate memory growth when needed, fix the next real hotspot without losing coverage, update the report, and commit scoped changes."
-policy:
-  allow_implicit_invocation: false

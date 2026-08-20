@@ -1,9 +1,0 @@
-<frontmatter>
-title: leaked
-</frontmatter>
-
-<body>
-First translated
-
-Second translated
-</body>
