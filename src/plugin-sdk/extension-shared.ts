@@ -6,9 +6,20 @@ import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-
 import { createDeferredCore } from "../shared/deferred.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
+import {
+  canResolveEnvSecretRefInReadOnlyPath as canResolveEnvSecretRefInReadOnlyPathInternal,
+} from "./secret-ref-readonly.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
-export { canResolveEnvSecretRefInReadOnlyPath } from "./secret-ref-readonly.internal.js";
+
+/**
+ * @deprecated Import from `openclaw/plugin-sdk/secret-ref-readonly`. This alias
+ * keeps published Firecrawl plugins through 2026.7.1 loadable. Remove it only
+ * after supported releases no longer import the legacy subpath and the normal
+ * Plugin SDK deprecation window has elapsed.
+ */
+export const canResolveEnvSecretRefInReadOnlyPath =
+  canResolveEnvSecretRefInReadOnlyPathInternal;
 
 type PassiveChannelStatusSnapshot = {
   configured?: boolean;

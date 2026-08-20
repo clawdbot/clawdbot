@@ -292,7 +292,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
     | `plugin-sdk/dangerous-name-runtime` | Private-local after July 2026; Dangerous-name matching resolution helpers |
     | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers, including `BOOTSTRAP_HANDOFF_OPERATOR_SCOPES` |
-    | `plugin-sdk/extension-shared` | Shared passive-channel, status, and ambient proxy helper primitives |
+    | `plugin-sdk/extension-shared` | Shared passive-channel, status, and ambient proxy helper primitives. Its `canResolveEnvSecretRefInReadOnlyPath` export is a deprecated load-compatibility alias for Firecrawl packages through 2026.7.1; new consumers must use `plugin-sdk/secret-ref-readonly`. |
     | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers |
     | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
