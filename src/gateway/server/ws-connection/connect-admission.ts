@@ -117,7 +117,10 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     sendFrame,
   } = context;
 
-  if (isStartupPending?.()) {
+  const isNodeClient =
+    connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+  // Startup awaits node enrollment; node authentication and pairing still run below.
+  if (isStartupPending?.() && !isNodeClient) {
     markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
     await sendFrame({
       type: "res",
@@ -144,8 +147,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   // Protocol v4 changed chat deltas, not node RPC frames. Keep N-1 limited to
   // the node role+mode so stale operator/UI clients cannot enter the v4 surface.
   const supportsPreviousNodeProtocol =
-    connectParams.role === "node" &&
-    connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+    isNodeClient &&
     maxProtocol >= MIN_NODE_PROTOCOL_VERSION &&
     minProtocol <= MIN_NODE_PROTOCOL_VERSION;
   const usesLegacyNodeProtocol = !supportsCurrentProtocol && supportsPreviousNodeProtocol;

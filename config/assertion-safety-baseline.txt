@@ -2138,7 +2138,6 @@ src/agents/tools/mobile-ui-tool.ts	5
 src/agents/tools/model-config.helpers.ts	1
 src/agents/tools/music-generate-tool.ts	2
 src/agents/tools/nodes-tool.ts	3
-src/agents/tools/nodes-utils.ts	2
 src/agents/tools/openclaw-delegate-tool.ts	1
 src/agents/tools/pdf-native-providers.ts	2
 src/agents/tools/pdf-tool.ts	3
@@ -2445,7 +2444,7 @@ src/cli/nodes-cli/register.pairing.ts	4
 src/cli/nodes-cli/register.push.ts	1
 src/cli/nodes-cli/register.screen.ts	1
 src/cli/nodes-cli/register.status.ts	4
-src/cli/nodes-cli/rpc.ts	3
+src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1

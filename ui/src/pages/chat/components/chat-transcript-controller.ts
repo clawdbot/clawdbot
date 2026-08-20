@@ -22,6 +22,7 @@ import {
   saveChatSessionScrollPosition,
   type ChatSessionScrollPosition,
 } from "../scroll.ts";
+import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { extractTranscriptRange, previewTranscriptRowKeys } from "./chat-transcript-range.ts";
 
 export type TranscriptRow<T = unknown> =
@@ -150,6 +151,15 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       instance.resizeItem(index, size);
     }
   }
+  private readonly handleGeometryCommit = () => {
+    const rect = this.scrollElement?.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0) {
+      return;
+    }
+    // The viewport observer must not repeat this committed width's row scan.
+    this.observedWidth = Math.round(rect.width);
+    this.measureConnectedRows();
+  };
   private queueConnectedRowMeasure(): void {
     if (this.pendingRowMeasureFrame !== null) {
       return;
@@ -303,6 +313,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       return;
     }
     this.connected = true;
+    if (this.host instanceof HTMLElement) {
+      this.host.addEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
+    }
     for (const controller of this.controllers) {
       controller.hostConnected?.();
     }
@@ -333,6 +346,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       return;
     }
     this.connected = false;
+    if (this.host instanceof HTMLElement) {
+      this.host.removeEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
+    }
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }

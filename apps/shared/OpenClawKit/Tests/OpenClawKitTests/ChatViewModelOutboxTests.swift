@@ -770,10 +770,11 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
-        try await waitUntil("empty outbox restore completes") {
-            await MainActor.run { vm.hasRestoredOutboxMessages }
+        try await waitUntil("empty outbox becomes ready") {
+            await MainActor.run {
+                vm.healthOK && !vm.isLoading && vm.hasRestoredOutboxMessages
+            }
         }
-        try await Task.sleep(for: .milliseconds(50))
         #expect(await MainActor.run { vm.healthOK })
         #expect(await MainActor.run { vm.errorText == nil })
 
@@ -783,10 +784,11 @@ struct ChatViewModelOutboxTests {
         #expect(await store.enqueueCommand(parked))
         let parkedVM = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { parkedVM.load() }
-        try await waitUntil("parked outbox restore completes") {
-            await MainActor.run { parkedVM.hasRestoredOutboxMessages }
+        try await waitUntil("parked outbox becomes ready") {
+            await MainActor.run {
+                parkedVM.healthOK && !parkedVM.isLoading && parkedVM.hasRestoredOutboxMessages
+            }
         }
-        try await Task.sleep(for: .milliseconds(50))
         #expect(await MainActor.run { parkedVM.healthOK })
         #expect(await MainActor.run { parkedVM.errorText == nil })
     }

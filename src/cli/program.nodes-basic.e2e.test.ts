@@ -1,6 +1,8 @@
 // Program nodes basic e2e tests cover node command registration through the full CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import {
   createIosNodeListResponse,
   formatRuntimeLogCallArg,
@@ -687,9 +689,9 @@ describe("cli program (nodes basics)", () => {
         params?: { nodeId?: string };
       };
       if (opts.method === "node.list") {
-        throw Object.assign(new Error("unknown method: node.list"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
+        throw new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown method: node.list",
         });
       }
       if (opts.method === "node.pair.list") {
@@ -876,5 +878,34 @@ describe("cli program (nodes basics)", () => {
     const invokeRequest = gatewayRequests().find((candidate) => candidate.method === "node.invoke");
     expect(invokeRequest?.clientName).toBe("cli");
     expect(invokeRequest?.mode).toBe("cli");
+  });
+
+  it("reports the inventory timeout instead of invoking a stale paired node", async () => {
+    const timeout = new GatewayProtocolRequestTimeoutError({
+      method: "node.list",
+      timeoutMs: 80,
+      requestSent: true,
+    });
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+      const { method } = (args[0] ?? {}) as { method?: string };
+      if (method === "node.list") {
+        throw timeout;
+      }
+      if (method === "node.pair.list") {
+        return { pending: [], paired: [{ nodeId: "stale-node", displayName: "Stale Node" }] };
+      }
+      throw new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "node not connected",
+      });
+    });
+
+    await expect(
+      runProgram(["nodes", "invoke", "--node", "Stale Node", "--command", "canvas.hide"]),
+    ).rejects.toThrow("exit");
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(timeout.message));
+    expect(gatewayRequests().map(({ method }) => method)).toEqual(["node.list"]);
+    expect(runtime.writeJson).not.toHaveBeenCalled();
   });
 });
