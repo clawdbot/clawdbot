@@ -44,7 +44,7 @@ const MemoryGetSchema = {
   additionalProperties: false,
 } as const satisfies TSchema;
 
-export type MemorySourceContract = Readonly<{ files: string; search: string }>;
+type MemorySourceContract = Readonly<{ files: string; search: string }>;
 
 function resolveMemorySourceContract(
   settings: NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
