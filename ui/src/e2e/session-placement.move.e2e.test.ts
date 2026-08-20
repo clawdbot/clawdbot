@@ -261,12 +261,19 @@ suite.define(() => {
   it("keeps a rapid offline publication over stale deferred startup hydration", async () => {
     const context = await suite.newBrowserContext(contextOptions());
     const page = await context.newPage();
-    const available = activeSession();
+    const parent = {
+      key: "agent:main:placement-parent",
+      kind: "direct" as const,
+      label: "Placement parent",
+      updatedAt: 1,
+      childSessions: ["agent:main:placement-move"],
+    };
+    const available = { ...activeSession(), parentSessionKey: parent.key };
     available.placement = {
       ...available.placement,
       runner: { kind: "device", status: "available" },
     } as typeof available.placement;
-    const offline = activeSession();
+    const offline = { ...activeSession(), parentSessionKey: parent.key };
     offline.placement = {
       ...offline.placement,
       runner: { kind: "device", status: "offline" },
@@ -278,7 +285,12 @@ suite.define(() => {
         { role: "assistant", content: "Deferred available startup transcript settled." },
       ],
       methodResponses: {
-        "sessions.list": chatSessionListResponse([available]),
+        "sessions.list": {
+          cases: [
+            { match: { spawnedBy: parent.key }, response: chatSessionListResponse([available]) },
+            { response: chatSessionListResponse([parent, available]) },
+          ],
+        },
       },
       sessionInfo: available,
       sessionKey: "agent:main:placement-move",
@@ -288,6 +300,24 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
+      await expect
+        .poll(() =>
+          page.evaluate((parentKey) => {
+            const sidebar = document.querySelector<
+              HTMLElement & {
+                sessionData?: {
+                  childSessionRowsByParent: Record<
+                    string,
+                    Array<{ placement?: { runner?: { status?: string } } }>
+                  >;
+                };
+              }
+            >("openclaw-app-sidebar");
+            return sidebar?.sessionData?.childSessionRowsByParent[parentKey]?.[0]?.placement?.runner
+              ?.status;
+          }, parent.key),
+        )
+        .toBe("available");
       await page.evaluate(() => {
         const state = { returnedOnline: false, seenOffline: false };
         const inspect = () => {
@@ -314,10 +344,26 @@ suite.define(() => {
         inspect();
       });
       const listCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", { agentId: "main" });
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await gateway.waitForRequest("sessions.list", { after: listCount });
-      await gateway.resolveDeferred("sessions.list", chatSessionListResponse([offline]));
+      await gateway.resolveDeferred("sessions.list", chatSessionListResponse([parent, offline]));
+      await page.getByRole("button", { name: "Device offline" }).waitFor();
+      expect(
+        await page.evaluate(() => {
+          const sidebar = document.querySelector<
+            HTMLElement & {
+              sessionData?: {
+                activeSessionLineageSelectedRow?: {
+                  placement?: { runner?: { status?: string } };
+                };
+              };
+            }
+          >("openclaw-app-sidebar");
+          return sidebar?.sessionData?.activeSessionLineageSelectedRow?.placement?.runner?.status;
+        }),
+      ).toBe("offline");
+      expect(await gateway.getSocketCount()).toBe(1);
 
       await page.getByRole("button", { name: "Open split view" }).click();
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");

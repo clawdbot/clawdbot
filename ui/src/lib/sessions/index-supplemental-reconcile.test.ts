@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { publishActiveSessionLineage } from "../../components/app-sidebar-child-session-data.ts";
 import { createSessionCapability } from "./index.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 
@@ -99,6 +100,93 @@ describe("supplemental session reconciliation", () => {
         sessionId: "session-routed",
       }),
     ]);
+    sessions.dispose();
+  });
+
+  it("keeps a newer canonical placement when an older sidebar lineage finishes", async () => {
+    const canonical = {
+      key,
+      kind: "direct" as const,
+      sessionId: "session-device",
+      updatedAt: 10,
+      placement: placement("offline"),
+    };
+    const sessions = capabilityWithList(sessionsResult([canonical], 10));
+    const sourceCanonicalListRevision = sessions.canonicalListRevision;
+    await sessions.refresh({ force: true });
+    const reconcile = vi.spyOn(sessions, "reconcile");
+    const cached = {
+      ...canonical,
+      updatedAt: 20,
+      derivedTitle: "My device session",
+      lastMessagePreview: "Most recent message",
+      placement: placement("available"),
+    };
+    const owner = {
+      activeSessionLineageRoot: null,
+      activeSessionLineageSelectedRow: cached,
+      childSessionRowsByParent: { "agent:main:parent": [cached] },
+      context: { sessions },
+      sessionsResult: sessions.state.result,
+    };
+
+    publishActiveSessionLineage(
+      owner,
+      key,
+      {
+        rowsByParent: { "agent:main:parent": [cached] },
+        topmostRow: cached,
+        lookupFailed: false,
+      },
+      sourceCanonicalListRevision,
+    );
+
+    expect(reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ placement: placement("offline") }),
+      sessions.state.result?.defaults,
+      { archivedFilter: "all", sourceCanonicalListRevision },
+    );
+    expect(sessions.state.result?.sessions[0]?.placement).toEqual(placement("offline"));
+    expect(owner.activeSessionLineageSelectedRow).toMatchObject({
+      placement: placement("offline"),
+      derivedTitle: "My device session",
+      lastMessagePreview: "Most recent message",
+    });
+    sessions.dispose();
+  });
+
+  it("publishes an archived lineage missing from a newer canonical list", async () => {
+    const sessions = capabilityWithList(sessionsResult([], 10));
+    const sourceCanonicalListRevision = sessions.canonicalListRevision;
+    await sessions.refresh({ force: true });
+    const reconcile = vi.spyOn(sessions, "reconcile");
+    const archived = {
+      key: "agent:main:archived-routed",
+      kind: "direct" as const,
+      sessionId: "session-routed",
+      updatedAt: 10,
+      archived: true,
+    };
+    const owner = {
+      activeSessionLineageRoot: null,
+      activeSessionLineageSelectedRow: null,
+      childSessionRowsByParent: {},
+      context: { sessions },
+      sessionsResult: sessions.state.result,
+    };
+
+    publishActiveSessionLineage(
+      owner,
+      archived.key,
+      { rowsByParent: {}, topmostRow: archived, lookupFailed: false },
+      sourceCanonicalListRevision,
+    );
+
+    expect(reconcile).toHaveBeenCalledWith(archived, sessions.state.result?.defaults, {
+      archivedFilter: "all",
+      sourceCanonicalListRevision,
+    });
+    expect(sessions.state.result?.sessions).toEqual([archived]);
     sessions.dispose();
   });
 });
