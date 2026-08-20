@@ -6,8 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
-import { getImageGenerationProvider } from "../media-generation/registry.js";
-import { listImageGenerationProviders } from "../media-generation/registry.js";
+import {
+  getImageGenerationProvider,
+  listImageGenerationProviders,
+} from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,

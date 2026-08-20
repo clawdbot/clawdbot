@@ -183,14 +183,8 @@ class GatewayRestartTransaction {
       acceptedConfig &&
       configDebt.restartOwnedPaths.every((path) =>
         isDeepStrictEqual(
-          getConfigValueAtPath(
-            configDebt.nextConfig as unknown as Record<string, unknown>,
-            path.split("."),
-          ),
-          getConfigValueAtPath(
-            acceptedConfig as unknown as Record<string, unknown>,
-            path.split("."),
-          ),
+          getConfigValueAtPath({ ...configDebt.nextConfig }, path.split(".")),
+          getConfigValueAtPath({ ...acceptedConfig }, path.split(".")),
         ),
       );
     if (!retainsConfigDebt) {

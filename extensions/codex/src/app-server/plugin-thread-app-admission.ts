@@ -12,8 +12,12 @@ import type {
   CodexPluginOwnedApp,
   CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
-import type { CodexAppServerRequestResult } from "./protocol.js";
-import { isJsonObject, type JsonObject, type v2 } from "./protocol.js";
+import {
+  type CodexAppServerRequestResult,
+  isJsonObject,
+  type JsonObject,
+  type v2,
+} from "./protocol.js";
 
 export type CodexPluginThreadAppAdmissionDiagnostic = {
   code: "account_app_inventory_unavailable" | "account_app_config_unavailable";

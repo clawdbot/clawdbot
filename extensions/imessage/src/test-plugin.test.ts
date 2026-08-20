@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -95,6 +96,83 @@ function requireMessageSendMedia(
 }
 
 describe("imessagePlugin contracts", () => {
+  it("rejects unqualified provider identifiers and exposes qualification guidance", async () => {
+    const targetResolver = imessagePlugin.messaging?.targetResolver;
+    const resolveTarget = targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error("Expected iMessage target resolver");
+    }
+
+    expect(targetResolver.hint).toBe(
+      "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
+    );
+
+    await expect(
+      resolveTarget({
+        cfg: {} as OpenClawConfig,
+        input: "C0AG22RN7L3",
+        normalized: "+02273",
+      }),
+    ).resolves.toBeNull();
+
+    await expect(
+      resolveTarget({
+        cfg: {} as OpenClawConfig,
+        input: "auto:Alice Smith",
+        normalized: "auto:AliceSmith",
+      }),
+    ).resolves.toMatchObject({ kind: "user", to: "auto:AliceSmith" });
+  });
+
+  it("keeps account-prefixed conversation bindings and opaque metadata across manager recreation", async () => {
+    await withStateDirEnv("openclaw-imessage-conversation-binding-", async () => {
+      const createManager = imessagePlugin.conversationBindings?.createManager;
+      expect(createManager).toBeTypeOf("function");
+      if (!createManager) {
+        throw new Error("iMessage conversation binding manager is unavailable");
+      }
+
+      const cfg = {
+        channels: { imessage: { accounts: { default: {} } } },
+      } satisfies OpenClawConfig;
+      const conversation = {
+        channel: "imessage",
+        accountId: "default",
+        conversationId: "+15555550999",
+      };
+      const opaqueMetadata = {
+        label: "persisted iMessage binding",
+        opaque: { owner: "channel", flags: ["durable", "account-scoped"] },
+      };
+      let manager = await createManager({ cfg, accountId: "default" });
+
+      try {
+        const binding = await getSessionBindingService().bind({
+          conversation,
+          targetKind: "session",
+          targetSessionKey: "agent:main:acp:imessage-durable",
+          placement: "current",
+          metadata: opaqueMetadata,
+        });
+
+        expect(binding.bindingId).toBe("default:+15555550999");
+        expect(binding.metadata).toMatchObject(opaqueMetadata);
+
+        await manager.stop();
+        manager = await createManager({ cfg, accountId: "default" });
+
+        expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
+          bindingId: binding.bindingId,
+          targetKind: "session",
+          targetSessionKey: binding.targetSessionKey,
+          metadata: opaqueMetadata,
+        });
+      } finally {
+        await manager.stop();
+      }
+    });
+  });
+
   it("declares durable final delivery capabilities", () => {
     expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
       text: true,

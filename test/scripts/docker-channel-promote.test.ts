@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
@@ -79,6 +82,27 @@ function requireJob(workflow: Workflow, name: string): WorkflowJob {
   return job;
 }
 
+function requireStep(job: WorkflowJob, name: string): WorkflowStep {
+  const step = job.steps?.find((candidate) => candidate.name === name);
+  if (!step?.run) {
+    throw new Error(`Missing workflow step: ${name}`);
+  }
+  return step;
+}
+
+function runWorkflowStep(step: WorkflowStep, env: NodeJS.ProcessEnv) {
+  return spawnSync("bash", ["-c", step.run!], {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+}
+
+// Workflow steps use bash 4+ builtins (mapfile); CI truth is Linux bash 5,
+// while stock macOS ships bash 3.2. Skip execution-backed cases there.
+const bashRunsWorkflowSteps =
+  process.platform !== "win32" &&
+  spawnSync("bash", ["-c", "type mapfile"], { encoding: "utf8" }).status === 0;
+
 describe("Docker channel promotion", () => {
   it("plans every extended-stable image variant in both registries", () => {
     expect(createDockerChannelPromotionPlan({ version: "2026.6.33", images })).toEqual({
@@ -103,6 +127,84 @@ describe("Docker channel promotion", () => {
       version: "2026.6.33",
     });
   });
+
+  it("threads a rebuild suffix through sources without changing channel aliases", () => {
+    expect(
+      createDockerChannelPromotionPlan({
+        version: "2026.7.1-2",
+        imageTagSuffix: "-r20260820",
+        images: images.slice(0, 1),
+      }),
+    ).toEqual({
+      channel: "stable",
+      promotions: [
+        {
+          image: images[0],
+          sourceRef: `${images[0]}:2026.7.1-2-r20260820`,
+          targetRefs: [`${images[0]}:latest`, `${images[0]}:main`],
+        },
+        {
+          image: images[0],
+          sourceRef: `${images[0]}:2026.7.1-2-r20260820-slim`,
+          targetRefs: [`${images[0]}:slim`, `${images[0]}:main-slim`],
+        },
+        {
+          image: images[0],
+          sourceRef: `${images[0]}:2026.7.1-2-r20260820-browser`,
+          targetRefs: [`${images[0]}:latest-browser`, `${images[0]}:main-browser`],
+        },
+      ],
+      version: "2026.7.1-2",
+    });
+  });
+
+  it("keeps an explicit empty suffix identical to the plain release plan", () => {
+    expect(
+      createDockerChannelPromotionPlan({
+        version: "2026.6.33",
+        imageTagSuffix: "",
+        images,
+      }),
+    ).toEqual(createDockerChannelPromotionPlan({ version: "2026.6.33", images }));
+  });
+
+  it("keeps suffixed extended-stable sources on dedicated aliases", () => {
+    const plan = createDockerChannelPromotionPlan({
+      version: "2026.6.34",
+      imageTagSuffix: "-r20260820",
+      images: images.slice(0, 1),
+    });
+
+    expect(plan.promotions.map(({ sourceRef, targetRefs }) => ({ sourceRef, targetRefs }))).toEqual(
+      [
+        {
+          sourceRef: `${images[0]}:2026.6.34-r20260820`,
+          targetRefs: [`${images[0]}:extended-stable`],
+        },
+        {
+          sourceRef: `${images[0]}:2026.6.34-r20260820-slim`,
+          targetRefs: [`${images[0]}:extended-stable-slim`],
+        },
+        {
+          sourceRef: `${images[0]}:2026.6.34-r20260820-browser`,
+          targetRefs: [`${images[0]}:extended-stable-browser`],
+        },
+      ],
+    );
+  });
+
+  it.each(["r20260820", "-r2026082", "-r202608200", "-r20260820-extra"])(
+    "rejects malformed rebuild suffix %s",
+    (imageTagSuffix) => {
+      expect(() =>
+        createDockerChannelPromotionPlan({
+          version: "2026.7.1",
+          imageTagSuffix,
+          images: images.slice(0, 1),
+        }),
+      ).toThrow("Invalid Docker image tag suffix");
+    },
+  );
 
   it("preflights every source before moving and verifying aliases", () => {
     const calls: string[][] = [];
@@ -198,11 +300,18 @@ describe("Docker channel promotion", () => {
 
     expect(() =>
       promoteDockerChannel(
-        { version: "2026.6.33", images: images.slice(0, 1) },
+        {
+          version: "2026.6.33",
+          imageTagSuffix: "-r20260820",
+          images: images.slice(0, 1),
+        },
         { execFileSyncImpl, verifyAttestationsImpl: skipAttestationVerification },
       ),
     ).toThrow(
       "Refusing to move ghcr.io/openclaw/openclaw:extended-stable backward from 2026.6.34 to 2026.6.33",
+    );
+    expect(execFileSyncImpl.mock.calls[0]?.[1]).toContain(
+      "ghcr.io/openclaw/openclaw:2026.6.33-r20260820",
     );
     expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
   });
@@ -370,6 +479,181 @@ describe("Docker channel promotion", () => {
       "no moving aliases",
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "threads empty and dated suffixes through every release image ref",
+    () => {
+      const workflow = readWorkflow(".github/workflows/docker-release.yml");
+      const resolveCases = [
+        {
+          job: "build-amd64",
+          step: "Resolve image tags (amd64)",
+          expected: ["-amd64", "-slim-amd64", "-browser-amd64"],
+        },
+        {
+          job: "build-arm64",
+          step: "Resolve image tags (arm64)",
+          expected: ["-arm64", "-slim-arm64", "-browser-arm64"],
+        },
+        {
+          job: "create-manifest",
+          step: "Resolve manifest tags",
+          expected: ["", "-slim", "-browser"],
+        },
+        {
+          job: "verify-attestations",
+          step: "Resolve image refs",
+          expected: [
+            "",
+            "-slim",
+            "-browser",
+            "-amd64",
+            "-slim-amd64",
+            "-browser-amd64",
+            "-arm64",
+            "-slim-arm64",
+            "-browser-arm64",
+          ],
+        },
+      ] as const;
+
+      for (const imageTagSuffix of ["", "-r20260820"]) {
+        const imageVersion = `2026.7.1-2${imageTagSuffix}`;
+        for (const testCase of resolveCases) {
+          const root = mkdtempSync(path.join(tmpdir(), "openclaw-docker-release-refs-"));
+          try {
+            const outputPath = path.join(root, "github-output");
+            writeFileSync(outputPath, "", "utf8");
+            const result = runWorkflowStep(
+              requireStep(requireJob(workflow, testCase.job), testCase.step),
+              {
+                DOCKERHUB_IMAGE: "docker.io/openclaw/openclaw",
+                GHCR_IMAGE: "ghcr.io/openclaw/openclaw",
+                GITHUB_OUTPUT: outputPath,
+                IMAGE_TAG_SUFFIX: imageTagSuffix,
+                SOURCE_REF: "refs/tags/v2026.7.1-2",
+              },
+            );
+            expect(result.status, `${testCase.step}: ${result.stderr}`).toBe(0);
+            const output = readFileSync(outputPath, "utf8");
+            for (const suffix of testCase.expected) {
+              expect(output, `${testCase.step}: ${suffix}`).toContain(
+                `ghcr.io/openclaw/openclaw:${imageVersion}${suffix}`,
+              );
+              expect(output, `${testCase.step}: ${suffix}`).toContain(
+                `docker.io/openclaw/openclaw:${imageVersion}${suffix}`,
+              );
+            }
+            if (imageTagSuffix === "") {
+              expect(output).not.toContain("-r20260820");
+            }
+          } finally {
+            rmSync(root, { force: true, recursive: true });
+          }
+        }
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "accepts only empty or dated rebuild suffix workflow inputs",
+    () => {
+      const workflow = readWorkflow(".github/workflows/docker-release.yml");
+      const validate = requireStep(
+        requireJob(workflow, "validate_release_identity"),
+        "Validate immutable tag and SHA inputs",
+      );
+      for (const imageTagSuffix of ["", "-r20260820"]) {
+        const result = runWorkflowStep(validate, {
+          IMAGE_TAG_SUFFIX: imageTagSuffix,
+          RELEASE_SHA: "a".repeat(40),
+          RELEASE_TAG: "v2026.7.1-2",
+        });
+        expect(result.status, result.stderr).toBe(0);
+      }
+      const invalid = runWorkflowStep(validate, {
+        IMAGE_TAG_SUFFIX: "-r2026082",
+        RELEASE_SHA: "a".repeat(40),
+        RELEASE_TAG: "v2026.7.1-2",
+      });
+      expect(invalid.status).not.toBe(0);
+      expect(invalid.stderr).toContain("Invalid Docker image tag suffix");
+    },
+  );
+
+  it.runIf(bashRunsWorkflowSteps)(
+    "uses suffixed per-arch sources for Docker Hub manifests and VCR verification",
+    () => {
+      const workflow = readWorkflow(".github/workflows/docker-release.yml");
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-docker-release-sources-"));
+      try {
+        const dockerCalls = path.join(root, "docker-calls");
+        const outputPath = path.join(root, "github-output");
+        const digestValue = `sha256:${"a".repeat(64)}`;
+        writeFileSync(outputPath, "", "utf8");
+        writeFileSync(
+          path.join(root, "docker"),
+          `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$DOCKER_CALLS"\nprintf '%s\\n' '{"digest":"${digestValue}"}'\n`,
+          "utf8",
+        );
+        writeFileSync(path.join(root, "node"), "#!/usr/bin/env bash\nexit 0\n", "utf8");
+        chmodSync(path.join(root, "docker"), 0o755);
+        chmodSync(path.join(root, "node"), 0o755);
+        // Keep the fake tools together on PATH without shadowing jq.
+        writeFileSync(path.join(root, "docker-calls"), "", "utf8");
+
+        const manifest = runWorkflowStep(
+          requireStep(requireJob(workflow, "create-manifest"), "Create and push manifest"),
+          {
+            AMD64_BROWSER_DIGEST: "ghcr.io/openclaw/openclaw@sha256:3",
+            AMD64_DIGEST: "ghcr.io/openclaw/openclaw@sha256:1",
+            ARM64_BROWSER_DIGEST: "ghcr.io/openclaw/openclaw@sha256:4",
+            ARM64_DIGEST: "ghcr.io/openclaw/openclaw@sha256:2",
+            BROWSER_TAGS: "ghcr.io/openclaw/openclaw:2026.7.1-2-r20260820-browser",
+            DOCKERHUB_BROWSER_TAGS: "docker.io/openclaw/openclaw:2026.7.1-2-r20260820-browser",
+            DOCKERHUB_IMAGE: "docker.io/openclaw/openclaw",
+            DOCKERHUB_TAGS:
+              "docker.io/openclaw/openclaw:2026.7.1-2-r20260820\ndocker.io/openclaw/openclaw:2026.7.1-2-r20260820-slim",
+            DOCKER_CALLS: dockerCalls,
+            IMAGE_TAG_SUFFIX: "-r20260820",
+            PATH: `${root}:${process.env.PATH ?? ""}`,
+            SOURCE_REF: "refs/tags/v2026.7.1-2",
+            TAGS: "ghcr.io/openclaw/openclaw:2026.7.1-2-r20260820\nghcr.io/openclaw/openclaw:2026.7.1-2-r20260820-slim",
+          },
+        );
+        expect(manifest.status, manifest.stderr).toBe(0);
+        const manifestCalls = readFileSync(dockerCalls, "utf8");
+        expect(manifestCalls).toContain("docker.io/openclaw/openclaw:2026.7.1-2-r20260820-amd64");
+        expect(manifestCalls).toContain(
+          "docker.io/openclaw/openclaw:2026.7.1-2-r20260820-browser-arm64",
+        );
+
+        writeFileSync(dockerCalls, "", "utf8");
+        const vcr = runWorkflowStep(
+          requireStep(
+            requireJob(workflow, "verify-attestations"),
+            "Resolve and verify immutable VCR source refs",
+          ),
+          {
+            DOCKER_CALLS: dockerCalls,
+            GHCR_IMAGE: "ghcr.io/openclaw/openclaw",
+            GITHUB_OUTPUT: outputPath,
+            IMAGE_TAG_SUFFIX: "-r20260820",
+            INCLUDE_BROWSER: "true",
+            PATH: `${root}:${process.env.PATH ?? ""}`,
+            VERSION: "2026.7.1-2",
+          },
+        );
+        expect(vcr.status, vcr.stderr).toBe(0);
+        const vcrCalls = readFileSync(dockerCalls, "utf8");
+        expect(vcrCalls).toContain("ghcr.io/openclaw/openclaw:2026.7.1-2-r20260820 ");
+        expect(vcrCalls).toContain("ghcr.io/openclaw/openclaw:2026.7.1-2-r20260820-slim");
+        expect(vcrCalls).toContain("ghcr.io/openclaw/openclaw:2026.7.1-2-r20260820-browser");
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("uses the digest-bound promotion path for releases and approved repairs", () => {
     const workflow = readWorkflow(".github/workflows/docker-channel-promote.yml");

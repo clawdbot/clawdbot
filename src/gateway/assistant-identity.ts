@@ -32,7 +32,11 @@ type AssistantIdentity = {
   emoji?: string;
 };
 
-type ResolvedAssistantIdentity = AssistantIdentity & { agentId: string };
+type AssistantIdentityNameSource = "config" | "agent" | "workspace" | "default";
+type ResolvedAssistantIdentity = AssistantIdentity & {
+  agentId: string;
+  nameSource: AssistantIdentityNameSource;
+};
 
 export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
   name: "Assistant",
@@ -117,9 +121,25 @@ export function resolveAssistantIdentity(params: {
   const uiName = normalizeIdentityValue("name", configAssistant?.name);
   const agentName = normalizeIdentityValue("name", agentIdentity?.name);
   const fileName = normalizeIdentityValue("name", fileIdentity?.name);
-  const name =
-    (isDefaultAgent ? (uiName ?? agentName ?? fileName) : (agentName ?? fileName ?? uiName)) ??
-    DEFAULT_ASSISTANT_IDENTITY.name;
+  let resolvedName: [string, AssistantIdentityNameSource] | undefined;
+  if (isDefaultAgent) {
+    resolvedName = uiName
+      ? [uiName, "config"]
+      : agentName
+        ? [agentName, "agent"]
+        : fileName
+          ? [fileName, "workspace"]
+          : undefined;
+  } else {
+    resolvedName = agentName
+      ? [agentName, "agent"]
+      : fileName
+        ? [fileName, "workspace"]
+        : uiName
+          ? [uiName, "config"]
+          : undefined;
+  }
+  const [name, nameSource] = resolvedName ?? [DEFAULT_ASSISTANT_IDENTITY.name, "default"];
 
   const uiAvatar = normalizeAvatarValue(configAssistant?.avatar);
   const agentAvatarCandidates = [
@@ -141,5 +161,5 @@ export function resolveAssistantIdentity(params: {
   ];
   const emoji = emojiCandidates.map((candidate) => normalizeEmojiValue(candidate)).find(Boolean);
 
-  return { agentId, name, avatar, emoji };
+  return { agentId, name, nameSource, avatar, emoji };
 }

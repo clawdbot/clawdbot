@@ -73,7 +73,7 @@ function hasConfiguredCapabilityPlugin(config: OpenClawConfig, env: NodeJS.Proce
   if (memoryEmbeddingProviderIds.size > 0) {
     if (
       hasOfficialExternalContractTarget({
-        contract: "memoryEmbeddingProviders",
+        contract: "embeddingProviders",
         providerIds: memoryEmbeddingProviderIds,
       })
     ) {

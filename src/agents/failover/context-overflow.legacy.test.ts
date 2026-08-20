@@ -247,6 +247,11 @@ describe("extractObservedOverflowTokenCount", () => {
         "input length and max_tokens exceed context limit (i.e 156321 + 48384 > 200000)",
       ),
     ).toBe(204705);
+    expect(
+      extractObservedOverflowTokenCount(
+        "input length and `max_tokens` exceed context limit: 176312 + 32000 > 200000",
+      ),
+    ).toBe(208312);
   });
 
   it("returns undefined when overflow counts are not present", () => {

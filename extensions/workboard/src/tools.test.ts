@@ -1,5 +1,6 @@
 // Workboard tests cover tools plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
@@ -499,9 +500,13 @@ describe("workboard tools", () => {
     );
 
     const boardPayload = readPayload(
-      await tools.get("workboard_board_create")?.execute("call-board", {
+      await expectDefined(
+        tools.get("workboard_board_create"),
+        "workboard board create tool",
+      ).execute("call-board", {
         id: "planning",
         name: "Planning",
+        automationJobId: "job-categorize-planning",
         orchestration: {
           autoDecompose: true,
           autoDecomposePerDispatch: 2,
@@ -512,12 +517,26 @@ describe("workboard tools", () => {
     expect(boardPayload.board).toMatchObject({
       id: "planning",
       name: "Planning",
+      automationJobId: "job-categorize-planning",
       orchestration: {
         autoDecompose: true,
         autoDecomposePerDispatch: 2,
         orchestratorProfile: "planner",
       },
     });
+    const boardCreate = expectDefined(
+      tools.get("workboard_board_create"),
+      "workboard board create tool",
+    );
+    expect(
+      Value.Check(boardCreate.parameters, {
+        id: "planning",
+        automationJobId: "job-categorize-planning",
+      }),
+    ).toBe(true);
+    expect(Value.Check(boardCreate.parameters, { id: "planning", automationJobId: "" })).toBe(
+      false,
+    );
 
     const parent = await store.create({
       title: "Rough",

@@ -169,7 +169,7 @@ export function adaptAnthropicToolCallIds(events: StreamEvent[]): StreamEvent[] 
     if (existing) {
       return existing;
     }
-    const adapted = `toolu_${createHash("sha256").update(id).digest("hex").slice(0, 48)}`;
+    const adapted = `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
     adaptedIds.set(id, adapted);
     return adapted;
   };

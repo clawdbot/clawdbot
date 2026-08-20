@@ -3,7 +3,10 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveProviderAuthProfileApiKey } from "openclaw/plugin-sdk/provider-auth";
+import {
+  resolveOpenAICodexAuthIdentity,
+  resolveProviderAuthProfileApiKey,
+} from "openclaw/plugin-sdk/provider-auth";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
@@ -15,7 +18,6 @@ import {
   resolveAcceptedBrowserOrigin,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import WebSocket, { type RawData } from "ws";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import {
   releaseOpenAIQuicksilverSession,
@@ -164,7 +166,7 @@ export async function resolveOpenAIChatGptSubscriptionAuth(params: {
   if (!token) {
     return undefined;
   }
-  const accountId = resolveCodexAuthIdentity({ accessToken: token }).accountId;
+  const accountId = resolveOpenAICodexAuthIdentity({ access: token }).accountId;
   if (!accountId) {
     throw new Error("The selected ChatGPT OAuth profile is missing its account id");
   }

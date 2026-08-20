@@ -7,8 +7,7 @@ import type { DraftRepositoryState } from "./discovery.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 type DraftRepositorySnapshot = Readonly<{
-  execNode: string;
-  cloudProfileId: string;
+  remotePlacement: boolean;
   selectedProject: ProjectRecord | undefined;
   remoteProjectSelected: boolean;
   folder: string;
@@ -32,6 +31,7 @@ export class DraftRepositoryController {
   private preferredWorktreeRestore = false;
   private preferredBaseRefRestore = "";
   private worktreeSelectedByUser = false;
+  private detailsSelectedByUser = false;
 
   constructor(
     private readonly read: () => DraftRepositorySnapshot,
@@ -58,11 +58,16 @@ export class DraftRepositoryController {
     return !this.preferredWorktreeRestore;
   }
 
+  get hasUserSelection(): boolean {
+    return this.worktreeSelectedByUser || this.detailsSelectedByUser;
+  }
+
   adoptPreference(preference: NewSessionPreference | null) {
     this.preferredWorktreeRestore = preference?.worktree === true;
     this.preferredBaseRefRestore = preference?.baseRef ?? "";
     this.worktreeNameValue = preference?.worktreeName ?? "";
     this.worktreeSelectedByUser = false;
+    this.detailsSelectedByUser = false;
   }
 
   reset() {
@@ -75,6 +80,7 @@ export class DraftRepositoryController {
     this.preferredWorktreeRestore = false;
     this.preferredBaseRefRestore = "";
     this.worktreeSelectedByUser = false;
+    this.detailsSelectedByUser = false;
   }
 
   invalidate() {
@@ -102,7 +108,7 @@ export class DraftRepositoryController {
   }
 
   toggle() {
-    if (this.read().cloudProfileId) {
+    if (this.read().remotePlacement) {
       return;
     }
     this.worktreeValue = !this.worktreeValue;
@@ -125,6 +131,7 @@ export class DraftRepositoryController {
     this.baseRefEditGeneration += 1;
     this.baseRefValue = baseRef;
     this.preferredBaseRefRestore = "";
+    this.detailsSelectedByUser = true;
     this.callbacks.persistPreference({ baseRef });
     this.callbacks.requestUpdate();
   }
@@ -134,15 +141,13 @@ export class DraftRepositoryController {
       return;
     }
     this.worktreeNameValue = worktreeName;
+    this.detailsSelectedByUser = true;
     this.callbacks.persistPreference({ worktreeName });
     this.callbacks.requestUpdate();
   }
 
   available(): boolean {
     const snapshot = this.read();
-    if (snapshot.execNode) {
-      return false;
-    }
     if (snapshot.selectedProject?.repoRoot) {
       return true;
     }
@@ -157,7 +162,7 @@ export class DraftRepositoryController {
   }
 
   matchesCurrentRepo(): boolean {
-    if (this.read().execNode || this.repositoryValue.kind === "idle") {
+    if (this.repositoryValue.kind === "idle") {
       return false;
     }
     const snapshot = this.read();
@@ -176,7 +181,6 @@ export class DraftRepositoryController {
     this.baseRefValue = "";
     if (
       snapshot.remoteProjectSelected ||
-      snapshot.execNode ||
       (snapshot.selectedProject && !snapshot.selectedProject.repoRoot)
     ) {
       this.preferredWorktreeRestore = false;
@@ -191,8 +195,8 @@ export class DraftRepositoryController {
     }
     if (usesWorkspace && !snapshot.workspaceGit) {
       this.repositoryValue = { kind: "direct", repoRoot };
-      const rejectedWorktree = !snapshot.cloudProfileId && (this.worktreeValue || restoreWorktree);
-      if (!snapshot.cloudProfileId) {
+      const rejectedWorktree = !snapshot.remotePlacement && (this.worktreeValue || restoreWorktree);
+      if (!snapshot.remotePlacement) {
         this.worktreeValue = false;
       }
       this.preferredWorktreeRestore = false;
@@ -223,8 +227,8 @@ export class DraftRepositoryController {
           };
           if (result?.repositoryStatus === "not_git") {
             const rejectedWorktree =
-              !this.read().cloudProfileId && (this.worktreeValue || restoreWorktree);
-            if (!this.read().cloudProfileId) {
+              !this.read().remotePlacement && (this.worktreeValue || restoreWorktree);
+            if (!this.read().remotePlacement) {
               this.worktreeValue = false;
             }
             if (rejectedWorktree) {
@@ -244,7 +248,7 @@ export class DraftRepositoryController {
           ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
           ...(result.headBranch ? { headBranch: result.headBranch } : {}),
         };
-        if (restoreWorktree && !this.worktreeSelectedByUser && !this.read().execNode) {
+        if (restoreWorktree && !this.worktreeSelectedByUser) {
           this.worktreeValue = true;
         }
         this.preferredWorktreeRestore = false;

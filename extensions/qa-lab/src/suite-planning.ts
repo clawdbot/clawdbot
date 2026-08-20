@@ -1,8 +1,8 @@
 // Qa Lab plugin module implements suite planning behavior.
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap from "p-map";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -13,7 +13,11 @@ import {
   scenarioMatchesQaProviderLane,
 } from "./scenario-lane.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
-import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
+import {
+  applyQaMergePatch,
+  isQaMergePatchBlockedKey,
+  isQaMergePatchObject,
+} from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
@@ -193,6 +197,9 @@ function resolveQaGatewayConfigPatchSelectedAccount(
   }
   const resolved: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(patch)) {
+    if (isQaMergePatchBlockedKey(key)) {
+      continue;
+    }
     const resolvedKey = key === QA_GATEWAY_CONFIG_SELECTED_ACCOUNT_KEY ? selectedAccountId : key;
     Object.defineProperty(resolved, resolvedKey, {
       configurable: true,
@@ -204,12 +211,17 @@ function resolveQaGatewayConfigPatchSelectedAccount(
   return resolved;
 }
 
-function collectQaSuiteGatewayConfigPatch(
+// The patches stay an ordered list instead of one composed document: a merge
+// patch cannot express "delete this parent, then recreate part of it", so
+// composing a scenario's deletion with a later scenario's object would let the
+// baseline siblings it removed survive. Startup replays them in order against
+// the real config, which is the semantics a scenario author writes.
+function collectQaSuiteGatewayConfigPatches(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
   selectedAccountId = "sut",
-): Record<string, unknown> | undefined {
+): Record<string, unknown>[] {
   const resolvedSelectedAccountId = selectedAccountId.trim() || "sut";
-  let merged: Record<string, unknown> | undefined;
+  const patches: Record<string, unknown>[] = [];
   for (const scenario of scenarios) {
     if (!isQaMergePatchObject(scenario.gatewayConfigPatch)) {
       continue;
@@ -218,9 +230,19 @@ function collectQaSuiteGatewayConfigPatch(
       scenario.gatewayConfigPatch,
       resolvedSelectedAccountId,
     );
-    merged = applyQaMergePatch(merged ?? {}, resolvedPatch) as Record<string, unknown>;
+    if (isQaMergePatchObject(resolvedPatch)) {
+      patches.push(resolvedPatch);
+    }
   }
-  return merged;
+  return patches;
+}
+
+/** Applies collected scenario patches to a gateway config in scenario order. */
+function applyQaSuiteGatewayConfigPatches(
+  config: unknown,
+  patches: readonly Record<string, unknown>[],
+): unknown {
+  return patches.reduce<unknown>((next, patch) => applyQaMergePatch(next, patch), config);
 }
 
 function collectQaSuiteGatewayRuntimeOptions(
@@ -408,9 +430,8 @@ async function mapQaSuiteWithConcurrency<T, U>(
       }
     })();
   }
-  const results = await pMap(
-    items,
-    async (item, index) => {
+  const { results } = await runTasksWithConcurrency({
+    tasks: items.map((item, index) => async () => {
       if (stopped) {
         return undefined;
       }
@@ -423,12 +444,11 @@ async function mapQaSuiteWithConcurrency<T, U>(
         stopped = true;
       }
       return result;
-    },
-    {
-      concurrency: Math.max(1, Math.floor(concurrency)),
-      stopOnError: true,
-    },
-  );
+    }),
+    limit: Math.max(1, Math.floor(concurrency)),
+    errorMode: "stop",
+    throwOnError: true,
+  });
   const completed: U[] = [];
   for (const result of results) {
     if (result !== undefined) {
@@ -457,8 +477,8 @@ async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
 }
 
 export {
-  applyQaMergePatch,
-  collectQaSuiteGatewayConfigPatch,
+  applyQaSuiteGatewayConfigPatches,
+  collectQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuiteTransportPolicy,
   collectQaSuitePluginIds,

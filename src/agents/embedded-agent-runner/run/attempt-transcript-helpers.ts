@@ -10,9 +10,9 @@ import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { log } from "../logger.js";
 import { canContinueFromMessage, trimToContinuableTail } from "./compaction-timeout.js";
 import { MID_TURN_PRECHECK_ERROR_MESSAGE } from "./midturn-precheck.js";
@@ -24,22 +24,11 @@ export function flushSessionManagerTranscript(sessionManager: AttemptSessionMana
   sessionManager.flushPendingPersistence();
 }
 
-export function repairAttemptToolUseResultPairing(
-  messages: AgentMessage[],
-  isOpenAIResponsesApi: boolean,
-): AgentMessage[] {
-  return sanitizeToolUseResultPairing(messages, {
-    erroredAssistantResultPolicy: "drop",
-    ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
-  });
-}
-
 function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const record = message as unknown as { stopReason?: unknown; errorMessage?: unknown };
-  return record.stopReason === "error" && record.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
+  return message.stopReason === "error" && message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
 }
 
 export function removeTrailingMidTurnPrecheckAssistantError(params: {
@@ -91,7 +80,7 @@ export function normalizeCompactionRecoveryTranscriptTail(params: {
   );
   params.activeSession.agent.state.messages =
     removedEntries > 0
-      ? params.sessionManager.buildSessionContext().messages
+      ? sanitizeCompactionReplayMessages(params.sessionManager.buildSessionContext().messages)
       : continuableMessages.length === messages.length
         ? messages
         : continuableMessages;

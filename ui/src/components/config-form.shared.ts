@@ -45,6 +45,29 @@ export function schemaType(schema: JsonSchema): string | undefined {
   return schema.type;
 }
 
+export function schemaMayAcceptString(schema: JsonSchema): boolean {
+  const declaredTypes = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  if (declaredTypes.length > 0 && !declaredTypes.includes("string")) {
+    return false;
+  }
+  if (schema.const !== undefined && typeof schema.const !== "string") {
+    return false;
+  }
+  if (schema.enum && !schema.enum.some((entry) => typeof entry === "string")) {
+    return false;
+  }
+  if (schema.allOf && !schema.allOf.every(schemaMayAcceptString)) {
+    return false;
+  }
+  if (schema.anyOf && !schema.anyOf.some(schemaMayAcceptString)) {
+    return false;
+  }
+  if (schema.oneOf && !schema.oneOf.some(schemaMayAcceptString)) {
+    return false;
+  }
+  return true;
+}
+
 export function configFieldId(path: Array<string | number>, suffix: string): string {
   const key =
     path.length === 0

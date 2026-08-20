@@ -1,10 +1,11 @@
 // Outbound send service chooses plugin-handled message actions or the core
 // message/poll path while preserving media policy and transcript mirrors.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type { DurableMessageSendIntent } from "../../channels/message/types.js";
+import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -71,6 +72,8 @@ type OutboundSendContext = {
   /** Known destination conversation kind prepared by the caller. */
   conversationType?: ChatType;
   sessionId?: string;
+  runId?: string;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -95,6 +98,8 @@ type OutboundSendContext = {
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
   /** Runs on identified platform evidence before queue acknowledgement. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** Runs once a plugin action accepted the send, before transcript mirroring. */
+  onPluginSendAccepted?: () => Promise<void>;
 };
 
 type PluginHandledResult = {
@@ -138,7 +143,7 @@ async function sendCoreMessage(params: {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   bestEffort?: boolean;
-  replyToId?: string;
+  reply?: OutboundReplyFacts;
   threadId?: string | number;
   queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
   payloads?: SendMessageParams["payloads"];
@@ -166,7 +171,7 @@ async function sendCoreMessage(params: {
     accountId: params.ctx.accountId ?? undefined,
     conversationType: params.ctx.conversationType,
     conversationReadOrigin: params.ctx.conversationReadOrigin,
-    replyToId: params.replyToId,
+    reply: params.reply,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
@@ -176,6 +181,8 @@ async function sendCoreMessage(params: {
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
     idempotencyKey: params.ctx.idempotencyKey,
+    runId: params.ctx.runId,
+    executionIdentityToken: params.ctx.executionIdentityToken,
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
@@ -209,6 +216,7 @@ async function sendCoreMessage(params: {
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
+  reply?: OutboundReplyFacts;
   onHandled?: () => Promise<void> | void;
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
@@ -240,6 +248,7 @@ async function tryHandleWithPluginAction(params: {
       ctx: params.ctx,
       action: params.action,
       mediaAccess,
+      reply: params.reply,
     }),
   );
   if (!handled) {
@@ -257,6 +266,7 @@ function createChannelActionContext(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
   mediaAccess?: ReturnType<typeof resolveAgentScopedOutboundMediaAccess>;
+  reply?: OutboundReplyFacts;
 }): ChannelMessageActionContext {
   const mediaAccess = params.mediaAccess ?? params.ctx.mediaAccess;
   return {
@@ -264,6 +274,7 @@ function createChannelActionContext(params: {
     action: params.action,
     cfg: params.ctx.cfg,
     params: params.ctx.params,
+    ...(params.reply ? { reply: params.reply } : {}),
     ...(mediaAccess ? { mediaAccess } : {}),
     mediaLocalRoots: mediaAccess?.localRoots ?? params.ctx.mediaAccess?.localRoots,
     mediaReadFile: mediaAccess?.readFile ?? params.ctx.mediaReadFile,
@@ -291,8 +302,7 @@ async function preparePluginSendPayload(params: {
   ctx: OutboundSendContext;
   to: string;
   payload: ReplyPayload;
-  replyToId?: string;
-  replyToIdSource?: "explicit" | "implicit";
+  reply?: OutboundReplyFacts;
   threadId?: string | number;
 }): Promise<PluginSendPayloadPreparation> {
   const plugin = params.ctx.plugin;
@@ -304,11 +314,11 @@ async function preparePluginSendPayload(params: {
     return { kind: "unavailable" };
   }
   const payload = await prepareSendPayload({
-    ctx: createChannelActionContext({ ctx: params.ctx, action: "send" }),
+    ctx: createChannelActionContext({ ctx: params.ctx, action: "send", reply: params.reply }),
     to: params.to,
     payload: params.payload,
-    replyToId: params.replyToId,
-    replyToIdSource: params.replyToIdSource,
+    replyToId: params.reply?.replyToId,
+    replyToIdSource: params.reply?.source,
     threadId: params.threadId,
   });
   // A null result is an ownership decision: the provider-native payload cannot
@@ -331,8 +341,7 @@ export async function executeSendAction(params: {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   bestEffort?: boolean;
-  replyToId?: string;
-  replyToIdSource?: "explicit" | "implicit";
+  reply?: OutboundReplyFacts;
   threadId?: string | number;
 }): Promise<{
   handledBy: "plugin" | "core";
@@ -361,8 +370,7 @@ export async function executeSendAction(params: {
         ctx: params.ctx,
         to: params.to,
         payload: defaultPayload,
-        replyToId: params.replyToId,
-        replyToIdSource: params.replyToIdSource,
+        reply: params.reply,
         threadId: params.threadId,
       });
   const channelPlugin = params.ctx.plugin;
@@ -419,7 +427,11 @@ export async function executeSendAction(params: {
     : await tryHandleWithPluginAction({
         ctx: pluginCtx,
         action: "send",
+        reply: params.reply,
         onHandled: async () => {
+          // The accepted-send commit must precede the transcript mirror below:
+          // first-contact outbound routes create their session row in it.
+          await params.ctx.onPluginSendAccepted?.();
           if (!params.ctx.mirror) {
             return;
           }
@@ -483,6 +495,7 @@ export async function executePollAction(params: {
   resolveCorePoll: () => {
     to: string;
     question: string;
+    content?: string;
     options: string[];
     maxSelections: number;
     durationSeconds?: number;
@@ -509,6 +522,7 @@ export async function executePollAction(params: {
     cfg: params.ctx.cfg,
     to: corePoll.to,
     question: corePoll.question,
+    content: corePoll.content,
     options: corePoll.options,
     maxSelections: corePoll.maxSelections,
     durationSeconds: corePoll.durationSeconds ?? undefined,
@@ -522,6 +536,8 @@ export async function executePollAction(params: {
     gateway: params.ctx.gateway,
     idempotencyKey: params.ctx.idempotencyKey,
     preparedPlugin: params.ctx.plugin,
+    sessionKey: params.ctx.sessionKey,
+    inboundEventKind: params.ctx.inboundEventKind,
   });
 
   return {

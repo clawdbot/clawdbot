@@ -159,6 +159,81 @@ describe("diffConfigPaths", () => {
     expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
     expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
   });
+
+  it.each([
+    {
+      name: "adds agents",
+      prev: {},
+      next: {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+      expectedPaths: ["agents.ownership", "agents.defaults.sessionStore", "agents.entries"],
+    },
+    {
+      name: "removes agents",
+      prev: {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+      next: {},
+      expectedPaths: ["agents.ownership", "agents.defaults.sessionStore", "agents.entries"],
+    },
+    {
+      name: "adds agent defaults",
+      prev: { agents: { ownership: "explicit", entries: { ops: {} } } },
+      next: {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+      expectedPaths: ["agents.defaults.sessionStore"],
+    },
+    {
+      name: "removes agent defaults",
+      prev: {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+      next: { agents: { ownership: "explicit", entries: { ops: {} } } },
+      expectedPaths: ["agents.defaults.sessionStore"],
+    },
+    {
+      name: "adds session config",
+      prev: {},
+      next: { session: { scope: "global", store: "/tmp/fixed.sqlite" } },
+      expectedPaths: ["session.scope", "session.store"],
+    },
+    {
+      name: "removes session config",
+      prev: { session: { scope: "global", store: "/tmp/fixed.sqlite" } },
+      next: {},
+      expectedPaths: ["session.scope", "session.store"],
+    },
+  ])("preserves hook policy dependencies when it $name", ({ prev, next, expectedPaths }) => {
+    const changedPaths = diffGatewayReloadPaths(prev as OpenClawConfig, next as OpenClawConfig);
+
+    for (const expectedPath of expectedPaths) {
+      expect(changedPaths).toContain(expectedPath);
+    }
+    expect(buildGatewayReloadPlan(changedPaths)).toMatchObject({
+      restartGateway: false,
+      refreshHooksPolicy: true,
+      reloadHooks: false,
+      restartGmailWatcher: false,
+    });
+  });
 });
 
 describe("buildGatewayReloadPlan", () => {
@@ -288,6 +363,8 @@ describe("buildGatewayReloadPlan", () => {
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
+    "secrets.egressProxy.enabled",
+    "secrets.egressProxy.bypassHosts",
   ])("keeps restart-owned path restart-backed: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 
@@ -342,12 +419,42 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it.each([
+    { path: "agents.entries", restartHeartbeat: true },
+    { path: "agents.ownership", restartHeartbeat: false },
+    { path: "agents.defaults.sessionStore", restartHeartbeat: false },
+    { path: "agents.defaults.sessionStore.agentId", restartHeartbeat: false },
+    { path: "session.scope", restartHeartbeat: false },
+    { path: "session.store", restartHeartbeat: false },
+  ])("refreshes only hook target policy for $path", ({ path, restartHeartbeat }) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      refreshHooksPolicy: true,
+      reloadHooks: false,
+      restartGmailWatcher: false,
+      restartHeartbeat,
+    });
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
+  });
+
+  it.each([
+    "agents",
+    "agents.defaults",
+    "agents.defaults.systemAgent.agentId",
+    "agents.list",
+    "session",
+    "session.mainKey",
+  ])("does not broadly refresh hook target policy for %s", (path) => {
+    expect(buildGatewayReloadPlan([path]).refreshHooksPolicy).not.toBe(true);
+  });
+
+  it.each([
     "agents.defaults",
     "agents.defaults.compaction",
     "agents.defaults.compaction.model",
     "agents.defaults.compaction.maxActiveTranscriptBytes",
     "agents.defaults.compaction.memoryFlush.model",
-    "agents.defaults.contextTokens",
     "agents.defaults.contextPruning.mode",
     "agents.defaults.contextLimits.postCompactionMaxChars",
     "agents.defaults.timeoutSeconds",

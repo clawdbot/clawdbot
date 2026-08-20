@@ -19,7 +19,46 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "extension_mapped_json", dataType: "TEXT", tableName: "claw_package_refs" },
   { columnName: "extension_unavailable_json", dataType: "TEXT", tableName: "claw_package_refs" },
   { columnName: "shared_host", dataType: "INTEGER", tableName: "worker_environments" },
+  { columnName: "node_setup_id", dataType: "TEXT", tableName: "worker_environments" },
+  { columnName: "node_device_id", dataType: "TEXT", tableName: "worker_environments" },
   { columnName: "terminal_reason", dataType: "TEXT", tableName: "worker_session_placements" },
   { columnName: "terminal_at_ms", dataType: "INTEGER", tableName: "worker_session_placements" },
+  {
+    columnName: "target_machine_class",
+    dataType: "TEXT",
+    tableName: "worker_session_placement_moves",
+  },
   { columnName: "run_end_cleanup_json", dataType: "TEXT", tableName: "worktrees" },
+  { columnName: "setup_id", dataType: "TEXT", tableName: "device_bootstrap_tokens" },
+  { columnName: "cwd", dataType: "TEXT", tableName: "session_groups" },
+  { columnName: "worktree", dataType: "INTEGER", tableName: "session_groups" },
+  { columnName: "workspace_dir", dataType: "TEXT", tableName: "installed_plugin_index" },
+  { columnName: "allowed_hosts", dataType: "TEXT", tableName: "secret_store_entries" },
+  {
+    columnName: "claim_released_time",
+    dataType: "INTEGER",
+    tableName: "skill_workshop_proposals",
+  },
 ] as const satisfies readonly LazyAdditiveStateColumnDefinition[];
+
+function isFirstUseAdditiveStateColumn({
+  columnName,
+  tableName,
+}: LazyAdditiveStateColumnDefinition): boolean {
+  return (
+    (tableName === "device_bootstrap_tokens" && columnName === "setup_id") ||
+    (tableName === "skill_workshop_proposals" && columnName === "claim_released_time") ||
+    (tableName === "worker_session_placement_moves" && columnName === "target_machine_class") ||
+    (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree"))
+  );
+}
+
+// Most same-version columns repair during a writable shared-state open. These
+// feature-owned columns stay absent until their feature first uses them.
+export const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS =
+  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.filter(
+    (definition) => !isFirstUseAdditiveStateColumn(definition),
+  );
+
+export const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS =
+  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.filter(isFirstUseAdditiveStateColumn);

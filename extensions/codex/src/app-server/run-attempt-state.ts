@@ -53,11 +53,17 @@ export async function markCodexAppServerBindingCoveredThroughTurn(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
   threadId: string;
+  continuityCalibration?: { promptChars: number; inputTokens: number };
 }): Promise<void> {
   await params.bindingStore.mutate(params.identity, {
     kind: "patch",
     threadId: params.threadId,
-    patch: { historyCoveredThrough: new Date().toISOString() },
+    patch: {
+      historyCoveredThrough: new Date().toISOString(),
+      ...(params.continuityCalibration
+        ? { continuityCalibration: params.continuityCalibration }
+        : {}),
+    },
   });
 }
 
@@ -143,12 +149,6 @@ export function prependCurrentInboundContext(
   return text
     ? [neutralizeCodexExplicitMentionSigils(text), prompt].filter(Boolean).join("\n\n")
     : prompt;
-}
-
-export function waitForCodexNotificationDispatchTurn(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
 }
 
 export function buildCodexAppServerTimeoutDiagnostics(params: {

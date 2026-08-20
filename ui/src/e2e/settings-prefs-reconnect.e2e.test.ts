@@ -159,11 +159,12 @@ suite.define(() => {
 
       const patch = await gateway.waitForRequest("config.patch");
       expect(patchPrefs(patch)).toEqual({ theme: "knot" });
-      expect(await gateway.getRequests("config.get")).toHaveLength(configGetsBeforeEdit);
+      // Reconnect owns one authoritative read even while the pending LWW preference shadows it.
+      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 1);
 
       await gateway.setMethodResponse("config.get", committed);
       await gateway.resolveDeferred("config.patch", committed);
-      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 1);
+      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 2);
       await expectThemeActive(page, "knot");
     } finally {
       await context.close();

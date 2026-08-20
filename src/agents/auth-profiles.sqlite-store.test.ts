@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -50,6 +51,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   resolveExternalCliAuthProfiles: mocks.resolveExternalCliAuthProfiles,
 }));
 
@@ -125,6 +127,33 @@ describe("auth profile sqlite store", () => {
     });
   });
 
+  it("persists the relocated shared store through the shared-state adapter", async () => {
+    await withAgentDirEnv("openclaw-auth-shared-state-", () => {
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      saveAuthProfileStore({
+        ...apiKeyStore("sk-shared"),
+        order: { openai: ["openai:default"] },
+      });
+
+      expect(ensureAuthProfileStore(undefined, { syncExternalCli: false })).toMatchObject({
+        profiles: { "openai:default": { key: "sk-shared" } },
+        order: { openai: ["openai:default"] },
+      });
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      expect(
+        database
+          .prepare("SELECT store_key FROM auth_profile_stores WHERE store_key = 'shared'")
+          .get(),
+      ).toEqual({ store_key: "shared" });
+      expect(
+        database
+          .prepare("SELECT store_key FROM auth_profile_state WHERE store_key = 'shared'")
+          .get(),
+      ).toEqual({ store_key: "shared" });
+      database.close();
+    });
+  });
+
   it("does not read legacy auth-profiles.json at runtime", async () => {
     await withAgentDirEnv("openclaw-auth-no-json-fallback-", (agentDir) => {
       fs.writeFileSync(
@@ -139,7 +168,7 @@ describe("auth profile sqlite store", () => {
     });
   });
 
-  it("fails closed when a credential source appears during a successful SQLite read", async () => {
+  it("keeps serving SQLite credentials when a credential source appears during the read", async () => {
     await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", (agentDir) => {
       saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
       const legacyPath = path.join(agentDir, "auth.json");
@@ -157,12 +186,15 @@ describe("auth profile sqlite store", () => {
         return existsSync(pathname);
       });
       try {
-        expect(() => ensureAuthProfileStore(agentDir, { syncExternalCli: false })).toThrow(
-          "requires legacy credential migration",
-        );
+        // The migrated store already owns these credentials, so a retired file
+        // appearing beside it is unarchived bytes rather than pending migration.
+        expect(
+          ensureAuthProfileStore(agentDir, { syncExternalCli: false }).profiles["openai:default"],
+        ).toMatchObject({ type: "api_key", provider: "openai", key: "not-a-real" });
       } finally {
         existsSpy.mockRestore();
       }
+      // Runtime never reads or removes it; Doctor still owns the archive step.
       expect(fs.existsSync(legacyPath)).toBe(true);
     });
   });

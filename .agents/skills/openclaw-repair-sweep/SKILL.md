@@ -84,8 +84,8 @@ proof choice, `$autoreview` pre-publish review, `$crabbox` heavy/remote proof.
   recorded checkpoint.
 - Classify source trust before execution. Untrusted contributor code, tests,
   or wrappers never run locally or on a credential-hydrated host; use the
-  sanitized remote-proof path. Route heavy trusted proof to the selected
-  remote box.
+  sanitized remote-proof path. Run capable heavy trusted proof on the current
+  dedicated Linux worker; otherwise use the selected remote box.
 - Before replacing a failed or interrupted worker, preserve its claimed items,
   patches, checkout ownership, and evidence; hand them to exactly one
   replacement without duplicating or discarding unfinished work.

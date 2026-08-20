@@ -38,12 +38,14 @@ vi.mock("./providers.runtime.js", () => ({
   resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
 
-vi.mock("./plugin-module-loader-cache.js", () => ({
+vi.mock("./plugin-module-loader-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-module-loader-cache.js")>()),
   createPluginModuleLoaderCache: mocks.createPluginModuleLoaderCache,
   getCachedPluginModuleLoader: mocks.getCachedPluginModuleLoader,
 }));
 
-vi.mock("./native-module-require.js", () => ({
+vi.mock("./native-module-require.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./native-module-require.js")>()),
   clearNativeRequireJavaScriptModuleCache: mocks.clearNativeRequireJavaScriptModuleCache,
 }));
 

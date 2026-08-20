@@ -114,6 +114,21 @@ const nostrTestPlugin = {
 
 const nostrConfigure = createPluginSetupWizardConfigure(nostrTestPlugin);
 
+function withoutNostrPrivateKey<T>(run: () => T): T {
+  const hadValue = Object.hasOwn(process.env, "NOSTR_PRIVATE_KEY");
+  const previous = process.env.NOSTR_PRIVATE_KEY;
+  delete process.env.NOSTR_PRIVATE_KEY;
+  try {
+    return run();
+  } finally {
+    if (hadValue && previous !== undefined) {
+      process.env.NOSTR_PRIVATE_KEY = previous;
+    } else {
+      delete process.env.NOSTR_PRIVATE_KEY;
+    }
+  }
+}
+
 function requireNostrLooksLikeId() {
   const looksLikeId = nostrTestPlugin.messaging?.targetResolver?.looksLikeId;
   if (!looksLikeId) {
@@ -210,7 +225,7 @@ describe("nostrPlugin", () => {
   describe("config adapter", () => {
     it("listAccountIds returns empty array for unconfigured", () => {
       const cfg = { channels: {} };
-      const ids = nostrTestPlugin.config.listAccountIds(cfg);
+      const ids = withoutNostrPrivateKey(() => nostrTestPlugin.config.listAccountIds(cfg));
       expect(ids).toStrictEqual([]);
     });
 
@@ -447,12 +462,12 @@ describe("nostr account helpers", () => {
   describe("listNostrAccountIds", () => {
     it("returns empty array when not configured", () => {
       const cfg = { channels: {} };
-      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
+      expect(withoutNostrPrivateKey(() => listNostrAccountIds(cfg))).toStrictEqual([]);
     });
 
     it("returns empty array when nostr section exists but no privateKey", () => {
       const cfg = { channels: { nostr: { enabled: true } } };
-      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
+      expect(withoutNostrPrivateKey(() => listNostrAccountIds(cfg))).toStrictEqual([]);
     });
 
     it("returns default when privateKey is configured", () => {
@@ -503,7 +518,7 @@ describe("nostr account helpers", () => {
 
     it("resolves unconfigured account with defaults", () => {
       const cfg = { channels: {} };
-      const account = resolveNostrAccount({ cfg });
+      const account = withoutNostrPrivateKey(() => resolveNostrAccount({ cfg }));
 
       expect(account.accountId).toBe("default");
       expect(account.enabled).toBe(true);
@@ -602,7 +617,9 @@ describe("nostr account helpers", () => {
         throw new Error("nostr setup credential inspect missing");
       }
 
-      expect(credential.inspect({ cfg, accountId: "default" })).toEqual({
+      expect(
+        withoutNostrPrivateKey(() => credential.inspect({ cfg, accountId: "default" })),
+      ).toEqual({
         accountConfigured: false,
         hasConfiguredValue: true,
         resolvedValue: undefined,

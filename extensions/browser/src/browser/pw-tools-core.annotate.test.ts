@@ -8,14 +8,12 @@ import {
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.interactions.js");
 
-type EvaluateArg = unknown;
-
 function evaluateMockReturning(view: { x: number; y: number; width?: number; height?: number }) {
   // Caller reads { x, y, width, height } in one evaluate; default to a normal
   // desktop viewport so refs near the top stay in-viewport unless a test puts
   // them out of range explicitly.
   const result = { width: 1280, height: 720, ...view };
-  return vi.fn(async (arg: EvaluateArg) => {
+  return vi.fn(async (arg: unknown) => {
     if (typeof arg === "function") {
       return result;
     }

@@ -59,11 +59,14 @@ export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
                 ? html`<div class="tp-session-empty">${t("terminal.noSessions")}</div>`
                 : props.sessions.map((session) => {
                     const current = props.currentSessionIds.has(session.sessionId);
-                    const state = current
-                      ? t("terminal.currentSession")
-                      : session.attached
-                        ? t("terminal.sessionAttached")
-                        : t("terminal.detached");
+                    const agentOwned = session.owner?.startsWith("agent:") === true;
+                    const state = `${agentOwned ? `${t("terminal.agentOwnedBadge")} · ` : ""}${
+                      current
+                        ? t("terminal.currentSession")
+                        : session.attached
+                          ? t("terminal.sessionAttached")
+                          : t("terminal.detached")
+                    }`;
                     return html`<button
                       class="tp-session"
                       type="button"

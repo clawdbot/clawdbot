@@ -10,9 +10,11 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
+  consumeAgentCoreStream,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
@@ -83,6 +85,22 @@ export interface CompactionResult<T = unknown> {
   tokensBefore: number;
   /** Optional implementation-specific details stored with the compaction entry. */
   details?: T;
+}
+
+// Persisted summaries replay on every later request, so their owner enforces
+// this provider-independent 16K hard bound.
+export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
+export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
+
+export function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS) {
+  if (maxChars <= 0 || summary.length <= maxChars) {
+    return summary;
+  }
+  if (maxChars < SUMMARY_TRUNCATED_MARKER.length) {
+    return truncateUtf16Safe(summary, maxChars);
+  }
+  const budget = maxChars - SUMMARY_TRUNCATED_MARKER.length;
+  return `${truncateUtf16Safe(summary, budget)}${SUMMARY_TRUNCATED_MARKER}`;
 }
 
 /** Compaction thresholds and retention settings. */
@@ -227,13 +245,14 @@ export function shouldCompact(
   contextWindow: number,
   settings: CompactionSettings,
 ): boolean {
-  if (!settings.enabled) {
+  if (!settings.enabled || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     return false;
   }
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
-const IMAGE_BLOCK_CHARS = 4800;
+export const IMAGE_BLOCK_TOKENS = 2_000;
+const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
 
 function countContentBlockChars(
   content: Array<{ type: string; content?: unknown; text?: string }>,
@@ -590,7 +609,7 @@ async function runSummarizationCompletion(params: {
     params.thinkingLevel,
   );
   const response = params.streamFn
-    ? await (await params.streamFn(params.model, context, options)).result()
+    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options))
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
   if (response.stopReason === "aborted") {
     return err(

@@ -21,6 +21,7 @@ import {
 } from "./config.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
@@ -118,6 +119,8 @@ function startThreadWithHarness(
     runtimeArtifactRequest?: Parameters<
       typeof startCodexAttemptThread
     >[0]["runtimeArtifactRequest"];
+    sandbox?: Parameters<typeof startCodexAttemptThread>[0]["sandbox"];
+    sandboxExecServerEnabled?: boolean;
   },
 ) {
   const harness = overrides?.harness ?? createClientHarness();
@@ -155,8 +158,8 @@ function startThreadWithHarness(
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
     nativeProviderWebSearchSupport: "supported",
-    sandboxExecServerEnabled: false,
-    sandbox: null,
+    sandboxExecServerEnabled: overrides?.sandboxExecServerEnabled ?? false,
+    sandbox: overrides?.sandbox ?? null,
     contextEngineProjection: undefined,
     startupTimeoutMs,
     signal,
@@ -181,7 +184,7 @@ async function captureExpectedRuntimeArtifact(
     before,
     startOptions: appServer.start,
     spawnIdentity,
-    runtimeIdentity: { serverVersion: "0.147.0", userAgent: "openclaw/0.147.0 (macOS; test)" },
+    runtimeIdentity: { serverVersion: "0.148.0", userAgent: "openclaw/0.148.0 (macOS; test)" },
   });
 }
 
@@ -191,7 +194,7 @@ async function answerInitialize(harness: ClientHarness): Promise<void> {
     timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.147.0 (macOS; test)" } });
+  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.148.0 (macOS; test)" } });
 }
 
 async function waitForRequest(
@@ -682,6 +685,29 @@ describe("startCodexAttemptThread", () => {
     expect(clientFactory).not.toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: expect.anything() }),
     );
+  });
+
+  it("requires app-server environment support for remote-exec placement", async () => {
+    const sandbox = {
+      ...createSandboxContext({}),
+      placementExecutionMode: "remote-exec" as const,
+    };
+    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      sandbox,
+    });
+    await answerInitialize(harness);
+    const environmentAdd = await waitForRequest(harness, "environment/add");
+    harness.send({
+      id: environmentAdd.id,
+      error: { code: -32601, message: "unknown variant environment/add" },
+    });
+
+    await expect(run).rejects.toThrow(
+      "Codex app-server did not register an OpenClaw sandbox exec-server environment.",
+    );
+    expect(
+      readHarnessMessages(harness.writes).some((entry) => entry.method === "thread/start"),
+    ).toBe(false);
   });
 
   it("closes a startup client that arrives after startup timeout", async () => {

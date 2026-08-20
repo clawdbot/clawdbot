@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
@@ -31,7 +32,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.js";
+import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
@@ -70,7 +71,13 @@ export async function readConfigFileSnapshotInternal(
         parsed: {},
         sourceConfig: config,
         valid: true,
-        runtimeConfig: config,
+        // Missing config is the fresh-install default path: materialize the
+        // same runtime defaults an existing empty {} config gets, so snapshot
+        // consumers see identical out-of-box behavior either way.
+        runtimeConfig: materializeRuntimeConfig(config, "snapshot", {
+          manifestRegistry:
+            context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined,
+        }),
         hash: hashConfigRaw(null),
         issues: [],
         warnings: [],
@@ -174,8 +181,13 @@ export async function readConfigFileSnapshotInternal(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
+    const contextBudgetMigration = migrateLegacyContextBudgetConfig(
+      readResolution.resolvedConfigRaw,
+    );
+    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
     envVarWarnings.push(
+      ...contextBudgetMigration.changes,
+      ...contextBudgetMigration.warnings,
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;
@@ -225,6 +237,7 @@ export async function readConfigFileSnapshotInternal(
           hash: snapshotHash,
           issues: validated.issues,
           warnings: [...validated.warnings, ...envVarWarnings],
+          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues,
         }),
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -283,7 +296,9 @@ export async function readConfigFileSnapshotInternal(
     }
     const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
       materializeRuntimeConfig(validated.config, "snapshot", {
-        manifestRegistry: pluginMetadata.getSnapshot()?.manifestRegistry,
+        manifestRegistry:
+          pluginMetadata.getSnapshot()?.manifestRegistry ??
+          (context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined),
       }),
     );
     return await deps.measure("config.snapshot.read.observe", () =>
@@ -306,6 +321,7 @@ export async function readConfigFileSnapshotInternal(
             hash: snapshotHash,
             issues: [],
             warnings: [...validated.warnings, ...envVarWarnings],
+            resolutionFacts: readResolution.resolutionFacts,
             legacyIssues: [],
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -400,7 +416,6 @@ export async function readConfigFileSnapshotForWriteFromContext(
   const assertConfigPathForWrite = () => {
     if (resolveConfigPathForDeps(context.deps) !== context.configPath) {
       throw new ConfigMutationConflictError("config path changed since last load", {
-        currentHash: null,
         retryable: false,
       });
     }
@@ -448,21 +463,31 @@ export async function readSourceConfigBestEffortFromContext(
   if (!deps.fs.existsSync(configPath)) {
     return {};
   }
+  // Best-effort legitimizes the fallback value, not the silence: consumers
+  // (update-channel selection, doctor lint) act on the result, so each
+  // degradation records why the real config was not used.
   try {
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = parseConfigJson5(raw, deps.json5);
     if (!parsed.ok) {
+      deps.logger.warn(
+        `Config (${configPath}): best-effort read ignored unparseable config: ${parsed.error}`,
+      );
       return {};
     }
     let resolved: unknown;
     try {
       resolved = resolveConfigIncludesForRead(parsed.parsed, configPath, deps);
-    } catch {
+    } catch (err) {
+      deps.logger.warn(
+        `Config (${configPath}): best-effort read skipped $include resolution: ${formatErrorMessage(err)}`,
+      );
       return coerceConfig(parsed.parsed);
     }
     const resolution = resolveConfigForRead(resolved, deps.env, deps.lowerPrecedenceEnv);
     return coerceConfig(resolution.resolvedConfigRaw);
-  } catch {
+  } catch (err) {
+    deps.logger.warn(`Config (${configPath}): best-effort read failed: ${formatErrorMessage(err)}`);
     return {};
   }
 }

@@ -1,8 +1,6 @@
 name: Mantis Discord Status Reactions
 
 on:
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       baseline_ref:

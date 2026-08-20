@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -21,9 +22,11 @@ import {
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
+  resolveSettledToolBatchEvidence,
   resolveSettledToolTerminalContinuationInstruction,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
@@ -33,6 +36,7 @@ import {
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
   shouldRetryMissingAssistantTurn,
+  TRUNCATED_REPLY_NOTICE_TEXT,
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -246,6 +250,11 @@ export async function resolveEmbeddedRunTerminal(input: {
         ? [silentToolResultReplyPayload]
         : input.payloadsWithToolMedia;
   const payloadCount = payloadsForTerminalPath?.length ?? 0;
+  const intentionalTerminalCompletion =
+    !terminalAborted &&
+    !terminalTimedOut &&
+    payloadCount === 0 &&
+    resolveSettledToolBatchEvidence(attempt).intentionalTermination;
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.
   const settledTurnFinalizationAttempted = input.settledTurnFinalizationOutcome !== "not-attempted";
@@ -345,6 +354,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           externalAbort: externalAbort || signalOwnedInterruption,
           timedOut: terminalTimedOut,
           hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
+          hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
           attempt,
         });
   const incompleteTurnFallbackSafe = Boolean(
@@ -362,7 +372,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     !emptyAssistantReplyIsSilent &&
     !settledTurnFinalizationAttempted &&
     (input.attemptCompactionCount > 0 ||
-      attempt.currentAttemptAssistant?.providerReplay?.type === "openai-responses-compaction") &&
+      isCompactionReplayCheckpoint(attempt.currentAttemptAssistant?.providerReplay)) &&
     payloadCount === 0 &&
     !terminalInterrupted &&
     !promptError &&
@@ -461,6 +471,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     payloadCount,
     payloadsForTerminalPath,
     emptyAssistantReplyIsSilent,
+    intentionalTerminalCompletion,
   });
 }
 
@@ -531,6 +542,7 @@ function completeEmbeddedRun(
     payloadCount: number;
     payloadsForTerminalPath: EmbeddedAgentRunResult["payloads"];
     emptyAssistantReplyIsSilent: boolean;
+    intentionalTerminalCompletion: boolean;
   },
 ): TerminalResolution {
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
@@ -581,12 +593,28 @@ function completeEmbeddedRun(
     : input.attempt.yieldDetected
       ? "end_turn"
       : (input.attemptAssistant?.stopReason as string | undefined);
+  // The truncation notice belongs to exactly the turns this fix newly delivers:
+  // a length stop whose only output is partial assistant text. A length stop that
+  // also produced terminal output (tool media, a committed source reply) was
+  // already complete before this fix and must not gain a misleading extra reply.
+  // Nonblank assistant text is also required: a cron turn whose only payload is
+  // the synthesized silent result of a successful tool has no partial prose to
+  // label, and appending a notice there would turn intentional silence into a
+  // visible message.
+  const hasPartialAssistantText =
+    input.attempt.assistantTexts.some((text) => text.trim().length > 0) ||
+    resolveFinalAssistantVisibleText(input.attemptAssistant) !== undefined;
+  const isTruncatedPartialReply =
+    stopReason === "length" && !hasAttemptTerminalState(input.attempt) && hasPartialAssistantText;
   // Existing visible payloads already avoid the silent-park symptom. The diagnostic
   // fills only an otherwise empty yielded turn and must not duplicate visible output.
+  // A length stop delivers partial text, so it is labeled instead of dropped. (#76477)
   const terminalPayloads = input.emptyAssistantReplyIsSilent
     ? [{ text: SILENT_REPLY_TOKEN }]
     : input.payloadsForTerminalPath?.length
-      ? input.payloadsForTerminalPath
+      ? isTruncatedPartialReply
+        ? [...input.payloadsForTerminalPath, { text: TRUNCATED_REPLY_NOTICE_TEXT }]
+        : input.payloadsForTerminalPath
       : input.attempt.yieldDetected && !yieldHasContinuation
         ? [{ text: YIELD_DIAGNOSTIC_TEXT }]
         : input.payloadsForTerminalPath;
@@ -615,8 +643,14 @@ function completeEmbeddedRun(
         livenessState,
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
         ...(input.attempt.yieldDetected ? { yielded: true } : {}),
+        ...(input.attempt.yieldAcknowledgment
+          ? { yieldAcknowledgment: input.attempt.yieldAcknowledgment }
+          : {}),
         ...(input.emptyAssistantReplyIsSilent
           ? { terminalReplyKind: "silent-empty" as const }
+          : {}),
+        ...(input.intentionalTerminalCompletion
+          ? { intentionalTerminalCompletion: "tool-batch" as const }
           : {}),
         stopReason,
         pendingToolCalls: input.attempt.clientToolCalls?.map((call) => ({

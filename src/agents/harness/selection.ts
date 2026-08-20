@@ -161,6 +161,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "groupId"
   | "groupChannel"
   | "groupSpace"
+  | "memberRoleIds"
   | "agentAccountId"
   | "senderId"
   | "senderName"
@@ -170,6 +171,9 @@ type PluginHarnessToolPolicyContext = Pick<
   | "inputProvenance"
   | "trustedInternalHandoff"
   | "scheduledToolPolicy"
+  | "runtimePluginToolGrant"
+  | "toolsAllow"
+  | "disableTools"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -179,6 +183,7 @@ type ResolvedPluginHarnessToolPolicies = {
   senderScopedGroupPolicy?: PluginHarnessToolPolicy;
   groupPolicy?: PluginHarnessToolPolicy;
   runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
+  safeDeniedToolNames: string[];
   toolPolicyRestricted: boolean;
 };
 
@@ -719,7 +724,10 @@ function withoutInternalHarnessAuthority(
     return {
       // The built-in harness is the internal owner of this authority. Only
       // plugin handoffs receive the projected public attempt shape below.
-      params: params as import("./types.js").AgentHarnessAttemptParamsV2,
+      params: {
+        ...params,
+        operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+      } as import("./types.js").AgentHarnessAttemptParamsV2,
       closeHostCapabilities: () => {},
     };
   }
@@ -804,6 +812,8 @@ function preparePluginHarnessParams(
   return applyPluginHarnessDenyAllToolPolicy(
     {
       ...preparedParams,
+      pluginHarnessToolPolicySafeDeniedTools:
+        policies.safeDeniedToolNames.length > 0 ? policies.safeDeniedToolNames : undefined,
       pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
     },
     policies,
@@ -859,6 +869,19 @@ export function resolvePluginHarnessPolicyToolsAllow(
     : undefined;
 }
 
+/** Resolves whether a harness operation must remove its ambient native tool surface. */
+export function resolveAgentHarnessNativeToolPolicyRestricted(
+  params: PluginHarnessToolPolicyContext,
+  harness: AgentHarness,
+): boolean {
+  return resolvePluginHarnessToolPolicies(
+    params,
+    harness.conversationToolPolicySupport === "exact"
+      ? harness.conversationToolPolicySafeDenyTools
+      : undefined,
+  ).toolPolicyRestricted;
+}
+
 function resolvePluginHarnessDenyAllToolPolicyPrompt(
   policies: ResolvedPluginHarnessToolPolicies,
 ): string | undefined {
@@ -902,6 +925,7 @@ function resolvePluginHarnessToolPolicies(
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
+    memberRoleIds: params.memberRoleIds,
     spawnedBy: params.spawnedBy,
     senderId: params.senderId,
     senderName: params.senderName,
@@ -912,6 +936,7 @@ function resolvePluginHarnessToolPolicies(
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
+    runtimePluginToolGrant: params.runtimePluginToolGrant,
   });
   const groupPolicyParams = {
     config: params.config,
@@ -930,6 +955,11 @@ function resolvePluginHarnessToolPolicies(
     senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
   };
   const { policy } = capabilityProfile;
+  const requestedToolPolicy = params.disableTools
+    ? { allow: [] }
+    : params.toolsAllow
+      ? { allow: params.toolsAllow }
+      : undefined;
   const explicitPolicies = [
     policy.globalPolicy,
     policy.globalProviderPolicy,
@@ -941,6 +971,7 @@ function resolvePluginHarnessToolPolicies(
     policy.subagentPolicy,
     policy.inheritedToolPolicy,
     policy.runtimeToolPolicyForInheritance,
+    requestedToolPolicy,
   ];
   const safeDenyToolNameSet = safeDenyToolNames
     ? new Set(safeDenyToolNames.map(normalizeToolPolicyName))
@@ -963,11 +994,30 @@ function resolvePluginHarnessToolPolicies(
       sandboxPolicy,
       policy.subagentPolicy,
       policy.inheritedToolPolicy,
+      requestedToolPolicy,
     ],
+    safeDeniedToolNames: collectHarnessSafeDeniedToolNames(explicitPolicies, safeDenyToolNameSet),
     toolPolicyRestricted: explicitPolicies.some((explicitPolicy) =>
       toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
     ),
   };
+}
+
+function collectHarnessSafeDeniedToolNames(
+  policies: Array<PluginHarnessToolPolicy | undefined>,
+  safeDenyToolNames: ReadonlySet<string> | undefined,
+): string[] {
+  if (!safeDenyToolNames) {
+    return [];
+  }
+  return [
+    ...new Set(
+      policies
+        .flatMap((policy) => expandToolGroups(policy?.deny ?? []))
+        .map(normalizeToolPolicyName)
+        .filter((name) => isKnownCoreToolId(name) && safeDenyToolNames.has(name)),
+    ),
+  ].toSorted();
 }
 
 function toolPolicyRestrictsHarnessNativeTools(

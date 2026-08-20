@@ -771,8 +771,7 @@ extension GatewayConnection {
               self.serverLeaseMatchesCurrentState(lease),
               let snapshot = lastSnapshot
         else { return nil }
-        let methods = snapshot.features["methods"]?.value as? [AnyCodable] ?? []
-        return methods.contains { ($0.value as? String) == method }
+        return snapshot.advertisedServerMethods()?.contains(method)
     }
 
     func isCurrentServerLease(_ lease: ServerLease) async -> Bool {
@@ -1061,7 +1060,17 @@ extension GatewayConnection {
     }
 
     static func defaultActivationBindingKey() -> SymmetricKey? {
-        GatewayActivationBindingKeyStore.loadOrCreate()
+        self.activationBindingKey(
+            launchPolicy: .current,
+            loadOrCreate: GatewayActivationBindingKeyStore.loadOrCreate)
+    }
+
+    static func activationBindingKey(
+        launchPolicy: AppLaunchRuntimePlan,
+        loadOrCreate: () -> SymmetricKey?) -> SymmetricKey?
+    {
+        guard launchPolicy.allowsGatewayUIKeychainAccess else { return nil }
+        return loadOrCreate()
     }
 
     private static func activationOwnershipFingerprint(

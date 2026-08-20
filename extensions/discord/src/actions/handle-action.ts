@@ -75,6 +75,7 @@ export async function handleDiscordMessageAction(
     | "sessionKey"
     | "inboundEventKind"
     | "conversationReadOrigin"
+    | "reply"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
@@ -102,6 +103,7 @@ export async function handleDiscordMessageAction(
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
+    ...(ctx.reply ? { reply: ctx.reply } : {}),
     ...readPolicyOptions,
   } as const;
   const notifyVisibleOutbound = (
@@ -303,32 +305,6 @@ export async function handleDiscordMessageAction(
     );
     notifyVisibleOutbound(result, to, sessionKey);
     return withAdoptedThreadReplyRoute(result, to, sessionKey);
-  }
-
-  if (action === "poll") {
-    const to = readStringParam(params, "to", { required: true });
-    const question = readStringParam(params, "pollQuestion", {
-      required: true,
-    });
-    const answers = readStringArrayParam(params, "pollOption", { required: true });
-    const allowMultiselect = readBooleanParam(params, "pollMulti");
-    const durationHours = readPositiveIntegerParam(params, "pollDurationHours");
-    const result = await handleDiscordAction(
-      {
-        action: "poll",
-        accountId: accountId ?? undefined,
-        to,
-        question,
-        answers,
-        allowMultiselect,
-        durationHours: durationHours ?? undefined,
-        content: readStringParam(params, "message"),
-      },
-      cfg,
-      actionOptions,
-    );
-    notifyVisibleOutbound(result, to);
-    return result;
   }
 
   if (action === "react") {

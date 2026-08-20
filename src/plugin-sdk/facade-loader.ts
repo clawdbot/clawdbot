@@ -5,7 +5,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import {
+  clearPluginModuleLoaderLifecycleCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
   type PluginModuleLoaderFactory,
@@ -25,9 +27,16 @@ const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 
 const moduleLoaders: PluginModuleLoaderCache = new Map();
 const loadedFacadeModules = new Map<string, unknown>();
+const loadedFacadeModuleRoots = new Map<string, string>();
 const loadedFacadePluginIds = new Set<string>();
 let facadeLoaderSourceTransformFactory: PluginModuleLoaderFactory | undefined;
 let cachedOpenClawPackageRoot: string | undefined;
+
+// Facade exports and native loader closures must retire with their plugin; imported ids are history.
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  loadedFacadeModules.clear();
+  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots: loadedFacadeModuleRoots });
+});
 
 function getOpenClawPackageRoot() {
   if (cachedOpenClawPackageRoot) {
@@ -196,6 +205,7 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
     loaded =
       params.loadModule?.(location.modulePath) ??
       (getModuleLoader(location.modulePath)(location.modulePath) as T);
+    loadedFacadeModuleRoots.set(location.modulePath, location.boundaryRoot);
     Object.assign(sentinel, loaded);
     loadedFacadePluginIds.add(
       typeof params.trackedPluginId === "function"
@@ -261,6 +271,7 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
   fs.closeSync(opened.fd);
 
   try {
+    // Native ESM imports cannot be evicted; bundled core-dist artifacts change only on restart.
     const loaded = (await import(pathToFileURL(preparedLocation.modulePath).href)) as T;
     loadedFacadeModules.set(preparedLocation.modulePath, loaded);
     loadedFacadePluginIds.add(
@@ -286,7 +297,7 @@ export function listImportedBundledPluginFacadeIds(): string[] {
 export function resetFacadeLoaderStateForTest(): void {
   loadedFacadeModules.clear();
   loadedFacadePluginIds.clear();
-  moduleLoaders.clear();
+  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots: loadedFacadeModuleRoots });
   facadeLoaderSourceTransformFactory = undefined;
   cachedOpenClawPackageRoot = undefined;
 }

@@ -7,6 +7,7 @@ import {
   resolveConfigScopedRuntimeCacheValue,
   type ConfigScopedRuntimeCache,
 } from "./plugin-cache-primitives.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 describe("PluginLruCache", () => {
   it("evicts the least recently used entry", () => {
@@ -128,6 +129,22 @@ describe("createConfigScopedPromiseLoader", () => {
     await expect(loader.load(config)).resolves.toBe("config-2");
 
     loader.clear();
+
+    await expect(loader.load()).resolves.toBe("default-3");
+    await expect(loader.load(config)).resolves.toBe("config-4");
+  });
+
+  it("drops default and config-scoped executable promises when plugin metadata changes", async () => {
+    const config = {} as OpenClawConfig;
+    let calls = 0;
+    const loader = createConfigScopedPromiseLoader(
+      async (owner?: OpenClawConfig) => `${owner ? "config" : "default"}-${++calls}`,
+    );
+
+    await expect(loader.load()).resolves.toBe("default-1");
+    await expect(loader.load(config)).resolves.toBe("config-2");
+
+    clearPluginMetadataLifecycleCaches();
 
     await expect(loader.load()).resolves.toBe("default-3");
     await expect(loader.load(config)).resolves.toBe("config-4");

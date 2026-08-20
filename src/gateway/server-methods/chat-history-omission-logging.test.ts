@@ -10,7 +10,6 @@ import { onDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type { DiagnosticPayloadLargeEvent } from "../../infra/diagnostic-events.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
-  enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
 } from "./chat-history-budget.js";
@@ -18,8 +17,8 @@ import {
 type Captured = DiagnosticPayloadLargeEvent[];
 
 // Mirrors the production sequence in handleChatHistoryRequest: replace oversized
-// messages, cap the array by byte budget, enforce the final budget, then report
-// omissions. Captures any emitted `payload.large` diagnostic event.
+// messages, cap the array by byte budget, then report omissions. Captures any
+// emitted `payload.large` diagnostic event.
 function runHistoryBudgetPipeline(params: {
   messages: unknown[];
   maxHistoryBytes: number;
@@ -38,10 +37,9 @@ function runHistoryBudgetPipeline(params: {
       maxSingleMessageBytes: perMessageHardCap,
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-    const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const emittedCount = reportOmittedChatHistory({
       originalMessages: messages,
-      finalMessages: bounded.messages,
+      finalMessages: capped,
       getNormalizedBytes: () => Buffer.byteLength(JSON.stringify(messages), "utf8"),
       maxHistoryBytes,
       logDebug: () => {},

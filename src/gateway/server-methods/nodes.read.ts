@@ -8,16 +8,28 @@ import {
   validateNodeSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { updatePairedNodeSessionHost } from "../../infra/device-pairing-node-facts.js";
 import { projectNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { parseNodeRunnerInventoryDeclaration } from "../../infra/node-runner-inventory.js";
+import {
+  formatNodeRunnerUpdateRequired,
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  parseNodeRunnerInventoryDeclaration,
+} from "../../infra/node-runner-inventory.js";
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
-import { isNodeRunnerSessionHost, updateNodeRunnerInventory } from "../node-registry-private.js";
+import {
+  collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
+  collectNodeWorkerCapacityByNodeId,
+  isNodeRunnerSessionHost,
+  updateNodeRunnerInventory,
+} from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
@@ -52,6 +64,10 @@ function safeNodeReadProjection(
 
 function nodeReadCallerDeviceId(client: GatewayClient | null): string | undefined {
   return normalizeOptionalString(client?.connect?.device?.id);
+}
+
+function respondRunnerInventoryRetry(respond: RespondFn, message: string): void {
+  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
 }
 
 function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
@@ -89,12 +105,27 @@ async function listNodesForClient(params: {
     connectedNodes: params.connectedNodes,
     nodeRegistry: params.context.nodeRegistry,
   });
+  const issuesByNodeId = collectNodeRunnerIssuesByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
+  const workerSlotsByNodeId = collectNodeWorkerCapacityByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
+  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: params.pairedDevices,
     pairedNodes: params.pairedNodes,
     pendingNodes: params.pendingNodes,
     connectedNodes: params.connectedNodes,
     sessionHostNodeIds,
+    workerSlotsByNodeId,
+    workerBundleByNodeId,
+    issuesByNodeId,
   });
   const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
     params.context.logGateway.warn(
@@ -380,7 +411,7 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
     });
     respond(true, { nodeId, skills: updated.nodeSkills }, undefined);
   },
-  "node.runnerInventory.update": ({ params, respond, client, context }) => {
+  "node.runnerInventory.update": async ({ params, respond, client, context }) => {
     const declaration = parseNodeRunnerInventoryDeclaration(params);
     if (!declaration) {
       respond(
@@ -401,6 +432,62 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       : null;
     if (!nodeId || !updated) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    if (
+      declaration.protocolFeatures.length === 1 &&
+      declaration.protocolFeatures[0] !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          formatNodeRunnerUpdateRequired(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+        ),
+      );
+      return;
+    }
+    const connId = client?.connId;
+    const currentSession = nodeId ? context.nodeRegistry.get(nodeId) : undefined;
+    const pairingGeneration =
+      currentSession && currentSession.connId === connId
+        ? currentSession.pairingGeneration
+        : undefined;
+    if (!connId || !pairingGeneration) {
+      respondRunnerInventoryRetry(
+        respond,
+        "node runner inventory publication is not current; retry after pairing completes",
+      );
+      return;
+    }
+    const sessionHost = "workerHost" in declaration && declaration.workerHost.enabled;
+    try {
+      const persisted = await updatePairedNodeSessionHost({
+        nodeId,
+        sessionHost,
+        expectedPairingGeneration: { nodeId, key: pairingGeneration },
+        isConnectionCurrent: () => {
+          const current = context.nodeRegistry.get(nodeId);
+          return (
+            current?.connId === connId &&
+            current.pairingGeneration === pairingGeneration &&
+            current.client.invalidated !== true
+          );
+        },
+      });
+      if (!persisted) {
+        respondRunnerInventoryRetry(
+          respond,
+          "node runner inventory publication lost its pairing ownership; retry",
+        );
+        return;
+      }
+    } catch (error) {
+      context.logGateway.warn(
+        `failed to persist runner host consent for ${nodeId}: ${formatErrorMessage(error)}`,
+      );
+      respondRunnerInventoryRetry(respond, "node runner inventory persistence failed; retry");
       return;
     }
     respond(true, { nodeId }, undefined);

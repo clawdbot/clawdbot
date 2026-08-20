@@ -715,6 +715,11 @@ describe("release validation no-push transport", () => {
     expect(validatePackage.run).toContain("package/dist/build-info.json");
     expect(validatePackage.run).toContain('[[ "$package_source_sha" == "$SELECTED_SHA" ]]');
     expect(validatePackage.run).toContain("scripts/check-openclaw-package-tarball.mjs");
+    expect(validatePackage.run).toContain(
+      "cd .release-harness && pnpm exec node scripts/check-openclaw-package-tarball.mjs",
+    );
+    expect(validatePackage.run).toContain('"$GITHUB_WORKSPACE/$target"');
+    expect(validatePackage.run).not.toContain("pnpm --dir .release-harness");
     const targetedRun = step(
       job(workflow, "validate_docker_lanes"),
       "Run targeted Docker E2E lanes",
@@ -1023,7 +1028,10 @@ describe("release validation no-push transport", () => {
         ),
       )
       .toSorted();
-    expect(callers).toEqual(["openclaw-release-publish.yml"]);
+    // docker-image-refresh.yml is the sanctioned second caller: it rebuilds
+    // already-published releases behind the same docker-release environment
+    // approval; its own guard test covers those safety properties.
+    expect(callers).toEqual(["docker-image-refresh.yml", "openclaw-release-publish.yml"]);
 
     expect(dockerCall.needs).toEqual([
       "resolve_release_target",

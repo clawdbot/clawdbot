@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
@@ -10,6 +11,11 @@ import {
   listActiveSessionCatalogs,
   type ActiveSessionCatalog,
 } from "openclaw/plugin-sdk/session-catalog-runtime";
+import {
+  fetchWithSsrFGuard,
+  GuardedFetchRedirectError,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { BEAM_MAX_BODY_BYTES, BEAM_MAX_ITEM_CHARS, BEAM_MAX_ITEMS } from "./types.js";
@@ -29,6 +35,7 @@ const MIRROR_MAX_SESSIONS = 32;
 const MIRROR_BODY_BUDGET_BYTES = BEAM_MAX_BODY_BYTES - 2_048;
 // One warning per source per interval keeps a broken endpoint from flooding logs.
 const MIRROR_WARN_INTERVAL_MS = 5 * 60_000;
+const MIRROR_UPLOAD_TIMEOUT_MS = 15_000;
 
 type BeamMirrorConfig = {
   endpoint: string;
@@ -267,11 +274,11 @@ export function createBeamMirrorRunner(params: {
   listCatalogs?: () => ActiveSessionCatalog[];
 }): BeamMirrorRunner {
   const env = params.env ?? process.env;
-  const fetchFn = params.fetchFn ?? fetch;
   const now = params.now ?? Date.now;
   const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
   let lastWarnAt = 0;
+  let redirectBlockedEndpoint: string | undefined;
   let running = false;
 
   const warnThrottled = (message: string) => {
@@ -286,14 +293,46 @@ export function createBeamMirrorRunner(params: {
     token: string | undefined,
     payload: BeamMirrorUpload,
   ): Promise<boolean> => {
-    const response = await fetchFn(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(payload),
-    });
+    if (redirectBlockedEndpoint === endpoint) {
+      return false;
+    }
+    redirectBlockedEndpoint = undefined;
+
+    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    try {
+      guarded = await fetchWithSsrFGuard({
+        url: endpoint,
+        fetchImpl: params.fetchFn,
+        timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
+        auditContext: "beam.mirror_upload",
+        // Only the configured receiver can acknowledge delivery. Following a redirect
+        // could fingerprint a payload that the receiver never accepted.
+        maxRedirects: 0,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(payload),
+        },
+      });
+    } catch (error) {
+      if (error instanceof GuardedFetchRedirectError) {
+        // Repeating the same poll cannot satisfy direct-only delivery. Hold this exact
+        // endpoint for this service instance; a fresh instance probes once so a receiver
+        // fixed in place can recover without a meaningless config change.
+        redirectBlockedEndpoint = endpoint;
+        params.logger.warn(
+          `beam mirror upload blocked for ${payload.source}: receiver returned redirect (${error.status}); redirects are not followed; configure the final endpoint`,
+        );
+        return false;
+      }
+      throw error;
+    }
+
+    const { response, release } = guarded;
     try {
       if (!response.ok) {
         warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
@@ -304,15 +343,18 @@ export function createBeamMirrorRunner(params: {
       // The mirror uses only the status; cancel the ignored payload so slow
       // receiver responses cannot retain connection slots across poll retries.
       await response.body?.cancel().catch(() => undefined);
+      await release();
     }
   };
 
   const buildUpload = async (
+    agentId: string,
     catalog: ActiveSessionCatalog,
     candidate: BeamMirrorCandidate,
     completed: boolean,
   ): Promise<BeamMirrorUpload> => {
     const transcript = await catalog.read({
+      agentId,
       hostId: candidate.hostId,
       threadId: candidate.threadId,
       limit: MIRROR_READ_LIMIT,
@@ -358,6 +400,13 @@ export function createBeamMirrorRunner(params: {
         warnThrottled(`beam mirror disabled: ${mirror}`);
         return;
       }
+      let agentId: string;
+      try {
+        agentId = resolveSessionAgentIds({ config: config as OpenClawConfig }).defaultAgentId;
+      } catch (error) {
+        warnThrottled(`beam mirror disabled: ${String(error)}`);
+        return;
+      }
       let token: string | undefined;
       if (mirror.token !== undefined) {
         const resolved = await resolveConfiguredSecretInputString({
@@ -386,7 +435,7 @@ export function createBeamMirrorRunner(params: {
       const candidates: BeamMirrorCandidate[] = [];
       for (const catalog of catalogs) {
         try {
-          const hosts = await catalog.list({ limitPerHost: MIRROR_LIST_LIMIT });
+          const hosts = await catalog.list({ agentId, limitPerHost: MIRROR_LIST_LIMIT });
           candidates.push(...hostCandidates(catalog.id, hosts, activeSinceMs));
         } catch (error) {
           warnThrottled(`beam mirror list failed for ${catalog.id}: ${String(error)}`);
@@ -403,7 +452,7 @@ export function createBeamMirrorRunner(params: {
           continue;
         }
         try {
-          const payload = await buildUpload(catalog, candidate, false);
+          const payload = await buildUpload(agentId, catalog, candidate, false);
           const fingerprint = mirrorFingerprint(payload);
           if (tracked.get(key)?.fingerprint === fingerprint) {
             continue;
@@ -427,7 +476,7 @@ export function createBeamMirrorRunner(params: {
           continue;
         }
         try {
-          const payload = await buildUpload(catalog, entry.candidate, true);
+          const payload = await buildUpload(agentId, catalog, entry.candidate, true);
           await upload(mirror.endpoint, token, payload);
         } catch {
           // The session store may already be gone; the receiver TTL cleans up.

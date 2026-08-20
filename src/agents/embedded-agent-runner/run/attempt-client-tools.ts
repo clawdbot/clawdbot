@@ -1,4 +1,4 @@
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../../../plugins/tools.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -7,7 +7,11 @@ import {
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
+import {
+  collectReplaySafeToolNames,
+  collectSideEffectToolOwners,
+  isAgentToolReplaySafe,
+} from "../../tool-replay-safety.js";
 import { addClientToolsToToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import {
@@ -131,6 +135,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
         },
       )
     : [];
+  // Terminal observations are name-only, so ownership is valid only when one
+  // concrete OpenClaw or client tool owns the normalized name.
+  const sideEffectToolOwners = collectSideEffectToolOwners(
+    [...params.uncompactedEffectiveTools, ...clientToolDefs],
+    {
+      declaredOwner: (tool) =>
+        getPluginToolSideEffectOwnerKey(
+          tool as Parameters<typeof getPluginToolSideEffectOwnerKey>[0],
+        ),
+    },
+  );
   const addClientToolsToCatalog = params.codeModeControlsEnabledForRun
     ? addClientToolsToCodeModeCatalog
     : addClientToolsToToolSearchCatalog;
@@ -161,11 +176,13 @@ export function prepareEmbeddedAttemptClientTools(params: {
   return {
     allCustomTools,
     builtinToolNames,
+    coreBuiltinToolNames,
     clientToolCallSlots,
     clientToolDefs,
     clientToolLoopDetection,
     replaySafeToolNames,
     replaySafeTools,
+    sideEffectToolOwners,
     sessionToolAllowlist,
   };
 }

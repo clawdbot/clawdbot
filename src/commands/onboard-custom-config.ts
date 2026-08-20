@@ -18,6 +18,7 @@ import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeAlias } from "./models/alias-name.js";
+import { projectAgentModelDefaults, type OnboardingAgentTarget } from "./onboard-agent-target.js";
 
 /**
  * Wizard default for non-Azure custom APIs when context length is unknown.
@@ -193,6 +194,7 @@ type ApplyCustomApiConfigParams = {
   providerId?: string;
   alias?: string;
   supportsImageInput?: boolean;
+  target?: OnboardingAgentTarget;
 };
 
 /** Raw CLI flag values for non-interactive custom API setup. */
@@ -731,6 +733,10 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         },
       },
     };
+  }
+
+  if (params.target && params.config.agents?.ownership === "explicit") {
+    config = projectAgentModelDefaults(params.config, params.target, config);
   }
 
   return {

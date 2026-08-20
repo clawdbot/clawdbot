@@ -1,6 +1,6 @@
 /** Ensures caller cancellation composes with, but never replaces, node pairing ownership. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_SUPERVISOR_COMMANDS } from "../../infra/node-commands.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../../infra/node-commands.js";
 import { isNodeWakeLifecycleCurrent } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import { nodeInvokeHandlers } from "./nodes.invoke.js";
@@ -100,7 +100,7 @@ function startNodeInvoke(options: {
 }
 
 describe("node.invoke caller cancellation", () => {
-  it.each(NODE_WORKER_SUPERVISOR_COMMANDS)(
+  it.each(NODE_WORKER_PRIVATE_COMMANDS)(
     "rejects private control %s before public policy and dispatch",
     async (command) => {
       const invoke = vi.fn();

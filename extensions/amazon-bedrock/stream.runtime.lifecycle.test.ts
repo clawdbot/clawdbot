@@ -76,6 +76,7 @@ describe("Bedrock provider-owned stream lifecycle", () => {
             delta: { toolUse: { input: '{"query":"ready"}' } },
           },
         },
+        { contentBlockStop: { contentBlockIndex: 0 } },
       ],
       endEvent: "toolcall_end",
       stopReason: BedrockStopReason.TOOL_USE,

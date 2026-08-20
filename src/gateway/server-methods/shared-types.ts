@@ -24,12 +24,16 @@ import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subag
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
-import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import type {
+  AgentRuntimeIdentity,
+  AgentRuntimeApprovalAuthorityValidator,
+} from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
 import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
@@ -73,6 +77,17 @@ import type { TrustedSessionCreation } from "./session-creation-provenance.js";
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+/** Trusted in-process spawn control plane that already owns this run's task row.
+    Gateway CLI tracking only covers runs nobody else records, so a marked run
+    must never get a second row. */
+export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
+
+/** Caller identity captured by a built-in agent tool before trusted in-process dispatch. */
+export type TrustedAgentToolCaller = Readonly<{
+  agentId: string;
+  sessionKey: string;
+}>;
+
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
@@ -84,6 +99,7 @@ export type GatewayClient = {
   authenticatedUserId?: string;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
+  authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
@@ -95,10 +111,6 @@ export type GatewayClient = {
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
   isDeviceTokenAuth?: boolean;
-  /** Temporary legacy migration session closed when normal enforcement resumes. */
-  isControlUiDeviceAuthMigrationSession?: boolean;
-  /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
-  isControlUiDeviceAuthMigration?: boolean;
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
@@ -108,12 +120,14 @@ export type GatewayClient = {
     senderAttribution?: { id: string; name?: string };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
     sessionCreation?: TrustedSessionCreation;
+    /** Trusted built-in agent tool caller; never accepted from Gateway wire params. */
+    agentToolCaller?: TrustedAgentToolCaller;
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
-    agentRunTracking?: "plugin_subagent";
+    agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
     pluginSubagentRequester?: PluginSubagentRequesterContext;
     /** Host-owned exact media set for a scoped automatic recovery delivery. */
@@ -168,6 +182,14 @@ type GatewaySystemAgentSession = {
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
+    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+      wizardInputPending?: boolean;
+      question?: SystemAgentChatQuestion;
+      step?: import("../../wizard/session.js").WizardStep;
+    };
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
@@ -190,6 +212,7 @@ type GatewaySystemAgentSession = {
 /** Kernel-owned services and state that can be constructed without binding sockets. */
 type GatewayKernelContext = {
   deps: CliDeps;
+  configRevisionProjector: GatewayConfigRevisionProjector;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
@@ -249,13 +272,6 @@ type GatewayKernelContext = {
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
-  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
-  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: {
-    deviceId: string;
-    publicKey: string;
-    scopes: string[];
-  }) => void;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -335,6 +351,7 @@ type GatewayTransportContext = {
 
 /** Resident-owned services bridged into request handling by the server lifecycle. */
 type GatewayResidentBridgeContext = {
+  getGatewayMethodRegistry?: () => import("../methods/registry.js").GatewayMethodRegistry;
   controlUiSessionPullRequests?: ReturnType<
     typeof import("../control-ui-session-pr-subscriptions.js").createControlUiSessionPullRequestSubscriptions
   >;
@@ -359,6 +376,10 @@ type GatewayResidentBridgeContext = {
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
   workerPlacementDispatchService?: WorkerPlacementDispatchContract;
+  githubPublicationService?: import("../github-publication.js").GitHubPublicationCoordinator;
+  githubOAuthService?: ReturnType<
+    typeof import("../github-oauth-lifecycle.js").createGitHubOAuthLifecycle
+  >;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
@@ -383,9 +404,13 @@ type GatewayResidentBridgeContext = {
 };
 
 /** Complete runtime context available to gateway request handlers. */
+export type GatewayContextResolver = () => GatewayRequestContext | undefined;
 export type GatewayRequestContext = GatewayKernelContext &
   GatewayTransportContext &
-  GatewayResidentBridgeContext;
+  GatewayResidentBridgeContext & {
+    /** Live instance routing only; never authorization or wire state. */
+    resolveGatewayContext?: GatewayContextResolver;
+  };
 
 /** Full dispatch context for raw request frames before params are normalized. */
 export type GatewayRequestOptions = {

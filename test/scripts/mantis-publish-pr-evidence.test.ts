@@ -1,5 +1,5 @@
 // Mantis Publish Pr Evidence tests cover mantis publish pr evidence script behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -79,6 +79,12 @@ function writeFixtureManifest() {
 }
 
 describe("scripts/mantis/publish-pr-evidence", () => {
+  it("selects only Mantis-owned status comments", () => {
+    const source = readFileSync("scripts/mantis/publish-pr-evidence.mjs", "utf8");
+
+    expect(source).toContain('.user.login == "openclaw-mantis[bot]"');
+  });
+
   it("renders a manifest-driven PR comment with inline screenshots and video links", () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
     const body = renderEvidenceComment({

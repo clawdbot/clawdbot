@@ -9,6 +9,7 @@ import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/s
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -20,6 +21,7 @@ import {
   toPublicPluginVerificationDiagnostic,
 } from "../../plugins/runtime-degraded-state.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -59,6 +61,19 @@ const debugHealth = (
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
+function attachPluginActivation(
+  plugin: NonNullable<ReturnType<typeof getActivePluginRegistry>>["plugins"][number] | undefined,
+  error: PluginHealthErrorSummary,
+): PluginHealthErrorSummary {
+  if (plugin?.activationSource) {
+    error.activationSource = plugin.activationSource;
+  }
+  if (plugin?.activationReason) {
+    error.activationReason = plugin.activationReason;
+  }
+  return error;
+}
+
 export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const entries = listAgentEntries(cfg);
@@ -91,6 +106,7 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
 }
 
 export async function buildHealthSessionSummary(storePath: string, agentId?: string) {
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
   const { listSessionEntriesReadOnly } = await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   let listed: ReturnType<typeof listSessionEntriesReadOnly>;
@@ -116,7 +132,7 @@ export async function buildHealthSessionSummary(storePath: string, agentId?: str
     age: session.updatedAt ? Date.now() - session.updatedAt : null,
   }));
   return {
-    path: storePath,
+    path: databasePath,
     count: sessions.length,
     recent,
   } satisfies HealthSummary["sessions"];
@@ -136,7 +152,7 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  const errors = (registry?.plugins ?? [])
+  const loadErrors = (registry?.plugins ?? [])
     .filter(
       (plugin) =>
         plugin.status === "error" &&
@@ -149,25 +165,33 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
             degradedPluginMatchesRoot(degraded, plugin.rootDir ?? ""),
         ),
     )
-    .map((plugin) => {
-      const error: PluginHealthErrorSummary = {
+    .map((plugin) =>
+      attachPluginActivation(plugin, {
         id: plugin.id,
         origin: plugin.origin,
         activated: plugin.activated === true,
         error: plugin.error ?? "unknown plugin load error",
-      };
-      if (plugin.activationSource) {
-        error.activationSource = plugin.activationSource;
-      }
-      if (plugin.activationReason) {
-        error.activationReason = plugin.activationReason;
-      }
-      if (plugin.failurePhase) {
-        error.failurePhase = plugin.failurePhase;
-      }
-      return error;
-    })
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+        ...(plugin.failurePhase ? { failurePhase: plugin.failurePhase } : {}),
+      }),
+    );
+  const serviceErrors = registry
+    ? listPluginServiceHealthFailures(registry).map((failure) =>
+        attachPluginActivation(
+          registry.plugins.find((entry) => entry.id === failure.pluginId),
+          {
+            id: failure.pluginId,
+            origin: failure.origin,
+            // Starting the registered service is the authoritative activation fact.
+            activated: true,
+            failurePhase: "service",
+            error: `service ${failure.serviceId}: ${failure.error}`,
+          },
+        ),
+      )
+    : [];
+  const errors = [...loadErrors, ...serviceErrors].toSorted(
+    (left, right) => left.id.localeCompare(right.id) || left.error.localeCompare(right.error),
+  );
   if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {
     return undefined;
   }

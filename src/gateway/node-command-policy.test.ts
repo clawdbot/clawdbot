@@ -7,7 +7,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { NODE_WORKER_SUPERVISOR_COMMANDS } from "../infra/node-commands.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
@@ -17,6 +17,7 @@ import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
+  retainFulfilledNodeCapabilities,
 } from "./node-command-policy.js";
 import {
   filterLegacyNodeProtocolFeatures,
@@ -112,20 +113,20 @@ describe("gateway/node-command-policy", () => {
 
   it("keeps private worker supervisor commands outside public policy", () => {
     const cfg = {
-      gateway: { nodes: { commands: { allow: [...NODE_WORKER_SUPERVISOR_COMMANDS] } } },
+      gateway: { nodes: { commands: { allow: [...NODE_WORKER_PRIVATE_COMMANDS] } } },
     } as OpenClawConfig;
     const node = {
       platform: "linux",
       deviceFamily: "Linux",
-      commands: [...NODE_WORKER_SUPERVISOR_COMMANDS],
-      approvedCommands: [...NODE_WORKER_SUPERVISOR_COMMANDS],
+      commands: [...NODE_WORKER_PRIVATE_COMMANDS],
+      approvedCommands: [...NODE_WORKER_PRIVATE_COMMANDS],
     };
 
     expect([...resolveNodeCommandAllowlist(cfg, node)]).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_SUPERVISOR_COMMANDS]),
+      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
     );
     expect([...resolveNodePairingCommandAllowlist(cfg, node)]).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_SUPERVISOR_COMMANDS]),
+      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
     );
   });
 
@@ -782,50 +783,53 @@ describe("gateway/node-command-policy", () => {
     expect(resolveNodeCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
   });
 
-  it("requires an explicit allow for the dangerous cua-computer plugin command", () => {
+  it("scopes a plugin dangerous flag to plugin surfaces, not core platform defaults", () => {
+    // A bundled computer-use provider plugin registers computer.act as dangerous
+    // so it needs a registered invoke policy. That flag must not revoke the core
+    // desktop platform default, whose grant is node enablement plus pairing.
     const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands.push({
-      pluginId: "cua-computer",
-      pluginName: "CUA Computer",
-      source: "/extensions/cua-computer/index.ts",
-      rootDir: "/extensions/cua-computer",
-      command: {
-        command: "computer.act",
-        cap: "computer",
-        dangerous: true,
-        handle: async () => "{}",
-      },
-    });
-    registry.nodeInvokePolicies.push({
-      pluginId: "cua-computer",
-      pluginName: "CUA Computer",
-      source: "/extensions/cua-computer/index.ts",
-      rootDir: "/extensions/cua-computer",
-      pluginConfig: {},
-      policy: {
-        commands: ["computer.act"],
-        dangerous: true,
-        handle: async (ctx) => await ctx.invokeNode(),
-      },
-    });
+    for (const command of ["computer.act", "cua.driver.reset"]) {
+      registry.nodeHostCommands.push({
+        pluginId: "cua-computer",
+        pluginName: "CUA Computer",
+        source: "/extensions/cua-computer/index.ts",
+        rootDir: "/extensions/cua-computer",
+        command: {
+          command,
+          cap: "computer",
+          dangerous: true,
+          agentTool: {
+            name: command.replaceAll(".", "_"),
+            description: "Computer surface",
+            defaultPlatforms: ["windows"],
+          },
+          handle: async () => "{}",
+        },
+      });
+      registry.nodeInvokePolicies.push({
+        pluginId: "cua-computer",
+        pluginName: "CUA Computer",
+        source: "/extensions/cua-computer/index.ts",
+        rootDir: "/extensions/cua-computer",
+        pluginConfig: {},
+        policy: {
+          commands: [command],
+          dangerous: true,
+          handle: async (ctx) => await ctx.invokeNode(),
+        },
+      });
+    }
     setActivePluginRegistry(registry);
 
     const node = {
       platform: "windows",
       deviceFamily: "Windows",
-      commands: ["computer.act"],
-      approvedCommands: ["computer.act"],
+      commands: ["computer.act", "cua.driver.reset"],
+      approvedCommands: ["computer.act", "cua.driver.reset"],
     };
-    expect(resolveNodeCommandAllowlist({} as OpenClawConfig, node).has("computer.act")).toBe(false);
-
-    const allowlist = resolveNodeCommandAllowlist(
-      {
-        gateway: {
-          nodes: { commands: { allow: ["computer.act"] } },
-        },
-      } as OpenClawConfig,
-      node,
-    );
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, node);
+    expect(allowlist.has("computer.act")).toBe(true);
+    expect(allowlist.has("cua.driver.reset")).toBe(false);
     expect(
       isNodeCommandAllowed({
         command: "computer.act",
@@ -833,6 +837,42 @@ describe("gateway/node-command-policy", () => {
         allowlist,
       }),
     ).toEqual({ ok: true });
+
+    const opted = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: { commands: { allow: ["cua.driver.reset"] } },
+        },
+      } as OpenClawConfig,
+      node,
+    );
+    expect(opted.has("cua.driver.reset")).toBe(true);
+  });
+
+  it("drops a capability whose declared commands all failed the allowlist", () => {
+    const denied = resolveNodePairingCommandAllowlist(
+      { gateway: { nodes: { commands: { deny: ["computer.act"] } } } } as OpenClawConfig,
+      { platform: "macos", deviceFamily: "Mac", commands: ["computer.act", "screen.snapshot"] },
+    );
+    expect(
+      retainFulfilledNodeCapabilities({
+        caps: ["canvas", "screen", "computer"],
+        withheldCommands: ["computer.act"],
+        admittedCommands: normalizeDeclaredNodeCommands({
+          declaredCommands: ["computer.act", "screen.snapshot"],
+          allowlist: denied,
+        }),
+      }),
+    ).toEqual(["canvas", "screen"]);
+
+    // A capability the node never backed with a core-owned command is untouched.
+    expect(
+      retainFulfilledNodeCapabilities({
+        caps: ["computer"],
+        admittedCommands: [],
+        withheldCommands: [],
+      }),
+    ).toEqual(["computer"]);
   });
 
   it("allows node-enabled and paired mobile UI without a persistent allow", () => {

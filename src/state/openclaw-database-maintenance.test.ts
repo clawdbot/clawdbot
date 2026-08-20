@@ -7,8 +7,14 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
-import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.js";
+import {
+  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+} from "./openclaw-state-db-additive-columns.js";
+import {
+  ensureAdditiveStateColumns,
+  ensureDevicePairSetupBootstrapSchema,
+} from "./openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -146,12 +152,13 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
-  it("keeps every registered same-version column bare, canonical, and ensured", () => {
-    expect(
-      CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
-        ({ columnName, tableName }) => `${tableName}.${columnName}`,
-      ),
-    ).toEqual(OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns);
+  it("keeps every same-version additive column bare and canonical", () => {
+    const additiveColumns = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+      ({ columnName, tableName }) => `${tableName}.${columnName}`,
+    );
+    expect(OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns).toEqual(
+      additiveColumns,
+    );
     expect(
       CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
         ({ columnName, dataType, tableName }) => `${tableName}.${columnName} ${dataType}`,
@@ -168,9 +175,18 @@ describe("OpenClaw database maintenance schema validation", () => {
       "claw_package_refs.extension_mapped_json TEXT",
       "claw_package_refs.extension_unavailable_json TEXT",
       "worker_environments.shared_host INTEGER",
+      "worker_environments.node_setup_id TEXT",
+      "worker_environments.node_device_id TEXT",
       "worker_session_placements.terminal_reason TEXT",
       "worker_session_placements.terminal_at_ms INTEGER",
+      "worker_session_placement_moves.target_machine_class TEXT",
       "worktrees.run_end_cleanup_json TEXT",
+      "device_bootstrap_tokens.setup_id TEXT",
+      "session_groups.cwd TEXT",
+      "session_groups.worktree INTEGER",
+      "installed_plugin_index.workspace_dir TEXT",
+      "secret_store_entries.allowed_hosts TEXT",
+      "skill_workshop_proposals.claim_released_time INTEGER",
     ]);
 
     const database = createGlobalDatabase();
@@ -201,7 +217,7 @@ describe("OpenClaw database maintenance schema validation", () => {
         columnName,
         dataType,
         tableName,
-      } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+      } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
         expect(readColumnContract(database, tableName, columnName)).toEqual({
           dflt_value: null,
           hidden: 0,
@@ -211,6 +227,17 @@ describe("OpenClaw database maintenance schema validation", () => {
           type: dataType,
         });
       }
+      expect(readColumnContract(database, "device_bootstrap_tokens", "setup_id")).toBeUndefined();
+
+      ensureDevicePairSetupBootstrapSchema(database);
+      expect(readColumnContract(database, "device_bootstrap_tokens", "setup_id")).toEqual({
+        dflt_value: null,
+        hidden: 0,
+        name: "setup_id",
+        notnull: 0,
+        pk: 0,
+        type: "TEXT",
+      });
     } finally {
       database.close();
     }

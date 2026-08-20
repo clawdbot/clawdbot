@@ -134,12 +134,30 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
         path: path.join(artifactDir, "01-after-model-ready-continue-setup.png"),
       });
 
+      await gateway.deferNext("channels.status", { probe: false });
       await continueSetup.click();
       await waitForControlUiRoute(page, {
         pathname: "/custodian",
         routeId: "custodian",
         search: "?onboarding=1",
       });
+      await gateway.waitForRequest("channels.status");
+      await gateway.rejectDeferred("channels.status", {
+        code: "UNAVAILABLE",
+        message: "channel status temporarily unavailable",
+        retryable: true,
+      });
+      const channelStatusError = page.getByRole("alert").filter({
+        hasText: "Channel status is unavailable",
+      });
+      await channelStatusError.waitFor();
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(artifactDir, "02-channel-status-error-before-retry.png"),
+      });
+
+      await gateway.setMethodResponse("channels.status", emptyChannelSnapshot);
+      await channelStatusError.getByRole("button", { name: "Retry" }).click();
       const channelNudge = page.locator(".custodian__nudge--channel-onboarding");
       await channelNudge.waitFor();
       await expect.poll(() => channelNudge.textContent()).toContain("The web app already works");
@@ -185,8 +203,9 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
       await page.setViewportSize({ height: 900, width: 1280 });
 
       const channelStatusRequests = await gateway.getRequests("channels.status");
-      expect(channelStatusRequests).toHaveLength(1);
+      expect(channelStatusRequests).toHaveLength(2);
       expect(channelStatusRequests[0]?.params).toMatchObject({ probe: false });
+      expect(channelStatusRequests[1]?.params).toMatchObject({ probe: false });
 
       await page.getByRole("button", { name: "Set up a channel" }).click();
       await waitForControlUiRoute(page, {

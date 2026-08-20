@@ -1378,7 +1378,6 @@ describe("gateway startup config secret preflight", () => {
       await activateRuntimeSecrets(config, { reason: "startup", activate: false });
 
       const events = readTimelineEvents(timelineEnv.timelinePath);
-      expect(events).toHaveLength(2);
       expect(events.map((event) => event.type)).toEqual(["span.start", "span.end"]);
       for (const event of events) {
         expect(event.name).toBe("secrets.prepare");

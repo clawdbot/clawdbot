@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { CHROME_STOP_PROBE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import {
   parseBrowserMajorVersion,
@@ -764,7 +765,7 @@ describe("browser chrome helpers", () => {
             return jsonResponse({ webSocketDebuggerUrl: browserWsUrl });
           }),
         );
-        await stopChromeWithProc(proc, 20);
+        await stopChromeWithProc(proc, CHROME_STOP_PROBE_TIMEOUT_MS);
 
         expect(closeRequested).toBe(true);
         expect(proc.kill).not.toHaveBeenCalled();

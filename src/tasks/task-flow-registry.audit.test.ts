@@ -7,11 +7,8 @@ import {
   createRunningTaskRunCore as createRunningTaskRunOrNull,
   finalizeTaskRunByRunIdCore as finalizeTaskRunByRunId,
 } from "./task-executor.js";
-import {
-  listTaskFlowAuditFindings,
-  type TaskFlowAuditCode,
-  type TaskFlowAuditFinding,
-} from "./task-flow-registry.audit.js";
+import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";
+import type { TaskFlowAuditCode, TaskFlowAuditFinding } from "./task-flow-registry.audit.types.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   requestFlowCancel,

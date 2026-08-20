@@ -9,6 +9,7 @@ import type {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
+import { redactSensitiveText } from "../../../logging/redact.js";
 import {
   attachRuntimePromptMediaFacts,
   isImageMediaFact,
@@ -220,6 +221,7 @@ async function loadMediaFromRef(
   },
 ): Promise<WebMediaResult | null> {
   options?.signal?.throwIfAborted();
+  const redactedRef = redactSensitiveText(ref.raw || ref.resolved);
   try {
     let targetPath = ref.resolved;
 
@@ -240,8 +242,8 @@ async function loadMediaFromRef(
         });
         targetPath = resolved.resolved;
       } catch (err) {
-        log.debug(
-          `${options?.label ?? "Native media"}: sandbox validation failed: ${formatErrorMessage(err)}`,
+        log.warn(
+          `${options?.label ?? "Native media"}: sandbox validation failed for ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
         );
         return null;
       }
@@ -266,7 +268,9 @@ async function loadMediaFromRef(
     return media;
   } catch (err) {
     options?.signal?.throwIfAborted();
-    log.debug(`${options?.label ?? "Native media"}: failed to load: ${formatErrorMessage(err)}`);
+    log.warn(
+      `${options?.label ?? "Native media"}: failed to load ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
+    );
     return null;
   }
 }
@@ -488,7 +492,12 @@ type PromptMediaOptions = {
   sandbox?: { root: string; bridge: SandboxFsBridge };
   provider?: boolean;
   signal?: AbortSignal;
+  onCurrentTurnImageFailure?: (count: number) => void;
 };
+
+export function buildPromptImageFailureNotice(count: number): string {
+  return `System note: ${count} image attachment${count === 1 ? "" : "s"} could not be loaded; their image contents are unavailable. Tell the user and ask them to resend ${count === 1 ? "the image" : "the images"}; do not claim inspection.`;
+}
 
 const VIDEO_OMISSION = {
   unsupported: "(video omitted: provider does not support native video)",
@@ -575,12 +584,13 @@ async function materializePromptMediaMessages(
 ): Promise<AgentMessage[]> {
   let hydrated: AgentMessage[] | undefined;
   const videoBudget = { remaining: MAX_VIDEO_BYTES };
+  const activeUserIndex = messages.findLastIndex((message) => message.role === "user");
   for (const [index, message] of messages.entries()) {
     if (message.role !== "user") {
       continue;
     }
     const runtimeMedia = readRuntimePromptMediaFacts(message);
-    const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+    const meta = Reflect.get(message, "__openclaw");
     const resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
     const runtimeImageOrder = readRuntimePromptImageOrder(message);
     const mediaImageLayout = readPersistedMediaImageLayout(message);
@@ -613,6 +623,17 @@ async function materializePromptMediaMessages(
       options,
       budget: videoBudget,
     });
+    if (
+      (options.provider || options.onCurrentTurnImageFailure) &&
+      index === activeUserIndex &&
+      result.failedMediaCount > 0
+    ) {
+      options.onCurrentTurnImageFailure?.(result.failedMediaCount);
+      projectedContent.push({
+        type: "text",
+        text: buildPromptImageFailureNotice(result.failedMediaCount),
+      });
+    }
     hydrated ??= messages.slice();
     if (options.provider) {
       hydrated[index] = {
@@ -637,9 +658,9 @@ async function materializePromptMediaMessages(
       content: projectedContent,
     } as AgentMessage;
     if (Object.keys(nextMeta).length > 0) {
-      (hydratedMessage as unknown as Record<string, unknown>)["__openclaw"] = nextMeta;
+      Reflect.set(hydratedMessage, "__openclaw", nextMeta);
     } else {
-      delete (hydratedMessage as unknown as Record<string, unknown>)["__openclaw"];
+      Reflect.deleteProperty(hydratedMessage, "__openclaw");
     }
     if (runtimeMedia) {
       attachRuntimePromptMediaFacts(hydratedMessage, runtimeMedia, runtimeImageOrder);
@@ -665,6 +686,7 @@ export async function materializeProviderContext(params: {
   workspaceOnly?: boolean;
   localRoots?: readonly string[];
   sandbox?: { root: string; bridge: SandboxFsBridge };
+  onCurrentTurnImageFailure?: (count: number) => void;
 }): Promise<ProviderContext> {
   const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
     workspaceDir: params.workspaceDir,
@@ -674,6 +696,7 @@ export async function materializeProviderContext(params: {
     sandbox: params.sandbox,
     provider: true,
     signal: params.signal,
+    onCurrentTurnImageFailure: params.onCurrentTurnImageFailure,
   });
   params.signal?.throwIfAborted();
   return messages === params.context.messages

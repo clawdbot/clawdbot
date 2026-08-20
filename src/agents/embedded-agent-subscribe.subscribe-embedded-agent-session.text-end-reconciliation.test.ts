@@ -182,7 +182,11 @@ describe("text_end snapshot reconciliation", () => {
       toolName: "message",
       toolCallId: "message-tool-1",
       isError: false,
-      result: { details: { deliveryStatus: "sent" } },
+      result: {
+        details: {
+          status: "sent",
+        },
+      },
     });
     await Promise.resolve();
     await new Promise<void>((resolve) => {

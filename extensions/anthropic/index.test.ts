@@ -446,15 +446,14 @@ describe("anthropic provider replay hooks", () => {
           defaults: {
             models: {},
           },
-          list: [
-            {
+          entries: {
+            main: {
               default: true,
-              id: "main",
               model: { primary: "anthropic/opus-4.7" },
               name: "Main",
               workspace: "/tmp/openclaw-agent",
             },
-          ],
+          },
         },
       },
     } as never);
@@ -484,16 +483,15 @@ describe("anthropic provider replay hooks", () => {
               "anthropic/opus-4.7": { params: { maxTokens: 1200 } },
             },
           },
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               models: {
                 "anthropic/sonnet-4.6": { alias: "Sonnet shorthand" },
               },
               name: "Main",
               workspace: "/tmp/openclaw-agent",
             },
-          ],
+          },
         },
       },
     } as never);
@@ -660,7 +658,7 @@ describe("anthropic provider replay hooks", () => {
       name: "resolves Claude Fable 5 with its always-adaptive model contract",
       modelId: "claude-fable-5",
       cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
       checksMedia: true,
       checksCliPolicy: true,
     },
@@ -709,16 +707,11 @@ describe("anthropic provider replay hooks", () => {
         provider: "anthropic",
         modelId,
       } as never);
-      expect(levelIds(profile)).toStrictEqual([
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "adaptive",
-        "max",
-      ]);
+      expect(levelIds(profile)).toStrictEqual(
+        modelId === "claude-fable-5"
+          ? ["minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
+          : ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
+      );
       expect(requireRecord(profile, `${modelId} thinking profile`).defaultLevel).toBe("high");
       const normalized = provider.normalizeResolvedModel?.({
         provider: "anthropic",
@@ -868,7 +861,6 @@ describe("anthropic provider replay hooks", () => {
       contextTokens: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: {
-        off: "low",
         minimal: "low",
         xhigh: "xhigh",
         max: "max",
@@ -877,12 +869,12 @@ describe("anthropic provider replay hooks", () => {
     expect(requireRecord(resolved, "Mythos model").mediaInput).toEqual({
       image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
     });
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "anthropic",
-        modelId: "claude-mythos-5",
-      } as never)?.defaultLevel,
-    ).toBe("high");
+    const thinkingProfile = provider.resolveThinkingProfile?.({
+      provider: "anthropic",
+      modelId: "claude-mythos-5",
+    } as never);
+    expect(thinkingProfile?.defaultLevel).toBe("high");
+    expect(levelIds(thinkingProfile)).not.toContain("off");
     expect(
       provider.resolveDynamicModel?.({
         provider: "claude-cli",

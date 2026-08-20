@@ -4,11 +4,14 @@ import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
-import { mergeAuthProfileStores } from "../agents/auth-profiles/persisted.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
+  mergeAuthProfileStores,
+} from "../agents/auth-profiles/persisted.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
@@ -126,7 +129,7 @@ function allocateProfileId(
 }
 
 async function persistCredentials(params: {
-  agentDir: string;
+  agentDir?: string;
   blockedStores?: readonly AuthProfileStore[];
   credentials: readonly PlaintextCredential[];
   inheritedStore?: AuthProfileStore;
@@ -169,7 +172,12 @@ async function persistCredentials(params: {
   if (!updated) {
     throw new Error("auth profile store could not be updated");
   }
-  const persisted = loadPersistedAuthProfileStore(params.agentDir);
+  const persisted = params.agentDir
+    ? loadPersistedAuthProfileStore(params.agentDir)
+    : loadPersistedSharedAuthProfileStore({
+        ...process.env,
+        OPENCLAW_STATE_DIR: params.stateDir,
+      });
   const effectivePersisted = params.inheritedStore
     ? mergeAuthProfileStores(params.inheritedStore, persisted ?? emptyStore())
     : persisted;
@@ -230,17 +238,20 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   const warnings: string[] = [];
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
-  const mainAgentDir = path.dirname(resolveSharedAuthStorePath(env));
+  const mainAgentDir = resolveSharedMainAuthAgentDir(env);
   const discoveredAgentDirs = listAgentModelsJsonPaths(params.cfg, stateDir, env).map(
     (modelsPath) => path.dirname(modelsPath),
   );
-  const agentDirs = [
-    ...new Set([mainAgentDir, resolveDefaultAgentDir(params.cfg, env), ...discoveredAgentDirs]),
-  ];
-  const mainStore = loadPersistedAuthProfileStore(mainAgentDir) ?? emptyStore();
+  const agentIds = listAgentIds(params.cfg);
+  const configuredAgentDirs =
+    agentIds.length > 0
+      ? agentIds.map((agentId) => resolveAgentDir(params.cfg, agentId, env))
+      : [resolveDefaultAgentDir(params.cfg, env)];
+  const agentDirs = [...new Set([mainAgentDir, ...configuredAgentDirs, ...discoveredAgentDirs])];
+  const mainStore = loadPersistedSharedAuthProfileStore(env) ?? emptyStore();
   const catalogs = agentDirs.map((agentDir) => collectAgentCatalogs(agentDir, warnings));
-  const effectiveStores = catalogs.map(({ agentDir, localStore }) =>
-    agentDir === mainAgentDir ? mainStore : mergeAuthProfileStores(mainStore, localStore),
+  const effectiveStores = catalogs.map(({ localStore }) =>
+    mergeAuthProfileStores(mainStore, localStore),
   );
   const childStores = catalogs
     .filter((catalog) => catalog.agentDir !== mainAgentDir)
@@ -284,7 +295,6 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   let migrated = 0;
   try {
     migrated += await persistCredentials({
-      agentDir: mainAgentDir,
       blockedStores: childStores,
       credentials: configCredentials,
       stateDir,
@@ -295,11 +305,11 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     params.runtime.error(warning);
   }
 
-  const migratedMainStore = loadPersistedAuthProfileStore(mainAgentDir) ?? mainStore;
+  const migratedMainStore = loadPersistedSharedAuthProfileStore(env) ?? mainStore;
   for (const [index, catalog] of catalogs.entries()) {
     try {
       migrated += await persistCredentials({
-        agentDir: catalog.agentDir,
+        ...(catalog.agentDir === mainAgentDir ? {} : { agentDir: catalog.agentDir }),
         credentials: catalogCredentials[index] ?? [],
         ...(catalog.agentDir === mainAgentDir ? {} : { inheritedStore: migratedMainStore }),
         stateDir,

@@ -381,6 +381,10 @@ export type SecretProviderConfig =
   | StoreSecretProviderConfig;
 
 export type SecretsConfig = {
+  egressProxy?: {
+    enabled?: boolean;
+    bypassHosts?: string[];
+  };
   providers?: Record<string, SecretProviderConfig>;
   defaults?: {
     env?: string;

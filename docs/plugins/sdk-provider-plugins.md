@@ -949,8 +949,8 @@ catalog, API-key auth, and dynamic model resolution.
 
         Declare the same id in `contracts.embeddingProviders`. This is the
         general embedding contract for reusable vector generation, including
-        memory search. `registerMemoryEmbeddingProvider(...)` is deprecated
-        compatibility for existing memory-specific adapters.
+        memory search. The retired memory-specific registrar and manifest
+        contract are no longer accepted.
       </Tab>
       <Tab title="Image and video generation">
         Image and video capabilities use a **mode-aware** shape. Image

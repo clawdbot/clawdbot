@@ -5,14 +5,20 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAgentHarnessHostCapabilitiesForTest,
+  createMockPluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import type { CodexModelListResponse } from "./protocol.js";
 import { runCodexAppServerAttempt } from "./run-attempt.js";
-import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import {
+  createCodexTestBindingStore,
+  sessionBindingIdentity,
+} from "./session-binding.test-helpers.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 
 const LIVE =
@@ -26,7 +32,7 @@ afterEach(() => {
 });
 
 describeLive("Codex app-server approval requester real-binary bridge", () => {
-  it("preserves an owner requester through promoted apply_patch approval", async () => {
+  it("runs owner-gated apply_patch under default yolo without approval requests", async () => {
     await withTempDir("openclaw-codex-approval-requester-", async (root) => {
       const workspace = path.join(root, "workspace");
       const agentDir = path.join(root, "agent");
@@ -44,6 +50,7 @@ describeLive("Codex app-server approval requester real-binary bridge", () => {
         authProfileId: null,
         timeoutMs: 120_000,
       });
+      let closeHost: (() => void) | undefined;
       try {
         const listed = await client.request<CodexModelListResponse>(
           "model/list",
@@ -121,32 +128,35 @@ describeLive("Codex app-server approval requester real-binary bridge", () => {
             agentEvents.push(event);
           },
         } as unknown as EmbeddedRunAttemptParams;
+        const host = await createAgentHarnessHostCapabilitiesForTest({
+          attempt: params,
+          pluginId: "codex",
+        });
+        params.hostCapabilities = host.capabilities;
+        closeHost = host.close;
 
+        const bindingStore = createCodexTestBindingStore();
         const result = await runCodexAppServerAttempt(params, {
-          bindingStore: createCodexTestBindingStore(),
+          bindingStore,
           pluginConfig: { appServer: { homeScope: "user" } },
           nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
           clientFactory: async () => client,
         });
 
         expect(result.terminal.kind, JSON.stringify(result.terminal)).toBe("ok");
+        const binding = await bindingStore.read(sessionBindingIdentity(params));
+        expect(binding).toMatchObject({ cwd: workspace, model: modelId });
+        expect(binding?.threadId).toEqual(expect.any(String));
         expect(await fs.readFile(target, "utf8")).toBe("REAL_BINARY_OWNER_OK\n");
-        expect(serverRequestMethods).toContain("item/fileChange/requestApproval");
+        expect(
+          serverRequestMethods.filter((method) => method.endsWith("/requestApproval")),
+        ).toEqual([]);
         expect(hookRequesters).toEqual(
           expect.arrayContaining([expect.objectContaining({ senderIsOwner: true })]),
         );
-        expect(agentEvents).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              stream: "approval",
-              data: expect.objectContaining({
-                status: "approved",
-                message: "Codex app-server approval accepted by OpenClaw tool policy.",
-              }),
-            }),
-          ]),
-        );
+        expect(agentEvents.filter((event) => event.stream === "approval")).toEqual([]);
       } finally {
+        closeHost?.();
         await client.closeAndWait();
       }
     });

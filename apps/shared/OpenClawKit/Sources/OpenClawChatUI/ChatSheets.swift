@@ -344,10 +344,17 @@ public struct ChatSessionsSheet: View {
                     }
                 }
                 Button {
-                    Task { await self.viewModel.forkSession(key: session.key) }
+                    Task {
+                        await self.viewModel.forkSession(
+                            key: session.key,
+                            fromLastCompleted: session.hasActiveRun == true)
+                    }
                 } label: {
                     self.actionLabel(
-                        LocalizedStringKey(String(localized: "Fork")),
+                        LocalizedStringKey(
+                            session.hasActiveRun == true
+                                ? String(localized: "Fork from last completed message")
+                                : String(localized: "Fork")),
                         systemImage: "arrow.triangle.branch")
                 }
                 Button {

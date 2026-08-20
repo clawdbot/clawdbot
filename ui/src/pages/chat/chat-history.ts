@@ -1,31 +1,25 @@
-// Control UI page module owns Chat transcript loading and selected-session message subscription.
-import {
-  readSessionMessageIdentity,
-  readSessionMessageSequence,
-} from "@openclaw/gateway-client/browser";
+import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
   GatewaySessionsDefaults,
-  ModelCatalogEntry,
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
-import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText, isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
+// Control UI page module owns Chat transcript loading and selected-session message subscription.
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentParamsForSession,
@@ -48,11 +42,11 @@ import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts"
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
-  isUnknownGatewayMethodError,
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
-import type { ChatRunStartupPhase, ChatRunStartupState } from "./chat-run-startup.ts";
+import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
@@ -66,12 +60,18 @@ import {
 } from "./performance.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
-  type ChatMessageCache,
+  readChatSessionSnapshot,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-import { retireHistoryProvenSteeredChips } from "./steer-lifecycle.ts";
+import {
+  latestPersistedSteerBoundary,
+  markChatStreamAfterBoundary,
+  resolveCumulativeAssistantTail,
+} from "./stream-causal-boundary.ts";
 import {
   clearToolStreamSegments,
   currentLiveToolCallIds,
@@ -79,12 +79,15 @@ import {
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
   maybeResetToolStream,
-  persistedCurrentToolStreamIds,
-  prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
+import {
+  pruneHistoryReplacedStreamSegments,
+  prunePersistedToolStreamMessages,
+} from "./stream-segment-pruning.ts";
 import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
-import { handleAgentEvent, normalizePlanSnapshot, type PlanStatus } from "./tool-stream.ts";
+import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -163,7 +166,7 @@ function shouldApplyChatHistoryResult(
   );
 }
 
-function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
   const requests = getChatHistoryPaneRequests(state);
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
@@ -245,7 +248,6 @@ export function materializeVisibleAssistantStreamMessages(
     requirePersistedTool?: boolean;
     replacementMessages?: unknown[];
     persistCommentary?: boolean;
-    keyedStartIndex?: number;
   } = {},
 ): unknown[] {
   return materializeVisibleStreamState(messages, state, {
@@ -260,64 +262,7 @@ function chatPersistCommentaryEnabled(state: ChatState): boolean {
   return state.settings?.chatPersistCommentary !== false;
 }
 
-export type ChatState = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  initialUserMessage?: ApplicationInitialUserMessageHandoff;
-  /** Monotonic owner epoch; reconnects can reuse the same client object. */
-  connectionEpoch: number;
-  sessionKey: string;
-  currentSessionId?: string | null;
-  reconnectResumeSessionId?: string | null;
-  chatLoading: boolean;
-  chatHistoryPagination?: ChatHistoryPagination;
-  chatMessages: unknown[];
-  chatMessagesBySession?: ChatMessageCache;
-  /** Active leaf of the history snapshot currently rendered by this pane. */
-  chatDisplayedLeafEntryId?: string | null;
-  chatThinkingLevel: string | null;
-  chatVerboseLevel: string | null;
-  /** Pane-owned explicit session queue override from the latest history response. */
-  chatQueueModeOverride?: GatewaySessionRow["queueMode"];
-  /** Pane-owned effective queue mode from this session's latest history response. */
-  chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
-  chatSending: boolean;
-  chatMessage: string;
-  chatAttachments: ChatAttachment[];
-  chatQueue: ChatQueueItem[];
-  chatRunId: string | null;
-  chatRunUsageById?: Map<string, number>;
-  chatStream: string | null;
-  chatStreamStartedAt: number | null;
-  chatRunStartup?: ChatRunStartupState | null;
-  planStatus?: PlanStatus | null;
-  lastError: string | null;
-  chatError?: string | null;
-  chatRunError?: { summary: string } | null;
-  lastLocalTerminalReconcile?: { runId: string | null } | null;
-  chatReplyTarget?: unknown;
-  agentsError?: string | null;
-  onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
-  resetChatInputHistoryNavigation?: () => void;
-  assistantAgentId?: string | null;
-  agentsList?: ChatAgentsListSnapshot | null;
-  agentsSelectedId?: string | null;
-  hello: GatewayHelloOk | null;
-  canvasPluginSurfaceUrl?: string | null;
-  settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
-  sessions?: Partial<SessionCapability>;
-  chatSessionMessageSubscriptionRequestedKey?: string | null;
-  chatSessionMessageSubscription?: SessionMessageSubscription | null;
-  chatBranches?: SessionBranch[];
-  chatBranchesSessionKey?: string | null;
-  chatBranchesConnectionEpoch?: number | null;
-  chatBranchesLoading?: boolean;
-  requestUpdate?: () => void;
-};
-
-type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
-  agents?: AgentsListResult["agents"];
-};
+export type { ChatState } from "./chat-state-contract.ts";
 
 type ChatSessionMessageSubscriptionState = ChatState & {
   sessions: Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
@@ -328,6 +273,7 @@ type ChatSessionMessageSubscriptionState = ChatState & {
 };
 
 export type ChatHistoryResult = {
+  deltaCursor?: string;
   messages?: Array<unknown>;
   offset?: number;
   nextOffset?: number;
@@ -354,12 +300,26 @@ export type ChatHistoryResult = {
       agentId?: string;
       data: Record<string, unknown>;
     }>;
-    plan?: {
-      steps: Array<PlanStatus["steps"][number] | string>;
-      explanation?: string;
-    };
   };
 };
+
+type ChatHistoryDeltaResult = {
+  kind: "delta";
+  messages: unknown[];
+  deltaCursor: string;
+  sessionInfo: GatewaySessionRow;
+  agentsList?: AgentsListResult;
+  metadata?: ChatMetadataResult;
+};
+
+type ChatHistoryResetResult = { kind: "reset" };
+type ChatHistoryResponse = ChatHistoryResult | ChatHistoryDeltaResult | ChatHistoryResetResult;
+
+function isChatHistoryCursorResult(
+  result: ChatHistoryResponse,
+): result is ChatHistoryDeltaResult | ChatHistoryResetResult {
+  return "kind" in result;
+}
 
 function replayInFlightRunEvents(
   state: ChatState,
@@ -388,79 +348,7 @@ function resolveInFlightAssistantTail(
   ) {
     return null;
   }
-
-  // A steered user turn can follow an assistant from the still-active run.
-  // Persisted run identity, not the latest user boundary, owns that prefix.
-  const ownedPrefixIndex = messages.findIndex((message) => {
-    const identity = readSessionMessageIdentity(message);
-    const persistedText = identity?.runId === runId ? extractText(message) : null;
-    return (
-      identity?.role === "assistant" &&
-      Boolean(
-        persistedText &&
-        (bufferedText.startsWith(persistedText) || persistedText.startsWith(bufferedText)),
-      )
-    );
-  });
-  let turnStart = ownedPrefixIndex === -1 ? 0 : ownedPrefixIndex;
-  if (ownedPrefixIndex === -1) {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (
-        message &&
-        typeof message === "object" &&
-        normalizeLowercaseStringOrEmpty((message as Record<string, unknown>).role) === "user"
-      ) {
-        turnStart = index + 1;
-        break;
-      }
-    }
-  }
-
-  let persistedPrefixLength = 0;
-  for (let index = turnStart; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const identity = readSessionMessageIdentity(message);
-    if (identity?.role !== "assistant" || (identity.runId && identity.runId !== runId)) {
-      continue;
-    }
-
-    const persistedText = extractText(message);
-    if (!persistedText) {
-      continue;
-    }
-    // One tool-using turn may persist several assistant segments; the Gateway
-    // buffer includes them all, so matching only its newest row duplicates text.
-    const remainingText = bufferedText.slice(persistedPrefixLength);
-    if (remainingText.startsWith(persistedText)) {
-      persistedPrefixLength += persistedText.length;
-      continue;
-    }
-    // History can persist past a live delta while its request is pending.
-    // That older cumulative buffer is already rendered by the persisted row.
-    if (persistedText.startsWith(remainingText)) {
-      return null;
-    }
-    const whitespace = /^\s+/u.exec(remainingText)?.[0];
-    if (persistedPrefixLength > 0 && whitespace) {
-      const remainingAfterWhitespace = remainingText.slice(whitespace.length);
-      if (remainingAfterWhitespace.startsWith(persistedText)) {
-        persistedPrefixLength += whitespace.length + persistedText.length;
-        continue;
-      }
-      if (persistedText.startsWith(remainingAfterWhitespace)) {
-        return null;
-      }
-    }
-    if (persistedPrefixLength > 0) {
-      break;
-    }
-  }
-
-  const tail = bufferedText.slice(persistedPrefixLength);
+  const tail = resolveCumulativeAssistantTail(messages, bufferedText, runId);
   return tail && !isHiddenAssistantStreamText(tail) ? tail : null;
 }
 
@@ -508,34 +396,6 @@ function mergeInFlightAssistantTails(
   return cumulativeLiveTail;
 }
 
-function reconcileHistoryPlanStatus(params: {
-  canAdoptRunSnapshot: boolean;
-  inFlightRun: ChatHistoryResult["inFlightRun"];
-  retainedPlan: PlanStatus | null;
-  sessionInfo: GatewaySessionRow | undefined;
-}): PlanStatus | null {
-  if (!params.canAdoptRunSnapshot) {
-    return params.retainedPlan;
-  }
-  const run = params.inFlightRun;
-  const runId = run?.runId?.trim();
-  if (run && runId) {
-    if (Object.hasOwn(run, "plan")) {
-      return run.plan ? normalizePlanSnapshot(run.plan, runId) : null;
-    }
-    return params.retainedPlan?.runId === runId ? params.retainedPlan : null;
-  }
-  const retainedRunId = params.retainedPlan?.runId;
-  if (!retainedRunId) {
-    return params.retainedPlan;
-  }
-  const activeRunIds = params.sessionInfo?.activeRunIds;
-  const confirmsTerminal =
-    params.sessionInfo?.hasActiveRun === false ||
-    (Array.isArray(activeRunIds) && !activeRunIds.includes(retainedRunId));
-  return confirmsTerminal ? null : params.retainedPlan;
-}
-
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,
 ): ChatHistoryPagination {
@@ -573,8 +433,8 @@ function resolveChatHistorySessionId(result: ChatHistoryResult): string | null {
     : null;
 }
 
-function retainedRawHistoryStart(pagination: ChatHistoryPagination | undefined): number | null {
-  const totalMessages = pagination?.totalMessages;
+function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
+  const totalMessages = pagination.totalMessages;
   if (
     typeof totalMessages !== "number" ||
     !Number.isSafeInteger(totalMessages) ||
@@ -582,7 +442,7 @@ function retainedRawHistoryStart(pagination: ChatHistoryPagination | undefined):
   ) {
     return null;
   }
-  const retainedDepth = pagination?.hasMore ? pagination.nextOffset : totalMessages;
+  const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
   const start = totalMessages - retainedDepth + 1;
   return Number.isSafeInteger(start) && start > 0 ? start : null;
 }
@@ -592,7 +452,7 @@ function reconcileLoadedHistoryTail(options: {
   nextPagination: ChatHistoryPagination;
   nextSessionId: string | null;
   previousMessages: unknown[];
-  previousPagination: ChatHistoryPagination | undefined;
+  previousPagination: ChatHistoryPagination;
   previousSessionId: string | null;
 }): { messages: unknown[]; pagination: ChatHistoryPagination } | null {
   if (
@@ -602,7 +462,7 @@ function reconcileLoadedHistoryTail(options: {
   ) {
     return null;
   }
-  const previousTotal = options.previousPagination?.totalMessages;
+  const previousTotal = options.previousPagination.totalMessages;
   const nextTotal = options.nextPagination.totalMessages;
   const previousStart = retainedRawHistoryStart(options.previousPagination);
   const nextStart = retainedRawHistoryStart(options.nextPagination);
@@ -634,10 +494,6 @@ function reconcileLoadedHistoryTail(options: {
   };
 }
 
-export type ChatMetadataResult = CommandsListResult & {
-  models?: ModelCatalogEntry[];
-};
-
 export type ChatEventPayload = {
   runId?: string;
   sessionKey: string;
@@ -653,8 +509,9 @@ export type ChatEventPayload = {
 };
 
 function setChatError(state: ChatState, error: string | null) {
-  state.lastError = error;
-  state.chatError = error;
+  const message = error === null ? null : formatUiError(error);
+  state.lastError = message;
+  state.chatError = message;
 }
 
 function chatScopedEventAgentScopeMatches(
@@ -874,7 +731,7 @@ export async function syncSelectedSessionMessageSubscription(
             }
             state.chatSessionMessageSubscriptionRequestedKey = nextKey;
             state.chatSessionMessageSubscription = subscribeResult.value;
-            state.sessionsError = `${String(unsubscribeResult.reason)}; replacement release failed: ${String(replacementReleaseError)}`;
+            state.sessionsError = `${formatUiError(unsubscribeResult.reason)}; replacement release failed: ${formatUiError(replacementReleaseError)}`;
           } else {
             paneRequests.pendingSubscriptionReleases.add(subscribeResult.value);
           }
@@ -882,7 +739,7 @@ export async function syncSelectedSessionMessageSubscription(
         }
       }
       if (isCurrent()) {
-        state.sessionsError = String(unsubscribeResult.reason);
+        state.sessionsError = formatUiError(unsubscribeResult.reason);
       }
       return;
     }
@@ -916,7 +773,7 @@ export async function syncSelectedSessionMessageSubscription(
     state.chatSessionMessageSubscription = subscribed;
   } catch (err) {
     if (isCurrent()) {
-      state.sessionsError = String(err);
+      state.sessionsError = formatUiError(err);
     }
   }
 }
@@ -935,7 +792,7 @@ type LoadChatHistoryOptions = {
 
 type SharedChatHistoryRequest = {
   consumers: Set<SharedChatHistoryConsumer>;
-  promise: Promise<ChatHistoryResult>;
+  promise: Promise<ChatHistoryResponse>;
 };
 
 type SharedChatHistoryRegistry = {
@@ -979,24 +836,19 @@ async function requestChatHistory(
   requestAgentId: string | undefined,
   shouldContinue: () => boolean,
   shouldRetry: () => boolean,
-): Promise<ChatHistoryResult> {
+  cursor?: string,
+): Promise<ChatHistoryResponse> {
   for (;;) {
     try {
-      return await client.request<ChatHistoryResult>(method, {
+      return await client.request<ChatHistoryResponse>(method, {
         sessionKey,
         ...(requestAgentId ? { agentId: requestAgentId } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
         limit: CHAT_HISTORY_REQUEST_LIMIT,
       });
     } catch (err) {
       if (!shouldContinue()) {
         throw err;
-      }
-      if (method === "chat.startup" && isUnknownGatewayMethodError(err, method)) {
-        return await client.request<ChatHistoryResult>("chat.history", {
-          sessionKey,
-          ...(requestAgentId ? { agentId: requestAgentId } : {}),
-          limit: CHAT_HISTORY_REQUEST_LIMIT,
-        });
       }
       if (shouldRetry() && isRetryableStartupUnavailable(err, method)) {
         await sleep(resolveStartupRetryDelayMs(err));
@@ -1018,7 +870,8 @@ function requestSharedChatHistory(
   requestAgentId: string | undefined,
   consumerOwner: object,
   isCurrentConsumer: () => boolean,
-): Promise<ChatHistoryResult> {
+  cursor?: string,
+): Promise<ChatHistoryResponse> {
   let registry = sharedChatHistoryRequests.get(client);
   if (!registry) {
     registry = {
@@ -1048,6 +901,7 @@ function requestSharedChatHistory(
       requestAgentId,
       shouldContinue,
       shouldRetry,
+      cursor,
     ).finally(() => {
       if (requests?.get(requestKey)?.promise === promise) {
         requests.delete(requestKey);
@@ -1066,6 +920,49 @@ function requestSharedChatHistory(
     shared?.consumers.delete(consumer);
     updateChatHistoryOwnerRequestCount(registry, consumerOwner, requestKey, -1);
   });
+}
+
+type ChatSessionSnapshotRequestResult =
+  | { kind: "snapshot"; snapshot: ChatSessionSnapshot }
+  | ChatHistoryDeltaResult
+  | ChatHistoryResetResult;
+
+export async function requestChatSessionSnapshot(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  consumerOwner: object,
+  isCurrentConsumer: () => boolean,
+  cursor?: string,
+): Promise<ChatSessionSnapshotRequestResult> {
+  const method = "chat.history";
+  const requestModeKey = cursor === undefined ? "page" : `cursor:${cursor}`;
+  const requestKey = `prefetch\u0000${method}\u0000${sessionKey}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000${requestModeKey}`;
+  const result = await requestSharedChatHistory(
+    client,
+    requestKey,
+    method,
+    sessionKey,
+    undefined,
+    consumerOwner,
+    isCurrentConsumer,
+    cursor,
+  );
+  if (isChatHistoryCursorResult(result)) {
+    return result;
+  }
+  const sessionInfo = result.sessionInfo;
+  return {
+    kind: "snapshot",
+    snapshot: {
+      ...(result.deltaCursor !== undefined ? { deltaCursor: result.deltaCursor } : {}),
+      ...(Object.hasOwn(sessionInfo ?? {}, "activeLeafEntryId")
+        ? { displayedLeafEntryId: sessionInfo?.activeLeafEntryId?.trim() || null }
+        : {}),
+      messages: visibleChatHistoryMessages(result.messages),
+      pagination: resolveChatHistoryPagination(result),
+      sessionId: resolveChatHistorySessionId(result),
+    },
+  };
 }
 
 function recordChatHistoryTiming(
@@ -1088,7 +985,12 @@ function recordChatHistoryTiming(
   );
 }
 
-function replaceCachedChatMessages(state: ChatState, sessionKey: string, agentId?: string) {
+function replaceCachedChatMessages(
+  state: ChatState,
+  sessionKey: string,
+  agentId: string | undefined,
+  deltaCursor?: string,
+) {
   if (!state.chatMessagesBySession) {
     return;
   }
@@ -1097,13 +999,34 @@ function replaceCachedChatMessages(state: ChatState, sessionKey: string, agentId
     state,
     { sessionKey, agentId },
     {
+      ...(deltaCursor !== undefined ? { deltaCursor } : {}),
       ...(state.chatDisplayedLeafEntryId !== undefined
         ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
         : {}),
       messages: state.chatMessages,
-      pagination: state.chatHistoryPagination ?? { hasMore: false },
+      pagination: state.chatHistoryPagination,
       sessionId: state.currentSessionId ?? null,
     },
+  );
+}
+
+function clearCachedChatDeltaCursor(state: ChatState, sessionKey: string, agentId?: string): void {
+  if (!state.chatMessagesBySession) {
+    return;
+  }
+  const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+    sessionKey,
+    agentId,
+  });
+  if (snapshot?.deltaCursor === undefined) {
+    return;
+  }
+  const { deltaCursor: _deltaCursor, ...withoutCursor } = snapshot;
+  cacheChatSessionSnapshot(
+    state.chatMessagesBySession,
+    state,
+    { sessionKey, agentId },
+    withoutCursor,
   );
 }
 
@@ -1263,7 +1186,7 @@ export async function clearChatHistory(
     }
   } catch (err) {
     if (ownsClearChatView(state, originalViewOwner)) {
-      setChatError(state, String(err));
+      setChatError(state, formatUiError(err));
       scheduleChatScroll(state);
     }
     return "failed";
@@ -1335,7 +1258,7 @@ export async function rewindChatHistory(
     state.handleChatDraftChange(editorText);
     return result;
   } catch (error) {
-    setChatError(state, error instanceof Error ? error.message : String(error));
+    setChatError(state, formatUiError(error));
     scheduleChatScroll(state);
     return null;
   }
@@ -1365,10 +1288,19 @@ export async function switchChatHistoryBranch(
     await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
     return visibleSessionMatches(state, sessionKey, agentParams.agentId);
   } catch (error) {
-    setChatError(state, error instanceof Error ? error.message : String(error));
+    setChatError(state, formatUiError(error));
     scheduleChatScroll(state);
     return false;
   }
+}
+
+/** Branches for the current pane; equivalence covers alias-canonicalization windows (#124020 class). */
+export function displayedChatSessionBranches(
+  state: Pick<ChatState, "chatBranches" | "chatBranchesSessionKey" | "sessionKey">,
+): SessionBranch[] {
+  return areUiSessionKeysEquivalent(state.chatBranchesSessionKey, state.sessionKey)
+    ? (state.chatBranches ?? [])
+    : [];
 }
 
 export async function loadChatBranches(state: ChatState): Promise<void> {
@@ -1378,17 +1310,10 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
   if (!sessions?.listBranches || !client || !state.connected) {
     return;
   }
-  if (isGatewayMethodAdvertised(state, "sessions.branches.list") === false) {
-    state.chatBranches = [];
-    state.chatBranchesSessionKey = sessionKey;
-    state.chatBranchesConnectionEpoch = state.connectionEpoch;
-    return;
-  }
   const requests = getChatHistoryPaneRequests(state);
   const version = ++requests.branchVersion;
   const connectionEpoch = state.connectionEpoch;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  state.chatBranchesLoading = true;
   try {
     const branches = await sessions.listBranches(sessionKey, agentParams);
     if (
@@ -1404,19 +1329,11 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
     state.chatBranchesSessionKey = sessionKey;
     state.chatBranchesConnectionEpoch = connectionEpoch;
   } catch {
-    if (
-      requests.branchVersion === version &&
-      state.client === client &&
-      state.connectionEpoch === connectionEpoch &&
-      visibleSessionMatches(state, sessionKey, agentParams.agentId)
-    ) {
-      state.chatBranches = [];
-      state.chatBranchesSessionKey = sessionKey;
-      state.chatBranchesConnectionEpoch = connectionEpoch;
-    }
+    // Leave chatBranchesSessionKey unset so the next history load retries;
+    // recording success here latched transient failures into a permanently
+    // hidden branch dropdown with no visible outcome.
   } finally {
     if (requests.branchVersion === version) {
-      state.chatBranchesLoading = false;
       state.requestUpdate?.();
     }
   }
@@ -1433,12 +1350,17 @@ export async function loadChatHistory(
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
-  const startupAdvertised = isGatewayMethodAdvertised(state, "chat.startup");
-  const method =
-    opts.startup === true && startupAdvertised !== false ? "chat.startup" : "chat.history";
+  const method = opts.startup === true ? "chat.startup" : "chat.history";
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
-  const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
+  const deltaCursor = state.chatMessagesBySession
+    ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
+        sessionKey,
+        agentId: requestAgentId,
+      })?.deltaCursor
+    : undefined;
+  const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
+  const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000${requestModeKey}`;
   const requests = getChatHistoryPaneRequests(state);
   const inFlight = requests.inFlightHistory;
   // Live events replace the rendered array while their snapshot is pending;
@@ -1452,7 +1374,7 @@ export async function loadChatHistory(
   }
   if (
     opts.deferBranches !== true &&
-    (state.chatBranchesSessionKey !== sessionKey ||
+    (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, sessionKey) ||
       state.chatBranchesConnectionEpoch !== connectionEpoch)
   ) {
     void loadChatBranches(state);
@@ -1464,6 +1386,7 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     method,
+    deltaCursor,
   ).finally(() => {
     if (requests.inFlightHistory?.promise === promise) {
       requests.inFlightHistory = undefined;
@@ -1520,9 +1443,11 @@ export function applyChatAgentsList(
   if (!agentsList || state.client !== client || !state.connected) {
     return;
   }
+  if (state.onAgentsList && !state.onAgentsList(agentsList, client)) {
+    return;
+  }
   state.agentsList = agentsList;
   state.agentsError = null;
-  state.onAgentsList?.(agentsList, client);
   const selectedId =
     typeof state.agentsSelectedId === "string" && state.agentsSelectedId.trim()
       ? normalizeAgentId(state.agentsSelectedId)
@@ -1543,6 +1468,7 @@ async function loadChatHistoryUncached(
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
+  deltaCursor: string | undefined,
 ): Promise<ChatHistoryResult | undefined> {
   const ownership = beginChatHistoryRequest(
     state,
@@ -1576,15 +1502,17 @@ async function loadChatHistoryUncached(
   state.chatLoading = true;
   setChatError(state, null);
   try {
-    const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
-    const res = await requestSharedChatHistory(
+    const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
+    const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000${requestModeKey}`;
+    let response = await requestSharedChatHistory(
       client,
       requestKey,
       method,
       sessionKey,
       requestAgentId,
-      state as object,
+      state,
       () => shouldApplyChatHistoryResult(state, ownership),
+      deltaCursor,
     );
     if (!shouldApplyChatHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
@@ -1595,6 +1523,62 @@ async function loadChatHistoryUncached(
       });
       return undefined;
     }
+    if (isChatHistoryCursorResult(response) && response.kind === "reset") {
+      clearCachedChatDeltaCursor(state, sessionKey, requestAgentId);
+      const pageRequestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000page`;
+      response = await requestSharedChatHistory(
+        client,
+        pageRequestKey,
+        method,
+        sessionKey,
+        requestAgentId,
+        state,
+        () => shouldApplyChatHistoryResult(state, ownership),
+      );
+      if (!shouldApplyChatHistoryResult(state, ownership)) {
+        recordChatHistoryTiming(state, "stale", startedAtMs, {
+          requestSessionKey: sessionKey,
+          requestAgentId,
+          previousRunId,
+          reason: "reset-fallback-version",
+        });
+        return undefined;
+      }
+    }
+    if (isChatHistoryCursorResult(response) && response.kind === "delta") {
+      const runActive = isSessionRunActive(response.sessionInfo);
+      for (const payload of response.messages) {
+        applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
+      }
+      applyChatAgentsList(state, response.agentsList, client);
+      if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
+        state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
+      }
+      state.currentSessionId = response.sessionInfo.sessionId?.trim() || previousSessionId;
+      state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
+      state.chatQueueModeOverride = response.sessionInfo.queueMode;
+      state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
+      replaceCachedChatMessages(state, sessionKey, requestAgentId, response.deltaCursor);
+      recordChatHistoryTiming(state, "applied", startedAtMs, {
+        requestSessionKey: sessionKey,
+        requestAgentId,
+        previousRunId,
+        messageCount: response.messages.length,
+        visibleMessageCount: response.messages.length,
+        resetStream: false,
+      });
+      return {
+        messages: state.chatMessages,
+        deltaCursor: response.deltaCursor,
+        sessionInfo: response.sessionInfo,
+        ...(response.agentsList ? { agentsList: response.agentsList } : {}),
+        ...(response.metadata ? { metadata: response.metadata } : {}),
+      };
+    }
+    if (isChatHistoryCursorResult(response)) {
+      throw new Error("chat history page request returned a cursor reset");
+    }
+    const res = response;
     // Fence concurrent run lifecycle before applying the response. A remount
     // may replace the map itself, so compare its canonical run entries.
     const runProjectionsBeforeApply = getChatSessionProjection(
@@ -1662,12 +1646,11 @@ async function loadChatHistoryUncached(
       },
     );
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
-      state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
+      state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
-    retireHistoryProvenSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
-    replaceCachedChatMessages(state, sessionKey, requestAgentId);
+    replaceCachedChatMessages(state, sessionKey, requestAgentId, res.deltaCursor);
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId
@@ -1678,8 +1661,7 @@ async function loadChatHistoryUncached(
     state.chatVerboseLevel = res.verboseLevel ?? null;
     state.chatQueueModeOverride = res.sessionInfo?.queueMode;
     state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
-    const planStatusBeforeStreamReset = state.planStatus ?? null;
-    const activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
+    let activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
@@ -1693,6 +1675,9 @@ async function loadChatHistoryUncached(
         state,
         streamReconciliation,
       );
+      if (pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation)) {
+        activeStreamBeforeReset = state.chatStream;
+      }
       const liveToolIds = currentLiveToolCallIds(state);
       if (state.chatRunId && (hasVisibleStream || liveToolIds.length > 0)) {
         state.chatRunStartup = { state: "activity", runId: state.chatRunId };
@@ -1809,6 +1794,14 @@ async function loadChatHistoryUncached(
       const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
       state.chatStream = tail;
       state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
+      const persistedBoundary = latestPersistedSteerBoundary(state.chatMessages, inFlightRunId);
+      if (tail && persistedBoundary) {
+        markChatStreamAfterBoundary(state, {
+          runId: inFlightRunId,
+          boundaryRunId: persistedBoundary.runId,
+          timestamp: state.chatStreamStartedAt,
+        });
+      }
       state.chatRunStartup = { state: "activity", runId: inFlightRunId };
       // Disconnect cleanup intentionally removes transient activity rows while
       // retaining the owned run. Replay fills that gap; per-identity sequence
@@ -1816,14 +1809,6 @@ async function loadChatHistoryUncached(
       replayInFlightRunEvents(state, res.inFlightRun);
     }
 
-    // Plan reconciliation shares stream adoption: rejected history cannot clobber newer live state.
-    // A missing plan is version-skew unknown; replacement or explicit terminal evidence clears it.
-    state.planStatus = reconcileHistoryPlanStatus({
-      canAdoptRunSnapshot: resetStream,
-      inFlightRun: res.inFlightRun,
-      retainedPlan: planStatusBeforeStreamReset,
-      sessionInfo: res.sessionInfo,
-    });
     recordChatHistoryTiming(state, "applied", startedAtMs, {
       requestSessionKey: sessionKey,
       requestAgentId,
@@ -1854,7 +1839,7 @@ async function loadChatHistoryUncached(
       state.chatVerboseLevel = null;
       setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
-      setChatError(state, String(err));
+      setChatError(state, formatUiError(err));
     }
   } finally {
     if (ownsChatHistoryRequest(state, ownership)) {

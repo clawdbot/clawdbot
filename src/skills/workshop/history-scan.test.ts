@@ -26,11 +26,9 @@ import {
   isSkillHistoryScanLocalTranscriptSizeEligible,
   prepareSkillHistoryScanReviewMessages,
 } from "./history-scan-transcript-content.js";
-import {
-  collectSkillHistoryScanBatch,
-  resolveSkillHistoryScanTranscriptBudget,
-} from "./history-scan-transcript.js";
+import { collectSkillHistoryScanBatch } from "./history-scan-transcript.js";
 import { runSkillHistoryScan } from "./history-scan.js";
+import { resolveSkillWorkshopProjectionBudgets } from "./model-context-budget.js";
 
 function summary(sessionKey: string, overrides: Partial<SessionEntrySummary["entry"]> = {}) {
   return {
@@ -226,9 +224,9 @@ describe("Skill Workshop history scan", () => {
   });
 
   it("bounds transcript input against the selected model context", () => {
-    expect(resolveSkillHistoryScanTranscriptBudget(undefined)).toBe(2_867);
-    expect(resolveSkillHistoryScanTranscriptBudget(32_768)).toBe(11_468);
-    expect(resolveSkillHistoryScanTranscriptBudget(1_000_000)).toBe(80_000);
+    expect(resolveSkillWorkshopProjectionBudgets(undefined).historyTranscriptChars).toBe(2_867);
+    expect(resolveSkillWorkshopProjectionBudgets(32_768).historyTranscriptChars).toBe(11_468);
+    expect(resolveSkillWorkshopProjectionBudgets(1_000_000).historyTranscriptChars).toBe(80_000);
   });
 
   it("redacts complete multiline secrets before transcript truncation", () => {
@@ -450,6 +448,7 @@ describe("Skill Workshop history scan", () => {
     await expect(
       collectSkillHistoryScanBatch({
         candidates: [candidate],
+        maxTranscriptChars: resolveSkillWorkshopProjectionBudgets().historyTranscriptChars,
         readSession: async () => {
           throw new Error("transient read failure");
         },
@@ -467,6 +466,7 @@ describe("Skill Workshop history scan", () => {
     let activeCheck = 0;
     const batch = await collectSkillHistoryScanBatch({
       candidates: [candidate],
+      maxTranscriptChars: resolveSkillWorkshopProjectionBudgets().historyTranscriptChars,
       isSessionActive: () => ++activeCheck === 2,
       readSession: async () => ({
         instanceId: candidate.instanceId,
@@ -497,6 +497,7 @@ describe("Skill Workshop history scan", () => {
     ];
     const batch = await collectSkillHistoryScanBatch({
       candidates,
+      maxTranscriptChars: resolveSkillWorkshopProjectionBudgets().historyTranscriptChars,
       isSessionActive: (candidate) => candidate.instanceId === "running",
       readSession: async (candidate) => ({
         instanceId: candidate.instanceId,

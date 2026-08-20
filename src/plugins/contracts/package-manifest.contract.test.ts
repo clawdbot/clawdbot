@@ -1,5 +1,5 @@
-import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
+import { describePackageManifestContract } from "../../plugin-sdk/test-helpers/package-manifest-contract.js";
 import { validatePackageExtensionEntriesForInstall } from "../package-entry-resolution.js";
 import {
   getPackageManifestMetadata,

@@ -321,6 +321,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 1,
           passed: 1,
@@ -334,6 +335,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       telegramSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 1,
           passed: 1,
@@ -487,6 +489,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
         scenarios: [optionalScenario],
       }),
@@ -507,6 +510,87 @@ describe("qa cli runtime", () => {
     );
   });
 
+  it("rejects a direct suite summary with unaccounted outcomes", async () => {
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        run: { status: "completed" },
+        counts: { total: 2, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [{ status: "pass" }],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+      }),
+    );
+
+    await expect(runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" })).rejects.toMatchObject({
+      code: "summary_counts_invalid",
+    });
+  });
+
+  it("rejects a direct suite summary whose canonical evidence contradicts its counts", async () => {
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        run: { status: "completed" },
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [{ status: "pass" }],
+        evidence: { entries: [{ result: { status: "fail" } }] },
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+      }),
+    );
+
+    await expect(runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" })).rejects.toMatchObject({
+      code: "summary_counts_invalid",
+    });
+  });
+
+  it("accepts a passing scenario with lower-level blocked and passing producer checks", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        run: { status: "completed" },
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [{ status: "pass" }],
+        evidence: {
+          entries: [{ result: { status: "blocked" } }, { result: { status: "pass" } }],
+        },
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
   it("keeps a direct suite green for a real pass and a report-only optional tool skip", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
@@ -518,6 +602,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
         scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
       }),
@@ -550,6 +635,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
         scenarios: [optionalScenario],
       }),
@@ -615,6 +701,7 @@ describe("qa cli runtime", () => {
         await fs.writeFile(
           suiteSummaryPath,
           JSON.stringify({
+            run: { status: "completed" },
             counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
             scenarios: [],
           }),
@@ -624,12 +711,11 @@ describe("qa cli runtime", () => {
         await fs.writeFile(
           suiteSummaryPath,
           JSON.stringify({
-            counts: {
-              total: 1,
-              passed: 0,
-              failed: 0,
-              skipped: summary === "required-skip" ? 1 : 0,
-            },
+            run: { status: "completed" },
+            counts:
+              summary === "required-skip"
+                ? { total: 1, passed: 0, failed: 0, skipped: 1 }
+                : { total: 1 },
             scenarios: [
               {
                 name: "Required channel scenario",
@@ -910,6 +996,7 @@ describe("qa cli runtime", () => {
       await fs.writeFile(
         suiteSummaryPath,
         JSON.stringify({
+          run: { status: "completed" },
           counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
           scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
         }),
@@ -1689,6 +1776,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       telegramSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { total: 1, passed: 1, failed: 0 },
         scenarios: [{ status: "fail" }],
       }),
@@ -1717,6 +1805,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       telegramSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { total: 1, passed: 0, failed: 1 },
         scenarios: [{ status: "fail" }],
       }),
@@ -1780,6 +1869,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 1,
           passed: 0,
@@ -1812,6 +1902,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
         scenarios: [
           {
@@ -1851,6 +1942,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
         scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
       }),
@@ -1878,6 +1970,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
         scenarios: [
           {
@@ -1913,6 +2006,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 1,
           passed: 0,
@@ -1946,6 +2040,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 1,
           passed: 0,
@@ -2044,6 +2139,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 1,
           passed: 0,
@@ -2108,6 +2204,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 1,
           passed: 0,
@@ -2140,6 +2237,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 1,
           passed: 0,
@@ -2364,6 +2462,7 @@ describe("qa cli runtime", () => {
       await fs.writeFile(
         path.join(repoRoot, "candidate.json"),
         JSON.stringify({
+          run: { status: "completed" },
           scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
         }),
         "utf8",
@@ -2371,6 +2470,7 @@ describe("qa cli runtime", () => {
       await fs.writeFile(
         path.join(repoRoot, "baseline.json"),
         JSON.stringify({
+          run: { status: "completed" },
           scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
         }),
         "utf8",
@@ -2435,6 +2535,7 @@ describe("qa cli runtime", () => {
           ],
           counts: { total: 1, passed: 1, failed: 0 },
           run: {
+            status: "completed",
             providerMode: "mock-openai",
             primaryModel: "openai/gpt-5.6-luna",
             runtimePair: ["openclaw", "codex"],
@@ -2510,6 +2611,7 @@ describe("qa cli runtime", () => {
           ],
           counts: { total: 1, passed: 1, failed: 0 },
           run: {
+            status: "completed",
             providerMode: "live-frontier",
             primaryModel: "openai/gpt-5.6-luna",
             runtimePair: ["openclaw", "codex"],
@@ -2604,6 +2706,27 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "codex-native-workspace");
   });
 
+  it("rejects null tool coverage summary JSON", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-tool-coverage-null-"));
+    await fs.writeFile(path.join(repoRoot, "runtime-summary.json"), "null\n", "utf8");
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await expect(
+        runQaCoverageReportCommand({
+          repoRoot,
+          tools: true,
+          summary: "runtime-summary.json",
+          json: true,
+        }),
+      ).rejects.toMatchObject({ code: "summary_not_completed" });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("writes a curated mock JSONL replay report and summary", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-jsonl-replay-cli-"));
     try {
@@ -2691,7 +2814,7 @@ describe("qa cli runtime", () => {
               },
             },
           ],
-          run: { runtimePair: ["openclaw", "codex"] },
+          run: { status: "completed", runtimePair: ["openclaw", "codex"] },
         }),
         "utf8",
       );
@@ -2993,6 +3116,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       summaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 2,
           passed: 1,
@@ -3032,6 +3156,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       summaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 2,
           passed: 1,
@@ -3062,6 +3187,38 @@ describe("qa cli runtime", () => {
       expect(process.exitCode).toBe(1);
     } finally {
       process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a running multipass summary", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
+    const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
+    await fs.writeFile(
+      summaryPath,
+      JSON.stringify({
+        run: { status: "running" },
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [{ status: "pass" }],
+      }),
+      "utf8",
+    );
+    runQaMultipass.mockResolvedValueOnce({
+      outputDir: repoRoot,
+      reportPath: path.join(repoRoot, "qa-suite-report.md"),
+      summaryPath,
+      hostLogPath: path.join(repoRoot, "multipass-host.log"),
+      bootstrapLogPath: path.join(repoRoot, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(repoRoot, "multipass-guest-run.sh"),
+      vmName: "openclaw-qa-test",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    try {
+      await expect(
+        runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo", runner: "multipass" }),
+      ).rejects.toMatchObject({ code: "summary_not_completed" });
+    } finally {
       await fs.rm(repoRoot, { recursive: true, force: true });
     }
   });
@@ -3122,7 +3279,11 @@ describe("qa cli runtime", () => {
   it("rejects partial multipass summary JSON without failure fields", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
     const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
-    await fs.writeFile(summaryPath, JSON.stringify({ counts: { total: 2, passed: 2 } }), "utf8");
+    await fs.writeFile(
+      summaryPath,
+      JSON.stringify({ run: { status: "completed" }, counts: { total: 2, passed: 2 } }),
+      "utf8",
+    );
     runQaMultipass.mockResolvedValueOnce({
       outputDir: repoRoot,
       reportPath: path.join(repoRoot, "qa-suite-report.md"),
@@ -3154,6 +3315,7 @@ describe("qa cli runtime", () => {
     await fs.writeFile(
       summaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: {
           total: 2,
           passed: 1,

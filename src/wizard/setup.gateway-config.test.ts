@@ -70,7 +70,6 @@ describe("configureGatewayForSetup", () => {
       token: undefined,
       password: undefined,
       customBindHost: undefined,
-      tailscaleResetOnExit: false,
     };
   }
 
@@ -220,7 +219,6 @@ describe("configureGatewayForSetup", () => {
           token: undefined,
           password: undefined,
           customBindHost: undefined,
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -475,7 +473,6 @@ describe("configureGatewayForSetup", () => {
         gatewayToken: "unused-token",
         gatewayPassword: password,
         tailscale: "funnel",
-        tailscaleResetOnExit: true,
       },
     );
 
@@ -493,7 +490,7 @@ describe("configureGatewayForSetup", () => {
       port: 19001,
       bind: "loopback",
       auth: { mode: "password", password },
-      tailscale: { mode: "funnel", resetOnExit: true },
+      tailscale: { mode: "funnel" },
     });
     expect(result.nextConfig.gateway?.auth?.token).toBeUndefined();
     expect(JSON.stringify(note.mock.calls)).not.toContain(password);

@@ -31,7 +31,6 @@ import {
   buildOllamaProvider,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
-  isReasoningModelHeuristic,
   isOllamaCloudModel,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
@@ -43,7 +42,7 @@ import {
   inspectOllamaModelsForSetup,
   mergeUniqueModelNames,
   normalizeOllamaModelName,
-  selectAppGuidedOllamaModelId,
+  selectAppGuidedOllamaModelFromDiscovery,
 } from "./setup-model-selection.js";
 import { pullOllamaModel, pullOllamaModelNonInteractive } from "./setup-pull.js";
 
@@ -148,6 +147,7 @@ export async function checkOllamaCloudAuth(
 async function promptForOllamaCloudCredential(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   opts?: Record<string, unknown>;
   prompter: WizardPrompter;
   secretInputMode?: SecretInputMode;
@@ -170,6 +170,7 @@ async function promptForOllamaCloudCredential(params: {
         : params.secretInputMode,
     config: params.cfg,
     env: params.env,
+    workspaceDir: params.workspaceDir,
     expectedProviders: ["ollama"],
     provider: "ollama",
     envLabel: "OLLAMA_API_KEY",
@@ -366,18 +367,9 @@ async function promptAndConfigureHostBackedOllama(params: {
     baseUrl,
     prompter: params.prompter,
   });
-  const localDefaultModelId = selectAppGuidedOllamaModelId(
-    [...discoveredModelsByName.values()].map((model) => ({
-      id: model.name,
-      contextWindow: model.contextWindow,
-      supportsTools: model.capabilities?.includes("tools") === true,
-      reasoning:
-        model.capabilities?.includes("thinking") === true || isReasoningModelHeuristic(model.name),
-      size: model.size,
-    })),
-  );
   const cloudDefaultModelId = suggestedModelNames.find(isOllamaCloudModel);
-  const defaultModelId = localDefaultModelId ?? cloudDefaultModelId;
+  const defaultModelId =
+    selectAppGuidedOllamaModelFromDiscovery(discoveredModelsByName.values()) ?? cloudDefaultModelId;
 
   return {
     ...(defaultModelId ? { defaultModel: `ollama/${defaultModelId}` } : {}),
@@ -393,6 +385,7 @@ async function promptAndConfigureHostBackedOllama(params: {
 export async function promptAndConfigureOllama(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   opts?: Record<string, unknown>;
   prompter: WizardPrompter;
   secretInputMode?: SecretInputMode;
@@ -415,6 +408,7 @@ export async function promptAndConfigureOllama(params: {
     const { credential, credentialMode, discoveryApiKey } = await promptForOllamaCloudCredential({
       cfg: params.cfg,
       env: params.env,
+      workspaceDir: params.workspaceDir,
       opts: params.opts,
       prompter: params.prompter,
       secretInputMode: params.secretInputMode,
@@ -485,6 +479,7 @@ export async function configureOllamaNonInteractive(params: {
 
   const requestedDefaultModelId =
     explicitModel ??
+    selectAppGuidedOllamaModelFromDiscovery(discoveredModelsByName.values()) ??
     expectDefined(OLLAMA_SUGGESTED_MODELS_LOCAL[0], "default suggested Ollama model");
   const availableModelNames = new Set(modelNames);
   const availableDefaultModelId = findAvailableOllamaModelName(

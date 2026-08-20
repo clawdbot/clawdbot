@@ -1,6 +1,7 @@
 name: Vitest Cache Warm
 
 on:
+  workflow_dispatch:
   repository_dispatch:
     types: [vitest-cache-warm]
   schedule:
@@ -18,7 +19,7 @@ jobs:
     # Dependency snapshots are serialized before main CI fanout. This workflow
     # writes only the transform and compile caches from scheduled/trusted runs.
     if: github.repository == 'openclaw/openclaw'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -57,4 +58,9 @@ jobs:
           EOF
 
       - name: Warm transform and compile caches
+        env:
+          # Match the CI shard lanes running the same envelopes: without the
+          # raised ceiling a heavy suite's worker can die under default heap
+          # (run 31874567859), skipping every cache save for the day.
+          NODE_OPTIONS: --max-old-space-size=8192
         run: node --import tsx scripts/ci-run-node-test-shard.mts

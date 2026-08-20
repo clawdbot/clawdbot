@@ -1,11 +1,12 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
-import { OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
+import { normalizeOllamaCloudModelId, OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
 import {
   buildDefaultOllamaCloudModelDefinition,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isReasoningModelHeuristic,
   readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
@@ -77,7 +78,7 @@ export function orderPreferredOllamaModelIds(modelIds: Iterable<string>): string
   return ordered;
 }
 
-export function selectAppGuidedOllamaModelId(
+function selectAppGuidedOllamaModelId(
   models: Iterable<{
     id: string;
     contextWindow?: number;
@@ -103,6 +104,21 @@ export function selectAppGuidedOllamaModelId(
   return orderPreferredOllamaModelIds(fastest.map((model) => model.id))[0];
 }
 
+export function selectAppGuidedOllamaModelFromDiscovery(
+  models: Iterable<OllamaModelWithContext>,
+): string | undefined {
+  return selectAppGuidedOllamaModelId(
+    [...models].map((model) => ({
+      id: model.name,
+      contextWindow: model.contextWindow,
+      supportsTools: model.capabilities?.includes("tools") === true,
+      reasoning:
+        model.capabilities?.includes("thinking") === true || isReasoningModelHeuristic(model.name),
+      size: model.size,
+    })),
+  );
+}
+
 export function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
@@ -110,8 +126,13 @@ export function buildOllamaModelsConfig(
 ) {
   return modelNames.map((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    const defaultModel = defaultModels.find((model) => model.id === name);
-    if (defaultModel && !discovered) {
+    // Cloud suggestions arrive suffixed (`kimi-k3:cloud`); the default table is keyed bare.
+    // Match through the suffix for context/capabilities, but keep the requested id: the
+    // suffixed spelling is what gets written into config.
+    const defaultModel = defaultModels.find(
+      (model) => model.id === normalizeOllamaCloudModelId(name),
+    );
+    if (defaultModel && !discovered && defaultModel.id === name) {
       return buildDefaultOllamaCloudModelDefinition(defaultModel);
     }
     const capabilities =

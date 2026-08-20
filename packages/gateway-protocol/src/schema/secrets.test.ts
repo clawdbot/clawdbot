@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  SecretsStoreDeleteParamsSchema,
   SecretsStoreListResultSchema,
   SecretsStoreMutationResultSchema,
   SecretsStoreSetParamsSchema,
@@ -20,7 +21,7 @@ describe("secret store protocol schemas", () => {
     expect(
       Value.Check(SecretsStoreListResultSchema, {
         entries: [
-          { ...metadata, kind: "secret" },
+          { ...metadata, kind: "secret", allowedHosts: ["api.example.com"] },
           { ...metadata, name: "SERVICE_URL", kind: "env", value: "https://service.test" },
         ],
       }),
@@ -43,6 +44,27 @@ describe("secret store protocol schemas", () => {
         name: "SERVICE_API_KEY",
         value: "value",
         kind: "secret",
+        allowedHosts: ["api.example.com"],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SecretsStoreSetParamsSchema, {
+        name: "SERVICE_API_KEY",
+        value: "value",
+        kind: "secret",
+        allowedHosts: ["api.example.com", "api.example.com"],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(SecretsStoreSetParamsSchema, {
+        name: "github-setup-11111111111111111111111111111111",
+        value: "value",
+        kind: "secret",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SecretsStoreDeleteParamsSchema, {
+        name: "github-setup-11111111111111111111111111111111",
       }),
     ).toBe(true);
     expect(
@@ -52,6 +74,7 @@ describe("secret store protocol schemas", () => {
         kind: "secret",
       }),
     ).toBe(false);
+    expect(Value.Check(SecretsStoreDeleteParamsSchema, { name: "github-setup-token" })).toBe(false);
     expect(
       Value.Check(SecretsStoreMutationResultSchema, {
         ok: true,

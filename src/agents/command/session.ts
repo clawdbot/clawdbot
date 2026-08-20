@@ -33,7 +33,7 @@ import {
   resolvePersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
 } from "../../config/sessions/session-store-owner.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   classifySessionKeyShape,
@@ -58,8 +58,8 @@ import { transitionMainSessionRecovery } from "../main-session-recovery/main-ses
 type SessionResolution = {
   sessionId: string;
   sessionKey?: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionEntry?: InternalSessionEntry;
+  sessionStore?: Record<string, InternalSessionEntry>;
   storePath: string;
   isNewSession: boolean;
   previousSessionId?: string;
@@ -70,11 +70,11 @@ type SessionResolution = {
 type SessionKeyResolution = {
   agentId?: string;
   sessionKey?: string;
-  sessionStore: Record<string, SessionEntry>;
+  sessionStore: Record<string, InternalSessionEntry>;
   storePath: string;
 };
 
-export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
+export function clearRotatedSessionMetadata(entry: InternalSessionEntry): InternalSessionEntry {
   const next = {
     ...entry,
     sessionFile: undefined,
@@ -104,6 +104,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     restartRecoveryTerminalRunIds: undefined,
     sessionStartedAt: undefined,
     sessionDiffBaseline: undefined,
+    sessionDiffBaselineCapture: undefined,
     lastInteractionAt: undefined,
     pendingTranscriptRepair: undefined,
   };
@@ -119,7 +120,7 @@ type SessionIdMatchSet = {
 
 type SessionIdMatchCandidate = {
   sessionKey: string;
-  entry: SessionEntry;
+  entry: InternalSessionEntry;
   resolution: SessionKeyResolution;
   primary: boolean;
 };
@@ -153,7 +154,7 @@ function loadCommandSessionStore(params: {
   agentId?: string;
   clone?: boolean;
   storePath: string;
-}): Record<string, SessionEntry> {
+}): Record<string, InternalSessionEntry> {
   return Object.fromEntries(
     listSessionEntriesCore({
       storePath: params.storePath,
@@ -173,7 +174,7 @@ export function buildExplicitSessionIdSessionKey(params: {
 
 function collectSessionIdMatchesForRequest(opts: {
   cfg: OpenClawConfig;
-  sessionStore: Record<string, SessionEntry>;
+  sessionStore: Record<string, InternalSessionEntry>;
   storePath: string;
   storeAgentId?: string;
   sessionId: string;
@@ -196,7 +197,7 @@ function collectSessionIdMatchesForRequest(opts: {
   }
 
   const addMatches = (
-    candidateStore: Record<string, SessionEntry>,
+    candidateStore: Record<string, InternalSessionEntry>,
     candidateStorePath: string,
     candidateAgentId: string | undefined,
     options?: { primary?: boolean },

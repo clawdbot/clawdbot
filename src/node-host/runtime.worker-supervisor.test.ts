@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  NODE_WORKER_SUPERVISOR_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../infra/node-commands.js";
@@ -22,7 +22,6 @@ vi.mock("../infra/path-env.js", () => ({
 
 vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(async () => ({
-    configuredServerCount: 0,
     descriptors: [],
     callMcpTool: vi.fn(),
     close: vi.fn(async () => undefined),
@@ -77,14 +76,28 @@ describe("node-host runtime worker supervisor lifetime", () => {
       return {} as T;
     };
     const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false } } },
+      config: {
+        nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } },
+      },
       env: { ...fixture.env, PATH: process.env.PATH },
+      enableWorkerRuns: true,
       platform: "linux",
     });
     expect(prepared.manifest.commands).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_SUPERVISOR_COMMANDS]),
+      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
     );
-    const runtime = prepared.start({ client: { request } });
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
+    const runtime = prepared.start({
+      client: { request },
+      onRunnerCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
+    });
+    await vi.waitFor(() =>
+      expect(capacitySnapshots).toEqual([
+        { total: 2, available: 0 },
+        { total: 2, available: 2 },
+      ]),
+    );
+    runtime.updateGatewayConnection({ url: "ws://127.0.0.1:18789" });
     const store = new NodeWorkerLaunchStore({ env: fixture.env });
 
     try {

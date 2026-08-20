@@ -27,6 +27,7 @@ describe("ModelSetupWizardRunner", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => "research",
       onChange: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
@@ -34,6 +35,12 @@ describe("ModelSetupWizardRunner", () => {
     });
 
     await runner.start("openai-oauth");
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "openclaw.setup.auth.start",
+      { sessionId: expect.any(String), agentId: "research", authChoice: "openai-oauth" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(runner.state).toMatchObject({ phase: "step" });
     const answer = runner.answer(undefined, false);
     void runner.answer(undefined, false);
@@ -57,13 +64,14 @@ describe("ModelSetupWizardRunner", () => {
         return Promise.resolve({ sessionId: "session-1", done: false, status: "running" });
       }
       if (method === "wizard.next") {
-        return Promise.reject(new Error("wizard unavailable"));
+        return Promise.reject(new Error("wizard unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
       }
       return Promise.resolve({ ok: true });
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => null,
       onChange: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
@@ -71,7 +79,10 @@ describe("ModelSetupWizardRunner", () => {
     });
 
     await runner.start("openai-oauth");
-    expect(runner.state).toEqual({ phase: "error", message: "wizard unavailable" });
+    expect(runner.state).toEqual({
+      phase: "error",
+      message: "wizard unavailable: OPENAI_API_KEY=sk-123...cdef",
+    });
     expect(request).toHaveBeenCalledWith(
       "wizard.cancel",
       { sessionId: expect.any(String) },
@@ -95,6 +106,7 @@ describe("ModelSetupWizardRunner", () => {
     });
     const runner = new ModelSetupWizardRunner({
       getClient: () => ({ request }) as unknown as GatewayBrowserClient,
+      getAgentId: () => null,
       onChange: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
@@ -147,6 +159,7 @@ describe("ModelSetupWizardRunner", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => null,
       onChange: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
@@ -201,6 +214,7 @@ describe("ModelSetupWizardRunner", () => {
     const seen: string[] = [];
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => null,
       onChange: (state) => {
         if (state.phase === "step" && state.step.type === "progress") {
           seen.push(state.step.message ?? "");

@@ -7,6 +7,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import {
   ReefInboxConnection,
+  ReefProtocolCompatibilityError,
   ReefRelayError,
   ReefTransportClient,
   createReefWebSocket,
@@ -37,6 +38,18 @@ function createClient(
   baseUrl = "https://relay.example",
 ): ReefTransportClient {
   return new ReefTransportClient(baseUrl, "alice", keys, fetcher, clock);
+}
+
+function pendingFriend(peer = "bob"): RelayFriend {
+  return {
+    peer,
+    status: "pending",
+    initiated_by: peer,
+    vouching_mutual: null,
+    ed25519_pub: "B".repeat(43),
+    x25519_pub: "C".repeat(43),
+    key_epoch: 2,
+  };
 }
 
 afterEach(() => {
@@ -172,18 +185,10 @@ describe("ReefTransportClient device authentication", () => {
     const calls: RequestInit[] = [];
     const fetcher: typeof fetch = async (_input, init) => {
       calls.push(init ?? {});
-      return Response.json({ peer: "bob", status: "active" });
+      return Response.json({ peer: "bob", status: "active", future: "ignored" });
     };
     const client = createClient(fetcher);
-    const friend: RelayFriend = {
-      peer: "bob",
-      status: "pending",
-      initiated_by: "bob",
-      vouching_mutual: null,
-      ed25519_pub: "B".repeat(43),
-      x25519_pub: "C".repeat(43),
-      key_epoch: 2,
-    };
+    const friend = pendingFriend();
 
     await expect(client.respondFriend(friend, true)).resolves.toEqual({
       peer: "bob",
@@ -196,6 +201,83 @@ describe("ReefTransportClient device authentication", () => {
       expected_ed25519_pub: "B".repeat(43),
       expected_x25519_pub: "C".repeat(43),
     });
+  });
+
+  it("diagnoses an outdated relay without retrying or downgrading the signed request", async () => {
+    const calls: RequestInit[] = [];
+    const fetcher: typeof fetch = async (_input, init) => {
+      calls.push(init ?? {});
+      return Response.json({ error: "invalid_request" }, { status: 400 });
+    };
+    const client = createClient(fetcher);
+    const friend = pendingFriend();
+
+    const error = await client.respondFriend(friend, true).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReefRelayError);
+    expect(error).toBeInstanceOf(ReefProtocolCompatibilityError);
+    expect(error).toMatchObject({
+      status: 400,
+      code: "invalid_request",
+      upgradeRequired: "reef-relay",
+      message:
+        "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
+    });
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode(calls[0]?.body as Uint8Array))).toEqual({
+      peer: "bob",
+      accept: true,
+      expected_key_epoch: 2,
+      expected_ed25519_pub: "B".repeat(43),
+      expected_x25519_pub: "C".repeat(43),
+    });
+  });
+
+  it("diagnoses an outdated OpenClaw client from the current relay response", async () => {
+    const client = createClient(async () =>
+      Response.json({ error: "client_upgrade_required" }, { status: 409 }),
+    );
+
+    const error = await client
+      .respondFriend(pendingFriend(), true)
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReefRelayError);
+    expect(error).toBeInstanceOf(ReefProtocolCompatibilityError);
+    expect(error).toMatchObject({
+      status: 409,
+      code: "client_upgrade_required",
+      upgradeRequired: "openclaw-client",
+      message:
+        "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
+    });
+  });
+
+  it.each([
+    { name: "an empty 204", response: () => new Response(null, { status: 204 }), accept: true },
+    { name: "a primitive", response: () => Response.json("active"), accept: true },
+    { name: "a malformed object", response: () => Response.json({ peer: "bob" }), accept: true },
+    {
+      name: "a different peer",
+      response: () => Response.json({ peer: "mallory", status: "active" }),
+      accept: true,
+    },
+    {
+      name: "the wrong accepted status",
+      response: () => Response.json({ peer: "bob", status: "blocked" }),
+      accept: true,
+    },
+    {
+      name: "the wrong rejected status",
+      response: () => Response.json({ peer: "bob", status: "active" }),
+      accept: false,
+    },
+  ])("rejects $name before friendship trust can be committed", async ({ response, accept }) => {
+    const client = createClient(async () => response());
+
+    await expect(client.respondFriend(pendingFriend(), accept)).rejects.toThrow(
+      "invalid Reef relay friendship response",
+    );
   });
 
   it("bumps ts monotonically so identical same-second requests never share a replay key", async () => {
@@ -306,7 +388,7 @@ describe("ReefTransportClient response body bounds", () => {
 
     const error = await client.requestFriend("bob", "code").catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(ReefRelayError);
-    expect(error).toMatchObject({ status: 400 });
+    expect(error).toMatchObject({ status: 400, code: undefined });
     expect((error as Error).message).toHaveLength(ERROR_RESPONSE_MAX_BYTES - 12);
     expect(Buffer.byteLength(body)).toBe(ERROR_RESPONSE_MAX_BYTES);
   });
@@ -322,6 +404,7 @@ describe("ReefTransportClient response body bounds", () => {
       name: "ReefRelayError",
       status: 503,
       message: "relay HTTP 503",
+      code: undefined,
     });
     expect(offered.state.cancelled).toBe(true);
     expect(offered.state.emittedBytes).toBeGreaterThan(64 * 1024);
@@ -335,6 +418,18 @@ describe("ReefTransportClient response body bounds", () => {
       name: "ReefRelayError",
       status: 502,
       message: "relay HTTP 502",
+      code: undefined,
+    });
+  });
+
+  it("keeps the status fallback when parsed error JSON has no relay code", async () => {
+    const client = createClient(async () => Response.json({ detail: "ignored" }, { status: 400 }));
+
+    await expect(client.requestFriend("bob")).rejects.toMatchObject({
+      name: "ReefRelayError",
+      status: 400,
+      message: "relay HTTP 400",
+      code: undefined,
     });
   });
 });

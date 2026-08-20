@@ -1,4 +1,5 @@
 // Session store migrations repair legacy field names during load/save normalization.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionEntry } from "./types.js";
 
 /** Applies best-effort in-place migrations for legacy session store entry fields. */
@@ -9,25 +10,28 @@ export function applySessionStoreMigrations(store: Record<string, SessionEntry>)
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const rec = entry as unknown as Record<string, unknown>;
-    if (typeof rec.channel !== "string" && typeof rec.provider === "string") {
-      rec.channel = rec.provider;
-      delete rec.provider;
+    const rec = asOptionalRecord(entry);
+    if (!rec) {
+      continue;
+    }
+    if (typeof rec["channel"] !== "string" && typeof rec["provider"] === "string") {
+      rec["channel"] = rec["provider"];
+      delete rec["provider"];
       changed = true;
     }
-    if (typeof rec.lastChannel !== "string" && typeof rec.lastProvider === "string") {
-      rec.lastChannel = rec.lastProvider;
-      delete rec.lastProvider;
+    if (typeof rec["lastChannel"] !== "string" && typeof rec["lastProvider"] === "string") {
+      rec["lastChannel"] = rec["lastProvider"];
+      delete rec["lastProvider"];
       changed = true;
     }
 
     // Best-effort migration: legacy `room` field → `groupChannel` (keep value, prune old key).
-    if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
-      rec.groupChannel = rec.room;
-      delete rec.room;
+    if (typeof rec.groupChannel !== "string" && typeof rec["room"] === "string") {
+      rec.groupChannel = rec["room"];
+      delete rec["room"];
       changed = true;
     } else if ("room" in rec) {
-      delete rec.room;
+      delete rec["room"];
       changed = true;
     }
   }
