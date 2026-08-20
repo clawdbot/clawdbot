@@ -294,7 +294,15 @@ export function resolveGatewayRequestContext(params: {
   sessionPrefix: string;
   defaultMessageChannel: string;
   useMessageChannelHeader?: boolean;
-}): { agentId: string; sessionKey: string; messageChannel: string } {
+  useMessageTargetHeaders?: boolean;
+}): {
+  agentId: string;
+  sessionKey: string;
+  messageChannel: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+} {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
   const sessionKey = resolveSessionKey({
     req: params.req,
@@ -308,7 +316,17 @@ export function resolveGatewayRequestContext(params: {
       params.defaultMessageChannel)
     : params.defaultMessageChannel;
 
-  return { agentId, sessionKey, messageChannel };
+  // Same optional header family as /tools/invoke and MCP HTTP; empty or
+  // whitespace-only values are treated as absent.
+  const target = params.useMessageTargetHeaders
+    ? {
+        to: normalizeOptionalString(getHeader(params.req, "x-openclaw-message-to")),
+        accountId: normalizeOptionalString(getHeader(params.req, "x-openclaw-account-id")),
+        threadId: normalizeOptionalString(getHeader(params.req, "x-openclaw-thread-id")),
+      }
+    : undefined;
+
+  return { agentId, sessionKey, messageChannel, ...target };
 }
 
 export function authorizeOpenAiCompatibleHttpSession(params: {

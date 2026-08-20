@@ -389,6 +389,9 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
   senderIsOwner: boolean;
   deps: CliDeps;
   abortSignal?: AbortSignal;
@@ -405,6 +408,12 @@ async function runResponsesAgentCommand(params: {
       runId: params.runId,
       deliver: false,
       messageChannel: params.messageChannel,
+      // Routing context only: async out-of-turn deliveries (e.g. subagent
+      // completion announces) can resolve a target, while the turn's own
+      // reply is still never pushed to a channel (deliver stays false).
+      to: params.to,
+      accountId: params.accountId,
+      threadId: params.threadId,
       senderIsOwner: params.senderIsOwner,
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
@@ -615,6 +624,7 @@ export async function handleOpenResponsesHttpRequest(
       sessionPrefix: "openresponses",
       defaultMessageChannel: "webchat",
       useMessageChannelHeader: true,
+      useMessageTargetHeaders: true,
     });
   } catch (err) {
     if (
@@ -710,6 +720,9 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        to: resolved.to,
+        accountId: resolved.accountId,
+        threadId: resolved.threadId,
         senderIsOwner,
         deps,
         abortSignal: abortController.signal,
@@ -1176,6 +1189,9 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        to: resolved.to,
+        accountId: resolved.accountId,
+        threadId: resolved.threadId,
         senderIsOwner,
         deps,
         abortSignal: abortController.signal,

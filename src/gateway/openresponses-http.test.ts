@@ -791,6 +791,55 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resChannelHeader);
 
       mockAgentOnce([{ text: "hello" }]);
+      const resTargetHeaders = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        {
+          "x-openclaw-message-to": "channel:24514",
+          "x-openclaw-account-id": "acct-7",
+          "x-openclaw-thread-id": "thread-42",
+        },
+      );
+      expect(resTargetHeaders.status).toBe(200);
+      const optsTargetHeaders = firstAgentOpts() as {
+        to?: string;
+        accountId?: string;
+        threadId?: string | number;
+        deliver?: boolean;
+        bestEffortDeliver?: boolean;
+      };
+      expect(optsTargetHeaders.to).toBe("channel:24514");
+      expect(optsTargetHeaders.accountId).toBe("acct-7");
+      expect(optsTargetHeaders.threadId).toBe("thread-42");
+      // A target is routing context only; the turn itself must stay undelivered.
+      expect(optsTargetHeaders.deliver).toBe(false);
+      expect(optsTargetHeaders.bestEffortDeliver).toBe(false);
+      await ensureResponseConsumed(resTargetHeaders);
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resNoTargetHeaders = await postResponses(port, { model: "openclaw", input: "hi" });
+      expect(resNoTargetHeaders.status).toBe(200);
+      const optsNoTargetHeaders = firstAgentOpts() as {
+        to?: string;
+        accountId?: string;
+        threadId?: string | number;
+      };
+      expect(optsNoTargetHeaders.to).toBeUndefined();
+      expect(optsNoTargetHeaders.accountId).toBeUndefined();
+      expect(optsNoTargetHeaders.threadId).toBeUndefined();
+      await ensureResponseConsumed(resNoTargetHeaders);
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resBlankTargetHeader = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-message-to": "   " },
+      );
+      expect(resBlankTargetHeader.status).toBe(200);
+      expect((firstAgentOpts() as { to?: string }).to).toBeUndefined();
+      await ensureResponseConsumed(resBlankTargetHeader);
+
+      mockAgentOnce([{ text: "hello" }]);
       const resModelOverride = await postResponses(
         port,
         {
