@@ -131,6 +131,12 @@ terminate_runtime_claim() {
   fi
 }
 
+wait_for_runtime_claim_exit() {
+  while claim_process_is_active; do
+    /bin/sleep 0.1
+  done
+}
+
 require_runtime_claim_active() {
   [[ ! -e "$(runtime_cancel_path "$1")" && ! -L "$(runtime_cancel_path "$1")" ]] \
     || die "runtime startup was cancelled"
@@ -843,12 +849,13 @@ case "$command" in
     [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
       || die "invalid runtime source"
     cancel_runtime_claim "$1" "$runtime_source"
-    # Release the owner before the removal below, which the 30s supervisor can kill: a claim
-    # still held then is unrecoverable, since destroy refuses one and nothing else ends it.
+    # Signal the owner before deadline-exposed removal, then wait for its exact claim to end;
+    # destroy follows stop synchronously and must not race the owner's TERM cleanup.
     terminate_runtime_claim
     stop_result=0
     remove_container_or_fail "$1" || stop_result=1
     cleanup_network "${1}-net" || stop_result=1
+    wait_for_runtime_claim_exit
     exit "$stop_result"
     ;;
   destroy)

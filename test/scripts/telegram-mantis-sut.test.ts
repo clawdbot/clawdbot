@@ -115,6 +115,77 @@ describe("Telegram Mantis SUT", () => {
     }
   });
 
+  it("waits for the claimed runtime owner before returning from stop", () => {
+    const root = tempDirs.make("telegram-mantis-stop-sync-");
+    const binDir = path.join(root, "bin");
+    const runtimeParent = path.join(root, "runtime");
+    const runtimeRootFile = path.join(root, "runtime-root");
+    const released = path.join(root, "released");
+    const containerName = "openclaw-telegram-sut-feed";
+    const runtimeSource = "/tmp/openclaw-tg-crabbox-sut-Sync";
+    fs.mkdirSync(binDir);
+    fs.mkdirSync(path.join(runtimeParent, "claims"), { recursive: true });
+    fs.writeFileSync(runtimeRootFile, `${runtimeParent}\n`);
+    const ownerPid = Number(
+      spawnSync(
+        "/bin/sh",
+        [
+          "-c",
+          `/usr/bin/setsid /bin/bash -c ${JSON.stringify(`trap 'sleep 1; touch ${JSON.stringify(released)}; exit 0' TERM; touch ${JSON.stringify(path.join(root, "ready"))}; while :; do sleep 10; done`)} >/dev/null 2>&1 & pid=$!; while [ ! -e ${JSON.stringify(path.join(root, "ready"))} ]; do :; done; echo $pid`,
+        ],
+        { encoding: "utf8" },
+      ).stdout.trim(),
+    );
+    const stat = fs.readFileSync(`/proc/${ownerPid}/stat`, "utf8");
+    const startTime = stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[19];
+    const claimPath = path.join(runtimeParent, "claims", `${containerName}.claim`);
+    fs.writeFileSync(claimPath, `${runtimeSource}\t${ownerPid}\t${ownerPid}\t${startTime}\n`, {
+      mode: 0o400,
+    });
+    const docker = path.join(binDir, "docker");
+    fs.writeFileSync(
+      docker,
+      '#!/bin/sh\ncase "$1 $2" in\n  "container ls"|"network ls") exit 0 ;;\n  *) exit 1 ;;\nesac\n',
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(binDir, "install"),
+      '#!/bin/bash\ndestination="${!#}"\n: >"$destination"\nchmod 0400 "$destination"\n',
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(binDir, "stat"),
+      `#!/bin/sh\nif [ "$1" = -c ] && [ "$2" = %u ] && [ "$3" = ${JSON.stringify(claimPath)} ]; then echo 0; else exec /usr/bin/stat "$@"; fi\n`,
+      { mode: 0o755 },
+    );
+    const sutScript = path.join(root, "mantis-sut-container.sh");
+    const source = fs
+      .readFileSync("scripts/mantis/mantis-sut-container.sh", "utf8")
+      .replace(
+        'readonly runtime_root_file="/etc/openclaw-mantis-sut-runtime-root"',
+        `readonly runtime_root_file=${JSON.stringify(runtimeRootFile)}`,
+      )
+      .replace(
+        'readonly docker_bin="/usr/bin/docker"',
+        `readonly docker_bin=${JSON.stringify(docker)}`,
+      );
+    expect(source).toContain(runtimeRootFile);
+    expect(source).toContain(docker);
+    fs.writeFileSync(sutScript, source, { mode: 0o755 });
+
+    try {
+      const result = spawnSync(sutScript, ["stop", containerName, runtimeSource], {
+        env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
+      });
+      expect(result.status, result.stderr.toString()).toBe(0);
+      expect(fs.existsSync(released)).toBe(true);
+    } finally {
+      try {
+        process.kill(-ownerPid, "SIGKILL");
+      } catch {}
+    }
+  });
+
   it("tests default Telegram delivery without forcing native reply mode", () => {
     const outputDir = tempDirs.make("telegram-mantis-config-");
     const { configPath } = writeSutConfig({
