@@ -4,6 +4,7 @@ import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/session
 import { appendExactAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { StopReason } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -44,6 +45,7 @@ export function buildCliHookAssistantMessage(params: {
     cacheWrite?: number;
     total?: number;
   };
+  stopReason?: StopReason;
 }): unknown {
   return {
     role: "assistant",
@@ -52,7 +54,7 @@ export function buildCliHookAssistantMessage(params: {
     provider: params.provider,
     model: params.model,
     ...(params.usage ? { usage: params.usage } : {}),
-    stopReason: "stop",
+    stopReason: params.stopReason ?? "stop",
     timestamp: Date.now(),
   };
 }
@@ -80,6 +82,7 @@ function buildCliContextEngineAssistantMessage(params: {
     cacheWrite?: number;
     total?: number;
   };
+  stopReason?: StopReason;
 }): AgentMessage {
   return buildCliHookAssistantMessage(params) as AgentMessage;
 }
@@ -144,6 +147,7 @@ export async function persistCliAssistantTranscript(params: {
     cacheWrite?: number;
     total?: number;
   };
+  stopReason?: StopReason;
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -190,7 +194,7 @@ export async function persistCliAssistantTranscript(params: {
           id: params.modelId,
         },
         content: [{ type: "text", text: params.text }],
-        stopReason: "stop",
+        stopReason: params.stopReason ?? "stop",
         usage: buildUsageWithNoCost({
           input: params.usage?.input,
           output: params.usage?.output,
@@ -359,6 +363,7 @@ export async function finalizeCliContextEngineTurn(params: {
         provider: runParams.provider,
         model: context.modelId,
         usage: params.output.usage,
+        stopReason: params.output.terminalInterruption ? "aborted" : undefined,
       }),
     );
   }
@@ -376,7 +381,8 @@ export async function finalizeCliContextEngineTurn(params: {
     const result = await finalizeHarnessContextEngineTurn({
       contextEngine: context.contextEngine,
       promptError: false,
-      aborted: runParams.abortSignal?.aborted === true,
+      aborted:
+        params.output.terminalInterruption !== undefined || runParams.abortSignal?.aborted === true,
       yieldAborted: false,
       sessionIdUsed: runParams.sessionId,
       sessionKey: runParams.sessionKey,
@@ -413,7 +419,9 @@ export async function finalizeCliContextEngineTurn(params: {
         sessionTarget: runParams.sessionTarget,
         sessionFile: runParams.sessionFile,
         promptError: false,
-        aborted: runParams.abortSignal?.aborted === true,
+        aborted:
+          params.output.terminalInterruption !== undefined ||
+          runParams.abortSignal?.aborted === true,
         yieldAborted: false,
         contextEngineHostSupport,
         providerId: runParams.provider,

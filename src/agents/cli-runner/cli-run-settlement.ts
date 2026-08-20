@@ -485,14 +485,19 @@ export function buildCliRunResult(params: {
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
   });
   const unflushedCliSessionId =
-    !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false
+    !output.terminalInterruption &&
+    !sessionBindingDisabled &&
+    effectiveCliSessionId &&
+    bindingFlushOk === false
       ? effectiveCliSessionId
       : undefined;
-  const persistedCliSessionId = sessionBindingDisabled
+  const persistedCliSessionId = output.terminalInterruption
     ? undefined
-    : unflushedCliSessionId
+    : sessionBindingDisabled
       ? undefined
-      : effectiveCliSessionId;
+      : unflushedCliSessionId
+        ? undefined
+        : effectiveCliSessionId;
   const createdReseedReceipt =
     persistedCliSessionId &&
     usedHistoryPrompt &&
@@ -514,32 +519,39 @@ export function buildCliRunResult(params: {
       ? runParams.cliSessionBinding.reseedReceipt
       : undefined;
   const reseedReceipt = createdReseedReceipt ?? preservedReseedReceipt;
-  const agentSessionId = sessionBindingDisabled
-    ? (runParams.sessionId ?? "")
-    : unflushedCliSessionId
-      ? ""
-      : (effectiveCliSessionId ?? runParams.sessionId ?? "");
+  const agentSessionId = output.terminalInterruption
+    ? ""
+    : sessionBindingDisabled
+      ? (runParams.sessionId ?? "")
+      : unflushedCliSessionId
+        ? ""
+        : (effectiveCliSessionId ?? runParams.sessionId ?? "");
   const yielded = output.yielded === true;
-  const stopReason = yielded ? "end_turn" : "completed";
+  const terminalInterruption = output.terminalInterruption;
+  const stopReason = terminalInterruption?.reason ?? (yielded ? "end_turn" : "completed");
 
-  runParams.onSuccessfulAuthBinding?.({
-    ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
-    ...(context.authBindingFingerprint ? { authFingerprint: context.authBindingFingerprint } : {}),
-    ...(!context.authBindingFingerprint && context.runtimeOwnerFingerprint
-      ? {
-          runtimeOwnerFingerprint: context.runtimeOwnerFingerprint,
-          runtimeOwnerKind: "cli-runtime" as const,
-          runtimeOwnerId: context.backendResolved.id,
-        }
-      : {}),
-    ...(context.runtimeArtifactFingerprint
-      ? {
-          runtimeArtifactFingerprint: context.runtimeArtifactFingerprint,
-          runtimeArtifactId: context.backendResolved.id,
-        }
-      : {}),
-    ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
-  });
+  if (!terminalInterruption) {
+    runParams.onSuccessfulAuthBinding?.({
+      ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
+      ...(context.authBindingFingerprint
+        ? { authFingerprint: context.authBindingFingerprint }
+        : {}),
+      ...(!context.authBindingFingerprint && context.runtimeOwnerFingerprint
+        ? {
+            runtimeOwnerFingerprint: context.runtimeOwnerFingerprint,
+            runtimeOwnerKind: "cli-runtime" as const,
+            runtimeOwnerId: context.backendResolved.id,
+          }
+        : {}),
+      ...(context.runtimeArtifactFingerprint
+        ? {
+            runtimeArtifactFingerprint: context.runtimeArtifactFingerprint,
+            runtimeArtifactId: context.backendResolved.id,
+          }
+        : {}),
+      ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
+    });
+  }
 
   return {
     payloads: payloadsWithToolMedia,
@@ -553,12 +565,32 @@ export function buildCliRunResult(params: {
           }
         : {}),
       systemPromptReport: context.systemPromptReport,
-      ...(yielded ? { yielded: true, livenessState: "paused" as const, stopReason } : {}),
+      ...(terminalInterruption
+        ? {
+            aborted: true,
+            providerStarted: true,
+            stopReason,
+            ...(terminalInterruption.reason === "timeout"
+              ? { timeoutPhase: "provider" as const }
+              : {}),
+          }
+        : yielded
+          ? { yielded: true, livenessState: "paused" as const, stopReason }
+          : {}),
       ...(output.yieldAcknowledgment ? { yieldAcknowledgment: output.yieldAcknowledgment } : {}),
       executionTrace: {
         winnerProvider: runParams.provider,
         winnerModel: context.modelId,
-        attempts: [{ provider: runParams.provider, model: context.modelId, result: "success" }],
+        attempts: [
+          {
+            provider: runParams.provider,
+            model: context.modelId,
+            result: terminalInterruption?.reason ?? "success",
+            ...(terminalInterruption
+              ? { reason: `CLI turn ${terminalInterruption.reason} after partial output` }
+              : {}),
+          },
+        ],
         fallbackUsed: false,
         runner: "cli",
       },
@@ -567,7 +599,7 @@ export function buildCliRunResult(params: {
         ...(context.effectiveAuthProfileId ? { authMode: "auth-profile" } : {}),
       },
       completion: {
-        finishReason: yielded ? "end_turn" : "stop",
+        finishReason: terminalInterruption?.reason ?? (yielded ? "end_turn" : "stop"),
         stopReason,
         refusal: false,
       },
@@ -612,7 +644,7 @@ export function buildCliRunResult(params: {
               },
             }
           : {}),
-        ...(sessionBindingDisabled || unflushedCliSessionId
+        ...(terminalInterruption || sessionBindingDisabled || unflushedCliSessionId
           ? { clearCliSessionBinding: true }
           : {}),
       },

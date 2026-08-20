@@ -435,6 +435,7 @@ export async function runPreparedCliAgent(
             provider: params.provider,
             model: context.modelId,
             usage: output.usage,
+            stopReason: output.terminalInterruption ? "aborted" : undefined,
           })
         : undefined;
     if (assistantText.length > 0 && hasLlmOutputHooks) {
@@ -536,7 +537,10 @@ export async function runPreparedCliAgent(
       const { output, assistantText, lastAssistant, sourceReplyWasDelivered, usedHistoryPrompt } =
         result;
       try {
-        await assertCliRuntimeBinding(context);
+        const terminalInterruption = output.terminalInterruption;
+        if (!terminalInterruption) {
+          await assertCliRuntimeBinding(context);
+        }
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
         const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
@@ -545,6 +549,7 @@ export async function runPreparedCliAgent(
           text: sourceReplyWasDelivered ? "" : assistantText,
           modelId: context.modelId,
           usage: output.usage,
+          stopReason: terminalInterruption ? "aborted" : undefined,
         });
         await finalizeCliContextEngineTurn({
           context,
@@ -555,18 +560,24 @@ export async function runPreparedCliAgent(
         });
         // A stateless backend may emit an id, but it never becomes continuity.
         // Managed stdio sessions own continuity in-process and write no native transcript.
-        const bindingFlushOk = sessionBindingDisabled
-          ? true
-          : await isCliBindingFlushed(
-              effectiveCliSessionId,
-              params.provider,
-              context.cwd ?? context.workspaceDir,
-              { skipTranscriptProbe: acceptsClaudeLive(context) },
-            );
+        const bindingFlushOk = terminalInterruption
+          ? false
+          : sessionBindingDisabled
+            ? true
+            : await isCliBindingFlushed(
+                effectiveCliSessionId,
+                params.provider,
+                context.cwd ?? context.workspaceDir,
+                { skipTranscriptProbe: acceptsClaudeLive(context) },
+              );
+        const interruptionError = terminalInterruption
+          ? `CLI turn ${terminalInterruption.reason} after partial output`
+          : undefined;
         await runCliAgentEndHook(params, {
           event: {
             messages: buildAgentEndMessages(lastAssistant),
-            success: true,
+            success: interruptionError === undefined,
+            ...(interruptionError ? { error: interruptionError } : {}),
             durationMs: Date.now() - context.started,
           },
           ctx: hookContext,
