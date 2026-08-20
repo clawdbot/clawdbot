@@ -213,6 +213,38 @@ describe("dream diary file behavior", () => {
     ]);
   });
 
+  it("excludes fallback entries before applying the recent diary limit", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-narrative-fallback-context-");
+    const fallbackNarrative = "A memory trace surfaced, but details were unavailable in this run.";
+
+    const written = await writeBackfillDiaryEntries({
+      workspaceDir,
+      entries: [
+        {
+          isoDay: "2026-04-03",
+          bodyLines: ["Older real diary entry."],
+        },
+        {
+          isoDay: "2026-04-04",
+          bodyLines: [fallbackNarrative],
+        },
+        {
+          isoDay: "2026-04-05",
+          bodyLines: ["Newest real diary entry."],
+        },
+      ],
+      timezone: "UTC",
+    });
+
+    const content = await fs.readFile(written.dreamsPath, "utf8");
+    expect(content).toContain(fallbackNarrative);
+
+    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 2 })).resolves.toEqual([
+      "Newest real diary entry.",
+      "Older real diary entry.",
+    ]);
+  });
+
   it("skips symlinked and non-file DREAMS.md when reading recent context", async () => {
     const symlinkWorkspace = await createTempWorkspace("dreaming-narrative-read-symlink-");
     const targetPath = path.join(symlinkWorkspace, "target-dreams.md");
