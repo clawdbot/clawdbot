@@ -54,6 +54,9 @@ export function findCatalogSessionHovercardRow(params: {
           continue;
         }
         const cwd = normalizeOptionalString(session.cwd);
+        const branch = normalizeOptionalString(session.gitBranch);
+        // A catalog cwd is authoritative workspace context, but it does not by
+        // itself prove repository identity; only projected Git facts do that.
         return {
           ...params.liveRow,
           label: session.name || session.threadId,
@@ -61,7 +64,14 @@ export function findCatalogSessionHovercardRow(params: {
           createdAt: params.liveRow?.createdAt ?? normalizeCatalogTimestamp(session.createdAt),
           updatedAt: params.liveRow?.updatedAt ?? normalizeCatalogTimestamp(session.updatedAt),
           workContext: cwd
-            ? { project: repoName(cwd), branch: normalizeOptionalString(session.gitBranch) }
+            ? branch || session.pullRequest
+              ? {
+                  kind: "project",
+                  name: repoName(cwd),
+                  path: cwd,
+                  ...(branch ? { branch } : {}),
+                }
+              : { kind: "workspace", name: repoName(cwd), path: cwd }
             : params.liveRow?.workContext,
         };
       }

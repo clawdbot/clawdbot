@@ -16,7 +16,12 @@ function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSessio
     updatedAt: Date.now() - 5 * 60_000,
     createdActor: { type: "human", id: "alice", label: "Alice Baker" },
     subtitle: "openclaw ⎇ feature/session-hovercard",
-    workContext: { project: "openclaw", branch: "feature/session-hovercard" },
+    workContext: {
+      kind: "project",
+      name: "openclaw",
+      path: "/work/openclaw",
+      branch: "feature/session-hovercard",
+    },
     children: [],
     ...overrides,
   } as SidebarRecentSession;
@@ -120,9 +125,9 @@ describe("renderSessionHovercard", () => {
     await avatar?.updateComplete;
 
     await vi.waitFor(() => {
-      expect(avatar?.querySelector(".session-hovercard__creator-avatar-fallback")?.textContent).toBe(
-        "AB",
-      );
+      expect(
+        avatar?.querySelector(".session-hovercard__creator-avatar-fallback")?.textContent,
+      ).toBe("AB");
     });
     expect(avatar?.querySelector("img.channel-avatar")).toBeNull();
     expect(container.querySelector("openclaw-viewer-avatar")).toBeNull();
@@ -215,6 +220,27 @@ describe("renderSessionHovercard", () => {
 
     expect(container.querySelector(".session-hovercard__section--metadata")).not.toBeNull();
     expect(container.querySelector(".session-hovercard__context-text")).toBeNull();
+  });
+
+  it("labels an authoritative non-repository cwd as a workspace", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        row: row({
+          workContext: {
+            kind: "workspace",
+            name: "release-notes",
+            path: "/workspaces/release-notes",
+          },
+        }),
+      }),
+      container,
+    );
+
+    const context = container.querySelector('[aria-label="Workspace: release-notes"]');
+    expect(context?.getAttribute("aria-label")).toBe("Workspace: release-notes");
+    expect(context?.getAttribute("title")).toBe("Workspace: /workspaces/release-notes");
+    expect(context?.textContent).toContain("release-notes");
   });
 
   it("falls back to a flat branch row and spaced create-PR link", () => {

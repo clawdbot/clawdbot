@@ -171,6 +171,7 @@ export const en: TranslationMap = {
     moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",
+    workspaceLabel: "Workspace",
     branchLabel: "Branch",
     noPrYet: "No PR yet",
     more: "+{count} more",

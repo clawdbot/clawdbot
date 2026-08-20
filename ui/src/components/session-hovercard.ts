@@ -241,17 +241,25 @@ function renderSessionContext(
     ${context
       ? html`<div
             class="session-hovercard__context-row"
-            aria-label=${`${t("sessionHovercard.projectLabel")}: ${context.project}`}
-            title=${`${t("sessionHovercard.projectLabel")}: ${context.project}`}
+            aria-label=${`${t(
+              context.kind === "project"
+                ? "sessionHovercard.projectLabel"
+                : "sessionHovercard.workspaceLabel",
+            )}: ${context.name}`}
+            title=${`${t(
+              context.kind === "project"
+                ? "sessionHovercard.projectLabel"
+                : "sessionHovercard.workspaceLabel",
+            )}: ${context.path}`}
           >
             <span class="session-hovercard__context-icon" aria-hidden="true">${icons.folder}</span>
             <span
               class="session-hovercard__context-value session-hovercard__context-text"
-              title=${context.project}
-              >${context.project}</span
+              title=${context.path}
+              >${context.name}</span
             >
           </div>
-          ${context.branch
+          ${context.kind === "project" && context.branch
             ? html`<div
                 class="session-hovercard__context-row"
                 aria-label=${`${t("sessionHovercard.branchLabel")}: ${context.branch}`}

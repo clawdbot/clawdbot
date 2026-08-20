@@ -735,28 +735,3 @@ export function applySidebarSessionOwnerFilter(input: {
     activeOwnerId,
   };
 }
-
-/** Merge adopted catalog sessions into the visible PR-indicator rows so an
-    adopted session hidden from the regular list still surfaces its PR state. */
-export function mergeAdoptedSessionPullRequestRows(input: {
-  rows: SidebarRecentSession[];
-  adopted: ReadonlySet<string>;
-  sessionsResult: SessionsListResult | null;
-  sessionResultsByAgent: Record<string, SessionsListResult>;
-  navigationState: SidebarSessionNavigationState;
-}): SidebarRecentSession[] {
-  if (input.adopted.size === 0) {
-    return input.rows;
-  }
-  const byKey = new Map(input.rows.map((row) => [row.key, row]));
-  const liveRows = [
-    ...(input.sessionsResult?.sessions ?? []),
-    ...Object.values(input.sessionResultsByAgent).flatMap((result) => result.sessions),
-  ];
-  for (const row of liveRows) {
-    if (input.adopted.has(row.key) && !byKey.has(row.key)) {
-      byKey.set(row.key, input.navigationState.toSidebarSession(row));
-    }
-  }
-  return [...byKey.values()];
-}

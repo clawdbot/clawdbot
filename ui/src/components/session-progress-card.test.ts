@@ -73,7 +73,7 @@ describe("renderSessionProgressCard", () => {
     const container = document.createElement("div");
     const completed = {
       ...progressCard,
-      steps: progressCard.steps?.map((step) => ({ ...step, status: "completed" as const })),
+      steps: progressCard.steps?.map(({ step }) => ({ step, status: "completed" as const })),
     };
     render(
       renderSessionProgressCard(completed, "composer", () => undefined),

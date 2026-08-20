@@ -7,6 +7,8 @@
 }
 
 .session-hovercard {
+  --session-hovercard-context-icon-size: var(--space-4);
+
   display: grid;
   gap: 0;
   min-width: 0;
@@ -48,7 +50,7 @@
   display: grid;
   width: 100%;
   grid-template-rows: auto auto;
-  gap: 2px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -103,7 +105,7 @@
 
 .session-hovercard__context-row {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr);
   align-items: center;
   column-gap: var(--space-2);
   min-width: 0;
@@ -115,16 +117,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
   align-self: center;
   color: var(--muted);
 }
 
 .session-hovercard__context-icon svg {
   display: block;
-  width: 16px;
-  height: 16px;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
   flex: none;
   stroke-width: 1.5px;
   stroke-linecap: round;
@@ -195,8 +197,8 @@
 .session-hovercard__creator-avatar .viewer-avatar {
   display: block;
   box-sizing: border-box;
-  width: 16px;
-  height: 16px;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
   aspect-ratio: 1;
   flex: 0 0 auto;
   flex-shrink: 0;
@@ -209,6 +211,12 @@
   box-shadow: none;
 }
 
+.session-hovercard__creator-avatar .channel-avatar {
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+  box-shadow: none;
+}
+
 .session-hovercard__creator-avatar .viewer-avatar img {
   width: 100%;
   height: 100%;
@@ -217,8 +225,8 @@
 
 .session-hovercard__creator-avatar-fallback {
   display: grid;
-  width: 16px;
-  height: 16px;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--accent-subtle) 70%, var(--panel-strong));
   color: var(--text);
@@ -230,9 +238,9 @@
 .session-hovercard__pr-row,
 .session-hovercard__branch-row {
   display: grid;
-  grid-template-columns: 16px auto minmax(0, 1fr);
+  grid-template-columns: var(--session-hovercard-context-icon-size) auto minmax(0, 1fr);
   align-items: center;
-  gap: var(--space-2);
+  column-gap: var(--space-2);
   min-width: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -240,8 +248,15 @@
   text-decoration: none;
 }
 
+.session-hovercard__pr-row {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
 .session-hovercard__branch-row {
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
 }
 
 .session-hovercard__pr-state-icon,
@@ -249,14 +264,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
 }
 
 .session-hovercard__pr-state-icon svg,
 .session-hovercard__branch-icon svg {
-  width: 16px;
-  height: 16px;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -303,7 +318,26 @@
 }
 
 .session-hovercard__pr-row .session-hovercard__diff {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  column-gap: var(--space-2);
   justify-self: end;
+  font: inherit;
+}
+
+.session-hovercard__pr-row .session-hovercard__files {
+  grid-column: 1;
+  justify-self: end;
+}
+
+.session-hovercard__pr-row .session-hovercard__additions {
+  grid-column: 2;
+}
+
+.session-hovercard__pr-row .session-hovercard__deletions {
+  grid-column: 3;
 }
 
 .session-hovercard__branch-name {
