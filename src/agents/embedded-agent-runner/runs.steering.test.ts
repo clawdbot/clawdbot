@@ -485,6 +485,41 @@ describe("embedded-agent active-run steering", () => {
     }
   });
 
+  // allowReplyRunInjection is a routing flag consumed by the injector itself. The
+  // embedded path must strip it too, not just the reply path: announce delivery
+  // now sets it for EVERY requester, so an embedded backend would otherwise start
+  // receiving a queue option that means nothing to it.
+  it("strips the reply-run routing flag before an embedded backend sees it", async () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-strip-routing-flag", createEmbeddedRunHandle({ queueMessage }));
+
+    expect(
+      queueEmbeddedAgentMessageWithOutcome("session-strip-routing-flag", "child done", {
+        steeringMode: "all",
+        allowReplyRunInjection: true,
+      }),
+    ).toMatchObject({ queued: true, target: "embedded_run" });
+    expect(queueMessage).toHaveBeenCalledWith("child done", { steeringMode: "all" });
+
+    const asyncQueueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-strip-routing-flag-async",
+      createEmbeddedRunHandle({ queueMessage: asyncQueueMessage }),
+    );
+
+    expect(
+      await queueEmbeddedAgentMessageWithOutcomeAsync(
+        "session-strip-routing-flag-async",
+        "child done",
+        { steeringMode: "all", debounceMs: 0, allowReplyRunInjection: true },
+      ),
+    ).toMatchObject({ queued: true, target: "embedded_run" });
+    expect(asyncQueueMessage).toHaveBeenCalledWith("child done", {
+      steeringMode: "all",
+      debounceMs: 0,
+    });
+  });
+
   it("accepts embedded steering with fresh or missing diagnostic evidence", () => {
     const freshQueueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(

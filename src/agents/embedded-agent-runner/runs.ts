@@ -418,11 +418,13 @@ export function queueEmbeddedAgentMessageWithOutcome(
     return prepared.outcome;
   }
   logActiveRunMessageAccepted(sessionId);
-  void prepared.queueMessage(text, options ?? { steeringMode: "all" }).catch((err: unknown) => {
-    diag.debug(
-      `queue message rejected after enqueue: sessionId=${sessionId} err=${formatErrorMessage(err)}`,
-    );
-  });
+  void prepared
+    .queueMessage(text, toReplyBackendQueueMessageOptions(options) ?? { steeringMode: "all" })
+    .catch((err: unknown) => {
+      diag.debug(
+        `queue message rejected after enqueue: sessionId=${sessionId} err=${formatErrorMessage(err)}`,
+      );
+    });
   return {
     queued: true,
     sessionId,
@@ -606,7 +608,10 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   const enqueuedAtMs = Date.now();
   const target = prepared.kind;
   try {
-    const queueResult = await prepared.queueMessage(text, options ?? { steeringMode: "all" });
+    const queueResult = await prepared.queueMessage(
+      text,
+      toReplyBackendQueueMessageOptions(options) ?? { steeringMode: "all" },
+    );
     if (queueResult?.transcriptCommit === "unconfirmed") {
       diag.warn(
         `queue message accepted without transcript confirmation: sessionId=${sessionId} err=${queueResult.errorMessage}`,
