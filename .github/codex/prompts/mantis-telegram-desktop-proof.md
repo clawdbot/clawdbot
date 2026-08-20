@@ -58,6 +58,9 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 `start` returns the exact command/budget list. No generic exec/eval or raw
 Telegram API exists. If a required action is absent, use `block`; do not route
 around the credential boundary.
+For normal group turns, address the current bot with `@{sut}`; the harness
+expands it to the live SUT username. Omit it only when an unmentioned message
+is intentionally part of the scenario.
 Recording starts with Telegram hidden. `send` and `turn` hold the model response
 until their exact session-owned outbound message is visible. Published screenshots
 and video use the bottom proof viewport; raw full-window footage remains private.

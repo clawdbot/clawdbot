@@ -656,7 +656,10 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
       throw recorderResult.reason;
     }
     const bot = z
-      .object({ id: z.union([z.string(), z.number()]).transform(String) })
+      .object({
+        id: z.union([z.string(), z.number()]).transform(String),
+        username: z.string().min(1),
+      })
       .parse(botResult.value);
     const logFd = fs.openSync(observerLog, "a", 0o600);
     let observer: ReturnType<typeof spawn>;
@@ -671,6 +674,8 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
           credential.groupId,
           "--sut-user-id",
           bot.id,
+          "--sut-username",
+          bot.username,
           "--socket",
           observerSocket,
           "--pid-file",

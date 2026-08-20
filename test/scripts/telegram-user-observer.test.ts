@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory() as root:
     public.mkdir()
     private.mkdir()
     driver = Driver()
-    observer = module.UserObserver(driver, -100123, 99, private / "events.ndjson", public)
+    observer = module.UserObserver(driver, -100123, 99, "qa_sut", private / "events.ndjson", public)
     (public / "proof.txt").write_text("visible media")
     staged_media = Path(observer.resolve_media("proof.txt"))
     staged_media_content = staged_media.read_text()
@@ -130,7 +130,7 @@ with tempfile.TemporaryDirectory() as root:
             "content": {"@type": "messageText", "text": {"text": "private bystander text"}},
         },
     })
-    sent = observer.call({"command": "send", "text": "/stop"})
+    sent = observer.call({"command": "send", "text": "@{sut} /stop"})
     pressed = observer.call({"command": "press", "messageId": "123", "button": 0})
     deleted = observer.call({"command": "delete", "messageId": "124"})
     try:
@@ -203,7 +203,7 @@ describe("Telegram user observer", () => {
         buttons: [{ index: 0, text: "Updated", type: "Callback" }],
         kind: "edit-meta",
       },
-      { actor: "user", kind: "message", messageId: "124", text: "/stop" },
+      { actor: "user", kind: "message", messageId: "124", text: "@qa_sut /stop" },
       { actor: "bot", kind: "message", messageId: "127", text: "fast reply" },
       { actor: "bot", isPermanent: true, kind: "delete", messageId: "123" },
     ]);

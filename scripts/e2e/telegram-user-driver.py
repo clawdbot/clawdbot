@@ -583,11 +583,12 @@ def server_message_id(tdlib_message_id):
 class UserObserver:
     MAX_EVENTS = 500
 
-    def __init__(self, user_driver, chat_id, sut_user_id, journal_path, media_root):
+    def __init__(self, user_driver, chat_id, sut_user_id, sut_username, journal_path, media_root):
         self.driver = user_driver
         self.client = user_driver.client
         self.chat_id = int(chat_id)
         self.sut_user_id = int(sut_user_id)
+        self.sut = {"id": self.sut_user_id, "username": sut_username.lstrip("@")}
         self.media_root = Path(media_root).resolve()
         self.media_staging = Path(journal_path).parent / "media"
         self.media_staging.mkdir(mode=0o700)
@@ -815,7 +816,7 @@ class UserObserver:
                 "events": self.events[since:],
             }
         if command == "send":
-            text = str(request.get("text") or "")
+            text, _ = apply_template(str(request.get("text") or ""), self.sut)
             media = request.get("media")
             if not text and not media:
                 raise DriverError("A message needs text or media.")
@@ -909,6 +910,7 @@ def command_serve_session(args):
         user_driver,
         chat_id,
         args.sut_user_id,
+        args.sut_username,
         args.journal,
         args.media_root,
     )
@@ -1417,6 +1419,7 @@ def main():
     serve = sub.add_parser("serve", help=argparse.SUPPRESS)
     serve.add_argument("--chat", required=True)
     serve.add_argument("--sut-user-id", required=True, type=int)
+    serve.add_argument("--sut-username", required=True)
     serve.add_argument("--socket", required=True)
     serve.add_argument("--pid-file", required=True)
     serve.add_argument("--journal", required=True)

@@ -161,6 +161,7 @@ function copyLaneArtifacts({
     resolveSummaryArtifact(lane, "previewGifCropped") ?? resolveSummaryArtifact(lane, "previewGif");
   copyArtifact({
     outputDir,
+    required: laneStatus(lane) === "pass",
     source: gif,
     targetPath: `${prefix}/telegram-desktop-proof.gif`,
   });
@@ -205,7 +206,7 @@ function requireLaneAttestation(lane: LoadedLane, expectedLane: LaneName, expect
   }
 }
 
-function laneArtifactEntries(): EvidenceArtifact[] {
+function laneArtifactEntries(statuses: Record<LaneName, "pass" | "fail">): EvidenceArtifact[] {
   return LANES.flatMap(({ altPrefix, label, lane }) => [
     {
       alt: `${altPrefix} native Telegram Desktop proof GIF`,
@@ -214,6 +215,7 @@ function laneArtifactEntries(): EvidenceArtifact[] {
       label,
       lane,
       path: `${lane}/telegram-desktop-proof.gif`,
+      required: statuses[lane] === "pass",
       targetPath: `${lane}/telegram-desktop-proof.gif`,
       width: 420,
     },
@@ -299,7 +301,7 @@ function buildTelegramDesktopProofManifest({
       },
       pass,
     },
-    artifacts: laneArtifactEntries(),
+    artifacts: laneArtifactEntries({ baseline: baselineStatus, candidate: candidateStatus }),
   };
 }
 

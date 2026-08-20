@@ -17,7 +17,11 @@ afterEach(() => {
   }
 });
 
-function makeLane(name: "baseline" | "candidate", sha: string) {
+function makeLane(
+  name: "baseline" | "candidate",
+  sha: string,
+  options: { status?: "pass" | "fail"; withGif?: boolean } = {},
+) {
   const repo = mkdtempSync(path.join(tmpdir(), `mantis-telegram-${name}-repo-`));
   tempDirs.push(repo);
   const outputDir = path.join(repo, ".artifacts", "qa-e2e", name);
@@ -26,7 +30,9 @@ function makeLane(name: "baseline" | "candidate", sha: string) {
   const mp4 = path.join(outputDir, "telegram-user-crabbox-session-motion-telegram-window.mp4");
   const screenshot = path.join(outputDir, "telegram-user-crabbox-session.png");
   const report = path.join(outputDir, "telegram-user-crabbox-session-report.md");
-  writeFileSync(gif, `${name} gif`);
+  if (options.withGif !== false) {
+    writeFileSync(gif, `${name} gif`);
+  }
   writeFileSync(mp4, `${name} mp4`);
   writeFileSync(screenshot, `${name} png`);
   writeFileSync(report, `${name} report`);
@@ -34,12 +40,12 @@ function makeLane(name: "baseline" | "candidate", sha: string) {
     path.join(outputDir, "telegram-user-crabbox-session-summary.json"),
     JSON.stringify({
       artifacts: {
-        previewGifCropped: path.relative(repo, gif),
+        ...(options.withGif === false ? {} : { previewGifCropped: path.relative(repo, gif) }),
         screenshot: path.relative(repo, screenshot),
         trimmedVideoCropped: path.relative(repo, mp4),
       },
       report: path.relative(repo, report),
-      status: "pass",
+      status: options.status ?? "pass",
       sutAttestation: { lane: name, sha },
     }),
   );
@@ -146,5 +152,43 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
         candidateSha,
       ]),
     ).toThrow("SUT attestation mismatch for candidate.");
+  });
+
+  it("preserves failed-lane evidence without requiring a success GIF", () => {
+    const baselineSha = "a".repeat(40);
+    const candidateSha = "b".repeat(40);
+    const baseline = makeLane("baseline", baselineSha);
+    const candidate = makeLane("candidate", candidateSha, { status: "fail", withGif: false });
+    const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-failure-proof-"));
+    tempDirs.push(outputDir);
+
+    const { manifest } = writeTelegramDesktopProofEvidence([
+      "--output-dir",
+      outputDir,
+      "--baseline-repo-root",
+      baseline.repo,
+      "--baseline-output-dir",
+      baseline.outputDir,
+      "--baseline-sha",
+      baselineSha,
+      "--candidate-repo-root",
+      candidate.repo,
+      "--candidate-output-dir",
+      candidate.outputDir,
+      "--candidate-sha",
+      candidateSha,
+    ]);
+
+    expect(manifest.comparison.pass).toBe(false);
+    expect(manifest.artifacts).toContainEqual(
+      expect.objectContaining({
+        lane: "candidate",
+        kind: "motionPreview",
+        required: false,
+      }),
+    );
+    expect(
+      readFileSync(path.join(outputDir, "candidate", "telegram-desktop-proof.png"), "utf8"),
+    ).toBe("candidate png");
   });
 });

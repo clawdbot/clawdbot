@@ -537,6 +537,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish --focus-message-id ID`");
     expect(prompt).toContain("`block --missing-primitive NAME --reason TEXT`");
+    expect(prompt).toContain("`@{sut}`");
     expect(prompt).toContain("raw full-window footage remains");
     expect(prompt).toContain("never stale chat history");
     expect(prompt).toContain("hold the model");
@@ -899,6 +900,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(startSession.indexOf('"serve"')).toBeLessThan(
       startSession.indexOf("await waitForObserver(observerSocket)"),
     );
+    expect(startSession).toContain('"--sut-username"');
     expect(prompt).toContain("--lane baseline|candidate");
     expect(prompt).toContain("start --repo-root <prepared-root>");
     expect(prompt).toContain("MANTIS_BASELINE_ROOT");
