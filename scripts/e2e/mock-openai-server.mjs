@@ -618,11 +618,6 @@ const server = http.createServer((req, res) => {
           writeResponsesEvents(res, body.stream, draftEvents);
           return;
         }
-        const editRecovery = editRecoveryEvents(body, bodyText);
-        if (editRecovery) {
-          writeResponsesEvents(res, body.stream, editRecovery);
-          return;
-        }
       }
       const response = await currentResponse();
       const responseText = responseControl ? response.text : resolveResponseText(bodyText);
