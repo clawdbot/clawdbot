@@ -149,6 +149,7 @@ const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] 
     agentRuntime: {
       id: "openclaw",
       cloudPlacementSupported: true,
+      cloudPlacementExecutionMode: "worker-turn",
       devicePlacementSupported: true,
       source: "implicit",
     },
@@ -162,6 +163,7 @@ const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] 
     agentRuntime: {
       id: "openclaw",
       cloudPlacementSupported: true,
+      cloudPlacementExecutionMode: "worker-turn",
       devicePlacementSupported: true,
       source: "implicit",
     },
@@ -794,6 +796,7 @@ describe("gateway server models + voicewake", () => {
             agentRuntime: {
               id: "openclaw",
               cloudPlacementSupported: true,
+              cloudPlacementExecutionMode: "worker-turn",
               devicePlacementSupported: true,
               source: "implicit",
             },
@@ -851,6 +854,7 @@ describe("gateway server models + voicewake", () => {
           agentRuntime: {
             id: "openclaw",
             cloudPlacementSupported: true,
+            cloudPlacementExecutionMode: "worker-turn",
             devicePlacementSupported: true,
             source: "implicit",
           },
@@ -875,6 +879,7 @@ describe("gateway server models + voicewake", () => {
           agentRuntime: {
             id: "openclaw",
             cloudPlacementSupported: true,
+            cloudPlacementExecutionMode: "worker-turn",
             devicePlacementSupported: true,
             source: "implicit",
           },

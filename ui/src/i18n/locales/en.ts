@@ -815,6 +815,8 @@ export const en: TranslationMap = {
     cloudWorkerProvider: "Cloud worker provider: {provider}",
     cloudRequiresWorktree: "Cloud needs a Git checkout",
     cloudRuntimeUnsupported: "The {runtime} runtime does not support cloud workers.",
+    cloudProfileRuntimeUnsupported:
+      "The {runtime} runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     deviceRuntimeUnsupported: "Needs the embedded runtime",
     cloudRecoveryUnavailable:
       "Cloud workers are unavailable because this connection does not support task recovery. Reconnect or update the Gateway.",

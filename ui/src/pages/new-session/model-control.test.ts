@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { DraftCloudProfile } from "./discovery.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
@@ -9,6 +10,59 @@ afterEach(() => {
 });
 
 describe("new-session model runtime", () => {
+  it.each([
+    {
+      name: "rejects a remote-exec runtime on a worker-turn profile",
+      runtime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "remote-exec" as const,
+        source: "model" as const,
+      },
+      executionMode: "worker-turn" as const,
+      expected:
+        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+    },
+    {
+      name: "accepts a worker-turn runtime on a worker-turn profile",
+      runtime: {
+        id: "openclaw",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "worker-turn" as const,
+        source: "model" as const,
+      },
+      executionMode: "worker-turn" as const,
+      expected: undefined,
+    },
+    {
+      name: "preserves an unknown provider mode",
+      runtime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "remote-exec" as const,
+        source: "model" as const,
+      },
+      executionMode: undefined,
+      expected: undefined,
+    },
+    {
+      name: "retains the existing whole-runtime rejection",
+      runtime: { id: "acpx", cloudPlacementSupported: false, source: "model" as const },
+      executionMode: "worker-turn" as const,
+      expected: "The acpx runtime does not support cloud workers.",
+    },
+  ])("$name", ({ runtime, executionMode, expected }) => {
+    const profile: DraftCloudProfile = {
+      id: "aws",
+      providerId: "crabbox",
+      ...(executionMode ? { executionMode } : {}),
+    };
+    const control = new NewSessionModelControl(() => undefined);
+    vi.spyOn(control, "resolveAgentRuntime").mockReturnValue(runtime);
+
+    expect(control.cloudRuntimeUnsupportedReason(profile)).toBe(expected);
+  });
+
   it("keeps CLI agents hidden and undiscovered while the Labs gate is off", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
