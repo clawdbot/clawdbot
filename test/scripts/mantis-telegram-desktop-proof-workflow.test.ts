@@ -351,6 +351,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(classifier?.with?.effort).toBe("low");
     expect(classifier?.with?.["output-schema"]).toContain('"enum": ["run", "skip"]');
     expect(classifier?.with?.["prompt-file"]).toBe(PREFLIGHT_PROMPT);
+    expect(classifier?.with?.["allow-bot-users"]).toBe("github-actions[bot]");
     expect(classifier?.["continue-on-error"]).toBe(true);
     expect(readFileSync(PREFLIGHT_PROMPT, "utf8")).toContain(
       "focus inspection, not to override the diff",

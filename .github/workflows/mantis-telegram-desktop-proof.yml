@@ -230,6 +230,7 @@ jobs:
           sandbox: read-only
           codex-args: '["-c","service_tier=\"fast\""]'
           safety-strategy: drop-sudo
+          allow-bot-users: github-actions[bot]
 
       - name: Read visibility decision
         id: read_decision
