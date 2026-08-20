@@ -513,6 +513,41 @@ describe("promptAuthConfig", () => {
     ]);
   });
 
+  it("canonicalizes a selected agent's legacy Codex primary before updating its allowlist", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-device-code");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: {
+          systemAgent: { agentId: "ops" },
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+        entries: {
+          main: {},
+          ops: { model: { primary: "codex/gpt-5.5" } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    mocks.applyAuthChoice.mockResolvedValue({ config });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["openai/gpt-5.5"],
+      scopeKeys: ["openai/gpt-5.5"],
+    });
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue(null);
+
+    const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+    });
+
+    expect(result.agents?.entries?.ops?.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(result.agents?.entries?.ops?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
+    expect(result.agents?.defaults?.model).toEqual({ primary: "anthropic/claude-sonnet-4-6" });
+  });
+
   it("keeps the selected provider scope when existing config has another provider", async () => {
     vi.clearAllMocks();
     mocks.promptAuthChoiceGrouped.mockResolvedValue("github-copilot");

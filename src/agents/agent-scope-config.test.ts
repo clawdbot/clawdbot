@@ -175,6 +175,17 @@ describe("agent roster resolution", () => {
     ).toBe("main");
   });
 
+  it("preserves retained legacy ownership for migrated CLI operations", () => {
+    const cfg = migratePersistedImplicitMainRoster({
+      agents: {
+        entries: { ops: { default: true }, research: {} },
+      },
+    }).config as OpenClawConfig;
+
+    expect(cfg.agents?.entries?.ops?.default).toBeUndefined();
+    expect(resolveAgentOperationAgentId(cfg)).toBe("ops");
+  });
+
   it("resolves defaults only for the rosterless implicit main agent", () => {
     const defaults = { fastModeDefault: "auto" as const };
 

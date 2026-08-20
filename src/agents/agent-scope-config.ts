@@ -249,9 +249,9 @@ export function resolveAgentOperationAgentId(
   context?: AgentSelectionContext,
 ): string {
   if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
-    return resolveSystemAgentTargetAgentId(cfg, requestedAgentId, context);
+    return resolveAmbientOwnerAgentId(cfg, requestedAgentId, context);
   }
-  return resolveDefaultAgentId(cfg, context);
+  return tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg, context);
 }
 
 /**

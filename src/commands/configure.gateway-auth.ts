@@ -1,4 +1,5 @@
 // Configure wizard model/auth selection and gateway auth config helpers.
+import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
@@ -117,9 +118,11 @@ function resolveProviderFromModelRef(model: string | undefined): string | undefi
 
 function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
   cfg: OpenClawConfig,
+  target: OnboardingAgentTarget,
   selectedModels: readonly string[],
 ): string | undefined {
-  const currentModel = cfg.agents?.defaults?.model;
+  const currentModel =
+    resolveMutableAgentEntry(cfg, target.agentId)?.model ?? cfg.agents?.defaults?.model;
   const primary =
     typeof currentModel === "string"
       ? currentModel.trim()
@@ -333,6 +336,7 @@ export async function promptAuthConfig(
       const selectedModels = allowlistSelection.models;
       const canonicalPrimary = resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
         next,
+        target,
         selectedModels,
       );
       if (canonicalPrimary) {
