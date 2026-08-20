@@ -272,6 +272,16 @@ describe("llm-task tool (json-only)", () => {
     expect(call.model).toBe("anthropic/claude-4-sonnet");
   });
 
+  it("does not misparse a slash-containing model id as a provider separator", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({
+      prompt: "x",
+      provider: "groq",
+      model: "openai/gpt-oss-20b",
+    });
+    expect(call.model).toBe("groq/openai/gpt-oss-20b");
+  });
+
   it("resolves configured model aliases before dispatching isolated completion", async () => {
     mockIsolatedCompletionJson({ ok: true });
     const tool = createLlmTaskTool(

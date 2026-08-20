@@ -48,6 +48,7 @@ function resolveLlmTaskModelRef(params: {
   api: OpenClawPluginApi;
   provider?: string;
   rawModel?: string;
+  explicitProvider?: string;
 }): { provider?: string; model?: string } {
   const defaultProvider =
     normalizeOptionalString(params.provider) ??
@@ -57,6 +58,19 @@ function resolveLlmTaskModelRef(params: {
     return {
       provider: params.provider,
       model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    };
+  }
+
+  // When the caller supplied an explicit provider, trust it and only strip a
+  // duplicate provider prefix from the model id. Do NOT re-parse the model
+  // string as a full provider/model ref, because model ids like
+  // "openai/gpt-oss-20b" contain a slash that would be misread as a provider
+  // separator (resolving to provider=openai instead of the explicit provider).
+  const explicitProvider = normalizeOptionalString(params.explicitProvider);
+  if (explicitProvider) {
+    return {
+      provider: explicitProvider,
+      model: stripDuplicateProviderPrefix(explicitProvider, rawModel),
     };
   }
 
@@ -168,6 +182,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         api,
         provider: requestedProvider,
         rawModel,
+        explicitProvider: requestProvider,
       });
       const provider = resolvedProvider;
 
