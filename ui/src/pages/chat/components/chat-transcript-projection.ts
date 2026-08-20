@@ -576,20 +576,17 @@ export function projectChatTranscript(
   }
   // New row keys measure expanded work immediately; existing keys keep their
   // cached height until ResizeObserver reports the changed layout.
-  const transcriptRows: TranscriptRow<ChatRenderItem>[] = [];
-  for (const item of transcriptItems) {
-    transcriptRows.push({ kind: "item", key: item.key, item });
-    if (item.kind !== "work-group" || !expandedToolCards.get(item.key)) {
-      continue;
-    }
-    for (const group of item.groups) {
-      transcriptRows.push({
-        kind: "item",
-        key: `${item.key}:${group.key}`,
-        item: group,
-      });
-    }
-  }
+  const transcriptRows = transcriptItems.flatMap((item): TranscriptRow<ChatRenderItem>[] =>
+    [{ kind: "item" as const, key: item.key, item }].concat(
+      item.kind === "work-group" && expandedToolCards.get(item.key)
+        ? item.groups.map((group) => ({
+            kind: "item" as const,
+            key: `${item.key}:${group.key}`,
+            item: group,
+          }))
+        : [],
+    ),
+  );
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
