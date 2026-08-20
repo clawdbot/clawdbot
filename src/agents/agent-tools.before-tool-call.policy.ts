@@ -365,7 +365,12 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.params) {
-      finalParams = mergeParamsWithApprovalOverrides(finalParams, hookResult.params);
+      finalParams = reconcileCodeModeExecBeforeHookParams({
+        owner: { toolKind: args.toolKind },
+        originalParams: policyAdjustedParams,
+        hookParams: policyAdjustedParams,
+        adjustedParams: mergeParamsWithApprovalOverrides(finalParams, hookResult.params),
+      });
     }
     const finalApprovalOutcome = await resolveSkillWorkshopApprovalForFinalParams({
       toolName,
