@@ -216,10 +216,31 @@ function isShallowEqualSessionRow(
   });
 }
 
+// Terminal projections that arrive for an active row are authoritative and
+// must clear the spinner — but only when they belong to the *current* run.
+// During an active run the row's activeRunIds is deleted (null tombstone), so
+// startedAt is the available run discriminator: the gateway's lifecycle
+// snapshot preserves the terminating run's startedAt, which differs from a
+// newer run that has since started. A mismatched startedAt signals the
+// terminal event is for an older run superseded by a newer active run.
+function isStaleTerminalForActiveRun(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow | undefined,
+): boolean {
+  return !(
+    typeof incoming.startedAt !== "number" ||
+    typeof existing?.startedAt !== "number" ||
+    incoming.startedAt === existing.startedAt
+  );
+}
+
 function isOlderSessionSnapshot(
   incoming: GatewaySessionRow,
   existing: GatewaySessionRow | undefined,
 ): boolean {
+  if (incoming.hasActiveRun === false && existing && isSessionRunActive(existing)) {
+    return isStaleTerminalForActiveRun(incoming, existing);
+  }
   return (
     typeof incoming.updatedAt === "number" &&
     typeof existing?.updatedAt === "number" &&
@@ -233,6 +254,9 @@ function isStaleForActiveSession(
 ): boolean {
   if (!existing || !isSessionRunActive(existing) || isSessionRunActive(incoming)) {
     return false;
+  }
+  if (incoming.hasActiveRun === false) {
+    return isStaleTerminalForActiveRun(incoming, existing);
   }
   const incomingUpdatedAt = incoming.updatedAt ?? 0;
   return (
