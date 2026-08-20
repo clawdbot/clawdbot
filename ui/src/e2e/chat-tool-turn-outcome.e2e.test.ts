@@ -338,24 +338,10 @@ suite.define(() => {
           content: [
             {
               type: "text",
-              text: JSON.stringify(
-                {
-                  kind: "canvas",
-                  presentation: { target: "assistant_message" },
-                  proof: Array.from(
-                    { length: 24 },
-                    (_, index) => `Focused test ${index + 1}: passed with stable geometry.`,
-                  ),
-                  view: {
-                    id: "disclosure-geometry-proof",
-                    preferred_height: 160,
-                    title: "Disclosure geometry proof",
-                    url: "/__openclaw__/canvas/documents/disclosure-geometry-proof/index.html",
-                  },
-                },
-                null,
-                2,
-              ),
+              text: Array.from(
+                { length: 24 },
+                (_, index) => `Focused test ${index + 1}: passed with stable transcript geometry.`,
+              ).join("\n"),
             },
           ],
           timestamp: 101,
@@ -447,18 +433,19 @@ suite.define(() => {
     });
     await waitForChatScrollIdle(page);
     traces.workMiddleExpand = await toggleDisclosureWithFrameTrace(page, middleWorkSummary);
-    const activitySummary = page.locator(
-      ".chat-group--activity > .chat-group-messages > .chat-activity-group > .chat-activity-group__summary",
-    );
+    const activitySummary = page
+      .locator(
+        ".chat-group--activity > .chat-group-messages > .chat-activity-group > .chat-activity-group__summary",
+      )
+      .first();
     traces.activityMiddleExpand = await toggleDisclosureWithFrameTrace(page, activitySummary);
-    const toolSummary = page.locator(".chat-group--activity .chat-tool-msg-summary").first();
+    const activityGroup = activitySummary.locator("..");
+    const toolSummary = activityGroup
+      .locator(".chat-tool-msg-summary")
+      .filter({ hasText: "pnpm test ui/src/pages/chat" });
     traces.toolMiddleExpand = await toggleDisclosureWithFrameTrace(page, toolSummary);
-    const rawDetailsToggle = page.locator(".chat-tool-card__raw-toggle").first();
-    await rawDetailsToggle.waitFor();
-    traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
-    traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
     traces.toolMiddleCollapse = await toggleDisclosureWithFrameTrace(page, toolSummary);
-    const fileToolToggle = page.locator(".chat-group--activity .chat-tool-row__toggle").first();
+    const fileToolToggle = activityGroup.locator(".chat-tool-row__toggle").first();
     traces.fileToolMiddleExpand = await toggleDisclosureWithFrameTrace(page, fileToolToggle);
     traces.fileToolMiddleCollapse = await toggleDisclosureWithFrameTrace(page, fileToolToggle);
     traces.activityMiddleCollapse = await toggleDisclosureWithFrameTrace(page, activitySummary);
@@ -482,6 +469,131 @@ suite.define(() => {
       });
     }
     await context.close();
+    for (const frames of Object.values(traces)) {
+      expectStableDisclosureFrames(frames);
+    }
+  });
+
+  it("keeps raw tool details anchored at the end and middle of a long transcript", async () => {
+    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.browser.newContext({
+      reducedMotion: "reduce",
+      viewport: { height: 600, width: 900 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 600, width: 900 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const transcriptPrefix = Array.from({ length: 14 }, (_, index) => [
+      {
+        role: "user",
+        content: `Earlier raw-details prompt ${index + 1}.`,
+        timestamp: index * 2 + 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Earlier raw-details response ${index + 1}.` }],
+        timestamp: index * 2 + 2,
+      },
+    ]).flat();
+    await installMockGateway(page, {
+      historyMessages: [
+        ...transcriptPrefix,
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "raw-details-widget",
+              name: "canvas_render",
+              arguments: { title: "Disclosure geometry proof" },
+            },
+            {
+              type: "tool_result",
+              id: "raw-details-widget",
+              name: "canvas_render",
+              text: JSON.stringify(
+                {
+                  kind: "canvas",
+                  proof: Array.from(
+                    { length: 24 },
+                    (_, index) => `Focused test ${index + 1}: passed with stable geometry.`,
+                  ),
+                  view: {
+                    backend: "canvas",
+                    id: "disclosure-geometry-proof",
+                    url: "/__openclaw__/canvas/documents/disclosure-geometry-proof/index.html",
+                    title: "Disclosure geometry proof",
+                    preferred_height: 160,
+                  },
+                  presentation: { target: "assistant_message" },
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+          timestamp: 100,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Disclosure geometry proof rendered." }],
+          timestamp: 101,
+        },
+      ],
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const toolSummary = page.locator(".chat-tool-msg-summary");
+    await toolSummary.waitFor();
+    await waitForChatScrollIdle(page);
+    expectStableDisclosureFrames(await toggleDisclosureWithFrameTrace(page, toolSummary));
+    const rawDetailsToggle = toolSummary.locator("..").locator(".chat-tool-card__raw-toggle");
+    await rawDetailsToggle.waitFor();
+    await page.locator(".chat-thread").evaluate((thread) => {
+      thread.scrollTop = thread.scrollHeight;
+    });
+    await waitForChatScrollIdle(page);
+    expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
+    const traces: Record<string, DisclosureFrame[]> = {};
+    traces.rawDetailsEndExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+    traces.rawDetailsEndCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+
+    await rawDetailsToggle.evaluate((button) => {
+      const row = button.closest<HTMLElement>(".chat-virtual-row");
+      const thread = button.closest<HTMLElement>(".chat-thread");
+      if (!row || !thread) {
+        throw new Error("Expected raw-details disclosure inside a virtual transcript row");
+      }
+      const rowTop = row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+      thread.scrollTop += Math.round(rowTop - thread.clientHeight / 2);
+    });
+    await waitForChatScrollIdle(page);
+    traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await fs.writeFile(
+        path.join(artifactDir, "raw-details-geometry.json"),
+        `${JSON.stringify(traces, null, 2)}\n`,
+      );
+      await page.locator(".chat-main").screenshot({
+        path: path.join(artifactDir, "raw-details-geometry-light.png"),
+      });
+      await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+        .toBe("dark");
+      await page.locator(".chat-main").screenshot({
+        path: path.join(artifactDir, "raw-details-geometry-dark.png"),
+      });
+    }
+    traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+    const video = page.video();
+    await context.close();
+    if (artifactDir) {
+      await video?.saveAs(path.join(artifactDir, "raw-details-geometry.webm"));
+    }
     for (const frames of Object.values(traces)) {
       expectStableDisclosureFrames(frames);
     }
