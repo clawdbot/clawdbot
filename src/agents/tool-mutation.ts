@@ -368,7 +368,6 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
 export function buildToolMutationState(
   toolName: string,
   args: unknown,
-  _meta?: string,
   options?: { ownerKey?: string },
 ): ToolMutationState {
   const ownerDeclaredMutation = options?.ownerKey !== undefined;

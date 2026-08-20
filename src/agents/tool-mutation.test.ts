@@ -28,9 +28,13 @@ describe("tool mutation helpers", () => {
 
   it("treats owner-declared side effects as mutating and replay-unsafe", () => {
     expect(
-      buildToolMutationState("memory_store", { text: "preference" }, undefined, {
-        ownerKey: '["memory-lancedb","memory_store"]',
-      }),
+      buildToolMutationState(
+        "memory_store",
+        { text: "preference" },
+        {
+          ownerKey: '["memory-lancedb","memory_store"]',
+        },
+      ),
     ).toEqual({ mutatingAction: true, replaySafe: false });
   });
 
@@ -93,7 +97,7 @@ describe("tool mutation helpers", () => {
     ["exec", "gh api --method POST repos/openclaw/openclaw/issues"],
   ])("keeps ambiguous or mutating shell command mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(true);
-    expect(buildToolMutationState(toolName, { command }, command).mutatingAction).toBe(true);
+    expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(true);
   });
 
   it("exposes mutation state for downstream payload rendering", () => {

@@ -205,12 +205,7 @@ export function buildToolCallSummary(
   ownerKey: string | undefined,
   structuredReplaySafe: boolean,
 ): ToolCallSummary {
-  const mutation = buildToolMutationState(
-    toolName,
-    args,
-    meta,
-    ownerKey ? { ownerKey } : undefined,
-  );
+  const mutation = buildToolMutationState(toolName, args, ownerKey ? { ownerKey } : undefined);
   return {
     meta,
     commandBearing: isCommandBearingToolCall(toolName, args),
