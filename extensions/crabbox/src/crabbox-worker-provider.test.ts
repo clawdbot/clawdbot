@@ -424,6 +424,32 @@ describe("Crabbox worker provider", () => {
     expect(desktopSetupText).not.toContain("/var/lib/crabbox/browser.env");
     expect(desktopSetupLines).not.toContain("export DISPLAY");
     expect(desktopSetupText).toContain(
+      'mapfile -t renderer_pids < <(pgrep -u "$worker_uid" -x xfdesktop || true)',
+    );
+    expect(desktopSetupText).toContain("Expected exactly one worker-owned XFCE desktop renderer");
+    expect(desktopSetupText).toContain('renderer_pid="${renderer_pids[0]}"');
+    expect(desktopSetupText).toContain('exec 8<"/proc/$renderer_pid/environ"');
+    for (const [name, target] of [
+      ["DISPLAY", "renderer_display"],
+      ["DBUS_SESSION_BUS_ADDRESS", "DBUS_SESSION_BUS_ADDRESS"],
+      ["SESSION_MANAGER", "SESSION_MANAGER"],
+      ["XDG_RUNTIME_DIR", "XDG_RUNTIME_DIR"],
+    ]) {
+      expect(desktopSetupText).toContain(`${name}=*) ${target}="\${process_variable#*=}"`);
+    }
+    expect(desktopSetupText).toContain('[ "$renderer_display" = ":99" ]');
+    expect(desktopSetupText).toContain(
+      '[ -n "$DBUS_SESSION_BUS_ADDRESS" ] && [ -n "$SESSION_MANAGER" ]',
+    );
+    expect(desktopSetupText).toContain(
+      'case "${XDG_RUNTIME_DIR:-}" in ""|/*) ;; *) echo "XFCE desktop renderer has an invalid XDG_RUNTIME_DIR"',
+    );
+    expect(desktopSetupText).toContain("export DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER");
+    expect(desktopSetupText).toContain('[ -z "${XDG_RUNTIME_DIR:-}" ] || export XDG_RUNTIME_DIR');
+    expect(desktopSetupText).not.toMatch(/(?:^|\n)\s*(?:\.|source)\s+[^\n]*\/proc\//u);
+    expect(desktopSetupText).not.toMatch(/(?:^|\n)\s*eval(?:\s|$)/u);
+    expect(desktopSetupText).not.toMatch(/(?:^|\n)\s*(?:\.|source)\s+[^\n]*\.env/u);
+    expect(desktopSetupText).toContain(
       "nohup /usr/local/bin/crabbox-browser --remote-debugging-address=127.0.0.1",
     );
     expect(desktopSetupText).toMatch(/for required_command in [^\n;]*python3[^\n;]*; do/u);
@@ -444,12 +470,34 @@ describe("Crabbox worker provider", () => {
       'wallpaper_path="$worker_home/.local/share/backgrounds/openclaw-worker.png"',
     );
     expect(desktopSetupText).toContain('for backdrop in "${backdrop_roots[@]}"; do');
+    const sessionExportIndex = desktopSetupText.indexOf(
+      "export DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER",
+    );
+    const sessionExtractionIndex = desktopSetupText.indexOf(
+      'DBUS_SESSION_BUS_ADDRESS=*) DBUS_SESSION_BUS_ADDRESS="${process_variable#*=}"',
+    );
+    const firstXfconfIndex = desktopSetupText.indexOf("xfconf-query -c xfce4-desktop");
+    const xrandrIndex = desktopSetupText.indexOf("xrandr --listmonitors");
     const lastImageIndex = desktopSetupText.indexOf('-p "$backdrop/last-image"');
-    const stopRendererIndex = desktopSetupText.indexOf("pkill -TERM -x xfdesktop");
-    const startRendererIndex = desktopSetupText.indexOf("nohup xfdesktop");
+    const saveRendererIndex = desktopSetupText.indexOf(
+      'renderer_pid_before_reload="$renderer_pid"',
+    );
+    const reloadRendererIndex = desktopSetupText.indexOf("xfdesktop --reload");
+    const verifyRendererIndex = desktopSetupText.indexOf(
+      '[ "$renderer_pid" = "$renderer_pid_before_reload" ]',
+    );
+    expect(sessionExtractionIndex).toBeGreaterThan(-1);
+    expect(sessionExportIndex).toBeGreaterThan(sessionExtractionIndex);
+    expect(sessionExportIndex).toBeGreaterThan(-1);
+    expect(firstXfconfIndex).toBeGreaterThan(sessionExportIndex);
+    expect(xrandrIndex).toBeGreaterThan(sessionExportIndex);
     expect(lastImageIndex).toBeGreaterThan(-1);
-    expect(stopRendererIndex).toBeGreaterThan(lastImageIndex);
-    expect(startRendererIndex).toBeGreaterThan(stopRendererIndex);
+    expect(saveRendererIndex).toBeGreaterThan(lastImageIndex);
+    expect(reloadRendererIndex).toBeGreaterThan(saveRendererIndex);
+    expect(verifyRendererIndex).toBeGreaterThan(reloadRendererIndex);
+    expect(desktopSetupLines.filter((line) => line === "bind_xfdesktop_session")).toHaveLength(2);
+    expect(desktopSetupText).not.toMatch(/pkill[^\n]*xfdesktop/u);
+    expect(desktopSetupText).not.toContain("nohup xfdesktop");
     expect(desktopSetupText).not.toContain("def ellipse");
     expect(desktopSetupText).not.toContain("import struct");
     expect(desktopSetupText).not.toContain(".svg");
