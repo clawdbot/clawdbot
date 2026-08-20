@@ -605,4 +605,122 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(instruction).toBeNull();
   });
+
+  function makeFailedReadAttempt(overrides: Partial<EmbeddedRunAttemptResult> = {}) {
+    const toolUseAssistant = makeLastAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool_1", name: "read", arguments: {} }],
+    });
+    return makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "read", isError: true }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      messagesSnapshot: [
+        toolUseAssistant,
+        { role: "toolResult", toolCallId: "tool_1", toolName: "read", isError: true },
+      ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+      lastAssistant: toolUseAssistant,
+      currentAttemptAssistant: toolUseAssistant,
+      lastToolError: { toolName: "read", error: "ENOENT" },
+      ...overrides,
+    });
+  }
+
+  it.each([
+    {
+      label: "an earlier successful tool presentation",
+      attemptOverrides: {},
+      extraParams: { hasTerminalToolPresentation: true },
+    },
+    {
+      label: "a stale lifecycle activeCount after the exact result persisted",
+      attemptOverrides: {
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_1"],
+        },
+      },
+      extraParams: {},
+    },
+  ])(
+    "finalizes an exact current failed terminal batch despite $label (#118489)",
+    ({ attemptOverrides, extraParams }) => {
+      const instruction = resolveSettledToolTerminalContinuationInstruction(
+        makeSettledContinuationParams(makeFailedReadAttempt(attemptOverrides), extraParams),
+      );
+      expect(instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+      expect(instruction).toContain("If a tool failed, say so; never claim completion or success.");
+    },
+  );
+
+  it.each([
+    {
+      label: "an async tool is still active",
+      attemptOverrides: {
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_1"],
+        },
+        toolMetas: [{ toolName: "read", isError: true, asyncStarted: true }],
+      },
+    },
+    {
+      label: "an accepted child session still owns the response",
+      attemptOverrides: {
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_1"],
+        },
+        acceptedSessionSpawns: [
+          { runId: "run-child", childSessionKey: "agent:main:subagent:child" },
+        ],
+      },
+    },
+    {
+      label: "an unrelated active item remains",
+      attemptOverrides: {
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+          activeItemIds: ["tool_unrelated"],
+        },
+      },
+    },
+  ])("does not override stale lifecycle proof when $label (#118489)", ({ attemptOverrides }) => {
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams(makeFailedReadAttempt(attemptOverrides)),
+    );
+    expect(instruction).toBeNull();
+  });
+
+  it("still suppresses continuation when the presentation belongs to a successful batch (#118489)", () => {
+    const toolUseAssistant = makeLastAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool_ok", name: "read", arguments: {} }],
+    });
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams(
+        makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "read" }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          messagesSnapshot: [
+            toolUseAssistant,
+            { role: "toolResult", toolCallId: "tool_ok", toolName: "read", isError: false },
+          ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+          lastAssistant: toolUseAssistant,
+          currentAttemptAssistant: toolUseAssistant,
+        }),
+        { hasTerminalToolPresentation: true },
+      ),
+    );
+    expect(instruction).toBeNull();
+  });
 });

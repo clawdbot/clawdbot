@@ -238,4 +238,58 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.attempt).toBe(attempt);
     expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
   });
+
+  it("finalizes an exact failed batch once when an earlier presentation was recorded (#118489)", async () => {
+    const attempt = settledFailedAttempt();
+    const finalAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "CANARY_RECOVERED: the exec tool failed as expected." }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValueOnce({
+      outcome: "answered",
+      result: {
+        assistant: finalAssistant,
+        usage: finalAssistant.usage,
+        diagnosticTrace: { traceId: "trace-118489", spanId: "span-118489" },
+      },
+    });
+    const input = finalizationInput(attempt);
+    input.finalization.hasTerminalToolPresentation = true;
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: "CANARY_RECOVERED: the exec tool failed as expected." }),
+    ]);
+  });
+
+  it("finalizes an exact failed batch once with a stale lifecycle activeCount (#118489)", async () => {
+    const attempt = settledFailedAttempt();
+    attempt.itemLifecycle = {
+      startedCount: 2,
+      completedCount: 1,
+      activeCount: 1,
+      activeItemIds: ["tool-exec"],
+    };
+    const finalAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "CANARY_RECOVERED: bridge failure explained." }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValueOnce({
+      outcome: "answered",
+      result: {
+        assistant: finalAssistant,
+        usage: finalAssistant.usage,
+        diagnosticTrace: { traceId: "trace-118489", spanId: "span-118489" },
+      },
+    });
+
+    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: "CANARY_RECOVERED: bridge failure explained." }),
+    ]);
+  });
 });

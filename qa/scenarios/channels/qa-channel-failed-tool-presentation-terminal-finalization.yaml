@@ -1,0 +1,126 @@
+title: QA channel final reply after a failed tool with a later terminal presentation
+
+scenario:
+  id: qa-channel-failed-tool-presentation-terminal-finalization
+  surface: channel
+  coverage:
+    primary: [agent-runtime.failure-recovery-empty-response-recovery]
+    secondary: [channels.qa-channel-final-reply, agent-runtime.failure-recovery-retry-policy]
+  regressionRefs:
+    - openclaw/openclaw#118489
+  runtimePairLane: core
+  gatewayConfigPatch:
+    tools:
+      web:
+        fetch:
+          # The presentation probe fetches the local mock server; private
+          # loopback must be allowed for this isolated QA scenario.
+          ssrfPolicy:
+            dangerouslyAllowPrivateNetwork: true
+  objective: Verify a failed terminal batch still receives one failure-honest finalization when a later tool outcome recorded a terminal presentation.
+  successCriteria:
+    - The failing read and the presentation-producing web_fetch are dispatched exactly once.
+    - The later web_fetch terminal presentation does not suppress the failure-honest finalization.
+    - The failed tool never replays and qa-channel delivers exactly one visible reply.
+  codeRefs:
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Verifies one exact tool batch with a terminal presentation and isolated qa-channel delivery.
+    channel: qa-channel
+    retryCount: 0
+    summary: Prove a failed read followed by a successful web_fetch presentation still yields one failure-honest reply.
+    config:
+      requiredProviderMode: mock-openai
+      channelId: qa-failed-terminal-presentation
+      promptSnippet: Failed tool terminal recovery with presentation QA check
+      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      failureHonestyNeedle: If a tool failed, say so; never claim completion or success.
+      expectedMarker: QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK
+
+flow:
+  steps:
+    - name: finalizes a failed batch despite a later terminal presentation
+      actions:
+        - if:
+            expr: "(env.gateway.runtimeEnv?.OPENCLAW_QA_FORCE_RUNTIME ?? 'openclaw') !== 'codex'"
+            then:
+              - call: qaImport
+                args:
+                  - ./errors.js
+                saveAs: qaErrors
+              - throw:
+                  expr: "new qaErrors.QaSuiteScenarioSkipError(`known-harness-gap openclaw-runtime: presentation residual requires the Codex app-server dynamic tool bridge (${config.promptSnippet})`)"
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: failed-terminal presentation proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:qa-channel:group:group:${config.channelId}`"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.channelId
+              kind: group
+            senderId: qa-driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Failed tool terminal recovery with presentation QA check: read the missing workspace file, then call web_fetch on ${env.mock.baseUrl}/debug/request-cursor, then respond with exact marker: \\`QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK\\`.`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.channelId
+              kind: group
+            sinceIndex:
+              ref: outboundStartIndex
+            textIncludes:
+              ref: config.expectedMarker
+            timeoutMs: 60000
+          saveAs: reply
+        - set: allRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))"
+        - set: scenarioRequests
+          value:
+            expr: "allRequests.filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - set: readPlans
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'read')"
+        - assert:
+            expr: "readPlans.length === 1"
+            message:
+              expr: "`expected one read plan, got ${JSON.stringify(scenarioRequests.map((request) => request.plannedToolName))}`"
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - assert:
+            expr: "transcript.assistantToolCallCounts.read === 1 && transcript.completedToolCallCounts.read === 1 && !transcript.successfulToolCallCounts.read && transcript.successfulToolCallCounts.web_fetch === 1"
+            message:
+              expr: "`expected one failed read and one successful web_fetch, got ${JSON.stringify(transcript)}`"
+        - set: deliveries
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.channelId)"
+        - assert:
+            expr: "deliveries.length === 1 && reply.text.trim() === config.expectedMarker"
+            message:
+              expr: "`expected exactly one failure-honest reply, got ${JSON.stringify(deliveries)}`"
+      detailsExpr: "`${reply.text}; read-calls=${String(transcript.assistantToolCallCounts.read)} fetch-success=${String(transcript.successfulToolCallCounts.web_fetch)}`"

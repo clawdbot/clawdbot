@@ -240,15 +240,44 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
         : [];
     }),
   );
-  const allToolsProvenSettled =
-    attempt.itemLifecycle.startedCount > 0 &&
-    attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
-    attempt.itemLifecycle.activeCount === 0 &&
+  const allRequestedToolsHavePersistedResults =
     requestedToolCalls.length > 0 &&
     requestedToolCalls.every(
       ({ id, name }) =>
         id !== null && name !== null && settledToolResults.get(id)?.toolName === name,
     );
+  const hasPersistedTerminalFailure =
+    allRequestedToolsHavePersistedResults &&
+    requestedToolCalls.some(
+      ({ id }) => id !== null && settledToolResults.get(id)?.isError === true,
+    );
+  // Exact persisted results are durable settlement evidence even when a bridge
+  // error raced the lifecycle decrement. Only override the aggregate count when
+  // the producer recorded that every still-active item belongs to this batch.
+  const activeItemIds = attempt.itemLifecycle.activeItemIds;
+  const everyActiveItemBelongsToSettledBatch =
+    Array.isArray(activeItemIds) &&
+    activeItemIds.length === attempt.itemLifecycle.activeCount &&
+    activeItemIds.every((itemId) =>
+      requestedToolCalls.some(
+        ({ id }) =>
+          id !== null &&
+          (itemId === id ||
+            itemId === `tool:${id}` ||
+            itemId === `command:${id}` ||
+            itemId === `patch:${id}`) &&
+          settledToolResults.get(id) !== undefined,
+      ),
+    );
+  const lifecycleIsSettled =
+    (attempt.itemLifecycle.startedCount > 0 &&
+      attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
+      attempt.itemLifecycle.activeCount === 0) ||
+    (hasPersistedTerminalFailure &&
+      everyActiveItemBelongsToSettledBatch &&
+      !hasAsyncActivity(attempt.toolMetas) &&
+      !hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns));
+  const allToolsProvenSettled = allRequestedToolsHavePersistedResults && lifecycleIsSettled;
   const failedToolNames = new Set(
     requestedToolCalls.flatMap(({ id, name }) =>
       id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
@@ -266,7 +295,13 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
       );
       return metadata?.terminate === true && metadata.isError !== true;
     });
-  return { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination };
+  return {
+    assistant,
+    allToolsProvenSettled,
+    failedToolNames,
+    intentionalTermination,
+    hasPersistedTerminalFailure,
+  };
 }
 
 /** Builds one fresh continuation after settled tools ended without a visible final answer. */
@@ -283,8 +318,13 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   attempt: IncompleteTurnAttempt;
 }): string | null {
   const { attempt } = params;
-  const { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination } =
-    resolveSettledToolBatchEvidence(attempt);
+  const {
+    assistant,
+    allToolsProvenSettled,
+    failedToolNames,
+    intentionalTermination,
+    hasPersistedTerminalFailure,
+  } = resolveSettledToolBatchEvidence(attempt);
   const terminal = attempt.terminal;
   const idlePromptTimeout =
     terminal.kind === "timeout" &&
@@ -315,7 +355,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   );
   if (
     params.payloadCount !== 0 ||
-    params.hasTerminalToolPresentation ||
+    (params.hasTerminalToolPresentation && !hasPersistedTerminalFailure) ||
     params.aborted ||
     ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||
     (terminal.kind === "failed" && !attempt.settledTurnFinalizationContext) ||

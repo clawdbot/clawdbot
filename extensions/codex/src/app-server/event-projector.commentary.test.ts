@@ -168,7 +168,12 @@ describe("CodexAppServerEventProjector commentary projection", () => {
         content: [{ type: "text", text: "" }],
       });
       expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
-      expect(result.itemLifecycle).toEqual({ startedCount: 2, completedCount: 2, activeCount: 0 });
+      expect(result.itemLifecycle).toEqual({
+        startedCount: 2,
+        completedCount: 2,
+        activeCount: 0,
+        activeItemIds: [],
+      });
       expect(result.messagesSnapshot.filter((message) => message.role === "assistant")).toEqual([
         expect.objectContaining({ content: [expect.objectContaining({ type: "toolCall" })] }),
       ]);

@@ -179,6 +179,7 @@ import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
   buildCustomToolCallEventsWithInput,
+  buildToolCallBatchEvents,
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
@@ -293,6 +294,10 @@ const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
 const QA_RESTART_CHECKPOINT_COUNT = 3;
 const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
+const QA_FAILED_TOOL_PRESENTATION_RECOVERY_PROMPT_RE =
+  /failed tool terminal recovery with presentation qa check/i;
+const QA_FAILED_TOOL_PRESENTATION_FETCH_URL_RE =
+  /(?:web_fetch url:|call web_fetch on) (https?:\/\/[^\s`",]+)/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
@@ -1044,6 +1049,10 @@ async function buildResponsesPayload(
     QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
+  const isActiveFailedToolPresentationRecovery =
+    QA_FAILED_TOOL_PRESENTATION_RECOVERY_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_FAILED_TOOL_PRESENTATION_RECOVERY_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -1365,9 +1374,41 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("");
   }
+  // #118489: the terminal presentation flag from a later successful tool must
+  // not suppress the failure-honest finalization for an exactly persisted
+  // failed batch. The failing read is planned first, the presentation-producing
+  // web_fetch second, so the tracked presentation belongs to the later outcome.
+  if (isActiveFailedToolPresentationRecovery) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      if (
+        !allInputText.includes("If a tool failed, say so; never claim completion or success.") &&
+        !allInputText.includes("state that failure plainly and do not claim it succeeded")
+      ) {
+        return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
+      }
+      const marker =
+        exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK";
+      return buildAssistantEvents("The requested file could not be read: ENOENT. " + marker);
+    }
+    if (!hasCompletedToolOutput) {
+      const fetchUrl =
+        QA_FAILED_TOOL_PRESENTATION_FETCH_URL_RE.exec(prompt)?.[1] ?? "https://example.com";
+      return buildToolCallBatchEvents([
+        { name: "read", args: { path: "qa-failed-terminal-missing-file.txt" } },
+        { name: "web_fetch", args: { url: fetchUrl } },
+      ]);
+    }
+    // After the tools have output, end the turn with no assistant message so
+    // the runtime's terminal assistant stays the toolUse batch (the residual
+    // shape); a replay or plain text would mask the finalization decision.
+    return buildAssistantEvents("");
+  }
   if (isActiveFailedToolTerminalRecovery) {
     if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      if (!allInputText.includes("state that failure plainly and do not claim it succeeded")) {
+      if (
+        !allInputText.includes("If a tool failed, say so; never claim completion or success.") &&
+        !allInputText.includes("state that failure plainly and do not claim it succeeded")
+      ) {
         return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
       }
       const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";

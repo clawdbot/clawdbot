@@ -364,6 +364,7 @@ export class CodexAppServerEventProjector {
       completedCompactionCount: this.completedCompactionCount,
       activeItemCount: this.activeItemIds.size,
       completedItemCount: this.completedItemIds.size,
+      activeItemIds: [...this.activeItemIds],
       guardianReviewCount: this.eventProjection.guardianReviewCount,
       toolTelemetry,
       yieldDetected: options?.yieldDetected,

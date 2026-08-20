@@ -709,6 +709,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,
       activeCount: state.itemActiveIds.size,
+      activeItemIds: [...state.itemActiveIds],
     }),
     waitForCompactionRetry: () => {
       // Reject after unsubscribe so callers treat it as cancellation, not success

@@ -199,7 +199,7 @@ describe("diagnostics-otel gateway runtime", () => {
       expect(finalizations).toHaveLength(1);
       expect(finalizations[0]?.body?.tools ?? []).toHaveLength(0);
       expect(finalizations[0]?.allInputText).toContain(
-        "state that failure plainly and do not claim it succeeded",
+        "If a tool failed, say so; never claim completion or success.",
       );
       const finalizationInput = finalizations[0]?.body?.input ?? [];
       const failedExecCalls = finalizationInput.filter(

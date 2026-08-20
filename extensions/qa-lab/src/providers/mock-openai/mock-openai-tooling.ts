@@ -136,6 +136,43 @@ export function buildToolCallEventsWithArgs(
   ];
 }
 
+/** Builds one assistant turn that requests several tools in a fixed order. */
+export function buildToolCallBatchEvents(
+  calls: ReadonlyArray<{ name: string; args: Record<string, unknown> }>,
+): StreamEvent[] {
+  const built = calls.map((call) => ({
+    name: call.name,
+    ...buildMockFunctionCall(call.name, call.args),
+  }));
+  const events: StreamEvent[] = [];
+  for (const call of built) {
+    events.push(
+      {
+        type: "response.output_item.added",
+        item: {
+          type: "function_call",
+          id: call.itemId,
+          call_id: call.callId,
+          name: call.name,
+          arguments: "",
+        },
+      },
+      { type: "response.function_call_arguments.delta", delta: call.serialized },
+      { type: "response.output_item.done", item: call.item },
+    );
+  }
+  events.push({
+    type: "response.completed",
+    response: {
+      id: built[0]?.responseId ?? "resp_mock_batch_" + Date.now(),
+      status: "completed",
+      output: built.map((call) => call.item),
+      usage: { input_tokens: 128, output_tokens: 32, total_tokens: 160 },
+    },
+  });
+  return events;
+}
+
 export function buildCustomToolCallEventsWithInput(
   name: string,
   input: string,

@@ -364,6 +364,12 @@ export type EmbeddedRunAttemptResult = {
     startedCount: number;
     completedCount: number;
     activeCount: number;
+    /**
+     * Producer-owned identity of the still-active items. Absent for older
+     * harnesses; the finalizer fails closed on a nonzero activeCount when the
+     * producer did not record which items remain active.
+     */
+    activeItemIds?: string[];
   };
   setTerminalLifecycleMeta?: (meta: {
     replayInvalid?: boolean;
