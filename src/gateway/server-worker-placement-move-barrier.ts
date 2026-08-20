@@ -23,15 +23,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
     runId: string;
   }) => Promise<void>;
 }): WorkerPlacementMoveBarrier {
-  return async ({
-    sessionId,
-    sessionKey,
-    agentId,
-    sourceDisposition,
-    authorize,
-    prepareAbandon,
-    begin,
-  }) => {
+  return async ({ sessionId, sessionKey, agentId, sourceDisposition, authorize, begin }) => {
     const sessionRuntime = await params.loadSessionRuntime();
     const target = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
       cfg: getRuntimeConfig(),
@@ -40,7 +32,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
       clone: false,
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
-    let begun: ReturnType<typeof begin> | undefined;
+    let begun: Awaited<ReturnType<typeof begin>> | undefined;
     await runExclusiveSessionLifecycleMutation({
       scope: target.storePath,
       identities: lifecycleIdentities,
@@ -55,20 +47,14 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
           errorMessage: `Session ${sessionKey} changed before placement move. Retry.`,
         });
         authorize?.();
-        const abandoned = sourceDisposition === "abandon" ? prepareAbandon?.() : undefined;
-        if (abandoned && params.persistAbandonedPartial) {
-          // Commit the exact live partial before durable drain clears its run owner;
-          // begin revalidates source ownership after asynchronous transcript I/O.
-          await params.persistAbandonedPartial({
-            sessionId,
-            sessionKey,
-            agentId,
-            runId: abandoned.runId,
-          });
-          authorize?.();
-          abandoned.assertCurrent();
-        }
-        begun = begin();
+        begun = await begin(async (runId) => {
+          if (params.persistAbandonedPartial) {
+            // Persist before a new durable drain closes the exact worker run;
+            // joined decisions never invoke this mint-only callback.
+            await params.persistAbandonedPartial({ sessionId, sessionKey, agentId, runId });
+            authorize?.();
+          }
+        });
         clearSessionQueues(lifecycleIdentities);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
         if (sourceDisposition === "abandon") {

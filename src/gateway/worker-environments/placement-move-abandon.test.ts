@@ -150,6 +150,56 @@ describe("offline device placement abandonment", () => {
     expect(beforeMoveBegin).toHaveBeenCalledOnce();
   });
 
+  it("joins a durable abandonment retry without validating or persisting the source again", async () => {
+    const persistedPartials: string[] = [];
+    const beforeMoveBegin = vi.fn(async (abandoned: { runId: string } | undefined) => {
+      if (abandoned) {
+        persistedPartials.push(abandoned.runId);
+      }
+    });
+    const afterMoveBegin = vi.fn().mockImplementationOnce(() => {
+      throw new Error("move barrier interrupted after durable begin");
+    });
+    const options = { beforeMoveBegin, afterMoveBegin, deviceRunnerAvailable: false };
+    const harness = createHarness(placements, options);
+    const active = await harness.service.dispatch(REQUEST);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+    placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "offline-retry-claim",
+      runId: "offline-retry-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const request = requestFor(active);
+
+    await expect(harness.service.move(request)).rejects.toThrow(
+      "move barrier interrupted after durable begin",
+    );
+
+    expect(placements.get(active.sessionId)).toMatchObject({ state: "draining" });
+    expect(placements.getPlacementMove(active.sessionId)).toMatchObject({
+      source: request.source,
+      target: request.target,
+      abandonSource: true,
+    });
+    expect(persistedPartials).toEqual(["offline-retry-run"]);
+    options.deviceRunnerAvailable = true;
+
+    await expect(harness.service.move(request)).resolves.toMatchObject({ state: "local" });
+
+    expect(beforeMoveBegin).toHaveBeenCalledOnce();
+    expect(persistedPartials).toEqual(["offline-retry-run"]);
+    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { name: "partial persistence fails", outcome: "persist-error" },
     { name: "the source changes during persistence", outcome: "stale-source" },

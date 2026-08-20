@@ -152,7 +152,7 @@ function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string) {
       stateChangedAtMs: 2,
     },
     joined: false,
-  } satisfies ReturnType<Parameters<WorkerPlacementMoveBarrier>[0]["begin"]>;
+  } satisfies Awaited<ReturnType<Parameters<WorkerPlacementMoveBarrier>[0]["begin"]>>;
 }
 
 describe("worker placement startup health lifetime", () => {
@@ -585,6 +585,11 @@ describe("worker placement startup health lifetime", () => {
 describe("worker placement move destination", () => {
   it.each([
     { name: "persists the claimed partial", claimRunId: "worker-run", outcome: "success" },
+    {
+      name: "joins an existing decision without new-source validation or persistence",
+      claimRunId: "worker-run",
+      outcome: "joined-existing",
+    },
     { name: "fails before the durable move", claimRunId: "worker-run", outcome: "persist-error" },
     {
       name: "rejects a changed source after persistence",
@@ -639,7 +644,19 @@ describe("worker placement move destination", () => {
         revokeSessionAuthority,
         persistAbandonedPartial,
       });
-      const begin = vi.fn(() => {
+      const begin = vi.fn(async (prepareNew?: (runId: string) => Promise<void>) => {
+        observed.push("inspect-intent");
+        if (scenario.outcome === "joined-existing") {
+          return { ...createMoveBarrierBeginFixture(sessionId, sessionKey), joined: true };
+        }
+        observed.push("validate-source");
+        if (scenario.claimRunId) {
+          await prepareNew?.(scenario.claimRunId);
+          observed.push("validate-claim");
+          if (scenario.outcome === "rotated-claim") {
+            throw new Error("worker turn changed");
+          }
+        }
         observed.push("begin");
         if (sourceChanged) {
           throw new Error("placement source changed");
@@ -657,34 +674,20 @@ describe("worker placement move destination", () => {
             throw new Error("session access revoked");
           }
         },
-        prepareAbandon: () => {
-          observed.push("validate-source");
-          return scenario.claimRunId
-            ? {
-                runId: scenario.claimRunId,
-                assertCurrent: () => {
-                  observed.push("validate-claim");
-                  if (scenario.outcome === "rotated-claim") {
-                    throw new Error("worker turn changed");
-                  }
-                },
-              }
-            : undefined;
-        },
         begin,
       });
 
       try {
         if (scenario.outcome === "persist-error") {
           await expect(operation).rejects.toThrow("transcript append failed");
-          expect(begin).not.toHaveBeenCalled();
           expect(revokeSessionAuthority).not.toHaveBeenCalled();
-          expect(observed).toEqual(["authorize", "validate-source", "persist"]);
+          expect(observed).toEqual(["authorize", "inspect-intent", "validate-source", "persist"]);
         } else if (scenario.outcome === "stale-source") {
           await expect(operation).rejects.toThrow("placement source changed");
           expect(revokeSessionAuthority).not.toHaveBeenCalled();
           expect(observed).toEqual([
             "authorize",
+            "inspect-intent",
             "validate-source",
             "persist",
             "authorize",
@@ -693,24 +696,36 @@ describe("worker placement move destination", () => {
           ]);
         } else if (scenario.outcome === "revoked-authority") {
           await expect(operation).rejects.toThrow("session access revoked");
-          expect(begin).not.toHaveBeenCalled();
-          expect(revokeSessionAuthority).not.toHaveBeenCalled();
-          expect(observed).toEqual(["authorize", "validate-source", "persist", "authorize"]);
-        } else if (scenario.outcome === "rotated-claim") {
-          await expect(operation).rejects.toThrow("worker turn changed");
-          expect(begin).not.toHaveBeenCalled();
           expect(revokeSessionAuthority).not.toHaveBeenCalled();
           expect(observed).toEqual([
             "authorize",
+            "inspect-intent",
+            "validate-source",
+            "persist",
+            "authorize",
+          ]);
+        } else if (scenario.outcome === "rotated-claim") {
+          await expect(operation).rejects.toThrow("worker turn changed");
+          expect(revokeSessionAuthority).not.toHaveBeenCalled();
+          expect(observed).toEqual([
+            "authorize",
+            "inspect-intent",
             "validate-source",
             "persist",
             "authorize",
             "validate-claim",
           ]);
+        } else if (scenario.outcome === "joined-existing") {
+          await expect(operation).resolves.toMatchObject({
+            joined: true,
+            placement: { state: "draining" },
+          });
+          expect(observed).toEqual(["authorize", "inspect-intent", "revoke", "interrupt"]);
         } else {
           await expect(operation).resolves.toMatchObject({ placement: { state: "draining" } });
           expect(observed).toEqual([
             "authorize",
+            "inspect-intent",
             "validate-source",
             ...(scenario.claimRunId ? ["persist", "authorize", "validate-claim"] : []),
             "begin",
@@ -718,7 +733,8 @@ describe("worker placement move destination", () => {
             "interrupt",
           ]);
         }
-        if (scenario.claimRunId) {
+        expect(begin).toHaveBeenCalledOnce();
+        if (scenario.claimRunId && scenario.outcome !== "joined-existing") {
           expect(persistAbandonedPartial).toHaveBeenCalledWith({
             sessionId,
             sessionKey,
@@ -799,7 +815,7 @@ describe("worker placement move destination", () => {
         if (!dispatchOptions) {
           throw new Error("worker placement move barrier was not captured");
         }
-        const begin = vi.fn(() => createMoveBarrierBeginFixture(sessionId, sessionKey));
+        const begin = vi.fn(async () => createMoveBarrierBeginFixture(sessionId, sessionKey));
         const operation = dispatchOptions.runMoveBarrier({
           sessionId,
           sessionKey,

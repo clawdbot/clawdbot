@@ -105,6 +105,13 @@ export function createHarness(
       }
       return begun;
     },
+    preparePlacementMove: async (params, prepareNew) => {
+      const begun = await placementStore.preparePlacementMove(params, prepareNew);
+      if (!begun.joined) {
+        log.push("placement:draining");
+      }
+      return begun;
+    },
     cancelPlacementMove: (params) => placementStore.cancelPlacementMove(params),
     completePlacementMoveSourceToLocal: (params) => {
       log.push("placement:local");
@@ -387,15 +394,14 @@ export function createHarness(
       fail("activation");
       return activate();
     },
-    runMoveBarrier: async ({ authorize, prepareAbandon, begin }) => {
+    runMoveBarrier: async ({ authorize, begin }) => {
       authorize?.();
-      const abandoned = prepareAbandon?.();
-      if (options.beforeMoveBegin) {
-        await options.beforeMoveBegin(abandoned);
-        authorize?.();
-        abandoned?.assertCurrent();
-      }
-      const begun = begin();
+      const begun = await begin(async (runId) => {
+        if (options.beforeMoveBegin) {
+          await options.beforeMoveBegin({ runId });
+          authorize?.();
+        }
+      });
       options.afterMoveBegin?.();
       if (options.failMoveAfterBegin) {
         throw new Error("move barrier interrupted");

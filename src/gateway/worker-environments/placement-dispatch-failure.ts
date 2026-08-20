@@ -33,6 +33,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimTurn"
   | "closeWorkerTurnToolState"
   | "beginPlacementMove"
+  | "preparePlacementMove"
   | "cancelPlacementMove"
   | "completePlacementMoveSourceToLocal"
   | "completeAbandonedPlacementMoveSourceToLocal"

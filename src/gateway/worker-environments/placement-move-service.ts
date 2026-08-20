@@ -29,12 +29,11 @@ export type WorkerPlacementMoveBarrier = (
   params: MoveSessionIdentity & {
     authorize?: WorkerPlacementAuthorization;
     sourceDisposition: WorkerPlacementMoveSourceDisposition;
-    prepareAbandon?: () => { runId: string; assertCurrent: () => void } | undefined;
-    begin: () => {
+    begin: (prepareNew?: (runId: string) => Promise<void>) => Promise<{
       intent: WorkerPlacementMoveIntent;
       placement: WorkerDrainingDispatchPlacement;
       joined: boolean;
-    };
+    }>;
   },
 ) => Promise<{
   intent: WorkerPlacementMoveIntent;
@@ -129,38 +128,30 @@ export function createWorkerPlacementMoveService(options: {
         agentId: request.agentId,
         sourceDisposition: request.abandonSource ? "abandon" : "reconcile",
         authorize,
-        ...(request.abandonSource
-          ? {
-              prepareAbandon: () => {
-                options.validateAbandonSource(request);
-                const placement = options.placements.get(request.sessionId);
-                const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
-                return claim
-                  ? {
-                      runId: claim.runId,
-                      assertCurrent: () => {
-                        const current = options.placements.get(request.sessionId);
-                        if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
-                          throw new Error(
-                            `Session ${request.sessionKey} abandonment worker turn changed; retry`,
-                          );
-                        }
-                      },
-                    }
-                  : undefined;
-              },
-            }
-          : {}),
-        begin: () => {
-          if (request.abandonSource) {
-            options.validateAbandonSource(request);
-          }
-          const started = options.placements.beginPlacementMove({
+        begin: async (prepareNew) => {
+          const moveRequest = {
             sessionId: request.sessionId,
             source: request.source,
             target: request.target,
-            ...(request.abandonSource ? { abandonSource: true } : {}),
-          });
+            ...(request.abandonSource ? { abandonSource: true as const } : {}),
+          };
+          const started = request.abandonSource
+            ? await options.placements.preparePlacementMove(moveRequest, async () => {
+                options.validateAbandonSource(request);
+                const placement = options.placements.get(request.sessionId);
+                const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
+                if (claim && prepareNew) {
+                  await prepareNew(claim.runId);
+                  const current = options.placements.get(request.sessionId);
+                  if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
+                    throw new Error(
+                      `Session ${request.sessionKey} abandonment worker turn changed; retry`,
+                    );
+                  }
+                  options.validateAbandonSource(request);
+                }
+              })
+            : options.placements.beginPlacementMove(moveRequest);
           if (started.placement.state !== "draining") {
             throw new Error(
               `Session ${request.sessionKey} placement move is already in ${started.placement.state}`,

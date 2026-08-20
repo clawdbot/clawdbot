@@ -40,10 +40,14 @@ describe("sessions.move abandonment", () => {
     });
   });
 
-  it("returns the terminal local generation while remote settlement remains unresolved", async () => {
+  it.each([
+    { name: "starts an active abandonment", joined: false },
+    { name: "joins an exact draining abandonment retry", joined: true },
+  ])("$name and returns local while remote settlement remains unresolved", async ({ joined }) => {
     const source = { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 };
     const active = activePlacement();
     const draining = { ...active, state: "draining" as const, generation: 5 };
+    const existing = joined ? draining : active;
     const local = {
       ...active,
       state: "local" as const,
@@ -53,6 +57,7 @@ describe("sessions.move abandonment", () => {
       turnClaim: null,
     };
     const recordPlacementMoveError = vi.fn();
+    const validateAbandonSource = vi.fn();
     let remoteSettlementObserved = false;
     const remoteSettlement = new Promise<void>(() => {});
     void remoteSettlement.then(() => {
@@ -60,26 +65,32 @@ describe("sessions.move abandonment", () => {
     });
     const moves = createWorkerPlacementMoveService({
       placements: {
-        beginPlacementMove: () => ({
-          intent: {
-            operationId: "move:v1:rpc-abandon",
-            sessionId,
-            source,
-            target: { kind: "gateway" },
-            abandonSource: true,
-            lastError: null,
-            createdAtMs: 1,
-            updatedAtMs: 1,
-          },
-          placement: draining,
-          joined: false,
-        }),
+        preparePlacementMove: async (_request: unknown, prepareNew: () => Promise<void>) => {
+          if (!joined) {
+            await prepareNew();
+          }
+          return {
+            intent: {
+              operationId: "move:v1:rpc-abandon",
+              sessionId,
+              source,
+              target: { kind: "gateway" },
+              abandonSource: true,
+              lastError: null,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+            },
+            placement: draining,
+            joined,
+          };
+        },
+        get: () => existing,
         getPlacementMove: () => undefined,
         recordPlacementMoveError,
       } as never,
       environments: { get: () => undefined },
       runMoveBarrier: async (params) => {
-        const begun = params.begin();
+        const begun = await params.begin();
         if (params.sourceDisposition !== "abandon") {
           throw new Error("placement move interrupted");
         }
@@ -87,7 +98,7 @@ describe("sessions.move abandonment", () => {
       },
       dispatch: vi.fn(),
       reclaimSource: vi.fn(),
-      validateAbandonSource: vi.fn(),
+      validateAbandonSource,
       abandonSource: vi.fn(async () => local as never),
       resolveDestination: vi.fn(),
     });
@@ -97,7 +108,7 @@ describe("sessions.move abandonment", () => {
         getSessionEventSubscriberConnIds: () => new Set(),
         workerPlacementDispatchService: { dispatch: vi.fn(), move: moves.move } as never,
         workerSessionPlacementService: {
-          getMany: () => new Map([[sessionId, active]]),
+          getMany: () => new Map([[sessionId, existing]]),
         },
       }),
       { expected: source, target: { kind: "gateway" }, abandonSource: true },
@@ -113,6 +124,7 @@ describe("sessions.move abandonment", () => {
       },
       undefined,
     );
+    expect(validateAbandonSource).toHaveBeenCalledTimes(joined ? 0 : 1);
     expect(recordPlacementMoveError).not.toHaveBeenCalled();
     expect(remoteSettlementObserved).toBe(false);
   });
