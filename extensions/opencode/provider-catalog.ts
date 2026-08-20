@@ -3,6 +3,7 @@ import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildLiveModelProviderConfig,
+  buildOpenAICompatibleLiveModels,
   fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -147,6 +148,7 @@ const MODEL_CAPABILITY_ROWS = [
   ["ling-3.0-flash-free", 262144, 32768, T, E_LMH, DEPRECATED],
   ["ling-3.0-tiny-free", 262144, 32768, T],
   ["nemotron-3-ultra-free", 1000000, 128000, T],
+  ["nemotron-3.5-lightning-free", 1000000, 128000, T],
   ["north-mini-code-free", 256000, 64000, T, E_NONE_HIGH],
   ["laguna-s-2.1-free", 256000, 32000, T, E_LMH],
   ["longcat-2.0-free", 1000000, 131072, T],
@@ -308,6 +310,7 @@ const MODEL_COSTS: Record<ZenModelId, ModelDefinitionConfig["cost"]> = {
   "minimax-m2.7": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
   "minimax-m3": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
   "nemotron-3-ultra-free": FREE_COST,
+  "nemotron-3.5-lightning-free": FREE_COST,
   "north-mini-code-free": FREE_COST,
   "qwen3.5-plus": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
   "qwen3.6-plus": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 },
@@ -373,6 +376,7 @@ const MODEL_NAMES: Record<ZenModelId, string> = {
   "minimax-m2.7": "MiniMax M2.7",
   "minimax-m3": "MiniMax M3",
   "nemotron-3-ultra-free": "Nemotron 3 Ultra Free",
+  "nemotron-3.5-lightning-free": "Nemotron 3.5 Lightning Free",
   "north-mini-code-free": "North Mini Code Free",
   "qwen3.5-plus": "Qwen3.5 Plus",
   "qwen3.6-plus": "Qwen3.6 Plus",
@@ -486,37 +490,11 @@ export async function resolveOpencodeZenStarterModel(params: {
   return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
 }
 
-function readLiveModelId(row: unknown): string | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const candidate = row as { id?: unknown; object?: unknown };
-  if (candidate.object !== undefined && candidate.object !== "model") {
-    return undefined;
-  }
-  if (typeof candidate.id !== "string") {
-    return undefined;
-  }
-  const modelId = candidate.id.trim().toLowerCase();
-  return modelId || undefined;
-}
-
-function projectOpencodeZenLiveModels(rows: readonly unknown[]): OpencodeZenModelDefinition[] {
-  const staticModels = new Map(OPENCODE_ZEN_MODELS.map((model) => [model.id, model]));
-  const seen = new Set<string>();
-  const models: OpencodeZenModelDefinition[] = [];
-  for (const row of rows) {
-    const modelId = readLiveModelId(row);
-    if (!modelId || seen.has(modelId)) {
-      continue;
-    }
-    seen.add(modelId);
-    const model = staticModels.get(modelId);
-    if (model) {
-      models.push(model);
-    }
-  }
-  return models;
+function projectOpencodeZenLiveModels(
+  rows: readonly unknown[],
+  fallback: ModelProviderConfig,
+): OpencodeZenModelDefinition[] {
+  return buildOpenAICompatibleLiveModels(rows, fallback) as OpencodeZenModelDefinition[];
 }
 
 export async function buildOpencodeZenLiveProviderConfig(

@@ -7,9 +7,11 @@ import type {
   ProviderPlugin,
 } from "../plugins/types.js";
 import {
-  buildOpenAICompatibleLiveModels,
+  buildOpenAICompatibleLiveModels as buildOpenAICompatibleLiveModelsInternal,
   readLiveModelCatalogRecord,
 } from "./provider-catalog-live-normalize.internal.js";
+
+export const buildOpenAICompatibleLiveModels = buildOpenAICompatibleLiveModelsInternal;
 import {
   buildSingleProviderApiKeyCatalog,
   clearLiveCatalogCacheForTests,
