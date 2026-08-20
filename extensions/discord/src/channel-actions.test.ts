@@ -510,6 +510,11 @@ describe("discordMessageActions", () => {
       readFile: mediaReadFile,
     };
     const mediaLocalRoots = ["/tmp/media"];
+    const reply = {
+      source: "implicit" as const,
+      replyToId: "source-message-1",
+      mode: "first" as const,
+    };
 
     await discordMessageActions.handleAction?.({
       channel: "discord",
@@ -525,6 +530,7 @@ describe("discordMessageActions", () => {
       mediaLocalRoots,
       mediaReadFile,
       conversationReadOrigin: "delegated",
+      reply,
     });
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
@@ -540,6 +546,7 @@ describe("discordMessageActions", () => {
       mediaLocalRoots,
       mediaReadFile,
       conversationReadOrigin: "delegated",
+      reply,
     });
   });
 });

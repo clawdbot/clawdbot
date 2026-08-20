@@ -1230,6 +1230,12 @@ export async function drainPendingDeliveriesCore(opts: {
   deliver: DeliverFn;
   selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
 }): Promise<void> {
+  const { migrateLegacyPendingOutboundDeliveries } = await import("./delivery-queue-migration.js");
+  await migrateLegacyPendingOutboundDeliveries({
+    cfg: opts.cfg,
+    log: opts.log,
+    stateDir: opts.stateDir,
+  });
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
     const matchingEntries = (await loadPendingDeliveries(opts.stateDir)).filter(

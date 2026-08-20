@@ -804,6 +804,64 @@ describe("executeSendAction", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "implicit first reply",
+      reply: { source: "implicit", replyToId: "source-1", mode: "first" } as const,
+    },
+    {
+      label: "explicit reply while configured replies are off",
+      reply: { source: "explicit", replyToId: "explicit-1" } as const,
+    },
+  ])("passes the host-owned $label through direct plugin fallback", async ({ reply }) => {
+    const prepareSendPayload = vi.fn(({ ctx }) => {
+      expect(ctx.reply).toEqual(reply);
+      return null;
+    });
+    const handleAction = vi.fn(async (ctx) => {
+      expect(ctx.params.components).toBeTypeOf("function");
+      return { content: [], details: { ok: true } };
+    });
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "discord", messageId: "unused-core-send" }),
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+        prepareSendPayload,
+        handleAction,
+      },
+    };
+    mocks.dispatchChannelMessageAction.mockImplementation(async (ctx) => {
+      return await plugin.actions?.handleAction?.(ctx);
+    });
+
+    const components = () => [];
+    const result = await executeSendAction({
+      ctx: {
+        plugin,
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello", components, replyTo: reply.replyToId },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      reply,
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(prepareSendPayload).toHaveBeenCalledOnce();
+    expect(handleAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ components, replyTo: reply.replyToId }),
+        reply,
+      }),
+    );
+  });
+
   it("uses plugin poll action when available", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("poll-plugin"));
 

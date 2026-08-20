@@ -216,6 +216,7 @@ async function sendCoreMessage(params: {
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
+  reply?: OutboundReplyFacts;
   onHandled?: () => Promise<void> | void;
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
@@ -247,6 +248,7 @@ async function tryHandleWithPluginAction(params: {
       ctx: params.ctx,
       action: params.action,
       mediaAccess,
+      reply: params.reply,
     }),
   );
   if (!handled) {
@@ -264,6 +266,7 @@ function createChannelActionContext(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
   mediaAccess?: ReturnType<typeof resolveAgentScopedOutboundMediaAccess>;
+  reply?: OutboundReplyFacts;
 }): ChannelMessageActionContext {
   const mediaAccess = params.mediaAccess ?? params.ctx.mediaAccess;
   return {
@@ -271,6 +274,7 @@ function createChannelActionContext(params: {
     action: params.action,
     cfg: params.ctx.cfg,
     params: params.ctx.params,
+    ...(params.reply ? { reply: params.reply } : {}),
     ...(mediaAccess ? { mediaAccess } : {}),
     mediaLocalRoots: mediaAccess?.localRoots ?? params.ctx.mediaAccess?.localRoots,
     mediaReadFile: mediaAccess?.readFile ?? params.ctx.mediaReadFile,
@@ -310,7 +314,7 @@ async function preparePluginSendPayload(params: {
     return { kind: "unavailable" };
   }
   const payload = await prepareSendPayload({
-    ctx: createChannelActionContext({ ctx: params.ctx, action: "send" }),
+    ctx: createChannelActionContext({ ctx: params.ctx, action: "send", reply: params.reply }),
     to: params.to,
     payload: params.payload,
     replyToId: params.reply?.replyToId,
@@ -423,6 +427,7 @@ export async function executeSendAction(params: {
     : await tryHandleWithPluginAction({
         ctx: pluginCtx,
         action: "send",
+        reply: params.reply,
         onHandled: async () => {
           // The accepted-send commit must precede the transcript mirror below:
           // first-contact outbound routes create their session row in it.

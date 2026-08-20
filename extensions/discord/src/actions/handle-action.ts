@@ -75,6 +75,7 @@ export async function handleDiscordMessageAction(
     | "sessionKey"
     | "inboundEventKind"
     | "conversationReadOrigin"
+    | "reply"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
@@ -102,6 +103,7 @@ export async function handleDiscordMessageAction(
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
+    ...(ctx.reply ? { reply: ctx.reply } : {}),
     ...readPolicyOptions,
   } as const;
   const notifyVisibleOutbound = (
