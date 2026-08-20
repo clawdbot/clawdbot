@@ -16,6 +16,7 @@ import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
+  resolveOnboardingSetupTarget,
 } from "../onboard-agent-target.js";
 import {
   applyLocalSetupWorkspaceConfig,
@@ -177,7 +178,7 @@ export async function runNonInteractiveLocalSetup(params: {
 }) {
   const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "local" as const;
-  const preCreationAgentId = resolveOnboardingAgentTarget(baseConfig).agentId;
+  const preCreationAgentId = resolveOnboardingSetupTarget(baseConfig).agentId;
 
   const requestedWorkspaceDir = resolveNonInteractiveWorkspaceDir({
     opts,

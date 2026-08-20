@@ -2,7 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   applyOnboardingPrimaryModel,
-  resolveOnboardingAgentTarget,
+  resolveOnboardingSetupTarget,
 } from "../commands/onboard-agent-target.js";
 import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -160,7 +160,7 @@ export async function runSetupModelAuthStep(params: {
     ]);
     promptAuthChoiceGrouped = promptAuthChoice;
     isKeepCurrentAuthChoice = isKeepCurrentChoice;
-    const target = resolveOnboardingAgentTarget(nextConfig);
+    const target = resolveOnboardingSetupTarget(nextConfig);
     authStore = ensureAuthProfileStore(params.agentDir ?? target.agentDir, {
       allowKeychainPrompt: false,
       readOnly: true,
@@ -173,7 +173,7 @@ export async function runSetupModelAuthStep(params: {
   }
   while (true) {
     if (authChoiceFromPrompt) {
-      const target = resolveOnboardingAgentTarget(nextConfig);
+      const target = resolveOnboardingSetupTarget(nextConfig);
       authChoice = await promptAuthChoiceGrouped!({
         prompter,
         store: authStore!,
@@ -214,7 +214,7 @@ export async function runSetupModelAuthStep(params: {
       // or run model/auth checks when the caller already chose to skip setup.
       if (authChoiceFromPrompt) {
         const { promptDefaultModel } = await loadModelPickerModule();
-        const target = resolveOnboardingAgentTarget(nextConfig);
+        const target = resolveOnboardingSetupTarget(nextConfig);
         const modelSelection = await promptDefaultModel({
           config: nextConfig,
           prompter,
@@ -235,7 +235,7 @@ export async function runSetupModelAuthStep(params: {
         }
 
         const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
-        const validationTarget = resolveOnboardingAgentTarget(nextConfig);
+        const validationTarget = resolveOnboardingSetupTarget(nextConfig);
         await warnIfModelConfigLooksOff(nextConfig, prompter, {
           agentId: validationTarget.agentId,
           agentDir: validationTarget.agentDir,
@@ -250,7 +250,7 @@ export async function runSetupModelAuthStep(params: {
       { promptDefaultModel },
     ] = await Promise.all([loadAuthChoiceModule(), loadModelPickerModule()]);
     prompter.disableBackNavigation?.();
-    const target = resolveOnboardingAgentTarget(nextConfig);
+    const target = resolveOnboardingSetupTarget(nextConfig);
     let authResult: PreparedAuthChoiceResult;
     try {
       authResult = await prepareAuthChoice({
@@ -292,7 +292,7 @@ export async function runSetupModelAuthStep(params: {
       break;
     }
     if (authResult.agentModelOverride) {
-      const overrideTarget = resolveOnboardingAgentTarget(nextConfig);
+      const overrideTarget = resolveOnboardingSetupTarget(nextConfig);
       nextConfig = applyOnboardingPrimaryModel(
         nextConfig,
         overrideTarget,
@@ -300,7 +300,7 @@ export async function runSetupModelAuthStep(params: {
       );
     }
 
-    const updatedTarget = resolveOnboardingAgentTarget(nextConfig);
+    const updatedTarget = resolveOnboardingSetupTarget(nextConfig);
     const authChoiceModelSelectionPolicy = await resolveAuthChoiceModelSelectionPolicy({
       authChoice,
       config: nextConfig,
@@ -334,7 +334,7 @@ export async function runSetupModelAuthStep(params: {
       }
     }
 
-    const validationTarget = resolveOnboardingAgentTarget(nextConfig);
+    const validationTarget = resolveOnboardingSetupTarget(nextConfig);
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
       agentId: validationTarget.agentId,
       agentDir: validationTarget.agentDir,

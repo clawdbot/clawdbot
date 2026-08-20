@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
+import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
 import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
@@ -559,7 +559,7 @@ async function runSetupWizardOnce(
     resolveAgentModelPrimaryValue(nextConfig.agents?.defaults?.model) !== undefined &&
     ((usedImportFlow && keepExistingModelConfig) || opts.authChoice !== "skip")
   ) {
-    const verificationTarget = resolveOnboardingAgentTarget(nextConfig);
+    const verificationTarget = resolveOnboardingSetupTarget(nextConfig);
     const verification = await offerLiveModelVerification({
       config: nextConfig,
       ...(stagedModelAuth
@@ -641,7 +641,7 @@ async function runSetupWizardOnce(
       allowConfigSizeDrop: false,
     });
   }
-  let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
+  let onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
@@ -711,7 +711,7 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
-  onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
+  onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");

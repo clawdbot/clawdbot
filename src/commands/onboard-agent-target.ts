@@ -48,6 +48,13 @@ export function resolveSystemAgentOnboardingTarget(config: OpenClawConfig): Onbo
   return resolveOnboardingAgentTarget(config, config.agents?.defaults?.systemAgent?.agentId);
 }
 
+/** Resolve onboarding setup to the system agent only for explicitly owned fleets. */
+export function resolveOnboardingSetupTarget(config: OpenClawConfig): OnboardingAgentTarget {
+  return config.agents?.ownership === "explicit"
+    ? resolveSystemAgentOnboardingTarget(config)
+    : resolveOnboardingAgentTarget(config);
+}
+
 export async function ensureOnboardingAgentWorkspace(
   target: OnboardingAgentTarget,
   runtime: RuntimeEnv,
