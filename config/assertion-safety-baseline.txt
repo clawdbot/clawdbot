@@ -2481,7 +2481,7 @@ src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	12
 src/cli/program/register.onboard.ts	37
 src/cli/program/register.setup.ts	10
-src/cli/program/register.status-health-sessions.ts	41
+src/cli/program/register.status-health-sessions.ts	29
 src/cli/program/route-specs.ts	1
 src/cli/run-main.ts	1
 src/cli/sandbox-cli.ts	4
@@ -3267,7 +3267,7 @@ src/infra/outbound/deliver-queue-state.ts	1
 src/infra/outbound/delivery-queue-media-spool.ts	2
 src/infra/outbound/delivery-queue-media-staging.ts	2
 src/infra/outbound/delivery-queue-preparation.ts	1
-src/infra/outbound/delivery-queue-storage.ts	11
+src/infra/outbound/delivery-queue-storage.ts	10
 src/infra/outbound/envelope.ts	2
 src/infra/outbound/format.ts	1
 src/infra/outbound/message-account-selection.ts	4

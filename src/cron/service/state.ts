@@ -260,6 +260,7 @@ export type CronServiceDeps = {
     mode?: "announce" | "webhook";
     accountId?: string;
     threadId?: string | number;
+    inheritSessionThread?: false;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
 };

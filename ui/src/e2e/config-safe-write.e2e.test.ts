@@ -375,4 +375,74 @@ suite.define(() => {
       },
     );
   });
+
+  it("keeps a dirty draft and adopts an opaque revision after an unchanged reconnect", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: uiProofArtifactDir, size: { height: 1000, width: 1440 } }
+          : undefined,
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const config = {
+          laboratory: { endpoint: "initial-api", retryBudget: 2 },
+          tools: {},
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(config, "legacy-raw-hash"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
+
+        expect(
+          (
+            await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`)
+          )?.status(),
+        ).toBe(200);
+        const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
+        await expect.poll(() => endpoint.inputValue()).toBe("initial-api");
+        await endpoint.fill("retained-draft");
+
+        const getsBeforeReconnect = (await gateway.getRequests("config.get")).length;
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(config, "hmac-sha256:v1:opaque-current"),
+        );
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await expect
+          .poll(async () => (await gateway.getRequests("config.get")).length)
+          .toBe(getsBeforeReconnect + 1);
+        await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
+
+        const saveIndicator = page.locator("openclaw-settings-save-indicator");
+        await expect
+          .poll(() => saveIndicator.textContent())
+          .toContain("Autosave paused after reconnect");
+        await capture(page, "07-opaque-revision-reconnect.png");
+
+        await gateway.deferNext("config.set");
+        await saveIndicator.getByRole("button", { name: "Save", exact: true }).click();
+        const save = mutationParams(await gateway.waitForRequest("config.set"));
+        expect(save.baseHash).toBe("hmac-sha256:v1:opaque-current");
+        expect(JSON.parse(String(save.raw))).toMatchObject({
+          laboratory: { endpoint: "retained-draft", retryBudget: 2 },
+        });
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(
+            { ...config, laboratory: { ...config.laboratory, endpoint: "retained-draft" } },
+            "hmac-sha256:v1:opaque-next",
+          ),
+        );
+        await gateway.resolveDeferred("config.set", { hash: "hmac-sha256:v1:opaque-next" });
+        await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
+      },
+    );
+  });
 });

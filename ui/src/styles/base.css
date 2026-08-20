@@ -59,8 +59,11 @@
   --rail-header-title-weight: 600;
   --rail-divider-color: var(--border);
   --rail-divider-size: 1px;
-  --rail-divider-active-size: 2px;
-  --rail-resizer-size: 4px;
+  --resize-handle-size: 6px;
+  --resize-handle-line-size: 1px;
+  --resize-handle-active-line-size: 2px;
+  --resize-handle-rest-color: color-mix(in srgb, var(--border) 74%, transparent);
+  --resize-handle-active-color: color-mix(in srgb, var(--text) 42%, transparent);
 
   /*
    * Accent - Punchy signature red

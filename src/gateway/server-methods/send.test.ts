@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -16,7 +16,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
   createChannelTestPluginBase,
@@ -91,6 +91,9 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
+  prepareExternalMessageActionTargetForResolution: (ctx: { params: Record<string, unknown> }) =>
+    ctx.params,
+  shouldDeferExternalMessageActionTargetResolution: () => false,
 }));
 
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
@@ -693,6 +696,11 @@ describe("gateway send mirroring", () => {
 
   beforeAll(async () => {
     await loadSendHandlersForTest();
+    await import("../../infra/outbound/message-action-runner.js");
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
   });
 
   beforeEach(async () => {
@@ -4123,6 +4131,134 @@ describe("gateway send mirroring", () => {
     expect(actionCall?.mediaAccess.localRoots).toBe(actionCall?.mediaLocalRoots);
     expect(actionCall?.mediaAccess).not.toHaveProperty("readFile");
     expect(actionCall).not.toHaveProperty("mediaReadFile");
+  });
+
+  it("passes authenticated reply facts into provider action dispatch", async () => {
+    registerMessageActionPlugin({ registrySuffix: "message-action-reply-facts" });
+    const reply = {
+      replyToId: "source-message-1",
+      source: "implicit",
+      mode: "first",
+    } as const;
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: { to: "123", message: "reply" },
+        reply,
+        agentId: "work",
+        idempotencyKey: "idem-message-action-reply-facts",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(lastDispatchChannelMessageActionCall()?.reply).toEqual(reply);
+  });
+
+  it("falls back once to canonical outbound poll delivery when plugin actions decline", async () => {
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        config: { resolveAccount: () => ({ enabled: true }), isConfigured: () => true },
+      }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action !== "poll",
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+      outbound: { deliveryMode: "direct", sendPoll: mocks.sendPoll },
+    };
+    mocks.getChannelPlugin.mockReturnValue(plugin);
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "discord",
+      configured: ["discord"],
+      plugin,
+    });
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+
+    const { respond } = await runMessageActionRequest({
+      channel: "discord",
+      action: "poll",
+      params: {
+        to: "channel:123",
+        threadId: "thread-123",
+        message: "Vote now",
+        pollQuestion: "Ship it?",
+        pollOption: ["Yes", "No"],
+        silent: true,
+      },
+      accountId: "default",
+      sessionKey: "agent:main:discord:channel:123",
+      inboundTurnKind: "room_event",
+      idempotencyKey: "idem-message-action-canonical-poll",
+    });
+
+    const response = firstRespondCall(respond);
+    expect(response[2]).toBeUndefined();
+    expect(response[0]).toBe(true);
+    expect(response[1]).toMatchObject({
+      channel: "discord",
+      question: "Ship it?",
+      options: ["Yes", "No"],
+      via: "direct",
+      result: { messageId: "poll-1" },
+    });
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledOnce();
+    expect(mocks.sendPoll).toHaveBeenCalledOnce();
+    expect(mocks.sendPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("Vote now"),
+        threadId: "thread-123",
+        silent: true,
+        sessionKey: "agent:main:discord:channel:123",
+        inboundEventKind: "room_event",
+      }),
+    );
+  });
+
+  it("rejects adapter-only polls before entering canonical outbound work", async () => {
+    const adapterPoll = vi.fn(async () => ({
+      messageId: "adapter-poll-1",
+      receipt: {
+        primaryPlatformMessageId: "adapter-poll-1",
+        platformMessageIds: ["adapter-poll-1"],
+        parts: [{ platformMessageId: "adapter-poll-1", kind: "poll" as const, index: 0 }],
+        sentAt: Date.now(),
+      },
+    }));
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        config: { resolveAccount: () => ({ enabled: true }), isConfigured: () => true },
+      }),
+      message: { send: { poll: adapterPoll } },
+    };
+    mocks.getChannelPlugin.mockReturnValue(plugin);
+
+    const { respond } = await runMessageActionRequest({
+      channel: "discord",
+      action: "poll",
+      params: {
+        to: "channel:123",
+        pollQuestion: "Ship it?",
+        pollOption: ["Yes", "No"],
+      },
+      accountId: "default",
+      idempotencyKey: "idem-message-action-adapter-only-poll",
+    });
+
+    const response = firstRespondCall(respond);
+    expect(response[0]).toBe(false);
+    expect(response[2]).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Channel discord does not support action poll.",
+    });
+    expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendPoll).not.toHaveBeenCalled();
+    expect(adapterPoll).not.toHaveBeenCalled();
   });
 
   it("uses signed sender group policy without granting gateway send host reads", async () => {

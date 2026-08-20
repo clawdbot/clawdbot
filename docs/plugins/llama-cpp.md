@@ -110,8 +110,10 @@ remain authoritative over discovered rows with the same ID.
 
 Existing endpoints support no auth, API keys, SecretRefs, auth profiles, and
 explicit authorization headers. An explicit `Authorization` header wins over
-ambient API-key discovery. Endpoint URLs containing a username or password are
-rejected.
+ambient API-key discovery unless setup receives a new key. Choosing no API key
+removes the default llama.cpp auth profile and stale inline key fields while
+preserving an explicit `Authorization` header and unrelated headers. Endpoint
+URLs containing a username or password are rejected.
 
 ```bash
 export LLAMA_SERVER_API_KEY="<API_KEY>"

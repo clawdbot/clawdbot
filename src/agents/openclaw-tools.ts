@@ -48,6 +48,7 @@ import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createGitHubIdentityStatusTool } from "./tools/github-identity-status-tool.js";
 import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import {
   createCreateGoalTool,
@@ -407,6 +408,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
+    ...(options?.githubPublicationAvailable !== undefined
+      ? [createGitHubIdentityStatusTool()]
+      : []),
     ...(options?.githubPublicationAvailable === true ? [createGitHubPublishTool()] : []),
     ...collectPresentOpenClawTools([transcriptsTool]),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),

@@ -225,7 +225,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           },
         }),
       );
-      return formatToolSearchControlResult(result, runtime);
+      return formatToolSearchControlResult(result, runtime, undefined, result.status);
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -255,7 +255,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           },
         }),
       );
-      return formatToolSearchControlResult(result, runtime);
+      return formatToolSearchControlResult(result, runtime, undefined, result.status);
     },
   } as AnyAgentTool);
   return [execTool, waitTool];

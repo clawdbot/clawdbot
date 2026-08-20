@@ -16,5 +16,6 @@ describe("OpenClaw state runtime schema projection", () => {
     expect(schema).not.toContain("outbound_message_progress_run_occurred_idx");
     expect(schema).not.toContain("CREATE TABLE IF NOT EXISTS github_publication_requests");
     expect(schema).not.toContain("idx_github_publication_requests_pending");
+    expect(schema).not.toContain("CREATE TABLE IF NOT EXISTS config_revision_keys");
   });
 });

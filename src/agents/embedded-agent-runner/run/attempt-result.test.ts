@@ -17,9 +17,11 @@ function completeResult(params?: {
   yieldAcknowledgment?: string;
   toolMetas?: Array<{
     toolName: string;
+    toolCallId?: string;
     meta?: string;
     replaySafe?: boolean;
     isError?: boolean;
+    terminate?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -177,9 +179,11 @@ describe("attempt result projection", () => {
           { toolName: "read", isError: false },
           {
             toolName: "exec",
+            toolCallId: "tool-current",
             meta: "done",
             replaySafe: true,
             isError: true,
+            terminate: true,
             asyncStarted: true,
             asyncTaskRunId: "run-1",
             asyncTaskId: "task-1",
@@ -195,9 +199,11 @@ describe("attempt result projection", () => {
       },
       {
         toolName: "exec",
+        toolCallId: "tool-current",
         meta: "done",
         replaySafe: true,
         isError: true,
+        terminate: true,
         asyncStarted: true,
         asyncTaskRunId: "run-1",
         asyncTaskId: "task-1",

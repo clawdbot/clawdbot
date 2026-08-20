@@ -28,7 +28,6 @@ import {
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
-import { resolveManagedLlamaServerPaths, selectLlamaServerAsset } from "./llama-server-install.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
@@ -188,14 +187,9 @@ export async function prepareLlamaCppSetup(
     defaultModel: ctx.modelRef,
     managed: {
       command: existing.localService.command,
-      presetPath:
-        existing.localService.args?.find(
-          (_, index, args) => args[index - 1] === "--models-preset",
-        ) ?? resolveManagedLlamaServerPaths(selectLlamaServerAsset()).presetPath,
       baseUrl,
       healthUrl: existing.localService.healthUrl ?? `${rootUrl}/health`,
       args: existing.localService.args ?? [],
-      backend: selectLlamaServerAsset().backend,
     },
   });
 }

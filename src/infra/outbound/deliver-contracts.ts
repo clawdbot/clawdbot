@@ -1,6 +1,7 @@
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 // Shared type contracts for outbound planning, queueing, and transport.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
@@ -160,8 +161,7 @@ export type DeliverOutboundPayloadsCoreParams = {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** @internal Canonical post-policy batch used by queue recovery and physical delivery. */
   preparedBatch?: PreparedOutboundBatch;
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
+  reply?: OutboundReplyFacts;
   formatting?: OutboundDeliveryFormattingOptions;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
@@ -219,6 +219,8 @@ export type DeliverOutboundPayloadsCoreParams = {
  * outbound substrate, recovery, and compatibility paths.
  */
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
+  replyToId?: string | null;
+  replyToMode?: ReplyToMode;
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
   /** @internal Fence recovery ownership at the same provider boundary as live sends. */

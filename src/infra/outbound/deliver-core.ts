@@ -55,6 +55,7 @@ export async function deliverOutboundPayloadsCore(
     throw new Error("Outbound delivery requires a prepared payload batch");
   }
   const accountId = params.accountId;
+  const reply = params.reply;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const results: OutboundDeliveryResult[] = [];
@@ -78,8 +79,8 @@ export async function deliverOutboundPayloadsCore(
       to,
       deps,
       accountId,
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
+      replyToId: reply?.replyToId,
+      replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
       formatting: params.formatting,
       threadId: params.threadId,
       identity: params.identity,
@@ -144,8 +145,7 @@ export async function deliverOutboundPayloadsCore(
     ? (params.formatting?.chunkMode ?? resolveChunkMode(cfg, channel, accountId))
     : "length";
   const { resolveCurrentReplyTo, applyReplyToConsumption } = createReplyToDeliveryPolicy({
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    reply,
   });
 
   const sendTextChunks = async (

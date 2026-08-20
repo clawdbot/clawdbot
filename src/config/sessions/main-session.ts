@@ -1,7 +1,6 @@
 import {
   listAgentIds,
   resolveAmbientOwnerAgentId,
-  resolveSystemAgentTargetAgentId,
   tryResolveAmbientOwnerAgentId,
 } from "../../agents/agent-scope-config.js";
 // Main-session keys normalize configured agents and legacy aliases into store keys.
@@ -26,7 +25,7 @@ function buildMainSessionKey(agentId: string, mainKey?: string): string {
 /** Resolves the configured main session key, honoring global session scope. */
 export function resolveMainSessionKey(cfg: OpenClawConfig): string {
   return resolveCanonicalMainSessionKey({
-    agentId: resolveAmbientOwnerAgentId(cfg, {
+    agentId: resolveAmbientOwnerAgentId(cfg, undefined, {
       surface: "main-session routing",
       hint: "Pass an explicit agent/session key instead of the unscoped main alias.",
     }),
@@ -40,7 +39,7 @@ export function resolveSystemMainSessionTarget(cfg: OpenClawConfig): {
   agentId: string;
   sessionKey: string;
 } {
-  const agentId = resolveSystemAgentTargetAgentId(cfg);
+  const agentId = resolveAmbientOwnerAgentId(cfg);
   return {
     agentId,
     sessionKey: resolveCanonicalMainSessionKey({

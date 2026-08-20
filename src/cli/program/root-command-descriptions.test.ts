@@ -94,7 +94,6 @@ const JSON_NOT_APPLICABLE = {
       "models image-fallbacks",
       "models auth",
       "models auth order",
-      "tasks flow",
       "skills workshop",
     ],
   },

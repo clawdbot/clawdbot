@@ -103,6 +103,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
     const panelDefinitions = sidebarPanelDefinitions({
       state,
+      themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
       desktopPresented,

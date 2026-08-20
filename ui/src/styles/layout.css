@@ -884,18 +884,18 @@ openclaw-settings-save-indicator {
   display: flex;
   min-height: 100%;
   overflow: visible;
-  border-right: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-inline-end: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
-/* 1px overlay on the nav border edge; the divider paints its own centered
-   line, so the host needs no background here. */
+/* The shell owns the resting boundary. The wider resize target takes over
+   that same edge during interaction, avoiding a doubled divider. */
 .sidebar-resizer {
+  --resize-handle-line-inline: 100%;
   grid-area: nav;
   align-self: stretch;
   justify-self: end;
   z-index: 20;
-  width: 1px;
 }
 
 .shell:has(.sidebar-resizer.dragging) {

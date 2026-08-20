@@ -1501,6 +1501,9 @@ describe("cron service ops seam coverage", () => {
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs[0]?.state.lastFailureAlertAtMs).toBe(endedAt);
       expect(persisted.jobs[0]?.state.consecutiveErrors).toBe(1);
+      expect(persisted.jobs[0]?.state.lastFailureNotificationDelivered).toBeUndefined();
+      expect(persisted.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+      expect(persisted.jobs[0]?.state.lastFailureNotificationDeliveryError).toBeUndefined();
       expect(sendCronFailureAlert).not.toHaveBeenCalled();
       stop(state);
     });

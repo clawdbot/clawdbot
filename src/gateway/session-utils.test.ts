@@ -811,6 +811,51 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("medium");
   });
 
+  test("session defaults and rows use dynamic catalog context limits with authored caps", () => {
+    const catalog = [
+      {
+        provider: "dynamic-router",
+        id: "reasoner",
+        name: "Reasoner",
+        contextWindow: 256_000,
+        contextTokens: 200_000,
+      },
+    ];
+    const cfg = createModelDefaultsConfig({ primary: "dynamic-router/reasoner" });
+
+    expect(getSessionDefaults(cfg, catalog).contextTokens).toBe(200_000);
+    expect(
+      buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        modelCatalog: catalog,
+      }).contextTokens,
+    ).toBe(200_000);
+
+    const capped = {
+      ...cfg,
+      models: {
+        providers: {
+          "dynamic-router": {
+            models: [{ id: "reasoner", contextWindow: 128_000 }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(getSessionDefaults(capped, catalog).contextTokens).toBe(128_000);
+    expect(
+      buildGatewaySessionRow({
+        cfg: capped,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        modelCatalog: catalog,
+      }).contextTokens,
+    ).toBe(128_000);
+  });
+
   test("session rows project automation bindings and event fields forward them", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     registerSessionAutomationSource({

@@ -23,7 +23,6 @@ import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import { resolveTerminalThemeMode } from "./app-root.ts";
 import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -661,7 +660,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .agentId=${selectedAgentId}
         .sessionKey=${sessionRoute ? host.activeSessionKey : null}
         .suppressed=${settingsTakeover}
-        .themeMode=${resolveTerminalThemeMode()}
+        .themeMode=${context.theme.resolvedMode}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
       ${sessionRoute

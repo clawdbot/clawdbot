@@ -1101,29 +1101,15 @@ describe("state migrations", () => {
     },
   );
 
-  it.each([
-    {
-      label: "the configured system agent",
-      targetAgentId: "main",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: {}, blocker: {}, digest: {} },
-        },
-      } as OpenClawConfig,
-    },
-    {
-      label: "the legacy compatibility owner before the configured system agent",
-      targetAgentId: "legacy",
-      cfg: {
-        agents: {
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { legacy: { default: true }, main: {} },
-        },
-      } as OpenClawConfig,
-    },
-  ])("migrates legacy shared agent and session state to $label", async ({ cfg, targetAgentId }) => {
+  it("migrates legacy shared agent and session state to the configured system agent", async () => {
+    const targetAgentId = "main";
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: targetAgentId } },
+        entries: { main: {}, blocker: {}, digest: {} },
+      },
+    } satisfies OpenClawConfig;
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);

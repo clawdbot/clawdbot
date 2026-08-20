@@ -108,10 +108,18 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     minimalTestGateway,
     log,
   });
+  const configRevisionProjector = await startupTrace.measure(
+    "gateway.config-revision-key",
+    async () => {
+      const { loadGatewayConfigRevisionProjector } = await import("./config-revision-token.js");
+      return loadGatewayConfigRevisionProjector({ env: process.env });
+    },
+  );
   const gatewayRequestContext = await startupTrace.measure("gateway.request-context", async () => {
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     return createGatewayRequestContext({
       deps,
+      configRevisionProjector,
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,
