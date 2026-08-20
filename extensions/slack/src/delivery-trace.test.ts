@@ -211,6 +211,8 @@ const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
 const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
 const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
 const COMPACT_COMMENTARY_TEXT = "Checking the current Slack behavior.";
+const COMPACT_COMMENTARY_TEXT_UPDATED =
+  "Checking the current Slack behavior and preparing the focused fix.";
 const COMPACT_FINAL_TEXT = "Compact Slack progress is ready.";
 
 const BLOCKS_FINAL_TEXT = "Release 2026.1.0 is ready to ship.";
@@ -282,7 +284,9 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
   "progress-compact-commentary": [
     { kind: "reply-start" },
     { kind: "partial", text: COMPACT_COMMENTARY_TEXT },
+    { kind: "advance", ms: 2000 },
     { kind: "tool-progress", name: "read", phase: "start" },
+    { kind: "partial", text: COMPACT_COMMENTARY_TEXT_UPDATED },
     { kind: "advance", ms: 2000 },
     { kind: "final", text: COMPACT_FINAL_TEXT },
     { kind: "idle" },
