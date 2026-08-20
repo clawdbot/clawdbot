@@ -339,6 +339,18 @@ export async function runProviderPluginAuthMethod(params: {
   };
 }
 
+/**
+ * Defers owner resolution until a directory fallback actually needs it, so
+ * fully-scoped callers never trip agent selection on multi-agent rosters.
+ */
+function createLazyOwnerAgentId(params: {
+  agentId?: string;
+  config: OpenClawConfig;
+}): () => string {
+  let resolved: string | undefined;
+  return () => (resolved ??= params.agentId ?? resolveDefaultAgentId(params.config));
+}
+
 async function prepareProviderPluginAuthMethod(
   params: Parameters<typeof runProviderPluginAuthMethod>[0],
 ): Promise<{
@@ -347,11 +359,14 @@ async function prepareProviderPluginAuthMethod(
   authProfiles: ProviderAuthResult["profiles"];
   persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
 }> {
-  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
-  const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
+  // Resolve the owner lazily: callers that already supply both directories never
+  // need an agent id, and eager resolution fails closed on explicit multi-agent
+  // rosters that have no sole owner.
+  const ownerAgentId = createLazyOwnerAgentId(params);
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config, ownerAgentId());
   const workspaceDir =
     params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
+    resolveAgentWorkspaceDir(params.config, ownerAgentId()) ??
     resolveDefaultAgentWorkspaceDir();
   const result = await runProviderPluginAuthMethodUnpersisted({
     config: params.config,
@@ -405,10 +420,10 @@ async function prepareProviderPluginAuthMethod(
 export async function prepareAuthChoiceLoadedPluginProvider(
   params: ApplyProviderAuthChoiceParams,
 ): Promise<PreparedApplyProviderAuthChoiceResult | null> {
-  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
+  const ownerAgentId = createLazyOwnerAgentId(params);
   const workspaceDir =
     params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
+    resolveAgentWorkspaceDir(params.config, ownerAgentId()) ??
     resolveDefaultAgentWorkspaceDir();
   let nextConfig = params.config;
   let enabledConfig = params.config;
