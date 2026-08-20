@@ -1325,7 +1325,6 @@ extensions/telegram/src/sent-message-cache.legacy-state.ts	2
 extensions/telegram/src/sent-message-cache.ts	2
 extensions/telegram/src/state-migrations.ts	2
 extensions/telegram/src/status-issues.ts	1
-extensions/telegram/src/status-reaction-variants.ts	1
 extensions/telegram/src/sticker-cache-store.legacy-state.ts	1
 extensions/telegram/src/sticker-cache.ts	2
 extensions/telegram/src/target-writeback.test-shared.ts	12
