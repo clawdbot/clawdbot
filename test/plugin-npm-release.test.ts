@@ -21,7 +21,8 @@ import {
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
 import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import { writeJsonFile } from "./helpers/temp-repo.js";
 
 type ExecFileSync = typeof import("node:child_process").execFileSync;
 

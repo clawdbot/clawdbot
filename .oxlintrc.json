@@ -62,13 +62,11 @@
     "eslint/symbol-description": "error",
     "eslint/unicode-bom": "error",
     "eslint/yoda": "error",
-    // Only import rules verified clean in the survey are activated in this tranche.
     "import/default": "off",
-    // Campaign follow-ups: clean import/first and import/no-duplicates before enabling them.
-    "import/first": "off",
+    "import/first": "error",
     "import/namespace": "off",
     "import/no-absolute-path": "error",
-    "import/no-duplicates": "off",
+    "import/no-duplicates": "error",
     "import/no-empty-named-blocks": "error",
     "import/no-named-as-default": "off",
     "import/no-named-as-default-member": "off",
@@ -290,7 +288,16 @@
         "**/*test-support.ts"
       ],
       "rules": {
+        // Vitest hoists mock setup above static imports, so this ordering is intentional in tests.
+        "import/first": "off",
         "typescript/no-explicit-any": "off"
+      }
+    },
+    {
+      "files": ["src/agents/subagents/registry/subagent-registry.ts"],
+      "rules": {
+        // Preserve the explicit maintenance side-effect import's module-request order.
+        "import/first": "off"
       }
     },
     {

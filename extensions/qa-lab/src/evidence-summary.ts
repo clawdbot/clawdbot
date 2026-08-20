@@ -463,6 +463,31 @@ export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSumma
   return qaEvidenceSummarySchema.parse(summary);
 }
 
+export function mergeQaEvidenceSummaries(params: {
+  evidenceSummaries: readonly QaEvidenceSummaryJson[];
+  generatedAt: string;
+}) {
+  const profiles = [
+    ...new Set(
+      params.evidenceSummaries
+        .map((summary) => summary.profile?.trim())
+        .filter((profile): profile is string => Boolean(profile)),
+    ),
+  ];
+  return validateQaEvidenceSummaryJson({
+    kind: QA_EVIDENCE_SUMMARY_KIND,
+    schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+    generatedAt: params.generatedAt,
+    evidenceMode:
+      params.evidenceSummaries.length > 0 &&
+      params.evidenceSummaries.every((summary) => summary.evidenceMode === "slim")
+        ? "slim"
+        : "full",
+    entries: params.evidenceSummaries.flatMap((summary) => summary.entries),
+    profile: profiles.length === 1 ? profiles[0] : undefined,
+  });
+}
+
 export function attachQaEvidenceScorecard(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   summary: QaEvidenceSummaryJson;

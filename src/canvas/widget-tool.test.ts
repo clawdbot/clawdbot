@@ -8,6 +8,11 @@ import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.
 import { createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
+import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
@@ -23,6 +28,7 @@ afterEach(async () => {
   vi.useRealTimers();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  resetPluginRuntimeStateForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -30,6 +36,56 @@ async function createStateDir(): Promise<string> {
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-widget-tool-"));
   tempDirs.push(stateDir);
   return stateDir;
+}
+
+function registerDiagramContentKind(): void {
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({
+    id: "diagram",
+    source: "diagram-fixture",
+    origin: "bundled",
+    enabled: true,
+    configSchema: false,
+  });
+  createPluginBoardWidgetContentKindRegistrar(registry)(record, {
+    kind: "diagram",
+    label: "Diagram",
+    resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
+    validateSource(source) {
+      if (!source.startsWith("diagram:")) {
+        throw new Error("diagram prefix required");
+      }
+    },
+    composeDocument: ({ source }) => `<main>${source}</main>`,
+  });
+  setActivePluginRegistry(registry);
+}
+
+function createBoardPutCaller() {
+  const mock = vi.fn(async (_method: string, params: Record<string, unknown>) => ({
+    sessionKey: params.sessionKey,
+    revision: 1,
+    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+    widgets: [
+      {
+        name: params.name,
+        tabId: "main",
+        contentKind: "plugin",
+        pluginKind: "diagram:diagram",
+        sizeW: 6,
+        sizeH: 4,
+        position: 0,
+        grantState: "none",
+        revision: 1,
+      },
+    ],
+    resolvedWidgetName: params.name,
+  }));
+  const callGateway: InProcessGatewayCaller = async <T>(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> => (await mock(method, params)) as T;
+  return { mock, callGateway };
 }
 
 function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
@@ -47,9 +103,14 @@ async function executeWidget(params: {
   name?: string;
   tab?: string;
   size?: "sm" | "md" | "lg" | "xl" | "full";
-  presentation?: "card" | "full-bleed" | "frameless";
+  presentation?: {
+    target?: "assistant_message" | "node_panel";
+    frame?: "card" | "full-bleed" | "frameless";
+  };
+  presenters?: readonly WidgetPresenter[];
   after?: string;
   capabilities?: { netOrigins?: string[]; tools?: string[] };
+  kind?: string;
 }) {
   const tool = createShowWidgetTool({
     stateDir: params.stateDir,
@@ -57,6 +118,7 @@ async function executeWidget(params: {
     agentId: "main",
     agentSessionKey: params.agentSessionKey,
     callGateway: params.callGateway,
+    presenters: params.presenters,
   });
   const result = await tool.execute("widget-call", {
     title: params.title ?? "Widget title",
@@ -68,6 +130,7 @@ async function executeWidget(params: {
     ...(params.presentation ? { presentation: params.presentation } : {}),
     ...(params.after ? { after: params.after } : {}),
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+    ...(params.kind ? { kind: params.kind } : {}),
   });
   const text = result.content.find((item) => item.type === "text")?.text;
   if (!text) {
@@ -90,24 +153,389 @@ async function executeWidget(params: {
     sandbox: parsed.presentation?.sandbox,
     resultText: parsed.text,
     boardWidgetName: parsed.view?.boardWidgetName,
+    target: parsed.presentation?.target,
     text,
   };
 }
 
 describe("show_widget", () => {
-  it("uses flat provider-safe enums for dashboard options", () => {
+  it("builds a sorted kind enum and routes registered source through board put", async () => {
+    registerDiagramContentKind();
+    const stateDir = await createStateDir();
+    const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
+    const tool = createShowWidgetTool({
+      stateDir,
+      sessionId: "registered",
+      agentSessionKey: "agent:main:registered",
+      callGateway,
+    });
+    const kindSchema = (tool.parameters as { properties?: { kind?: { enum?: string[] } } })
+      .properties?.kind;
+
+    expect(kindSchema?.enum).toEqual(["html", "diagram"]);
+    await tool.execute("registered", {
+      title: "Diagram",
+      widget_code: "diagram:ready",
+      kind: "diagram",
+      pin: true,
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      "board.widget.put",
+      expect.objectContaining({
+        content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
+      }),
+    );
+
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    await expect(
+      tool.execute("stale", {
+        title: "Diagram",
+        widget_code: "diagram:ready",
+        kind: "diagram",
+      }),
+    ).rejects.toThrow(
+      'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
+    );
+  });
+
+  it("uses board-only delivery when inline hosting is disabled", async () => {
+    registerDiagramContentKind();
+    const stateDir = await createStateDir();
+    const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
+    const tool = createShowWidgetTool({
+      stateDir,
+      sessionId: "board-only",
+      agentSessionKey: "agent:main:board-only",
+      inlineHostEnabled: false,
+      callGateway,
+    });
+
+    await expect(
+      tool.execute("unpinned", {
+        title: "Diagram",
+        widget_code: "diagram:ready",
+        kind: "diagram",
+      }),
+    ).rejects.toThrow(
+      "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
+    );
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+
+    const result = await tool.execute("pinned", {
+      title: "Diagram",
+      widget_code: "diagram:ready",
+      kind: "diagram",
+      pin: true,
+    });
+    const text = result.content.find((item) => item.type === "text")?.text;
+    expect(JSON.parse(text ?? "null")).toEqual({
+      status: "pinned",
+      boardWidgetName: "diagram",
+      text: "Widget pinned to dashboard tab main as diagram",
+    });
+    expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
+      "board.widget.put",
+      expect.objectContaining({
+        content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
+      }),
+    );
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+
+  it("tells the agent to use widgets proactively", () => {
+    expect(createShowWidgetTool().description).toMatch(
+      /^Visual helps\? Make widget\. Do not wait for ask\./,
+    );
+  });
+
+  it("keeps widget documents from duplicating host-owned metadata and controls", () => {
+    const description = createShowWidgetTool().description;
+
+    expect(description).toContain("`title` is host metadata");
+    expect(description).toContain("Start directly with content");
+    expect(description).toContain("do not repeat the title");
+  });
+
+  it("builds provider-safe kind and presentation enums from both registries", () => {
+    registerDiagramContentKind();
     const tool = createShowWidgetTool();
     const properties = (
       tool.parameters as {
-        properties?: Record<string, { anyOf?: unknown; enum?: string[] }>;
+        properties?: Record<
+          string,
+          {
+            anyOf?: unknown;
+            enum?: string[];
+            properties?: Record<string, { anyOf?: unknown; enum?: string[]; description?: string }>;
+          }
+        >;
       }
     ).properties;
+    expect(properties?.kind).toMatchObject({ enum: ["html", "diagram"] });
     expect(properties?.size).toMatchObject({ enum: ["sm", "md", "lg", "xl", "full"] });
-    expect(properties?.presentation).toMatchObject({
+    expect(properties?.presentation?.properties?.target).toMatchObject({
+      enum: ["assistant_message"],
+    });
+    expect(properties?.presentation?.properties?.target?.description).not.toContain("node_panel");
+    expect(properties?.presentation?.properties?.frame).toMatchObject({
       enum: ["card", "full-bleed", "frameless"],
     });
     expect(properties?.size?.anyOf).toBeUndefined();
-    expect(properties?.presentation?.anyOf).toBeUndefined();
+    expect(properties?.presentation?.properties?.target?.anyOf).toBeUndefined();
+    expect(properties?.presentation?.properties?.frame?.anyOf).toBeUndefined();
+    expect(tool.description).toContain("registered kinds are diagram");
+
+    const presenter: WidgetPresenter = {
+      target: "node_panel",
+      description: "Show on a connected device panel",
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present: async () => ({
+        ok: true,
+        value: { kind: "node", nodeId: "mac-panel", nodeName: "Studio" },
+      }),
+    };
+    const withPresenterTool = createShowWidgetTool({ presenters: [presenter] });
+    const withPresenter = withPresenterTool.parameters as {
+      properties?: Record<
+        string,
+        {
+          enum?: string[];
+          properties?: Record<string, { enum?: string[]; description?: string }>;
+        }
+      >;
+    };
+    expect(withPresenter.properties?.kind).toMatchObject({ enum: ["html", "diagram"] });
+    expect(withPresenter.properties?.presentation?.properties?.target).toMatchObject({
+      enum: ["assistant_message", "node_panel"],
+      description: expect.stringContaining("node_panel: Show on a connected device panel"),
+    });
+    expect(withPresenterTool.description).toContain("registered kinds are diagram");
+    expect(withPresenterTool.description).toContain(
+      "Use presentation.target to choose a registered device surface.",
+    );
+  });
+
+  it("routes node-panel presentation and reports the selected device", async () => {
+    const stateDir = await createStateDir();
+    const availability = vi.fn(async () => ({
+      ok: true as const,
+      value: { available: true as const },
+    }));
+    const present = vi.fn(async () => ({
+      ok: true as const,
+      value: { kind: "node" as const, nodeId: "mac-panel", nodeName: "Studio" },
+    }));
+    const result = await executeWidget({
+      stateDir,
+      title: "Status",
+      widgetCode: "<p>ready</p>",
+      agentSessionKey: "agent:main:status",
+      presentation: { target: "node_panel" },
+      presenters: [
+        {
+          target: "node_panel",
+          description: "Show on a connected device panel",
+          availability,
+          present,
+        },
+      ],
+    });
+
+    expect(result.target).toBe("node_panel");
+    expect(result.resultText).toContain("presented on Studio (mac-panel)");
+    expect(availability).toHaveBeenCalledWith({ sessionKey: "agent:main:status" });
+    expect(present).toHaveBeenCalledWith({
+      document: {
+        kind: "html",
+        html: expect.stringContaining("<p>ready</p>"),
+        hostedUrl: result.url,
+      },
+      title: "Status",
+      context: { sessionKey: "agent:main:status" },
+    });
+  });
+
+  it.each([
+    {
+      name: "has no registered presenter",
+      presenters: [] as WidgetPresenter[],
+      expected: "No widget presenter is registered",
+    },
+    {
+      name: "has no eligible node",
+      presenters: [
+        {
+          target: "node_panel" as const,
+          description: "Show on a connected device panel",
+          availability: async () => ({
+            ok: false as const,
+            error: { code: "no_eligible_node" as const, message: "No connected device." },
+          }),
+          present: async () => {
+            throw new Error("present must not run");
+          },
+        },
+      ],
+      expected: "No connected device.",
+    },
+    {
+      name: "hits a node error",
+      presenters: [
+        {
+          target: "node_panel" as const,
+          description: "Show on a connected device panel",
+          availability: async () => ({ ok: true as const, value: { available: true as const } }),
+          present: async () => ({
+            ok: false as const,
+            error: {
+              code: "node_error" as const,
+              message: "Canvas is disabled.",
+              nodeId: "mac-panel",
+            },
+          }),
+        },
+      ],
+      expected: "Canvas is disabled.",
+    },
+  ])(
+    "falls back inline with an actionable message when node presentation $name",
+    async ({ presenters, expected }) => {
+      const stateDir = await createStateDir();
+      const result = await executeWidget({
+        stateDir,
+        widgetCode: "<p>inline fallback</p>",
+        presentation: { target: "node_panel" },
+        presenters,
+      });
+
+      expect(result.target).toBe("assistant_message");
+      expect(result.resultText).toContain(expected);
+      expect(result.resultText).toContain("available inline here");
+      expect(result.resultText).toMatch(
+        /Pair a canvas-capable device|Retry the requested presentation destination/u,
+      );
+      await expect(
+        access(resolveCanvasDocumentDir(stateDir, result.viewId)),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it("enforces current-presenter source kinds and byte limits in core", async () => {
+    registerDiagramContentKind();
+    const presenter: WidgetPresenter = {
+      target: "current_channel",
+      description: "HTML-only current channel",
+      capabilities: { sourceKinds: ["html"], maxSourceBytes: 8 },
+      match: () => true,
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present: async () => {
+        throw new Error("present must not run");
+      },
+    };
+    const tool = createShowWidgetTool({
+      inlineClientAvailable: false,
+      presenters: [presenter],
+      presenterContext: {},
+    });
+    const kindSchema = (tool.parameters as { properties?: { kind?: { enum?: string[] } } })
+      .properties?.kind;
+
+    expect(kindSchema?.enum).toEqual(["html"]);
+    expect(tool.description).not.toContain("registered kinds are diagram");
+    await expect(
+      tool.execute("oversized-current", { title: "Large", widget_code: "123456789" }),
+    ).rejects.toThrow("widget_code exceeds maximum size (8 bytes)");
+    await expect(
+      tool.execute("unsupported-current", {
+        title: "Diagram",
+        widget_code: "diagram:ready",
+        kind: "diagram",
+      }),
+    ).rejects.toThrow("inline widget hosting is disabled");
+  });
+
+  it("fails visibly without inline fallback and uses a real inline route when available", async () => {
+    const presenter: WidgetPresenter = {
+      target: "current_channel",
+      description: "Failing current channel",
+      capabilities: { sourceKinds: ["html"] },
+      match: () => true,
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present: async () => ({
+        ok: false,
+        error: { code: "presentation_error", message: "delivery rejected" },
+      }),
+    };
+    const noInline = createShowWidgetTool({
+      inlineClientAvailable: false,
+      presenters: [presenter],
+      presenterContext: {},
+    });
+    await expect(
+      noInline.execute("no-inline", { title: "Status", widget_code: "<p>ready</p>" }),
+    ).rejects.toThrow("Widget presentation failed: delivery rejected");
+
+    const stateDir = await createStateDir();
+    const withInline = createShowWidgetTool({
+      stateDir,
+      sessionId: "inline-fallback",
+      inlineClientAvailable: true,
+      presenters: [presenter],
+      presenterContext: {},
+    });
+    const fallback = await withInline.execute("with-inline", {
+      title: "Status",
+      widget_code: "<p>ready</p>",
+    });
+    const parsed = JSON.parse(
+      fallback.content[0]?.type === "text" ? fallback.content[0].text : "null",
+    );
+    expect(parsed).toMatchObject({
+      kind: "canvas",
+      presentation: { target: "assistant_message" },
+      text: expect.stringContaining("delivery rejected. The widget is available inline here."),
+    });
+  });
+
+  it("reports pin success and presentation failure as an explicit partial outcome", async () => {
+    const { callGateway } = createBoardPutCaller();
+    const presenter: WidgetPresenter = {
+      target: "current_channel",
+      description: "Failing current channel",
+      capabilities: { sourceKinds: ["html"] },
+      match: () => true,
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present: async () => ({
+        ok: false,
+        error: { code: "presentation_error", message: "delivery rejected" },
+      }),
+    };
+    const tool = createShowWidgetTool({
+      agentSessionKey: "agent:main:partial",
+      callGateway,
+      inlineClientAvailable: false,
+      presenters: [presenter],
+      presenterContext: {},
+    });
+    const result = await tool.execute("partial", {
+      title: "Status",
+      widget_code: "<p>ready</p>",
+      pin: true,
+    });
+    const parsed = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "null");
+
+    expect(parsed).toMatchObject({
+      status: "partial",
+      boardWidgetName: "status",
+      presentation: {
+        target: "current_channel",
+        status: "failed",
+        error: { code: "presentation_error", message: "delivery rejected" },
+      },
+      text: expect.stringContaining(
+        "pinned to dashboard tab main as status, but presentation failed",
+      ),
+    });
   });
 
   it("keeps the wrapped document bytes stable", () => {
@@ -316,7 +744,7 @@ describe("show_widget", () => {
       name: "release-status",
       tab: "main",
       size: "lg",
-      presentation: "frameless",
+      presentation: { frame: "frameless" },
       callGateway,
     });
     const pinnedTitle = Array.from(title).slice(0, 80).join("");

@@ -169,10 +169,23 @@ describe("placement session retirement", () => {
       sessionKey: "agent:main:session-requested",
       agentId: "main",
     });
+    const ownedIdentity = {
+      sessionId: "session-owned-requested",
+      sessionKey: "agent:main:session-owned-requested",
+      agentId: "main",
+    };
+    const ownedClaim = placements.claimTurn({
+      ...ownedIdentity,
+      owner: { kind: "local" },
+      claimId: "requested-owner-claim",
+      runId: "requested-owner-run",
+    });
+    const ownedRequested = placements.startDispatch(ownedIdentity);
     const retireSessionPlacement = vi.fn((input: WorkerSessionPlacementRetirement) =>
       placements.retireSessionPlacement(input),
     );
     const forceDestroyEnvironment = vi.fn();
+    const warn = vi.fn();
     const retirement = createPlacementSessionRetirement({
       placements: {
         get: (sessionId) => placements.get(sessionId),
@@ -182,7 +195,7 @@ describe("placement session retirement", () => {
       environments: { get: () => undefined },
       forceDestroyEnvironment,
       createSessionEvidenceResolver: async () => async () => "absent",
-      warn: vi.fn(),
+      warn,
     });
 
     try {
@@ -193,7 +206,20 @@ describe("placement session retirement", () => {
         expectedState: "requested",
         expectedGeneration: requested.generation,
       });
+      expect(retireSessionPlacement).toHaveBeenCalledOnce();
       expect(placements.get(requested.sessionId)).toBeUndefined();
+      expect(placements.get(ownedRequested.sessionId)).toMatchObject({
+        state: "requested",
+        generation: ownedRequested.generation,
+        turnClaim: {
+          owner: "local",
+          claimId: ownedClaim.claimId,
+          runId: ownedClaim.runId,
+        },
+      });
+      expect(warn).toHaveBeenCalledWith(
+        `Retired ownerless worker placement ${requested.sessionId} because its authoritative session is absent (requested@${requested.generation})`,
+      );
       expect(forceDestroyEnvironment).not.toHaveBeenCalled();
     } finally {
       closeOpenClawStateDatabaseForTest();

@@ -53,6 +53,8 @@ const ZERO_BASELINE_RULES = [
   "eslint/unicode-bom",
   "eslint/yoda",
   "import/no-absolute-path",
+  "import/first",
+  "import/no-duplicates",
   "import/no-empty-named-blocks",
   "import/no-self-import",
   "node/no-exports-assign",
@@ -112,9 +114,7 @@ const ZERO_BASELINE_RULES = [
 
 const DEFERRED_IMPORT_RULES = [
   "import/default",
-  "import/first",
   "import/namespace",
-  "import/no-duplicates",
   "import/no-named-as-default",
   "import/no-named-as-default-member",
   "import/no-unassigned-import",
@@ -240,6 +240,7 @@ describe("oxlint config", () => {
           "**/*test-support.ts",
         ],
         rules: {
+          "import/first": "off",
           "typescript/no-explicit-any": "off",
         },
       },
@@ -312,7 +313,7 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("enables clean zero-baseline lint rules and keeps import campaigns off", () => {
+  it("enables clean zero-baseline lint rules and keeps deferred import rules off", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 
     expect(config.plugins).toContain("import");

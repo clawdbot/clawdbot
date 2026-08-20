@@ -153,6 +153,7 @@ describe("resolveTelegramConversationBaseSessionKey", () => {
       accountId: "default",
       chatId: 12345,
       isGroup: false,
+      threadSpec: { scope: "none" },
       senderId: 12345,
     });
 
@@ -198,8 +199,7 @@ describe("resolveTelegramConversationBaseSessionKey", () => {
       accountId: "default",
       chatId: -1001234567890,
       isGroup: true,
-      resolvedThreadId: 11,
-      replyThreadId: 11,
+      threadSpec: { id: 11, scope: "forum" },
       senderId: 12345,
     });
 

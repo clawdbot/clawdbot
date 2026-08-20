@@ -8,6 +8,7 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
 import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
+import { inferToolMetaFromArgsCore } from "./tool-display.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 describe("tool terminal outcome observer", () => {
@@ -36,12 +37,59 @@ describe("tool terminal outcome observer", () => {
       error: "A failed",
       actionFingerprint: expect.stringContaining("to=channel:a"),
     });
+    expect(afterB.lastToolRecovery).toEqual({ toolName: "message" });
     expect(
       observe({ toolName: "heartbeat_respond", arguments: {}, outcome: "success" }).lastToolError,
     ).toMatchObject({ error: "A failed" });
     expect(
       observe({ toolName: "message", arguments: actionA, outcome: "success" }).lastToolError,
     ).toBeUndefined();
+  });
+
+  it("surfaces the successful cross-tool recovery without leaking failure details", () => {
+    const observe = createToolTerminalObserver("run-edit-recovery");
+
+    observe({
+      toolName: "edit",
+      arguments: { path: "/tmp/demo.txt", oldText: "missing", newText: "after" },
+      outcome: "failure",
+      failure: { error: "Could not find TOP_SECRET text in /tmp/demo.txt" },
+    });
+    const recovered = observe({
+      toolName: "write",
+      arguments: { path: "/tmp/demo.txt", content: "after" },
+      outcome: "success",
+    });
+    const afterRead = observe({
+      toolName: "read",
+      arguments: { path: "/tmp/demo.txt" },
+      outcome: "success",
+    });
+    const payloads = buildPayloads({ lastToolRecovery: afterRead.lastToolRecovery });
+
+    expect(recovered.lastToolError).toBeUndefined();
+    expect(recovered.lastToolRecovery).toEqual({ toolName: "write" });
+    expect(afterRead.lastToolRecovery).toEqual({ toolName: "write" });
+    expect(payloads.map((payload) => payload.text)).toEqual(["✅ ✍️ Write succeeded after retry."]);
+    expect(JSON.stringify(payloads)).not.toContain("TOP_SECRET");
+    expect(JSON.stringify(payloads)).not.toContain("/tmp/demo.txt");
+
+    const afterUnrelatedFailure = observe({
+      toolName: "message",
+      arguments: { action: "send", to: "channel:other", message: "hello" },
+      outcome: "failure",
+      failure: { error: "send failed" },
+    });
+    expect(afterUnrelatedFailure.lastToolError).toMatchObject({ error: "send failed" });
+    expect(afterUnrelatedFailure.lastToolRecovery).toEqual({ toolName: "write" });
+
+    const afterSameTargetFailure = observe({
+      toolName: "edit",
+      arguments: { path: "/tmp/demo.txt", oldText: "after", newText: "later" },
+      outcome: "failure",
+      failure: { error: "second edit failed" },
+    });
+    expect(afterSameTargetFailure.lastToolRecovery).toBeUndefined();
   });
 
   it("uses host execution and adjusted-argument evidence before fallback facts", () => {
@@ -118,6 +166,65 @@ describe("tool terminal outcome observer", () => {
       sideEffectEvidence: false,
       lastToolError: { mutatingAction: false },
     });
+  });
+
+  it("clears a failed sessions_spawn once a retry with adjusted arguments succeeds", () => {
+    const observe = createToolTerminalObserver("run-spawn-retry");
+    const failedArgs = {
+      task: "Investigate the flaky gateway test",
+      label: "Investigate",
+      cwd: "/outside/workspace",
+    };
+    // The retry the model actually issues: drops the rejected cwd and rewords the task.
+    const retryArgs = { task: "Investigate the flaky gateway test in repo scope" };
+
+    observe({
+      toolName: "sessions_spawn",
+      arguments: failedArgs,
+      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
+      outcome: "failure",
+      failure: { error: "cwd is outside the workspace" },
+    });
+    const afterRetry = observe({
+      toolName: "sessions_spawn",
+      arguments: retryArgs,
+      meta: inferToolMetaFromArgsCore("sessions_spawn", retryArgs),
+      outcome: "success",
+    });
+
+    expect(afterRetry.lastToolError).toBeUndefined();
+    expect(afterRetry.lastToolRecovery).toEqual({ toolName: "sessions_spawn" });
+
+    const payloads = buildPayloads({
+      assistantTexts: ["Started Investigate in a new session."],
+      lastToolError: afterRetry.lastToolError,
+      lastToolRecovery: afterRetry.lastToolRecovery,
+    });
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Started Investigate in a new session.",
+      "✅ 🧑‍🔧 Sub-agent succeeded after retry.",
+    ]);
+  });
+
+  it("keeps the sessions_spawn failure warning when no later spawn succeeds", () => {
+    const observe = createToolTerminalObserver("run-spawn-failed");
+    const failedArgs = { task: "Investigate the flaky gateway test", label: "Investigate" };
+
+    const terminal = observe({
+      toolName: "sessions_spawn",
+      arguments: failedArgs,
+      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
+      outcome: "failure",
+      failure: { error: "cwd is outside the workspace" },
+    });
+
+    const payloads = buildPayloads({
+      assistantTexts: ["Started Investigate in a new session."],
+      lastToolError: terminal.lastToolError,
+      lastToolRecovery: terminal.lastToolRecovery,
+    });
+    expect(payloads.at(-1)?.isError).toBe(true);
+    expect(payloads.at(-1)?.text).toContain("Sub-agent failed");
   });
 
   it("preserves durable memory recall side-effect evidence", () => {

@@ -242,6 +242,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       config: params.cfg,
     });
   return {
+    approvalKind: "exec",
     id: "diagnostics-private-route",
     request: {
       command: buildGatewayDiagnosticsExportJsonCommand(),

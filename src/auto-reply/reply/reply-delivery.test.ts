@@ -346,30 +346,6 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.replyToCurrent).toBeUndefined();
   });
 
-  it("normalizes reaction directives into Telegram channel data", () => {
-    const normalized = normalizeReplyPayloadDirectives({
-      payload: { text: "[[react_to_current:✅]]" },
-      currentMessageId: "msg-123",
-      trimLeadingWhitespace: true,
-      parseMode: "auto",
-    });
-
-    expect(normalized.payload).toMatchObject({
-      text: undefined,
-      replyToId: "msg-123",
-      replyToCurrent: true,
-      channelData: {
-        telegram: {
-          reaction: {
-            emoji: "✅",
-            replyToCurrent: true,
-            replyToId: "msg-123",
-          },
-        },
-      },
-    });
-  });
-
   it("passes structured media block replies through media path normalization", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),

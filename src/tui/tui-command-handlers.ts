@@ -304,7 +304,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   ) => {
     selector.onSelect = (item) => {
       void (async () => {
-        await onSelect(item.value);
+        try {
+          await onSelect(item.value);
+        } catch (err) {
+          // A rejected selection must not strand the overlay open with an
+          // unhandled rejection; close it and surface the cause in chat.
+          chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
+        }
         closeOverlayAndRender(overlayHandle);
       })();
     };
@@ -318,7 +324,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     try {
       chatLog.addSystem("loading models...");
       tui.requestRender();
-      const models = await client.listModels();
+      const models = await client.listModels({ agentId: selection.agentId });
       if (!isCurrentSessionSelection(selection)) {
         return;
       }

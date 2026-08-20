@@ -117,13 +117,12 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     }
     return { source, rootDir };
   }
-  // Source-external plugins can leave package-local npm build output behind.
-  // Keep source authoritative over that output, but allow the lifecycle-owned root
-  // build to provide the fresh JavaScript artifact used by source checkouts.
-  const packageLocalArtifactSource =
-    params.packageManifest?.build?.bundledDist === false
-      ? null
-      : resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+  // Source-external plugins keep source authoritative over package-local output;
+  // only the lifecycle-owned canonical root build may replace that pair.
+  const sourceExternal = params.packageManifest?.build?.bundledDist === false;
+  const packageLocalArtifactSource = sourceExternal
+    ? null
+    : resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
   if (packageLocalArtifactSource) {
     return { source: packageLocalArtifactSource, rootDir };
   }
@@ -140,9 +139,9 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     return { source, rootDir };
   }
   const artifactRelativePath = rewriteBundledRuntimeArtifactRelativePath(relativeSource);
-  // The runtime overlay is a staging fallback. Final canonicalization maps it
-  // to the matching root build when both exist, so one build owns execution.
-  for (const artifactRootName of ["dist-runtime", "dist"] as const) {
+  // Source-external packaging can replace the flat root build while leaving its
+  // staging wrapper behind, so only bundled artifacts may fall back to dist-runtime.
+  for (const artifactRootName of sourceExternal ? ["dist"] : ["dist-runtime", "dist"]) {
     const artifactRoot = path.join(
       packageRoot,
       artifactRootName,

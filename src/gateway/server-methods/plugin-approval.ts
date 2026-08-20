@@ -60,7 +60,11 @@ export function createPluginApprovalHandlers(
 ): GatewayRequestHandlers {
   return {
     "plugin.approval.list": async ({ respond, client }) => {
-      respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
+      respond(
+        true,
+        listVisiblePendingApprovalRequests({ manager, client, approvalKind: "plugin" }),
+        undefined,
+      );
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (
@@ -243,7 +247,7 @@ export function createPluginApprovalHandlers(
         return;
       }
 
-      const requestEvent = buildRequestedApprovalEvent(record);
+      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
       const forwardRequest = opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder);
       const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
 

@@ -4,23 +4,23 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
-import {
-  formatEmbeddedAgentQueueFailureSummary,
-  isEmbeddedAgentRunActive,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunSessionId,
-} from "./commands-steer.runtime.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
+import {
+  beginReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt,
+  replyRunRegistry,
+  type ReplyMessageInjectionTarget,
+} from "./reply-run-registry.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
 
@@ -46,21 +46,10 @@ function resolveSteerTargetSessionKey(params: HandleCommandsParams): string | un
   return resolveInternalSessionKey({ key: raw, alias, mainKey });
 }
 
-function resolveStoredSessionEntry(
-  params: HandleCommandsParams,
-  targetSessionKey: string,
-): SessionEntry | undefined {
-  if (params.sessionStore?.[targetSessionKey]) {
-    return params.sessionStore[targetSessionKey];
-  }
-  if (params.sessionKey === targetSessionKey) {
-    return params.sessionEntry;
-  }
-  return undefined;
-}
-
 function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
   const candidates = [targetSessionKey];
+  // Text slash turns still arrive on a source-only :slash: lane while the
+  // direct conversation owns the reply operation (#104844, #116763).
   if (targetSessionKey.includes(":slash:")) {
     candidates.push(
       targetSessionKey.replace(":slash:", ":direct:"),
@@ -70,23 +59,17 @@ function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
   return [...new Set(candidates)];
 }
 
-function resolveSteerSessionId(params: {
-  commandParams: HandleCommandsParams;
-  targetSessionKey: string;
-}): string | undefined {
-  const candidateKeys = listSteerCandidateSessionKeys(params.targetSessionKey);
+function resolveSteerTarget(
+  targetSessionKey: string,
+): { sessionId: string; sessionKey: string; target: ReplyMessageInjectionTarget } | undefined {
+  const candidateKeys = listSteerCandidateSessionKeys(targetSessionKey);
   for (const candidateKey of candidateKeys) {
-    const activeSessionId = resolveActiveEmbeddedRunSessionId(candidateKey);
-    if (activeSessionId) {
-      return activeSessionId;
-    }
-  }
-
-  for (const candidateKey of candidateKeys) {
-    const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
-    const sessionId = normalizeOptionalString(entry?.sessionId);
-    if (sessionId && isEmbeddedAgentRunActive(sessionId)) {
-      return sessionId;
+    const operation = replyRunRegistry.get(candidateKey);
+    const target = operation
+      ? replyRunRegistry.resolveCurrentMessageInjectionTarget(candidateKey)
+      : undefined;
+    if (operation && target) {
+      return { sessionId: operation.sessionId, sessionKey: candidateKey, target };
     }
   }
 
@@ -119,8 +102,8 @@ export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
       );
     }
 
-    const sessionId = resolveSteerSessionId({ commandParams: params, targetSessionKey });
-    if (!sessionId) {
+    const steerTarget = resolveSteerTarget(targetSessionKey);
+    if (!steerTarget) {
       return continueWithSteerFallback(
         params,
         message,
@@ -128,30 +111,41 @@ export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
       );
     }
 
-    const queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, {
-      steeringMode: "all",
-      isInboundUserMessage: true,
-      debounceMs: 0,
-      ...(params.opts?.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }
-        : {}),
-      taskSuggestionDeliveryMode: params.opts?.taskSuggestionDeliveryMode,
+    const finalization = await finalizeReplyMessageInjectionAttempt({
+      target: steerTarget.target,
+      attempt: beginReplyMessageInjectionTarget(steerTarget.target, message, {
+        steeringMode: "all",
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: resolveInboundReplyToolAuthorityOverlay({
+          ctx: params.ctx,
+          sessionEntry:
+            params.sessionStore?.[steerTarget.sessionKey] ??
+            (params.sessionKey === steerTarget.sessionKey ? params.sessionEntry : undefined),
+          senderIsOwner: params.command.senderIsOwner,
+          toolsAllow: params.opts?.toolsAllow,
+          disableTools: params.opts?.disableTools === true,
+        }),
+        debounceMs: 0,
+        ...(params.opts?.sourceReplyDeliveryMode
+          ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }
+          : {}),
+        taskSuggestionDeliveryMode: params.opts?.taskSuggestionDeliveryMode,
+      }),
     }).catch((err: unknown): CommandHandlerResult => {
       return continueWithSteerFallback(
         params,
         message,
-        `steer: active session ${sessionId} threw while steering: ${formatErrorMessage(err)}; continuing with /steer payload as a normal prompt`,
+        `steer: active session ${steerTarget.sessionId} threw while steering: ${formatErrorMessage(err)}; continuing with /steer payload as a normal prompt`,
       );
     });
-    if ("shouldContinue" in queueOutcome) {
-      return queueOutcome;
+    if ("shouldContinue" in finalization) {
+      return finalization;
     }
-    if (!queueOutcome.queued) {
-      const summary = formatEmbeddedAgentQueueFailureSummary(queueOutcome);
+    if (finalization.status === "rejected") {
       return continueWithSteerFallback(
         params,
         message,
-        `steer: active session ${sessionId} rejected steering injection: ${summary}; continuing with /steer payload as a normal prompt`,
+        `steer: active session ${steerTarget.sessionId} rejected steering injection (${finalization.outcome.reason}); continuing with /steer payload as a normal prompt`,
       );
     }
 

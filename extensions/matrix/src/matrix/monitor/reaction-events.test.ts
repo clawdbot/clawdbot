@@ -46,10 +46,16 @@ type MatrixReactionEvent = MatrixReactionParams["event"];
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: (...args: unknown[]) => resolveMatrixApproval(...args),
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
-  isApprovalNotFoundError: (err: unknown) =>
-    err instanceof Error && /unknown or expired approval id/i.test(err.message),
-}));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: (err: unknown) =>
+      err instanceof Error && /unknown or expired approval id/i.test(err.message),
+  };
+});
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: (...args: unknown[]) => editMessageMatrix(...args),

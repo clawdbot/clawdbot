@@ -1,4 +1,9 @@
-import "./prepared-model-runtime.test-harness.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -11,10 +16,6 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
-import {
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -47,6 +48,7 @@ describe("prepared reply dispatch runtime", () => {
       gatewayLifecycle: true,
       catalogMode: "static",
       allowGatewaySubagentBinding: true,
+      pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
     });
     const input = {
       agentId: "default",
@@ -58,7 +60,7 @@ describe("prepared reply dispatch runtime", () => {
     };
     const firstSnapshot = getPreparedModelRuntimeSnapshot(input);
     const firstRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
-    expect(firstRuntime).toEqual({
+    expect(firstRuntime).toMatchObject({
       agentId: "default",
       agentDir: "/tmp/unused-agent",
       workspaceDir: "/tmp/unused-workspace",
@@ -66,6 +68,10 @@ describe("prepared reply dispatch runtime", () => {
       modelCatalog: firstSnapshot?.modelCatalog,
       inboundPluginRegistry: firstRegistry,
     });
+    expect(firstRuntime?.pluginGeneration?.pluginMetadataSnapshot).toBe(
+      mocks.pluginMetadataSnapshot,
+    );
+    expect(firstSnapshot?.metadataSnapshot).toBe(mocks.pluginMetadataSnapshot);
     expect(Object.isFrozen(firstRuntime)).toBe(true);
 
     const replacementCatalog = createDeferred<{ entries: [] }>();
@@ -73,6 +79,7 @@ describe("prepared reply dispatch runtime", () => {
     const refresh = refreshPreparedModelRuntimeSnapshots(replacementConfig, {
       catalogMode: "static",
       allowGatewaySubagentBinding: true,
+      pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
     });
     await vi.waitFor(() =>
       expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4),
@@ -165,6 +172,9 @@ describe("prepared reply dispatch runtime", () => {
     const configuredRuntimeBefore = await loadPublishedGatewayReplyDispatchRuntime({
       agentId: "default",
     });
+    if (!configuredRuntimeBefore) {
+      throw new Error("expected configured reply runtime");
+    }
     const configuredInput = {
       agentId: "default",
       agentDir: "/tmp/unused-agent",
@@ -181,7 +191,9 @@ describe("prepared reply dispatch runtime", () => {
         { provider: "openai", modelId: "gpt-5.5", runtime: "codex" as const },
       ],
     };
-    const dynamicLease = await acquireAgentRunPreparedModelRuntime(dynamicInput);
+    const dynamicLease = await acquireAgentRunPreparedModelRuntime(dynamicInput, {
+      pluginGeneration: configuredRuntimeBefore.pluginGeneration,
+    });
     const dynamicSelectedBefore = dynamicLease.snapshot.pluginRegistry;
     dynamicLease.release();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);

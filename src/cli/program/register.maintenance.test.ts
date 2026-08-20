@@ -58,6 +58,10 @@ function commandCall(mock: ReturnType<typeof vi.fn>): [typeof runtime, Record<st
   return call;
 }
 
+function jsonFailure(message: string) {
+  return { ok: false, error: { type: "cli_error", message } };
+}
+
 describe("registerMaintenanceCommands doctor action", () => {
   async function runMaintenanceCli(args: string[]) {
     const program = new Command();
@@ -121,7 +125,11 @@ describe("registerMaintenanceCommands doctor action", () => {
     await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--json"]);
 
     expect(runtime.writeJson).toHaveBeenCalledWith({
-      error: expect.stringContaining("maintenance failed: Authorization: Bearer"),
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("maintenance failed: Authorization: Bearer"),
+      },
     });
     expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
     expect(runtime.error).not.toHaveBeenCalled();
@@ -225,7 +233,7 @@ describe("registerMaintenanceCommands doctor action", () => {
       "--json",
     ]);
 
-    expect(runtime.writeJson).toHaveBeenCalledWith({ error: message });
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
@@ -279,7 +287,7 @@ describe("registerMaintenanceCommands doctor action", () => {
       expect(doctorCommand).not.toHaveBeenCalled();
       expect(runDoctorLintCli).not.toHaveBeenCalled();
       if (json) {
-        expect(runtime.writeJson).toHaveBeenCalledWith({ error: message });
+        expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
         expect(runtime.error).not.toHaveBeenCalled();
       } else {
         expect(runtime.error).toHaveBeenCalledWith(message);
@@ -372,7 +380,7 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith({ error: message });
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
@@ -394,7 +402,7 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith({ error: message });
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
@@ -415,7 +423,7 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     await runMaintenanceCli(["doctor", "--json"]);
 
-    expect(runtime.writeJson).toHaveBeenCalledWith({ error: "lint failed" });
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure("lint failed"));
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });

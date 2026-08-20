@@ -1,5 +1,5 @@
 // Verifies plugin loader runtime registry behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -13,6 +13,7 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "./installed-plugin-index-records.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
+import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
   clearPluginRegistryLoadCache,
   loadAndActivateRootPluginRegistry,
@@ -40,6 +41,24 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
 
   expect(handle).not.toBe(root);
   expect(getActivePluginRegistry()).toBe(root);
+});
+
+it("keeps injected instance runtime surfaces independent of the broad runtime module", () => {
+  const gateway = {} as PluginRuntime["gateway"];
+  const nodes = {} as PluginRuntime["nodes"];
+  const subagent = {} as PluginRuntime["subagent"];
+  const loadPluginModule = vi.fn((_modulePath: string): unknown => {
+    throw new Error("broad runtime should stay lazy");
+  });
+  const runtime = createLazyPluginRuntime({
+    loadPluginModule,
+    runtimeOptions: { gateway, nodes, subagent },
+  });
+
+  expect(runtime.gateway).toBe(gateway);
+  expect(runtime.nodes).toBe(nodes);
+  expect(runtime.subagent).toBe(subagent);
+  expect(loadPluginModule).not.toHaveBeenCalled();
 });
 
 function requireMemoryEmbeddingProvider(providerId: string) {

@@ -146,6 +146,7 @@ export async function persistCliAssistantTranscript(params: {
   };
 }): Promise<{
   owned: boolean;
+  idempotencyKey?: string;
   terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
 }> {
   const { runParams } = params;
@@ -167,6 +168,7 @@ export async function persistCliAssistantTranscript(params: {
     return { owned: false };
   }
   try {
+    const idempotencyKey = `cli-assistant:${runParams.runId}`;
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
@@ -178,7 +180,7 @@ export async function persistCliAssistantTranscript(params: {
         ? { expectedWriterRunId: runParams.expectedWriterRunId }
         : {}),
       storePath: runParams.storePath,
-      idempotencyKey: `cli-assistant:${runParams.runId}`,
+      idempotencyKey,
       config: runParams.config,
       beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       message: buildAssistantMessage({
@@ -202,7 +204,11 @@ export async function persistCliAssistantTranscript(params: {
       log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`);
       return { owned: result.code === "blocked" || result.code === "session-rebound" };
     }
-    return { owned: true, ...(result.anchor ? { terminalAnchor: result.anchor } : {}) };
+    return {
+      owned: true,
+      idempotencyKey,
+      ...(result.anchor ? { terminalAnchor: result.anchor } : {}),
+    };
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
     return { owned: false };

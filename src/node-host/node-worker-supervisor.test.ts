@@ -41,7 +41,7 @@ function fixture(
   options: {
     capacity?: number;
     capacityWaitMs?: number;
-    onAvailabilityChanged?: (available: boolean) => void;
+    onCapacityChanged?: (capacity: { total: number; available: number }) => void;
   } = {},
 ) {
   const root = tempDirs.make("node-worker-supervisor-");
@@ -142,12 +142,12 @@ describe("node worker supervisor", () => {
       supervisorIdentity.startTime,
     );
 
-    const availability: boolean[] = [];
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const sameHandle = createNodeWorkerSupervisor({
       bundleRoot,
       env,
       capacity: 2,
-      onAvailabilityChanged: (available) => availability.push(available),
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
     expect(await sameHandle.status("pending-launch")).toMatchObject({
       state: "pending",
@@ -157,7 +157,10 @@ describe("node worker supervisor", () => {
       state: "running",
       worker: supervisorIdentity,
     });
-    expect(availability).toEqual([false]);
+    expect(capacitySnapshots).toEqual([
+      { total: 2, available: 0 },
+      { total: 2, available: 0 },
+    ]);
     await supervisor.close();
     await sameHandle.close();
     closeOpenClawStateDatabaseForTest();
@@ -213,11 +216,11 @@ describe("node worker supervisor", () => {
   });
 
   it("admits two durable launches and releases one physical slot at a time", async () => {
-    const availability: boolean[] = [];
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const { env, supervisor, workspaceDir } = fixture({
       capacity: 2,
       capacityWaitMs: 5_000,
-      onAvailabilityChanged: (available) => availability.push(available),
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
     const first = launchInput(workspaceDir, "capacity-a", "wait");
     const second = launchInput(workspaceDir, "capacity-b", "wait");
@@ -231,7 +234,12 @@ describe("node worker supervisor", () => {
       launchId: first.launchId,
       state: "running",
     });
-    expect(availability).toEqual([false, true, false]);
+    expect(capacitySnapshots).toEqual([
+      { total: 2, available: 0 },
+      { total: 2, available: 2 },
+      { total: 2, available: 1 },
+      { total: 2, available: 0 },
+    ]);
 
     const thirdAdmission = supervisor.launch(third, TEST_WORKER_ENDPOINT);
     const fourthAdmission = supervisor.launch(fourth, TEST_WORKER_ENDPOINT);
@@ -254,7 +262,16 @@ describe("node worker supervisor", () => {
     await expect(thirdAdmittedFirst ? fourthAdmission : thirdAdmission).resolves.toMatchObject({
       state: "running",
     });
-    expect(availability).toEqual([false, true, false, true, false, true, false]);
+    expect(capacitySnapshots).toEqual([
+      { total: 2, available: 0 },
+      { total: 2, available: 2 },
+      { total: 2, available: 1 },
+      { total: 2, available: 0 },
+      { total: 2, available: 1 },
+      { total: 2, available: 0 },
+      { total: 2, available: 1 },
+      { total: 2, available: 0 },
+    ]);
 
     await supervisor.close();
   });
@@ -308,10 +325,10 @@ describe("node worker supervisor", () => {
   it.each(["status", "launch", "cancel", "close"] as const)(
     "retains an observed terminal outcome when %s reconciliation keeps failing",
     async (operation) => {
-      const availability: boolean[] = [];
+      const capacitySnapshots: Array<{ total: number; available: number }> = [];
       const { env, supervisor, workspaceDir } = fixture({
         capacity: 1,
-        onAvailabilityChanged: (available) => availability.push(available),
+        onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
       });
       const input = launchInput(workspaceDir, `finish-failure-${operation}`);
       const store = (supervisor as unknown as { store: NodeWorkerLaunchStore }).store;
@@ -344,11 +361,11 @@ describe("node worker supervisor", () => {
       });
       await vi.waitFor(() => expect(finish).toHaveBeenCalled(), { timeout: 5_000 });
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
-      expect(availability.at(-1)).toBe(false);
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
 
       await expect(invoke()).rejects.toThrow("injected finish failure");
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
-      expect(availability.at(-1)).toBe(false);
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
 
       persistenceUnavailable = false;
       const completed = await invoke();
@@ -357,7 +374,7 @@ describe("node worker supervisor", () => {
         resultJson: expect.stringContaining('"status":"completed"'),
       });
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("completed");
-      expect(availability.at(-1)).toBe(true);
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 1 });
       await supervisor.close();
     },
   );
@@ -665,7 +682,7 @@ describe("node worker supervisor", () => {
     const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
     expect(running.state).toBe("running");
     const grandchildPath = path.join(workspaceDir, "grandchild.pid");
-    await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
+    await vi.waitFor(() => expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u));
     const grandchildPid = Number(fs.readFileSync(grandchildPath, "utf8"));
     const grandchild = requireNodeWorkerProcessIdentity(grandchildPid);
     expect(inspectNodeWorkerProcessIdentity(grandchild)).toBe("live");

@@ -56,6 +56,9 @@ function mapAuditActivityEvent(event: AuditEventRecord): AuditActivityEventV1 {
         : { type: "system" as const, id: actorId };
     return { ...activity, eventType: "inbound_message", actor };
   }
+  if (event.action !== "message.outbound.finished") {
+    throw new Error("nonterminal outbound messages are not audit activity records");
+  }
   const { actorType, actorId, ...activity } = event;
   return { ...activity, eventType: "outbound_message", actor: { type: actorType, id: actorId } };
 }
@@ -174,7 +177,9 @@ export const auditHandlers: GatewayRequestHandlers = {
       typeof params.runId !== "string" ||
       (params.executionCursor === decisionCursor &&
         decisionCursor !== undefined &&
-        (decisionCursor.startsWith("a:") || decisionCursor.startsWith("g:")))
+        (decisionCursor.startsWith("a:") ||
+          decisionCursor.startsWith("m:") ||
+          decisionCursor.startsWith("g:")))
         ? undefined
         : parsePositiveAuditCursor(params.executionCursor);
     if (

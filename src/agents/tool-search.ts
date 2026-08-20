@@ -26,8 +26,10 @@ import {
   setToolSearchCodeModeSupportedForTest,
   setToolSearchMinCodeTimeoutMsForTest,
 } from "./tool-search-config.js";
-import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
-import { MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS } from "./tool-search-directory.js";
+import {
+  applyToolSchemaDirectoryCatalog,
+  MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
+} from "./tool-search-directory.js";
 import { readToolSearchRequest } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,

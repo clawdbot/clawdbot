@@ -17,6 +17,12 @@ import {
 } from "./terminal-panel-upload.ts";
 
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
+type TerminalPanelViewportParams = {
+  activeId: string | null;
+  connecting: boolean;
+  error: { text: string; retry?: () => void } | null;
+  uploadController: TerminalPanelUploadController;
+};
 
 export function renderTerminalPanelToolbar(
   fullscreen: boolean,
@@ -62,14 +68,23 @@ export function renderTerminalPanelHeader(
   </header>`;
 }
 
-export function renderTerminalPanelViewport(
-  activeId: string | null,
-  connecting: boolean,
-  errorText: string | null,
-  uploadController: TerminalPanelUploadController,
-): TemplateResult {
+export function renderTerminalPanelViewport({
+  activeId,
+  connecting,
+  error,
+  uploadController,
+}: TerminalPanelViewportParams): TemplateResult {
   return html`
-    ${errorText ? html`<div class="tp-error" role="alert">${errorText}</div>` : nothing}
+    ${error
+      ? html`<div class="tp-error" role="alert">
+          <span>${error.text}</span>
+          ${error.retry
+            ? html`<button class="btn btn--sm" type="button" @click=${error.retry}>
+                ${t("common.retry")}
+              </button>`
+            : nothing}
+        </div>`
+      : nothing}
     <wa-tab-panel
       id="terminal-tab-panel"
       class="tp-viewport"
@@ -87,7 +102,7 @@ export function renderTerminalPanelViewport(
             <span>${t("terminal.connecting")}</span>
           </div>`
         : nothing}
-      ${!activeId && !connecting && !errorText
+      ${!activeId && !connecting && !error
         ? renderPanelEmptyState({
             icon: icons.terminal,
             heading: t("chat.sidePanel.terminal"),
@@ -105,7 +120,7 @@ export function terminalOpenErrorText(error: unknown): string {
     return t("terminal.connectionTimedOut");
   }
   if (error instanceof TerminalOpenUnusableSessionError) {
-    return t("terminal.unavailable");
+    return t("terminal.unusableSession", { field: error.field });
   }
   return formatUiError(error);
 }

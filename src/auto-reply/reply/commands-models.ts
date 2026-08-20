@@ -271,9 +271,12 @@ export async function buildModelsProviderData(
           catalog,
           model: trimmed,
           defaultProvider: resolvedDefault.provider,
+          agentId,
         })
       : resolvedDefault.provider;
     const resolved = resolveModelRefFromString({
+      cfg,
+      agentId,
       raw: trimmed,
       defaultProvider,
       aliasIndex,

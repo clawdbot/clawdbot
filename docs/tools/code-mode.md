@@ -43,7 +43,7 @@ commands are rejected before the QuickJS worker starts with actionable
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
-  such as `computer` or the native-vision `image` loader whose image result
+  such as `computer` or the native-vision `view_image` loader whose image result
   cannot survive the guest bridge.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.
@@ -184,10 +184,11 @@ With code mode active, the logged model-facing tool names should be `exec` and
 ## Use Swarm for agent fan-out
 
 [Swarm](/tools/swarm) adds `agents.run()`, `phase()`, and `log()` guest globals
-for orchestrating concurrent sub-agents from Code Mode scripts. Enable both
-`tools.codeMode` and `tools.swarm`, then use normal JavaScript control flow for
-fan-out, decision gates, and structured collection. Swarm is a separate opt-in
-gate; enabling Code Mode alone does not expose the `agents.*` API.
+for orchestrating concurrent sub-agents from Code Mode scripts. Enable
+`tools.swarm`, and ensure Code Mode engages through `"auto"` or `true`, then use
+normal JavaScript control flow for fan-out, decision gates, and structured
+collection. Swarm is a separate opt-in gate; engaging Code Mode alone does not
+expose the `agents.*` API.
 
 ## Technical tour
 
@@ -242,8 +243,9 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 
 ## Configuration
 
-`tools.codeMode.enabled` is the activation gate; setting other fields does not
-enable the feature on its own.
+`tools.codeMode.enabled` is the activation gate. If it is omitted, including
+from object-form config that sets other fields, it inherits the `"auto"`
+default and may engage for catalog-preferred models.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
@@ -406,6 +408,7 @@ type CodeModeExecInput = {
   code?: string;
   command?: string;
   language?: "javascript" | "typescript";
+  restartSafe?: boolean;
 };
 ```
 
@@ -420,6 +423,16 @@ Rules:
   string enum (`"javascript" | "typescript"`), not a `oneOf`/`anyOf` union,
   since some providers reject those shapes.
 - If `language` is `"typescript"`, OpenClaw transpiles before evaluation.
+- Set `restartSafe: true` only for read-only work where every catalog call is
+  explicitly replay-safe. OpenClaw rejects unmarked catalog tools and namespace
+  surfaces that are not proven replay-safe, and restart-safe runs do not
+  auto-drain pending calls. A generic exec surface is not replay-safe merely
+  because one command appears read-only; use audited read, grep, or find tools.
+  Suspended results are marked replay-safe so
+  [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
+  turn from its transcript instead of restoring the process-local snapshot.
+  Recovery remains limited to audited read-only core tools and explicitly
+  replay-safe plugin tools. Leave the field omitted for ordinary calls.
 - `exec` rejects `import`, `require`, dynamic import, and module-loader
   patterns.
 - `exec` never exposes the normal shell `exec` implementation recursively.
@@ -465,8 +478,7 @@ includes a `runId` for `wait`. Bridge tool calls — `tools.search`/`describe`/
 `call` and namespace calls, including MCP namespace calls — are auto-drained
 inside the same `exec`/`wait` call while they resolve within the deadline, so a
 compact code block that awaits several tools runs to completion in one model
-turn instead of forcing one model tool call per await. Restart-safe runs never
-auto-drain; their pending work still goes through the replay-safe checks.
+turn instead of forcing one model tool call per await.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
@@ -520,10 +532,18 @@ declare const tools: ToolCatalog;
 declare const MCP: Record<string, unknown>;
 declare const namespaces: Record<string, unknown>;
 
+declare function setTimeout(
+  callback: (...args: unknown[]) => void,
+  delay?: number,
+  ...args: unknown[]
+): number;
+declare function clearTimeout(id: number): void;
 declare function text(value: unknown): void;
 declare function json(value: unknown): void;
 declare function yield_control(reason?: string): Promise<void>;
 ```
+
+Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
 
 `ALL_TOOLS` is compact metadata for the run-scoped catalog; it does not contain
 full schemas by default. The model-visible `exec` description also includes a
@@ -847,7 +867,7 @@ exact catalog id and dispatches through the same executor path.
 Code mode supersedes the OpenClaw Tool Search model surface for runs where it
 is active.
 
-When `tools.codeMode.enabled` is true and code mode activates:
+When Code Mode engages through forced `true` or `"auto"` activation:
 
 - OpenClaw does not expose `tool_search_code`, `tool_search`, `tool_describe`,
   or `tool_call` as model-visible tools.
@@ -909,15 +929,6 @@ session.`.
 - A run's snapshot is removed from the map as soon as it settles to
   `completed` or `failed`, or is dropped on Gateway shutdown (nothing
   survives a restart: this is transient runtime state).
-- For read-only work, `exec` can set `restartSafe: true`. OpenClaw then rejects
-  catalog and namespace tool surfaces that are not proven replay-safe before
-  execution and marks suspended results as replay-safe. A generic exec surface
-  is not replay-safe merely because one command appears read-only; recovery
-  runs should use the audited read, grep, or find tools. If a restart interrupts `wait`,
-  [restart recovery](/gateway/restart-recovery) reconstructs the turn from the
-  transcript instead of restoring the process-local snapshot. The recovery
-  turn itself remains limited to audited read-only core tools and explicitly
-  replay-safe plugin tools.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
 runs.`.
@@ -978,6 +989,7 @@ hardening for high-risk deployments.
 type CodeModeErrorCode =
   | "invalid_input"
   | "runtime_unavailable"
+  | "aborted"
   | "timeout"
   | "output_limit_exceeded"
   | "snapshot_limit_exceeded"
@@ -988,6 +1000,10 @@ type CodeModeErrorCode =
 rejected module access, TypeScript transform failures, unknown/expired/
 wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
 covers a QuickJS worker that fails to start or exits non-zero.
+`aborted` means the caller cancelled an active `exec` or `wait`; OpenClaw
+terminates the worker or drops the suspended run, so that `runId` cannot be
+resumed. It is distinct from `timeout`, which means an execution deadline was
+exceeded.
 `output_limit_exceeded` is reserved for a result that cannot be serialized into
 the bounded projection; ordinary oversized successful results are truncated and
 remain successful.
@@ -1072,7 +1088,8 @@ does not use a `node:vm` child as the sandbox.
 Code mode coverage should prove:
 
 - disabled config leaves existing tool exposure unchanged
-- object config without `enabled: true` leaves code mode disabled
+- omitted `enabled`, including object config that sets other fields, inherits
+  `"auto"` and engages only for catalog-preferred models
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to
   the model when tools are active for the run
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger

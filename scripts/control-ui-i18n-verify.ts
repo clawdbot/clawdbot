@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import {
   loadControlUiTranslationMemory,
+  loadControlUiLocaleCatalog,
+  loadControlUiSourceCatalog,
   materializeControlUiLocaleCatalog,
-  mergeControlUiTranslationMaps,
+  readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
@@ -44,37 +46,12 @@ export function formatControlUiCatalogFallbackDriftError(): string {
   ].join("\n");
 }
 
-async function importLocaleModule<T>(filePath: string): Promise<T> {
-  const stats = await stat(filePath);
-  return (await import(`${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`)) as T;
-}
-
-async function loadLocaleMap(filePath: string, exportName: string): Promise<TranslationMap | null> {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  const mod = await importLocaleModule<Record<string, TranslationMap>>(filePath);
-  return mod[exportName] ?? null;
-}
-
 async function loadSourceLocaleMap(): Promise<TranslationMap> {
-  const source = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
-  const activitySource = (
-    await importLocaleModule<{
-      registerActivityEnglish: { catalog: TranslationMap };
-    }>(ACTIVITY_SOURCE_LOCALE_PATH)
-  ).registerActivityEnglish.catalog;
-  if (!source || !activitySource) {
-    throw new Error("Control UI English source catalogs are incomplete");
-  }
-  return mergeControlUiTranslationMaps(source, activitySource);
+  return await loadControlUiSourceCatalog(SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH);
 }
 
 async function readSourceLocaleRaw(): Promise<string> {
-  const sources = await Promise.all(
-    [SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH].map((filePath) => readFile(filePath, "utf8")),
-  );
-  return sources.join("\n");
+  return await readControlUiSourceCatalog(SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH);
 }
 
 function extractPlaceholders(text: string): string[] {
@@ -328,7 +305,7 @@ export async function verifyRuntimeLocaleConfig() {
     }
   }
 
-  const enMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
+  const enMap = (await loadControlUiLocaleCatalog(SOURCE_LOCALE_PATH, "en")) ?? {};
   const languageMap = enMap.languages;
   const languageKeys =
     languageMap && typeof languageMap === "object"

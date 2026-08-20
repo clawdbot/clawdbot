@@ -1,4 +1,5 @@
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
@@ -165,4 +166,3 @@ export function resolveLobsterPetMode(
   }
   return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
 }
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";

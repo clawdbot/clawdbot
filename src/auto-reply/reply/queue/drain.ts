@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
-import { stableStringify } from "@openclaw/normalization-core";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
@@ -523,7 +522,11 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
 }
 
 function requiresIndividualCollectDrain(item: FollowupRun): boolean {
-  return item.disableCollectBatching === true || hasRuntimeOnlyFollowupMetadata(item);
+  return (
+    item.disableCollectBatching === true ||
+    item.run.skillWorkshopProposalRevision !== undefined ||
+    hasRuntimeOnlyFollowupMetadata(item)
+  );
 }
 
 type AggregateCancellation = {

@@ -1,5 +1,6 @@
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
+import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 
@@ -10,7 +11,14 @@ export type GatewayCloseOptions = {
 };
 
 export type GatewayServer = {
+  /** Process-local endpoint used by OpenClaw-managed Tailscale proxying. */
+  getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
   close: (opts?: GatewayCloseOptions) => Promise<void>;
+  /**
+   * Resolves when this generation finishes mandatory sidecar startup and rejects on failure.
+   * Closing never forces settlement. Direct callers may safely ignore this pre-handled promise.
+   */
+  startupSettled: Promise<void>;
 };
 
 export type GatewayServerOptions = {

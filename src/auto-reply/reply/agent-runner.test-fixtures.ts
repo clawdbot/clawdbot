@@ -2,7 +2,25 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { FollowupRun } from "./queue.js";
+import type { TemplateContext } from "../templating.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
+
+type FollowupRunFixture = Pick<FollowupRun, "prompt" | "summaryLine" | "enqueuedAt"> &
+  Partial<Omit<FollowupRun, "prompt" | "summaryLine" | "enqueuedAt" | "run">> & {
+    run: Partial<Omit<FollowupRun["run"], "skillsSnapshot">> & {
+      skillsSnapshot?: Partial<FollowupRun["run"]["skillsSnapshot"]>;
+    };
+  };
+
+export function createTestTemplateContext(
+  overrides: Partial<TemplateContext> = {},
+): TemplateContext {
+  return { ...overrides };
+}
+
+export function createTestQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
+  return { mode: "interrupt", ...overrides };
+}
 
 export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
   return {
@@ -31,6 +49,10 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
       ...overrides,
     },
   } satisfies FollowupRun;
+}
+
+export function createTestQueuedFollowupRun(fixture: FollowupRunFixture): FollowupRun {
+  return fixture as FollowupRun;
 }
 
 export function withTestModelContextTokens(params: {

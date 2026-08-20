@@ -131,6 +131,26 @@ function resolveConfiguredRuntimeModel(
     : undefined;
 }
 
+function readAuthoredModelContextTokens(model: ConfigModelEntry | undefined): number | undefined {
+  return typeof model?.contextTokens === "number" && model.contextTokens > 0
+    ? model.contextTokens
+    : undefined;
+}
+
+/** Returns only the per-model contextTokens value authored in OpenClaw config. */
+export function resolveAuthoredModelContextTokens(
+  params: Pick<ContextTokenResolutionParams, "cfg" | "provider" | "modelProvider" | "model">,
+): number | undefined {
+  const ref = resolveProviderModelRef(params);
+  const explicitProvider = params.provider?.trim();
+  if (!ref || !explicitProvider) {
+    return undefined;
+  }
+  return readAuthoredModelContextTokens(
+    resolveConfiguredRuntimeModel(params.cfg, explicitProvider, params.modelProvider, ref.model),
+  );
+}
+
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
@@ -203,14 +223,18 @@ export function resolveContextTokensForModelFromCache(
     const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model, {
       claudeCli1M: effectiveContext1M === true,
     });
-    const configuredContextTokens =
-      typeof configuredModel?.contextTokens === "number" && configuredModel.contextTokens > 0
-        ? configuredModel.contextTokens
+    const configuredContextTokens = readAuthoredModelContextTokens(configuredModel);
+    const configuredContextWindow =
+      typeof configuredModel?.contextWindow === "number" && configuredModel.contextWindow > 0
+        ? configuredModel.contextWindow
         : undefined;
+    // Fixed provider contracts deliberately ignore materialized catalog windows.
+    // Other runtimes must still keep an authored effective cap below its native window.
+    const configuredTokenLimit = fixedContextWindow ?? configuredContextWindow;
     if (configuredContextTokens !== undefined) {
-      return fixedContextWindow === undefined
+      return configuredTokenLimit === undefined
         ? configuredContextTokens
-        : Math.min(configuredContextTokens, fixedContextWindow);
+        : Math.min(configuredContextTokens, configuredTokenLimit);
     }
     if (fixedContextWindow !== undefined) {
       return fixedContextWindow;
@@ -235,10 +259,6 @@ export function resolveContextTokensForModelFromCache(
       providerWindow,
       modelContextWindow,
     );
-    const configuredContextWindow =
-      typeof configuredModel?.contextWindow === "number" && configuredModel.contextWindow > 0
-        ? configuredModel.contextWindow
-        : undefined;
     if (discoveredCap !== undefined) {
       return configuredContextWindow === undefined
         ? discoveredCap

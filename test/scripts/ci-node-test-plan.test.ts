@@ -372,6 +372,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           .every((shard) => (shard.predictedSeconds ?? Infinity) <= 150),
       ).toBe(true);
     }
+    for (const plan of [
+      githubCompact,
+      githubPullRequestCompact,
+      hybridCompact,
+      hybridPullRequestCompact,
+    ]) {
+      const agentChatStripes = plan
+        .flatMap((shard) => shard.groups)
+        .filter((group) => group.shard_name.startsWith("agentic-control-plane-agent-chat-hosted-"));
+      expect(agentChatStripes).toHaveLength(2);
+      expect(
+        agentChatStripes.every(
+          (group) =>
+            !group.includePatterns?.includes(
+              "src/gateway/server.chat.gateway-server-chat.test.ts",
+            ) || !group.includePatterns.includes("src/gateway/server.sessions.create.test.ts"),
+        ),
+      ).toBe(true);
+    }
     // Historical checks-node-compact-large-2 was this gateway-core group. Its
     // 139.5s Blacksmith spike keeps a dedicated floor and singleton bin even
     // though compact check numbers change when the matrix shrinks.
@@ -382,12 +401,28 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "agentic-gateway-core-3",
     ]);
     expect(hybridLargeTail?.predictedSeconds).toBe(140);
-    const hybridJobOf = (name: string) =>
-      hybridCompact.findIndex((shard) => shard.groups.some((group) => group.shard_name === name));
-    // Synthesized hosted stripes retain divided admission weights, while
-    // native hybrid groups use Blacksmith stripe hints during rebalance.
-    expect(hybridJobOf("agentic-agents-core-runtime-hosted-1")).not.toBe(
-      hybridJobOf("agentic-agents-core-tools"),
+    // Synthesized hosted stripes carry divided admission weights while native
+    // hybrid groups carry Blacksmith stripe hints, so both weight sources must
+    // survive rebalancing rather than one class monopolizing the tall bins.
+    // Assert that property, not one arrangement: bin membership legitimately
+    // moves whenever a hint is refit from fresh measurements.
+    const hybridStripeBins = hybridCompact.filter((shard) =>
+      shard.groups.some((group) => /-hosted-\d+$/u.test(group.shard_name)),
+    );
+    expect(hybridStripeBins.length).toBeGreaterThan(0);
+    expect(
+      hybridStripeBins.every((shard) => (shard.predictedSeconds ?? Infinity) <= 150),
+      "synthesized hosted stripes must respect the hybrid body ceiling",
+    ).toBe(true);
+    // agents-core-models measured 56.3s (n=6) against a 36s scaled estimate, so
+    // packing it beside agents-core-runtime-hosted-1 (60.4s) built the only bin
+    // running >=1.25x its prediction: 122s of work priced at 88s. The measured
+    // hybrid hint separates them; without it they pack together again.
+    const modelsBin = hybridCompact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-agents-core-models"),
+    );
+    expect(modelsBin?.groups.map((group) => group.shard_name)).not.toContain(
+      "agentic-agents-core-runtime-hosted-1",
     );
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);

@@ -97,6 +97,7 @@ async function makeSuiteResult(params: {
   resultStatus?: "pass" | "fail";
   summaryStatus?: "pass" | "fail";
   summaryFailedCount?: number;
+  runStatus?: "running" | "completed";
 }) {
   const resultStatus = params.resultStatus ?? "pass";
   const summaryStatus = params.summaryStatus ?? resultStatus;
@@ -107,6 +108,7 @@ async function makeSuiteResult(params: {
     summaryPath,
     `${JSON.stringify(
       {
+        run: { status: params.runStatus ?? "completed" },
         counts: {
           total: 1,
           passed: summaryFailedCount > 0 ? 0 : 1,
@@ -612,6 +614,30 @@ describe("runQaCharacterEval", () => {
 
     expect(result.runs[0]?.status).toBe("fail");
     expect(result.runs[0]?.error).toBeUndefined();
+  });
+
+  it("rejects a candidate whose suite summary is still running", async () => {
+    const model = "openai/gpt-5.6-luna";
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: [model],
+      judgeModels: [model],
+      runSuite: async (params) =>
+        makeSuiteResult({
+          outputDir: params.outputDir,
+          model,
+          transcript: "USER Alice: hi\n\nASSISTANT openclaw: partial reply",
+          runStatus: "running",
+        }),
+      runJudge: makeRunJudge([{ model, rank: 1, score: 0.5, summary: "failed" }]),
+    });
+
+    expect(result.runs[0]).toMatchObject({
+      model,
+      status: "fail",
+      error: expect.stringContaining("still running"),
+    });
   });
 
   it.each([

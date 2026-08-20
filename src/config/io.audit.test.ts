@@ -1,6 +1,5 @@
 // Covers config audit reporting for files, paths, and values.
-import fs from "node:fs";
-import { promises as fsPromises } from "node:fs";
+import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
@@ -379,6 +378,11 @@ describe("config io audit helpers", () => {
       expected: ["openclaw", "--password", "***"],
     },
     {
+      name: "password alias covered by the secret suffix matcher",
+      argv: ["openclaw", "--passwd", "fake"],
+      expected: ["openclaw", "--passwd", "***"],
+    },
+    {
       name: "secret flag without a value",
       argv: ["openclaw", "--token"],
       expected: ["openclaw", "--token"],
@@ -475,6 +479,16 @@ describe("config io audit helpers", () => {
         '[{"path":"channels.slack.token","value":"secret-value"}]',
       ],
       expected: ["openclaw", "config", "set", "--batch-json", "***"],
+    },
+    {
+      name: "config provider env assignment",
+      argv: ["openclaw", "config", "set", "--provider-env", "KEY=secret-value"],
+      expected: ["openclaw", "config", "set", "--provider-env", "***"],
+    },
+    {
+      name: "inline config provider env assignment",
+      argv: ["openclaw", "config", "set", "--provider-env=KEY=secret-value"],
+      expected: ["openclaw", "config", "set", "--provider-env=***"],
     },
   ])("redacts $name in persisted audit process info", ({ argv, expected }) => {
     expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);

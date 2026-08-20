@@ -163,6 +163,7 @@ export async function dispatchCronDelivery(
     const {
       buildOutboundSessionContext,
       createOutboundSendDeps,
+      durableMessageBatchMayHaveReachedRecipient,
       resolveAgentOutboundIdentity,
       resolveCronChannelReplyTransform,
       sendDurableMessageBatchCore,
@@ -323,15 +324,8 @@ export async function dispatchCronDelivery(
             attemptedPayloadsForMirror.push(payload);
           },
         });
-        // No durable id is still ambiguous: the adapter was already invoked.
         payloadMayHaveReachedRecipientBeforeFailure ||=
-          send.payloadOutcomes?.some(
-            (outcome) =>
-              outcome.status === "sent" ||
-              (outcome.status === "failed" && outcome.sentBeforeError) ||
-              (outcome.status === "suppressed" &&
-                outcome.reason === "adapter_returned_no_identity"),
-          ) ?? false;
+          durableMessageBatchMayHaveReachedRecipient(send);
         if (
           send.status === "failed" &&
           (await waitForCompletedDirectCronDelivery({

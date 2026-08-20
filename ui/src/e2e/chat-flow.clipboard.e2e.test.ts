@@ -122,9 +122,14 @@ suite.define(() => {
       await button.click();
 
       await expect.poll(() => button.getAttribute("aria-label")).toBe("Copy failed");
+      await expect.poll(() => button.getAttribute("class")).toContain("copy-failed");
       await expect
-        .poll(() => button.locator(".code-block-copy__idle").textContent())
-        .toBe("Copy failed");
+        .poll(() =>
+          button
+            .locator(".code-block-copy__failed")
+            .evaluate((element) => getComputedStyle(element).display),
+        )
+        .not.toBe("none");
       expect(await readClipboardFailureProof(page)).toEqual({
         asyncAttempts: 1,
         legacyAttempts: 1,
@@ -142,7 +147,7 @@ suite.define(() => {
       }
 
       await expect.poll(() => button.getAttribute("aria-label")).toBe("Copy code");
-      await expect.poll(() => button.locator(".code-block-copy__idle").textContent()).toBe("Copy");
+      await expect.poll(() => button.getAttribute("class")).not.toContain("copy-failed");
     } finally {
       await suite.closeBrowserContext(context);
     }

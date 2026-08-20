@@ -10,7 +10,7 @@ export const PREFS_MIGRATION_KEY = "new-session.migration.v1";
 
 export type NewSessionWhere =
   | { kind: "local" }
-  | { kind: "node"; id: string }
+  | { kind: "device"; id: string }
   | { kind: "cloud"; id: string };
 
 export type NewSessionPreference = {
@@ -81,7 +81,7 @@ function normalizeWhere(value: unknown): NewSessionWhere | undefined {
     return { kind: "local" };
   }
   const id = normalizeOptionalString(value.id);
-  return id && (value.kind === "node" || value.kind === "cloud")
+  return id && (value.kind === "device" || value.kind === "cloud")
     ? { kind: value.kind, id }
     : undefined;
 }

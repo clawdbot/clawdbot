@@ -46,6 +46,11 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       expectedState: placement.state,
       expectedGeneration: placement.generation,
     });
+    if (placement.state === "requested") {
+      deps.warn(
+        `Retired ownerless worker placement ${placement.sessionId} because its authoritative session is absent (${placement.state}@${placement.generation})`,
+      );
+    }
     return true;
   };
 

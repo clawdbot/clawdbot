@@ -17,7 +17,7 @@ import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 
-/** Owns the resources and composer state that follow one retained presentation. */
+/** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   protected abstract clearComposerPrefillAttention(): void;
   protected abstract settleResetConfirmation(confirmed: boolean): void;
@@ -43,15 +43,12 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     if (presented) {
-      this.boardProviderLifecycleConnected = true;
       this.minutePoll.start();
       this.consumeSessionHandoff(this.sessionKey);
       this.syncActiveBindings();
       void this.refreshSessionPullRequests();
       return;
     }
-    this.boardProviderLifecycleConnected = false;
-    this.releaseBoardProviderLease();
     this.minutePoll.stop();
     this.clearHistoryObserver();
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);

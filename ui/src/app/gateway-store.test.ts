@@ -90,7 +90,7 @@ function createStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
-    basePath?: string;
+    resourceBasePath?: string;
   } = {},
 ) {
   const clients: FakeGatewayClient[] = [];
@@ -105,7 +105,7 @@ function createStore(
     },
     {
       persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
-      basePath: params.basePath,
+      resourceBasePath: params.resourceBasePath,
     },
   );
   const current = () => {
@@ -141,9 +141,9 @@ describe("createApplicationGateway connection phase", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes the explicit same-origin base path to avatar resolution", () => {
+  it("passes the explicit same-origin resource base to avatar resolution", () => {
     const settings = { ...loadSettings(), gatewayUrl: "ws://127.0.0.1:18789/ws" };
-    const { gateway } = createStore({ settings, basePath: "/wilfred" });
+    const { gateway } = createStore({ settings, resourceBasePath: "/wilfred" });
 
     gateway.start();
 
@@ -349,6 +349,34 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.lastError).toContain("1006");
   });
 
+  it("keeps retryable startup unavailable in the initial progress state", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    const startupClose = {
+      code: 4013,
+      reason: "gateway starting",
+      willRetry: true,
+      error: {
+        code: "UNAVAILABLE",
+        message: "gateway starting; retry shortly",
+        details: { reason: "startup-sidecars" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
+    };
+    current().opts.onClose?.(startupClose);
+
+    expect(gateway.snapshot.phase).toBe("starting");
+    expect(gateway.snapshot.lastError).toBeNull();
+    expect(gateway.snapshot.lastErrorCode).toBeNull();
+
+    const listener = vi.fn();
+    gateway.subscribe(listener);
+    current().opts.onClose?.(startupClose);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("returns a never-connected terminal close to stopped", () => {
     const { gateway, current } = createStore();
     gateway.start();
@@ -545,6 +573,80 @@ describe("createApplicationGateway connection phase", () => {
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
 
     expect(gateway.snapshot.phase).toBe("offline");
+  });
+
+  it("schedules the guarded reload and publishes a terminal phase for a stale build", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch: Control UI updated; reload this page to continue",
+      error: {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+      },
+      willRetry: false,
+    });
+
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
+      buildId: "replacement-build",
+    });
+    expect(gateway.snapshot.phase).toBe("reload-required");
+  });
+
+  it("keeps reload-required ahead of retryable startup presentation", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch: Control UI updated; reload this page to continue",
+      error: {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+          reason: "startup-sidecars",
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+        retryable: true,
+      },
+      willRetry: true,
+    });
+
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
+      buildId: "replacement-build",
+    });
+    expect(gateway.snapshot.phase).toBe("reload-required");
+    expect(gateway.snapshot.lastError).toContain("Control UI updated");
+    expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
+  });
+
+  it("keeps a bare protocol mismatch in the login-gate path", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "protocol mismatch",
+        details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+      },
+      willRetry: false,
+    });
+
+    expect(scheduleStaleChunkReloadMock).not.toHaveBeenCalled();
+    expect(gateway.snapshot.phase).toBe("stopped");
+    expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
   });
 
   it("keeps reconnecting across event-gap recovery with a fresh client", () => {

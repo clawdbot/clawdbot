@@ -6,12 +6,10 @@ import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
 } from "../infra/device-identity.js";
+import * as devicePairingApprovalModule from "../infra/device-pairing-approval.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import * as devicePairingModule from "../infra/device-pairing.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { callGateway } from "./call.js";
 import {
@@ -305,7 +303,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
     const loaded = loadDeviceIdentity("silent-reconnect-race");
     let ws: WebSocket | undefined;
 
-    const approveOriginal = devicePairingModule.approveDevicePairing;
+    const approveOriginal = devicePairingApprovalModule.approveDevicePairing;
     let simulatedRace = false;
     const forwardApprove = async (requestId: string, optionsOrBaseDir?: unknown) => {
       if (optionsOrBaseDir && typeof optionsOrBaseDir === "object") {
@@ -317,7 +315,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       return await approveOriginal(requestId);
     };
     const approveSpy = vi
-      .spyOn(devicePairingModule, "approveDevicePairing")
+      .spyOn(devicePairingApprovalModule, "approveDevicePairing")
       .mockImplementation(async (requestId: string, optionsOrBaseDir?: unknown) => {
         if (simulatedRace) {
           return await forwardApprove(requestId, optionsOrBaseDir);
@@ -353,7 +351,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
     let ws: WebSocket | undefined;
 
     const approveSpy = vi
-      .spyOn(devicePairingModule, "approveDevicePairing")
+      .spyOn(devicePairingApprovalModule, "approveDevicePairing")
       .mockImplementation(async (requestId: string) => {
         await devicePairingModule.rejectDevicePairing(requestId);
         return null;
@@ -400,7 +398,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
     let replacementRequestId = "";
 
     const approveSpy = vi
-      .spyOn(devicePairingModule, "approveDevicePairing")
+      .spyOn(devicePairingApprovalModule, "approveDevicePairing")
       .mockImplementation(async (_requestId: string) => {
         const replacement = await devicePairingModule.requestDevicePairing({
           deviceId: loaded.identity.deviceId,

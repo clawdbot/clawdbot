@@ -9,7 +9,11 @@ import {
   getDiscordExecApprovalApprovers,
   isDiscordExecApprovalClientEnabled,
 } from "../exec-approvals.js";
-import type { BaseCommand, BaseMessageInteractiveComponent, Modal } from "../internal/discord.js";
+import type {
+  BaseMessageInteractiveComponent,
+  DiscordCommand,
+  Modal,
+} from "../internal/discord.js";
 import { createDiscordVoiceCommand, DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 import {
   createAgentComponentControls,
@@ -55,12 +59,12 @@ export function createDiscordProviderInteractionSurface(params: {
   abortSignal?: AbortSignal;
   createNativeCommand?: typeof createDiscordNativeCommand;
 }): {
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
 } {
   const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
-  const commands: BaseCommand[] = params.commandSpecs.map((spec) => {
+  const commands: DiscordCommand[] = params.commandSpecs.map((spec) => {
     if (
       params.nativeEnabled &&
       params.voiceEnabled &&

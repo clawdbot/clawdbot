@@ -12,10 +12,12 @@ import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
+  CronCompletionStatus,
   CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronFailureNotificationDelivery,
+  CronFailureNotificationDetail,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
@@ -41,6 +43,7 @@ export type CronEvent = {
   runAtMs?: number;
   durationMs?: number;
   status?: CronRunStatus;
+  completionStatus?: CronCompletionStatus;
   error?: string;
   summary?: string;
   diagnostics?: CronRunDiagnostics;
@@ -55,6 +58,18 @@ export type CronEvent = {
   nextRunAtMs?: number;
   triggerFired?: boolean;
 } & CronRunTelemetry;
+
+/** Transient internal context delivered beside, but never projected into, a CronEvent. */
+type CronEventContext = {
+  failureNotificationDetail?: CronFailureNotificationDetail;
+};
+
+/** Builds event context only when a closed notification fact exists. */
+export function cronFailureNotificationEventContext(
+  failureNotificationDetail?: CronFailureNotificationDetail,
+): CronEventContext | undefined {
+  return failureNotificationDetail ? { failureNotificationDetail } : undefined;
+}
 
 /** Logger contract consumed by cron service internals. */
 export type Logger = {
@@ -245,8 +260,9 @@ export type CronServiceDeps = {
     mode?: "announce" | "webhook";
     accountId?: string;
     threadId?: string | number;
+    inheritSessionThread?: false;
   }) => Promise<void>;
-  onEvent?: (evt: CronEvent) => void;
+  onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
 };
 
 /** Cron deps after optional defaults have been made concrete. */
@@ -280,7 +296,6 @@ export type CronServiceState = {
   stopped: boolean;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
-  restartRecoveryPending: boolean;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
@@ -317,7 +332,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     stopped: false,
     schedulingPaused: false,
     schedulerStarted: false,
-    restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
@@ -333,16 +347,24 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
 }
 
 /** Dispatches a cron event without letting subscriber errors escape scheduler work. */
-export function emit(state: CronServiceState, evt: CronEvent) {
+export function emit(state: CronServiceState, evt: CronEvent, context?: CronEventContext) {
   try {
-    state.deps.onEvent?.(evt);
+    if (context) {
+      state.deps.onEvent?.(evt, context);
+    } else {
+      state.deps.onEvent?.(evt);
+    }
   } catch {
     /* ignore */
   }
 }
 
-/** Direct-run mode: respect due time or force execution. */
-export type CronRunMode = "due" | "force";
+/** Direct-run mode: respect due time, force execution, or run immediately while enabled. */
+export type CronRunMode = "due" | "force" | "if-enabled";
+
+export function isImmediateCronRunMode(mode: CronRunMode | undefined): boolean {
+  return mode === "force" || mode === "if-enabled";
+}
 
 /** Main-session wake strategy used after enqueuing cron text. */
 export type CronWakeMode = "now" | "next-heartbeat";
@@ -364,9 +386,9 @@ export type CronStatusSummary = {
 export type CronRunResult =
   | { ok: true; ran: true }
   | { ok: true; enqueued: true; runId: string }
+  | { ok: true; ran: false; reason: "disabled" }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
-  | { ok: true; ran: false; reason: "restart-recovery-pending" }
   | { ok: true; ran: false; reason: "invalid-spec" }
   | { ok: true; ran: false; reason: "stopped" }
   | { ok: false };

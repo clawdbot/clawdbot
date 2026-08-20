@@ -68,6 +68,7 @@ export function resolveCronPreflightCandidates(params: {
   });
   return resolveModelCandidateChain({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: params.provider,
     model: params.model,
     requestedRouteResolution: "resolved",

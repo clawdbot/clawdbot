@@ -60,6 +60,21 @@ afterEach(() => {
 });
 
 describe("Control UI refresh nudge", () => {
+  it("flags a terminal build rejection without requiring a hello", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "reload-required",
+      hello: null,
+    });
+
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+    overlays.dispose();
+  });
+
   it("does not flag an independently built configured UI root", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);
@@ -153,12 +168,42 @@ describe("application approval overlays", () => {
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
       "approval-review-only",
     ]);
+    expect(overlays.snapshot.approvalCanGrant).toBe(false);
     expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalErrors.get("approval-review-only")).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
     expect(
       request.mock.calls.some(
         ([method]) => method === "exec.approval.resolve" || method === "approval.resolve",
       ),
     ).toBe(false);
+    overlays.dispose();
+  });
+
+  it("surfaces a stale decision dispatched after grant revocation", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-stale-action", 1_000);
+
+    // A rendered action can dispatch before the overlay subscriber consumes
+    // the snapshot that revokes its grant.
+    harness.replaceSnapshotWithoutPublishing({ hello: null });
+    await overlays.decideApproval("allow-once", "approval-stale-action");
+
+    expect(overlays.snapshot.approvalErrors.get("approval-stale-action")).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
+    expect(request.mock.calls.some(([method]) => method === "exec.approval.resolve")).toBe(false);
     overlays.dispose();
   });
 
@@ -392,9 +437,13 @@ describe("application approval overlays", () => {
 
     harness.update({ hello: null });
     expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalCanGrant).toBe(false);
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
       "approval-stale-grant",
     ]);
+    expect(overlays.snapshot.approvalErrors.get("approval-stale-grant")).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
     harness.update({
       hello: {
         auth: { role: "operator", scopes: ["operator.approvals"] },
@@ -402,6 +451,7 @@ describe("application approval overlays", () => {
     });
     harness.emitApproval("approval-current-grant", 2_000);
     const currentDecision = overlays.decideApproval("deny", "approval-current-grant");
+    expect(overlays.snapshot.approvalCanGrant).toBe(true);
 
     staleResolution.resolve({ ok: true });
     await staleDecision;
@@ -417,6 +467,9 @@ describe("application approval overlays", () => {
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
       "approval-stale-grant",
     ]);
+    expect(overlays.snapshot.approvalErrors.get("approval-stale-grant")).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
     overlays.dispose();
   });
 
@@ -507,6 +560,26 @@ describe("application approval overlays", () => {
       "Approval failed: gateway unavailable",
     );
     expect(overlays.snapshot.approvalBusy).toBe(false);
+    overlays.dispose();
+  });
+
+  it("surfaces a connection error when a rendered approval races a disconnect", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.emitApproval("approval-disconnected", 1_000);
+
+    // The rendered modal can dispatch its click before Lit consumes the
+    // Gateway snapshot notification that removes the stale card.
+    harness.replaceSnapshotWithoutPublishing({ phase: "reconnecting" });
+    await overlays.decideApproval("allow-once", "approval-disconnected");
+
+    expect(overlays.snapshot.approvalErrors.get("approval-disconnected")).toBe(
+      "Connect to the Gateway to change sessions.",
+    );
+    expect(request).not.toHaveBeenCalledWith("exec.approval.resolve", expect.anything());
     overlays.dispose();
   });
 

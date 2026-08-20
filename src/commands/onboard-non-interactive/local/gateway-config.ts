@@ -26,7 +26,6 @@ export function applyNonInteractiveGatewayConfig(params: {
   bind: string;
   authMode: string;
   tailscaleMode: string;
-  tailscaleResetOnExit: boolean;
 } | null {
   const { opts, runtime } = params;
 
@@ -60,8 +59,6 @@ export function applyNonInteractiveGatewayConfig(params: {
     (hasExplicitTokenAuthInput ? "token" : existingGateway?.auth?.mode) ??
     "token";
   const tailscaleMode = opts.tailscale ?? existingGateway?.tailscale?.mode ?? "off";
-  const tailscaleResetOnExit =
-    opts.tailscaleResetOnExit ?? existingGateway?.tailscale?.resetOnExit ?? false;
 
   // Tighten config to safe combos:
   // - If Tailscale is on, force loopback bind (the tunnel handles external access).
@@ -212,7 +209,6 @@ export function applyNonInteractiveGatewayConfig(params: {
       tailscale: {
         ...nextConfig.gateway?.tailscale,
         mode: tailscaleMode,
-        resetOnExit: tailscaleResetOnExit,
       },
     },
   };
@@ -223,6 +219,5 @@ export function applyNonInteractiveGatewayConfig(params: {
     bind,
     authMode,
     tailscaleMode,
-    tailscaleResetOnExit,
   };
 }

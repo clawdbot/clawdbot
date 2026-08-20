@@ -1,5 +1,11 @@
 /** Gateway-backed archive and delete commands for stored sessions. */
+import type {
+  PreservedSessionWorktree,
+  SessionsDeleteResult,
+  WorktreePreservationReason,
+} from "../../packages/gateway-protocol/src/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -35,7 +41,7 @@ type SessionsLifecycleResult = {
   status: SessionsLifecycleStatus;
   error?: string;
   archived?: string[];
-  worktreePreserved?: { id: string; branch: string; path: string };
+  worktreePreserved?: PreservedSessionWorktree;
 };
 
 type SessionsListRow = {
@@ -54,14 +60,6 @@ type SessionsPatchResult = {
   ok?: boolean;
   key?: string;
   entry?: { archivedAt?: number };
-};
-
-type SessionsDeleteResult = {
-  ok?: boolean;
-  key?: string;
-  deleted?: boolean;
-  archived?: string[];
-  worktreePreserved?: { id: string; branch: string; path: string };
 };
 
 type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTransport>[1];
@@ -83,6 +81,14 @@ function notFoundResult(key: string, agent?: string): SessionsLifecycleResult {
     error: `Session not found. Run ${listHint(agent)} to choose a valid key.`,
   };
 }
+
+const WORKTREE_PRESERVATION_REASON_COPY = {
+  "owner-mismatch": "registered to another owner",
+  busy: "still in use by a live run or another cleanup",
+  "foreign-lock": "Git reports a lock owned outside OpenClaw",
+  "snapshot-failed": "OpenClaw could not create a safety snapshot",
+  "cleanup-failed": "cleanup did not finish normally",
+} as const satisfies Record<WorktreePreservationReason, string>;
 
 async function listRequestedSessions(
   keys: readonly string[],
@@ -138,7 +144,19 @@ function outputLifecycleResults(
 ): void {
   const ok = results.every((result) => result.ok);
   if (json) {
-    writeRuntimeJson(runtime, { ok, operation, dryRun, results });
+    writeRuntimeJson(
+      runtime,
+      ok
+        ? { ok, operation, dryRun, results }
+        : {
+            ...formatCliJsonFailure(
+              `Session ${operation} did not complete for every requested key.`,
+            ),
+            operation,
+            dryRun,
+            results,
+          },
+    );
   } else {
     for (const result of results) {
       switch (result.status) {
@@ -154,8 +172,9 @@ function outputLifecycleResults(
             runtime.log(`Archived transcript: ${archived}`);
           }
           if (result.worktreePreserved) {
+            const preserved = result.worktreePreserved;
             runtime.error(
-              `Preserved worktree ${result.worktreePreserved.branch} at ${result.worktreePreserved.path}; remove it manually after preserving any changes.`,
+              `Worktree ${preserved.branch} at ${preserved.path} needs attention: ${WORKTREE_PRESERVATION_REASON_COPY[preserved.reason]}. Inspect it with ${formatCliCommand("openclaw worktrees list")}.`,
             );
           }
           break;
@@ -194,6 +213,7 @@ async function runSessionsLifecycleCommand(
   try {
     sessions = await listRequestedSessions(keys.filter(Boolean), opts.agent, rpcOptions);
   } catch (error) {
+    rethrowExpectedCliError(error);
     const message = formatErrorMessage(error);
     outputLifecycleResults(
       operation,
@@ -299,7 +319,7 @@ async function runSessionsLifecycleCommand(
           },
           { defaultTimeoutMs: 30_000 },
         )) as SessionsDeleteResult;
-        if (response?.ok !== true || response.deleted !== true) {
+        if (!response.deleted) {
           results[index] = notFoundResult(session.key, opts.agent);
           continue;
         }

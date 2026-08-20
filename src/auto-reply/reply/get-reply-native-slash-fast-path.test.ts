@@ -111,6 +111,13 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     handleCommandsMock.mockResolvedValue(response);
     const commandName = body.slice(1).split(/\s+/, 1)[0] ?? "";
     const typing = createTypingController();
+    const resolvedConfig =
+      config ??
+      ({
+        session: {
+          store: path.join(tempDirs.make("openclaw-native-directive-"), "sessions.json"),
+        },
+      } as OpenClawConfig);
     const result = await runTestNativeSlashFastReply({
       ctx: buildTestCtx({
         Body: body,
@@ -132,22 +139,32 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
           body,
         },
       }),
-      cfg: markCompleteReplyConfig(
-        config ??
-          ({
-            session: {
-              store: path.join(tempDirs.make("openclaw-native-directive-"), "sessions.json"),
-            },
-          } as OpenClawConfig),
-      ),
+      cfg: markCompleteReplyConfig(resolvedConfig),
       agentId: "main",
       agentCfg: config?.agents?.defaults,
       commandAuthorized: true,
       typing,
     });
 
-    return { result, typing };
+    return { result, typing, storePath: resolvedConfig.session?.store };
   }
+
+  it("persists a native exec node selection before model dispatch", async () => {
+    const { result, storePath } = await resolveNativeDirectiveCommand(
+      "/exec host=node node=worker-1",
+    );
+
+    expect(result).toMatchObject({
+      handled: true,
+      reply: { text: expect.stringContaining("Exec defaults set (host=node, node=worker-1).") },
+    });
+    expect(
+      loadExactSessionEntry({
+        sessionKey: "agent:main:telegram:123",
+        storePath: storePath ?? "",
+      })?.entry,
+    ).toMatchObject({ execHost: "node", execNode: "worker-1" });
+  });
 
   it.each([
     { command: "/queue Can you diagnose this?", expected: 'Unrecognized queue mode "Can".' },

@@ -252,6 +252,61 @@ export async function issueDevicePairSetupBootstrapToken(params: {
   return { ...issued, setupId };
 }
 
+type EnsuredDevicePairSetupBootstrap =
+  | { status: "pending"; token: string; expiresAtMs: number; setupId: string }
+  | { status: "completed"; setupId: string; deviceId: string };
+
+/** Reuse one environment-owned setup credential across provider replay. */
+export async function ensureDevicePairSetupBootstrapToken(params: {
+  setupId: string;
+  baseDir?: string;
+  profile: DeviceBootstrapProfileInput;
+}): Promise<EnsuredDevicePairSetupBootstrap> {
+  const setupId = params.setupId.trim();
+  if (!setupId) {
+    throw new Error("Device setup id must be non-empty.");
+  }
+  return await withLock(async () => {
+    const completion = loadDevicePairSetupCompletionRecord(setupId, Date.now(), params.baseDir);
+    if (completion) {
+      return { status: "completed", setupId, deviceId: completion.deviceId };
+    }
+    const state = await loadState(params.baseDir);
+    const existing = Object.values(state).find((record) => record.setupId === setupId);
+    const profile = normalizeDeviceBootstrapHandoffProfile(params.profile);
+    if (existing) {
+      if (!deviceBootstrapProfilesEqual(existing.profile, profile)) {
+        throw new Error("Device setup profile changed during replay.");
+      }
+      return {
+        status: "pending",
+        token: existing.token,
+        expiresAtMs: existing.issuedAtMs + DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+        setupId,
+      };
+    }
+    const issuedAtMs = asDateTimestampMs(Date.now());
+    const expiresAtMs =
+      issuedAtMs === undefined
+        ? undefined
+        : resolveExpiresAtMsFromDurationMs(DEVICE_BOOTSTRAP_TOKEN_TTL_MS, { nowMs: issuedAtMs });
+    if (issuedAtMs === undefined || expiresAtMs === undefined) {
+      throw new Error("Device bootstrap token expiry could not be resolved.");
+    }
+    const token = generatePairingToken();
+    state[token] = {
+      token,
+      setupId,
+      ts: issuedAtMs,
+      profile,
+      redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
+      issuedAtMs,
+    };
+    persistState(state, params.baseDir);
+    return { status: "pending", token, expiresAtMs, setupId };
+  });
+}
+
 /**
  * Retire one setup bearer and record that credential delivery is not yet known.
  * The transport confirms delivery only after its response finishes; a crash or

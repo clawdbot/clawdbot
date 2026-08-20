@@ -1,12 +1,8 @@
-import type {
-  ChatMessageGetResult,
-  SessionsCatalogContinueResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette-contract.ts";
-import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   announceCatalogSessionContinued,
@@ -30,9 +26,8 @@ import {
   rewindChatHistory,
   switchChatHistoryBranch,
 } from "./chat-history.ts";
-import { ChatPaneSession } from "./chat-pane-session.ts";
+import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
-  CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT,
   CHAT_HISTORY_INTENT_EDGE_PX,
   CHAT_HISTORY_INTENT_IDLE_MS,
   CHAT_HISTORY_TOUCH_INTENT_PX,
@@ -40,9 +35,7 @@ import {
   clearPaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { persistedMessageEntryId } from "./chat-thread.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   captureChatSessionScrollPosition,
@@ -50,175 +43,9 @@ import {
   scheduleChatScroll,
 } from "./scroll.ts";
 
-export abstract class ChatPaneHistory extends ChatPaneSession {
+export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   private activeCatalogContinuation: symbol | null = null;
   private activeOlderLoad: Promise<boolean> | null = null;
-  private activeReplyNavigation: symbol | null = null;
-  private replyNavigationSessionKey: string | null = null;
-  protected replyNavigationId: string | null = null;
-  protected replyMessageRevision = 0;
-  private readonly replyMessages = new Map<
-    string,
-    { client: object; settled?: boolean; message?: unknown }
-  >();
-
-  protected readonly readReplyMessage = (messageId: string): unknown => {
-    const state = this.state;
-    if (!state) {
-      return undefined;
-    }
-    return this.replyMessages.get(this.replyMessageCacheKey(state.sessionKey, messageId))?.message;
-  };
-
-  protected readonly requestReplyMessage = (messageId: string): void => {
-    void this.loadReplyMessage(messageId);
-  };
-
-  protected readonly openReplyMessage = (messageId: string): void => {
-    void this.navigateToReplyMessage(messageId);
-  };
-
-  private replyMessageCacheKey(sessionKey: string, messageId: string): string {
-    const state = this.state;
-    const agentId = state ? scopedAgentParamsForSession(state, sessionKey).agentId : undefined;
-    return `${sessionKey}\u0000${agentId ?? ""}\u0000${messageId}`;
-  }
-
-  private async loadReplyMessage(messageId: string): Promise<void> {
-    const scope = this.captureConnectionScope();
-    if (!scope || parseCatalogSessionKey(scope.state.sessionKey)) {
-      return;
-    }
-    const sessionKey = scope.state.sessionKey;
-    const agentId = scopedAgentParamsForSession(scope.state, sessionKey).agentId;
-    const cacheKey = this.replyMessageCacheKey(sessionKey, messageId);
-    const cached = this.replyMessages.get(cacheKey);
-    if (cached && (cached.client === scope.client || cached.settled)) {
-      return;
-    }
-    while (this.replyMessages.size >= 256) {
-      this.replyMessages.delete(this.replyMessages.keys().next().value!);
-    }
-    this.replyMessages.set(cacheKey, { client: scope.client });
-    try {
-      const result = await scope.client.request<ChatMessageGetResult>("chat.message.get", {
-        sessionKey,
-        ...(agentId ? { agentId } : {}),
-        messageId,
-        maxChars: 500,
-      });
-      const pending = this.replyMessages.get(cacheKey);
-      if (pending?.client !== scope.client || pending.settled) {
-        return;
-      }
-      this.replyMessages.set(
-        cacheKey,
-        result.ok && result.message
-          ? { client: scope.client, settled: true, message: result.message }
-          : { client: scope.client, settled: true },
-      );
-    } catch {
-      const pending = this.replyMessages.get(cacheKey);
-      if (pending?.client !== scope.client || pending.settled) {
-        return;
-      }
-      this.replyMessages.delete(cacheKey);
-    }
-    this.replyMessageRevision += 1;
-    if (
-      this.isConnectionScopeCurrent(scope) &&
-      areUiSessionKeysEquivalent(scope.state.sessionKey, sessionKey)
-    ) {
-      this.requestUpdate();
-    }
-  }
-
-  private replyNavigationIsCurrent(
-    navigation: symbol,
-    state: ChatPageHost,
-    sessionKey: string,
-    sessionId: string,
-  ): boolean {
-    return (
-      this.activeReplyNavigation === navigation &&
-      this.state === state &&
-      areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
-      (!sessionId || state.currentSessionId === sessionId)
-    );
-  }
-
-  protected currentReplyNavigationId(sessionKey: string): string | null {
-    return this.replyNavigationSessionKey &&
-      areUiSessionKeysEquivalent(this.replyNavigationSessionKey, sessionKey)
-      ? this.replyNavigationId
-      : null;
-  }
-
-  protected currentReplyMessageAccess(sessionKey: string) {
-    return {
-      revision: this.replyMessageRevision,
-      navigationId: this.currentReplyNavigationId(sessionKey),
-      read: this.readReplyMessage,
-      request: this.requestReplyMessage,
-      open: this.openReplyMessage,
-    };
-  }
-
-  private async navigateToReplyMessage(messageId: string): Promise<void> {
-    const state = this.state;
-    if (!state || parseCatalogSessionKey(state.sessionKey)) {
-      return;
-    }
-    const sessionKey = state.sessionKey;
-    const sessionId = state.currentSessionId?.trim() ?? "";
-    const navigation = Symbol("reply-navigation");
-    this.activeReplyNavigation = navigation;
-    this.replyNavigationSessionKey = sessionKey;
-    this.replyNavigationId = messageId;
-    this.requestUpdate();
-    try {
-      while (
-        !state.chatMessages.some((message) => persistedMessageEntryId(message) === messageId)
-      ) {
-        if (!this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
-          return;
-        }
-        if (!state.chatHistoryPagination?.hasMore) {
-          if (this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
-            state.lastError = t("chat.messages.originalUnavailable");
-            state.requestUpdate?.();
-          }
-          return;
-        }
-        const loaded = await this.loadOlderMessages();
-        if (!this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
-          return;
-        }
-        if (!loaded) {
-          if (!state.chatHistoryPagination?.hasMore && !state.lastError) {
-            state.lastError = t("chat.messages.originalUnavailable");
-            state.requestUpdate?.();
-          }
-          return;
-        }
-      }
-      if (!this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
-        return;
-      }
-      this.requestUpdate();
-      await this.updateComplete;
-      if (this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
-        this.transcript.revealMessage(messageId);
-      }
-    } finally {
-      if (this.activeReplyNavigation === navigation) {
-        this.activeReplyNavigation = null;
-        this.replyNavigationSessionKey = null;
-        this.replyNavigationId = null;
-        this.requestUpdate();
-      }
-    }
-  }
 
   protected hasOlderMessages(): boolean {
     const state = this.state;
@@ -228,24 +55,16 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     if (parseCatalogSessionKey(state.sessionKey)) {
       return Boolean(this.catalogCursor && !this.catalogLoading);
     }
-    const pagination = state.chatHistoryPagination ?? { hasMore: false };
-    if (pagination !== this.nativePaginationSnapshot) {
-      this.nativePaginationSnapshot = pagination;
-      this.olderOffsetsSeen.clear();
-    }
-    return pagination.hasMore && !state.chatLoading;
+    return state.chatHistoryPagination.hasMore && !state.chatLoading;
   }
 
   protected resetOlderMessagesViewport(): void {
     this.olderLoadGeneration += 1;
     this.activeOlderLoad = null;
-    this.activeReplyNavigation = null;
-    this.replyNavigationSessionKey = null;
-    this.replyNavigationId = null;
+    this.resetReplyNavigation();
     this.loadingOlder = false;
     this.historyObserverArmed = false;
     this.historyAutoLoadBlocked = false;
-    this.historyBootstrapPagesLoaded = 0;
     this.historyIntentConsumed = false;
     this.historyTouchY = null;
     if (this.historyIntentTimer !== null) {
@@ -254,8 +73,6 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     }
     this.transcriptScrollTop = null;
     this.olderCursorsSeen.clear();
-    this.olderOffsetsSeen.clear();
-    this.nativePaginationSnapshot = null;
     this.clearHistoryObserver();
   }
 
@@ -295,10 +112,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     }
     this.transcriptScrollTop ??= root.scrollTop;
     const threadIsScrollable = root.scrollHeight > root.clientHeight;
-    const bootstrap =
-      !this.historyObserverArmed &&
-      !threadIsScrollable &&
-      this.historyBootstrapPagesLoaded < CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT;
+    const bootstrap = !this.historyObserverArmed && !threadIsScrollable;
     if (this.historyAutoLoadBlocked) {
       this.clearHistoryObserver();
       return;
@@ -324,9 +138,6 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
           this.historyObserverArmed = false;
-          if (bootstrap) {
-            this.historyBootstrapPagesLoaded += 1;
-          }
           void this.loadOlderMessages();
         }
       },
@@ -441,6 +252,40 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     this.syncHistoryObserver();
   }
 
+  protected async showEarlierMessages(): Promise<void> {
+    const state = this.state;
+    const root = this.querySelector<HTMLElement>(".chat-thread");
+    if (!state || !root) {
+      return;
+    }
+    if (root.scrollTop > CHAT_HISTORY_INTENT_EDGE_PX) {
+      const nextScrollTop = Math.max(0, root.scrollTop - root.clientHeight);
+      // Keep the observer's intent tracker aligned so this explicit page-up
+      // cannot masquerade as a user scroll and trigger an older-page load.
+      this.transcriptScrollTop = nextScrollTop;
+      root.scrollTop = nextScrollTop;
+      return;
+    }
+    const sessionKey = state.sessionKey;
+    const sessionStillCurrent = () =>
+      this.state === state && areUiSessionKeysEquivalent(state.sessionKey, sessionKey);
+    const loaded = await this.loadOlderMessages();
+    if (!loaded || !sessionStillCurrent()) {
+      return;
+    }
+    await this.updateComplete;
+    if (!sessionStillCurrent()) {
+      return;
+    }
+    // The explicit reveal can leave the sentinel visible. Disarm it before the
+    // programmatic jump so one click cannot chain another automatic page load.
+    this.transcriptScrollTop = 0;
+    this.historyObserverArmed = false;
+    this.historyAutoLoadBlocked = this.hasOlderMessages();
+    this.clearHistoryObserver();
+    this.transcript.scrollToOffset(0);
+  }
+
   protected async loadOlderMessages(): Promise<boolean> {
     if (this.activeOlderLoad) {
       return this.activeOlderLoad;
@@ -471,13 +316,12 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         prepended = await this.loadCatalogSession(catalogKey, true);
       } else {
         const pagination = state.chatHistoryPagination;
-        if (!pagination?.hasMore) {
+        if (!pagination.hasMore) {
           return false;
         }
         const requestedOffset = pagination.nextOffset;
         const expectedSessionId =
           typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
-        this.olderOffsetsSeen.add(requestedOffset);
         const result = await loadOlderChatHistoryPage(state, requestedOffset);
         if (!result || generation !== this.olderLoadGeneration) {
           return false;
@@ -496,10 +340,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
           return true;
         }
         const nextPagination = resolveChatHistoryPagination(result);
-        const exhausted =
-          !nextPagination.hasMore ||
-          nextPagination.nextOffset <= requestedOffset ||
-          this.olderOffsetsSeen.has(nextPagination.nextOffset);
+        const exhausted = !nextPagination.hasMore || nextPagination.nextOffset <= requestedOffset;
         const messages = Array.isArray(result.messages) ? result.messages : [];
         const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
         const grew = nextMessages.length > state.chatMessages.length;
@@ -513,7 +354,6 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
             }
           : nextPagination;
         state.chatHistoryPagination = appliedPagination;
-        this.nativePaginationSnapshot = appliedPagination;
         state.lastError = null;
         scheduleChatScroll(state, false);
         prepended = grew || !exhausted;
@@ -521,6 +361,10 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     } catch (error) {
       if (generation === this.olderLoadGeneration) {
         state.lastError = formatUiError(error);
+        // Loading-row removal can emit a layout scroll. Align the tracker so it
+        // cannot masquerade as renewed user intent and consume the manual retry.
+        this.transcriptScrollTop =
+          this.querySelector<HTMLElement>(".chat-thread")?.scrollTop ?? null;
       }
     } finally {
       if (generation === this.olderLoadGeneration) {

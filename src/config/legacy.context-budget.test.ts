@@ -44,10 +44,26 @@ describe("legacy context-budget config migration", () => {
       { contextTokens: 8_000, contextWindow: 16_000 },
     ]);
     expect(migrated.changes).toEqual([
-      "models.providers.example.contextTokens → models.providers.example.models[0].contextTokens.",
-      "Removed models.providers.example.contextTokens after baking it into explicit model entries.",
-      "models.providers.example.contextWindow → models.providers.example.models[0].contextWindow.",
-      "Removed models.providers.example.contextWindow after baking it into explicit model entries.",
+      {
+        path: "models.providers.example.contextTokens",
+        message:
+          "models.providers.example.contextTokens → models.providers.example.models[0].contextTokens.",
+      },
+      {
+        path: "models.providers.example.contextTokens",
+        message:
+          "Removed models.providers.example.contextTokens after baking it into explicit model entries.",
+      },
+      {
+        path: "models.providers.example.contextWindow",
+        message:
+          "models.providers.example.contextWindow → models.providers.example.models[0].contextWindow.",
+      },
+      {
+        path: "models.providers.example.contextWindow",
+        message:
+          "Removed models.providers.example.contextWindow after baking it into explicit model entries.",
+      },
     ]);
     expect(migrated.warnings).toEqual([]);
   });
@@ -59,12 +75,26 @@ describe("legacy context-budget config migration", () => {
 
     expect(migrated.config).toEqual({ models: { providers: { example: {} } } });
     expect(migrated.changes).toEqual([
-      "Removed models.providers.example.contextTokens.",
-      "Removed models.providers.example.contextWindow.",
+      {
+        path: "models.providers.example.contextTokens",
+        message: "Removed models.providers.example.contextTokens.",
+      },
+      {
+        path: "models.providers.example.contextWindow",
+        message: "Removed models.providers.example.contextWindow.",
+      },
     ]);
     expect(migrated.warnings).toEqual([
-      "models.providers.example.contextTokens had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.",
-      "models.providers.example.contextWindow had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.",
+      {
+        path: "models.providers.example.contextTokens",
+        message:
+          "models.providers.example.contextTokens had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.",
+      },
+      {
+        path: "models.providers.example.contextWindow",
+        message:
+          "models.providers.example.contextWindow had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.",
+      },
     ]);
   });
 
@@ -83,9 +113,18 @@ describe("legacy context-budget config migration", () => {
       agents: { defaults: {}, entries: { ops: {}, writer: {} }, list: [{ id: "legacy" }] },
     });
     expect(migrated.changes).toEqual([
-      "Removed agents.defaults.contextTokens.",
-      "Removed agents.entries.ops.contextTokens.",
-      "Removed agents.list[0].contextTokens.",
+      {
+        path: "agents.defaults.contextTokens",
+        message: "Removed agents.defaults.contextTokens.",
+      },
+      {
+        path: "agents.entries.ops.contextTokens",
+        message: "Removed agents.entries.ops.contextTokens.",
+      },
+      {
+        path: "agents.list[0].contextTokens",
+        message: "Removed agents.list[0].contextTokens.",
+      },
     ]);
     expect(migrated.warnings).toHaveLength(3);
     expect(migrateLegacyContextBudgetConfig(migrated.config)).toEqual({

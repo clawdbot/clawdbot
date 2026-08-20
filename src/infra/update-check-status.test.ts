@@ -3,13 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout } from "../process/exec.js";
+import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { checkUpdateStatus } from "./update-check.js";
 
+const runCommandWithTimeout = processExec.runCommandWithTimeout;
+
 async function runGit(cwd: string, ...args: string[]): Promise<string> {
-  const result = await runCommandWithTimeout(["git", ...args], { cwd, timeoutMs: 5000 });
+  const result = await runCommandWithTimeout(["git", ...args], {
+    cwd,
+    timeoutMs: 5000,
+  });
   if (result.code !== 0) {
     throw new Error(result.stderr || `git ${args.join(" ")} failed`);
   }
@@ -32,6 +37,32 @@ afterEach(() => {
 });
 
 describe("checkUpdateStatus", () => {
+  it.each([
+    { name: "shared default", timeoutMs: undefined, expectedTimeoutMs: 120_000 },
+    { name: "explicit override", timeoutMs: 4321, expectedTimeoutMs: 4321 },
+  ])("uses the $name for Git fetches", async ({ timeoutMs, expectedTimeoutMs }) => {
+    await withTestDir({ prefix: "openclaw-update-check-fetch-timeout-" }, async (base) => {
+      const remoteRoot = path.join(base, "remote");
+      const localRoot = path.join(base, "local");
+      await initGitRepo(remoteRoot);
+      await commitGit(remoteRoot, "initial");
+      await runGit(base, "clone", "--quiet", remoteRoot, localRoot);
+      const runCommandSpy = vi.spyOn(processExec, "runCommandWithTimeout");
+
+      await checkUpdateStatus({
+        root: localRoot,
+        includeRegistry: false,
+        fetchGit: true,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+
+      const fetchCall = runCommandSpy.mock.calls.find(
+        ([argv]) => argv[0] === "git" && argv.includes("fetch"),
+      );
+      expect(fetchCall?.[1]).toMatchObject({ timeoutMs: expectedTimeoutMs });
+    });
+  });
+
   it("fetches a retained main upstream whose remote nickname contains a slash", async () => {
     await withTestDir({ prefix: "openclaw-update-check-slash-remote-" }, async (base) => {
       const sourceRoot = path.join(base, "source");
@@ -552,7 +583,10 @@ describe("checkUpdateStatus", () => {
         JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
         "utf8",
       );
-      await runCommandWithTimeout(["git", "init"], { cwd: repoRoot, timeoutMs: 1000 });
+      await runCommandWithTimeout(["git", "init"], {
+        cwd: repoRoot,
+        timeoutMs: 1000,
+      });
       await fs.symlink(repoRoot, linkedRoot);
 
       const status = await checkUpdateStatus({

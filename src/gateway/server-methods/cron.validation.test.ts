@@ -40,6 +40,18 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
     } => ({ canonicalKey: sessionKey, entry: undefined }),
   ),
 );
+const cronTaskRunHistoryPageOverride = vi.hoisted(() => vi.fn());
+
+vi.mock("../../cron/task-run-history.js", async () => {
+  const actual = await vi.importActual<typeof import("../../cron/task-run-history.js")>(
+    "../../cron/task-run-history.js",
+  );
+  return {
+    ...actual,
+    readCronTaskRunHistoryPage: (...args: Parameters<typeof actual.readCronTaskRunHistoryPage>) =>
+      cronTaskRunHistoryPageOverride(...args) ?? actual.readCronTaskRunHistoryPage(...args),
+  };
+});
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -579,6 +591,7 @@ function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void 
 describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    cronTaskRunHistoryPageOverride.mockReset().mockReturnValue(undefined);
     loadGatewaySessionEntry
       .mockReset()
       .mockImplementation((sessionKey: string) => ({ canonicalKey: sessionKey, entry: undefined }));
@@ -2939,17 +2952,17 @@ describe("cron method validation", () => {
     createCronJob({ failureAlert: { channel: "c0example01", mode: "announce" } }),
   );
 
-  // Job omits mode and inherits the global webhook mode, so runtime never uses
-  // the channel; validation must not reject it (matches resolveFailureAlert).
-  failureAlertUpdateAccepted(
-    "does not validate an inherited-webhook failureAlert channel on cron.update (global mode)",
+  // An explicit job channel selects announce routing ahead of the global
+  // webhook destination, so the canonical resolver must validate it.
+  failureAlertUpdateRejected(
+    "validates an explicit failureAlert channel ahead of a global webhook on cron.update",
     { failureAlert: { channel: "C0EXAMPLE01", to: "https://example.invalid/hook" } },
     createCronJob(),
     globalFailureAlertConfig(telegramSlackConfig(), { enabled: true, mode: "webhook" }),
   );
 
-  failureAlertAddAccepted(
-    "does not validate an inherited-webhook failureAlert channel on cron.add (global mode)",
+  failureAlertAddRejected(
+    "validates an explicit failureAlert channel ahead of a global webhook on cron.add",
     agentTurnCronParams({
       name: "inherited webhook alert",
       failureAlert: { channel: "C0EXAMPLE01", to: "https://example.invalid/hook" },
@@ -3018,10 +3031,10 @@ describe("cron method validation", () => {
     }),
   );
 
-  // Enabling an alert with no routing key of its own makes it inherit the job
-  // delivery channel; a legacy-invalid one must be rejected, not persisted.
-  failureAlertUpdateRejected(
-    "validates a newly enabled alert (--failure-alert-after) that inherits a legacy-invalid delivery channel",
+  // Route-backed alerts are already active by default, so a threshold-only edit
+  // must not revalidate a legacy channel that the patch does not change.
+  failureAlertUpdateAccepted(
+    "does not revalidate a route-backed legacy channel for a threshold-only edit",
     { failureAlert: { after: 3 } },
     createRoutedCronJob("c0legacyinvalid", "123"),
   );
@@ -3825,6 +3838,14 @@ describe("cron method validation", () => {
   });
 
   it("preserves deleted-job history without listing unrelated cron jobs", async () => {
+    cronTaskRunHistoryPageOverride.mockReturnValue({
+      entries: [{ jobId: "deleted-cron", action: "finished", status: "ok", ts: 1 }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
     const context = createCronContext();
 
     const { respond } = await invokeCron("cron.runs", { id: "deleted-cron" }, { context });
@@ -3834,6 +3855,39 @@ describe("cron method validation", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ entries: expect.any(Array) }),
+      undefined,
+    );
+  });
+
+  it("returns a typed lookup miss when cron.runs has no live job or retained history", async () => {
+    const context = createCronContext();
+
+    const { respond } = await invokeCron("cron.runs", { id: "missing-cron" }, { context });
+
+    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("missing-cron");
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Automation not found: missing-cron",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-cron" },
+    });
+  });
+
+  it("keeps the exact empty cron.runs page for a live job with no history", async () => {
+    const context = createCronContext(createCronJob({ id: "empty-cron" }));
+
+    const { respond } = await invokeCron("cron.runs", { id: "empty-cron" }, { context });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        entries: [],
+        total: 0,
+        offset: 0,
+        limit: 50,
+        hasMore: false,
+        nextOffset: null,
+      },
       undefined,
     );
   });

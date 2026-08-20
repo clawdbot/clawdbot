@@ -12,10 +12,7 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
-  it.each([
-    { sendState: "steering" as const, sendRunId: "send-1" },
-    { pendingRunId: "run-1", sendRunId: "send-1" },
-  ])("renders one Steering badge for an in-flight or acknowledged steer", (steerState) => {
+  it("renders the durable steer mode without a run-bound state", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -25,8 +22,8 @@ describe("chat composer steering queue", () => {
             id: "steer-1",
             text: "change course",
             createdAt: 1,
-            kind: "steered",
-            ...steerState,
+            queueMode: "steer",
+            sendState: "waiting-idle",
           },
         ],
         onQueueRemove: vi.fn(),
@@ -35,11 +32,9 @@ describe("chat composer steering queue", () => {
     );
 
     const badges = container.querySelectorAll(".chat-queue__badge");
-    expect(badges).toHaveLength(1);
-    expect(badges[0]?.textContent?.trim()).toBe(t("chat.queue.states.steering"));
-    const icon = container.querySelector(".chat-queue__icon");
-    expect(icon?.querySelector('polyline[points="15 10 20 15 15 20"]')).not.toBeNull();
-    expect(icon?.querySelector("circle")).toBeNull();
+    expect(badges).toHaveLength(2);
+    expect(badges[0]?.textContent?.trim()).toBe(t("chat.queue.steer"));
+    expect(badges[1]?.textContent?.trim()).toBe(t("chat.queue.states.waitingForRun"));
   });
 
   it("keeps a failed steer visually classified as an error", () => {
@@ -52,7 +47,7 @@ describe("chat composer steering queue", () => {
             id: "failed-steer",
             text: "change course",
             createdAt: 1,
-            kind: "steered",
+            queueMode: "steer",
             sendState: "failed",
             sendError: "steer rejected",
           },
@@ -64,11 +59,11 @@ describe("chat composer steering queue", () => {
 
     const row = container.querySelector(".chat-queue__item");
     expect(row?.classList.contains("chat-queue__item--failed")).toBe(true);
-    expect(row?.classList.contains("chat-queue__item--steered")).toBe(false);
     const icon = row?.querySelector(".chat-queue__icon");
     expect(icon?.querySelector('path[d^="m21.73 18"]')).not.toBeNull();
-    expect(icon?.querySelector('polyline[points="15 10 20 15 15 20"]')).toBeNull();
-    expect(container.querySelector(".chat-queue__badge--steered")).toBeNull();
+    expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+      t("chat.queue.steer"),
+    );
   });
 });
 
@@ -155,7 +150,7 @@ describe("chat composer queue reordering", () => {
   it("reserves the handle column on every row so the pills never shift", () => {
     const container = renderQueue({
       queue: [
-        { id: "steer", text: "steer", createdAt: 1, kind: "steered", pendingRunId: "run-1" },
+        { id: "pending", text: "pending", createdAt: 1, pendingRunId: "run-1" },
         waiting("b", 2),
         waiting("c", 3),
       ],
@@ -197,43 +192,81 @@ describe("chat composer queue reordering", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it("holds every action slot inert while one edit is open", () => {
+  it("renders the inline editor while keeping other rows actionable", () => {
     const onQueueEdit = vi.fn();
+    const onQueueSteer = vi.fn();
     const onQueueRemove = vi.fn();
     const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3)],
+      canAbort: true,
+      queue: [
+        { id: "a", text: "a", createdAt: 1, sendState: "waiting-idle" },
+        { id: "b", text: "b", createdAt: 2, sendState: "waiting-idle" },
+        { id: "c", text: "c", createdAt: 3, sendState: "waiting-idle" },
+      ],
       editingId: "b",
       onQueueEdit,
+      onQueueSteer,
       onQueueMove: vi.fn(),
       onQueueRemove,
     });
 
     const rows = [...container.querySelectorAll(".chat-queue__item")];
-    // Every row keeps both buttons, so no column shifts while the edit is open.
-    for (const selector of [".chat-queue__edit", ".chat-queue__remove"]) {
-      const present = rows.map((row) => row.querySelector(selector) !== null);
-      expect(present).toEqual([true, true, true]);
-    }
-    // One edit at a time, so every pencil waits; discarding another row is still
-    // safe, so only the edited row's X goes inert.
+    expect(rows.map((row) => row.querySelector(".chat-queue__edit") !== null)).toEqual([
+      true,
+      false,
+      true,
+    ]);
+    expect(rows[1]?.querySelector(".chat-queue__edit-input")).not.toBeNull();
+    expect(rows[1]?.querySelector(".chat-queue__edit-submit")).not.toBeNull();
+    expect(rows[1]?.querySelector(".chat-queue__edit-cancel")).not.toBeNull();
+    expect(rows.map((row) => row.querySelector(".chat-queue__action") !== null)).toEqual([
+      true,
+      false,
+      true,
+    ]);
+
     const disabled = (selector: string) =>
-      rows.map((row) => row.querySelector(selector)!.hasAttribute("disabled"));
-    expect(disabled(".chat-queue__edit")).toEqual([true, true, true]);
-    expect(disabled(".chat-queue__remove")).toEqual([false, true, false]);
+      rows.map((row) => row.querySelector(selector)?.hasAttribute("disabled") ?? false);
+    expect(disabled(".chat-queue__edit")).toEqual([true, false, true]);
+    expect(disabled(".chat-queue__remove")).toEqual([false, false, false]);
 
     rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__edit")?.click();
-    rows[1]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
     expect(onQueueEdit).not.toHaveBeenCalled();
-    expect(onQueueRemove).not.toHaveBeenCalled();
 
     rows[2]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
     expect(onQueueRemove).toHaveBeenCalledWith("c");
   });
 
+  it("routes inline draft changes, submit, cancel, and keyboard shortcuts", () => {
+    const onQueueEditChange = vi.fn();
+    const onQueueEditSubmit = vi.fn();
+    const onQueueEditCancel = vi.fn();
+    const container = renderQueue({
+      queue: [waiting("a", 1)],
+      editingId: "a",
+      editingText: "a draft",
+      onQueueEditChange,
+      onQueueEditSubmit,
+      onQueueEditCancel,
+      onQueueRemove: vi.fn(),
+    });
+    const editor = container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!;
+    expect(editor.value).toBe("a draft");
+    editor.value = "updated draft";
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onQueueEditChange).toHaveBeenCalledWith("updated draft");
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(onQueueEditCancel).toHaveBeenCalledOnce();
+    editor.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+    );
+    expect(onQueueEditSubmit).toHaveBeenCalledOnce();
+  });
+
   it("keeps a row that already joined a run out of the reorder set", () => {
     const container = renderQueue({
       queue: [
-        { id: "steer", text: "steer", createdAt: 1, kind: "steered", pendingRunId: "run-1" },
+        { id: "pending", text: "pending", createdAt: 1, pendingRunId: "run-1" },
         waiting("b", 2),
         waiting("c", 3),
       ],

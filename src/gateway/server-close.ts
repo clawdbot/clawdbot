@@ -38,7 +38,6 @@ import {
 } from "./server-chat-state.js";
 import type { MediaCleanupStopResult } from "./server-media-cleanup-lifecycle.js";
 import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
@@ -51,6 +50,7 @@ const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const MCP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 const LSP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 const EMBEDDING_PROVIDER_CLOSE_GRACE_MS = 5_000;
+const AGENT_HARNESS_CLOSE_GRACE_MS = 5_000;
 const RESTART_REPLY_DRAIN_POLL_MS = 100;
 const RESTART_REPLY_POST_ABORT_DRAIN_TIMEOUT_MS = 1_000;
 const RESTART_REPLY_POST_ABORT_DRAIN_POLL_MS = 50;
@@ -582,7 +582,12 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
 }
 
 async function disposeRuntimeWithShutdownGrace(params: {
-  label: "plugin-services" | "bundle-mcp" | "bundle-lsp" | "embedding-providers";
+  label:
+    | "plugin-services"
+    | "agent-harnesses"
+    | "bundle-mcp"
+    | "bundle-lsp"
+    | "embedding-providers";
   dispose: () => Promise<void>;
   graceMs: number;
   warnings: string[];
@@ -606,7 +611,7 @@ async function disposeRuntimeWithShutdownGrace(params: {
 export async function runGatewayClosePrelude(params: {
   stopDiagnostics?: () => void;
   clearSkillsRefreshTimer?: () => void;
-  skillsChangeUnsub?: () => void;
+  skillsChangeUnsub?: () => void | Promise<void>;
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
   stopChannelHealthMonitor?: () => Promise<void>;
@@ -615,7 +620,7 @@ export async function runGatewayClosePrelude(params: {
 }): Promise<void> {
   params.stopDiagnostics?.();
   params.clearSkillsRefreshTimer?.();
-  params.skillsChangeUnsub?.();
+  await params.skillsChangeUnsub?.();
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
   await params.stopChannelHealthMonitor?.();
@@ -659,6 +664,50 @@ async function waitForHttpClose(params: {
   }
 }
 
+async function closeHttpListener(params: {
+  server: HttpServer;
+  label: string;
+  warnings: string[];
+}): Promise<void> {
+  const { server, label, warnings } = params;
+  server.closeIdleConnections?.();
+  const closePromise = new Promise<void>((resolve, reject) => {
+    server.close((err) => {
+      if (!err || isServerNotRunningError(err)) {
+        resolve();
+        return;
+      }
+      reject(err);
+    });
+  });
+  void closePromise.catch(() => undefined);
+  const closedWithinGrace = await waitForHttpClose({
+    closePromise,
+    timeoutMs: HTTP_CLOSE_GRACE_MS,
+    label,
+    warnings,
+  });
+  if (closedWithinGrace) {
+    return;
+  }
+  shutdownLog.warn(
+    `${label} close exceeded ${HTTP_CLOSE_GRACE_MS}ms; forcing connection shutdown and waiting for close`,
+  );
+  recordShutdownWarning(warnings, label);
+  server.closeAllConnections?.();
+  const closedAfterForce = await waitForHttpClose({
+    closePromise,
+    timeoutMs: HTTP_CLOSE_FORCE_WAIT_MS,
+    label,
+    warnings,
+  });
+  if (!closedAfterForce) {
+    throw new Error(
+      `${label} close still pending after forced connection shutdown (${HTTP_CLOSE_FORCE_WAIT_MS}ms)`,
+    );
+  }
+}
+
 export function createGatewayCloseHandler(
   params: {
     bonjourStop: (() => Promise<void>) | null;
@@ -667,7 +716,6 @@ export function createGatewayCloseHandler(
     channelIds?: readonly ChannelId[];
     stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
     pluginServices: PluginServicesHandle | null;
-    postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
     disposeAllBundleLspRuntimes: () => Promise<void>;
@@ -836,16 +884,6 @@ export function createGatewayCloseHandler(
       if (params.bonjourStop) {
         await shutdownStep("bonjour", () => params.bonjourStop!(), warnings);
       }
-      if (params.tailscaleCleanup) {
-        await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
-      }
-      if (params.postReadySidecars?.length) {
-        await measureCloseStep("post-ready-sidecars", async () => {
-          for (const [index, sidecar] of params.postReadySidecars!.entries()) {
-            await shutdownStep(`post-ready-sidecar/${index}`, () => sidecar.stop(), warnings);
-          }
-        });
-      }
       // ACPX owns agent-process cleanup, so plugin teardown must not overtake
       // the manager drain even when cancellation and handle close are slow.
       await measureCloseStep("acp-session-manager", () =>
@@ -873,7 +911,12 @@ export function createGatewayCloseHandler(
         }
       });
       await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns(), warnings);
-      await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
+      await disposeRuntimeWithShutdownGrace({
+        label: "agent-harnesses",
+        dispose: disposeRegisteredAgentHarnesses,
+        graceMs: AGENT_HARNESS_CLOSE_GRACE_MS,
+        warnings,
+      });
       await shutdownStep("ai-session-resources", () => cleanupSessionResources(), warnings);
       await shutdownStep(
         "provider-transport-dispatchers",
@@ -1019,54 +1062,32 @@ export function createGatewayCloseHandler(
           : params.httpServer
             ? [params.httpServer]
             : [];
-      if (transportServers.length > 0) {
-        await measureCloseStep("http-server", async () => {
-          const servers = transportServers;
-          for (let i = 0; i < servers.length; i++) {
-            const httpServer = servers[i] as HttpServer & {
-              closeAllConnections?: () => void;
-              closeIdleConnections?: () => void;
-            };
-            const label = servers.length > 1 ? `http-server[${i}]` : "http-server";
-            if (typeof httpServer.closeIdleConnections === "function") {
-              httpServer.closeIdleConnections();
+      try {
+        if (transportServers.length > 0) {
+          await measureCloseStep("http-server", async () => {
+            const results = await Promise.allSettled(
+              transportServers.map((server, index) =>
+                closeHttpListener({
+                  server,
+                  label: transportServers.length > 1 ? `http-server[${index}]` : "http-server",
+                  warnings,
+                }),
+              ),
+            );
+            const failure = results.find(
+              (result): result is PromiseRejectedResult => result.status === "rejected",
+            );
+            if (failure) {
+              throw failure.reason;
             }
-            const closePromise = new Promise<void>((resolve, reject) => {
-              httpServer.close((err) => {
-                if (!err || isServerNotRunningError(err)) {
-                  resolve();
-                  return;
-                }
-                reject(err);
-              });
-            });
-            void closePromise.catch(() => undefined);
-            const closedWithinGrace = await waitForHttpClose({
-              closePromise,
-              timeoutMs: HTTP_CLOSE_GRACE_MS,
-              label,
-              warnings,
-            });
-            if (!closedWithinGrace) {
-              shutdownLog.warn(
-                `${label} close exceeded ${HTTP_CLOSE_GRACE_MS}ms; forcing connection shutdown and waiting for close`,
-              );
-              recordShutdownWarning(warnings, label);
-              httpServer.closeAllConnections?.();
-              const closedAfterForce = await waitForHttpClose({
-                closePromise,
-                timeoutMs: HTTP_CLOSE_FORCE_WAIT_MS,
-                label,
-                warnings,
-              });
-              if (!closedAfterForce) {
-                throw new Error(
-                  `${label} close still pending after forced connection shutdown (${HTTP_CLOSE_FORCE_WAIT_MS}ms)`,
-                );
-              }
-            }
-          }
-        });
+          });
+        }
+      } finally {
+        // The foreground Tailscale session owns the route, so closing its claim
+        // releases the ephemeral backend before this lifecycle is forgotten.
+        if (params.tailscaleCleanup) {
+          await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
+        }
       }
       await disposeRuntimeWithShutdownGrace({
         label: "embedding-providers",

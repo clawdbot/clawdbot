@@ -812,17 +812,17 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("preserves the most recent user/assistant messages", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "older ask", timestamp: 1 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "older answer" }],
         timestamp: 2,
-      } as unknown as AgentMessage,
+      }),
       { role: "user", content: "recent ask", timestamp: 3 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "recent answer" }],
         timestamp: 4,
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -840,36 +840,36 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("drops orphaned tool results from preserved assistant turns", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "older ask", timestamp: 1 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_old", name: "read", arguments: {} }],
         timestamp: 2,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "toolResult",
         toolCallId: "call_old",
         toolName: "read",
         content: [{ type: "text", text: "old result" }],
         timestamp: 3,
-      } as unknown as AgentMessage,
+      }),
       { role: "user", content: "recent ask", timestamp: 4 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
         timestamp: 5,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "toolResult",
         toolCallId: "call_recent",
         toolName: "read",
         content: [{ type: "text", text: "recent result" }],
         timestamp: 6,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "recent final answer" }],
         timestamp: 7,
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -901,29 +901,29 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const split = splitPreservedRecentTurns({
       messages: [
         { role: "user", content: "older ask", timestamp: 1 },
-        {
+        castAgentMessage({
           role: "assistant",
           content: [{ type: "text", text: "older answer" }],
           timestamp: 2,
-        } as unknown as AgentMessage,
+        }),
         { role: "user", content: "recent ask", timestamp: 3 },
-        {
+        castAgentMessage({
           role: "assistant",
           content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
           timestamp: 4,
-        } as unknown as AgentMessage,
-        {
+        }),
+        castAgentMessage({
           role: "toolResult",
           toolCallId: "call_recent",
           toolName: "read",
           content: [{ type: "text", text: "recent raw output" }],
           timestamp: 5,
-        } as unknown as AgentMessage,
-        {
+        }),
+        castAgentMessage({
           role: "assistant",
           content: [{ type: "text", text: "recent final answer" }],
           timestamp: 6,
-        } as unknown as AgentMessage,
+        }),
       ],
       recentTurnsPreserve: 1,
     });
@@ -943,27 +943,26 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const split = splitPreservedRecentTurns({
       messages: [
         { role: "user", content: "recent ask", timestamp: 1 },
-        { role: "assistant", content: toolCalls, timestamp: 2 } as unknown as AgentMessage,
-        ...toolCalls.map(
-          (toolCall, index) =>
-            ({
-              role: "toolResult",
-              toolCallId: toolCall.id,
-              toolName: "read",
-              content: [
-                {
-                  type: "text",
-                  text: `paired-result-${String(index).padStart(2, "0")}-${"x".repeat(700)}`,
-                },
-              ],
-              timestamp: index + 3,
-            }) as unknown as AgentMessage,
+        castAgentMessage({ role: "assistant", content: toolCalls, timestamp: 2 }),
+        ...toolCalls.map((toolCall, index) =>
+          castAgentMessage({
+            role: "toolResult",
+            toolCallId: toolCall.id,
+            toolName: "read",
+            content: [
+              {
+                type: "text",
+                text: `paired-result-${String(index).padStart(2, "0")}-${"x".repeat(700)}`,
+              },
+            ],
+            timestamp: index + 3,
+          }),
         ),
-        {
+        castAgentMessage({
           role: "assistant",
           content: [{ type: "text", text: "terminal answer survives" }],
           timestamp: 33,
-        } as unknown as AgentMessage,
+        }),
       ],
       recentTurnsPreserve: 1,
     });
@@ -981,16 +980,16 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("formats preserved non-text messages with placeholders", () => {
     const section = preservedTurnsText([
-      {
+      castAgentMessage({
         role: "user",
         content: [{ type: "image", data: "abc", mimeType: "image/png" }],
         timestamp: 1,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
         timestamp: 2,
-      } as unknown as AgentMessage,
+      }),
     ]);
 
     expect(section).toContain("- User: [non-text content: image]");
@@ -999,14 +998,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("keeps non-text placeholders for mixed-content preserved messages", () => {
     const section = preservedTurnsText([
-      {
+      castAgentMessage({
         role: "user",
         content: [
           { type: "text", text: "caption text" },
           { type: "image", data: "abc", mimeType: "image/png" },
         ],
         timestamp: 1,
-      } as unknown as AgentMessage,
+      }),
     ]);
 
     expect(section).toContain("- User: caption text");
@@ -1027,11 +1026,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("does not add non-text placeholders for text-only content blocks", () => {
     const section = preservedTurnsText([
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "plain text reply" }],
         timestamp: 1,
-      } as unknown as AgentMessage,
+      }),
     ]);
 
     expect(section).toContain("- Assistant: plain text reply");
@@ -1041,46 +1040,46 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("caps preserved tail when user turns are below preserve target", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "single user prompt", timestamp: 1 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-1" }],
         timestamp: 2,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-2" }],
         timestamp: 3,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-3" }],
         timestamp: 4,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-4" }],
         timestamp: 5,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-5" }],
         timestamp: 6,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-6" }],
         timestamp: 7,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-7" }],
         timestamp: 8,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-8" }],
         timestamp: 9,
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -1934,7 +1933,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
         ],
         turnPrefixMessages: [],
         firstKeptEntryId: "entry-1",
@@ -2278,14 +2277,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          {
+          castAgentMessage({
             role: "custom",
             customType: "openclaw.runtime-context",
             content: "secret runtime context",
             display: false,
             timestamp: 1.5,
-          } as unknown as AgentMessage,
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          }),
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: preservedUserText, timestamp: 3 },
         ],
         turnPrefixMessages: [],
@@ -2377,13 +2376,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
-          {
+          castAgentMessage({
             role: "assistant",
             content: "latest assistant reply",
             timestamp: 4,
-          } as unknown as AgentMessage,
+          }),
         ],
         turnPrefixMessages: [],
         firstKeptEntryId: "entry-1",
@@ -2440,13 +2439,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
-          {
+          castAgentMessage({
             role: "assistant",
             content: [{ type: "text", text: "latest assistant reply" }],
             timestamp: 4,
-          } as unknown as AgentMessage,
+          }),
         ],
         turnPrefixMessages: [
           { role: "user", content: "prefix request that was split out", timestamp: 0 },
@@ -2505,11 +2504,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "latest user ask", timestamp: 1 },
-          {
+          castAgentMessage({
             role: "assistant",
             content: [{ type: "text", text: "latest assistant reply" }],
             timestamp: 2,
-          } as unknown as AgentMessage,
+          }),
         ],
         turnPrefixMessages: [],
         firstKeptEntryId: "entry-1",
@@ -2642,7 +2641,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
         ],
         turnPrefixMessages: [] as AgentMessage[],
         firstKeptEntryId: "entry-1",
@@ -2734,7 +2733,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
           {
             role: "assistant",
@@ -2998,31 +2997,30 @@ describe("compaction-safeguard recent-turn preservation", () => {
     }));
     const turnPrefixMessages = [
       { role: "user" as const, content: "raw tool request", timestamp: 100 },
-      {
+      castAgentMessage({
         role: "assistant" as const,
         content: toolCalls,
         timestamp: 101,
-      } as unknown as AgentMessage,
-      ...toolCalls.map(
-        (toolCall, index) =>
-          ({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: "read",
-            content: [
-              {
-                type: "text",
-                text: `finalizer-tool-output-${index}-${"r".repeat(600)}`,
-              },
-            ],
-            timestamp: index + 102,
-          }) as unknown as AgentMessage,
+      }),
+      ...toolCalls.map((toolCall, index) =>
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: toolCall.id,
+          toolName: "read",
+          content: [
+            {
+              type: "text",
+              text: `finalizer-tool-output-${index}-${"r".repeat(600)}`,
+            },
+          ],
+          timestamp: index + 102,
+        }),
       ),
-      {
+      castAgentMessage({
         role: "assistant" as const,
         content: [{ type: "text", text: "raw terminal answer survives" }],
         timestamp: 114,
-      } as unknown as AgentMessage,
+      }),
     ];
     const event = {
       preparation: {
@@ -3926,10 +3924,12 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(false);
 
     expect(
-      testing.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: [{ type: "reasoning", summary: [] }],
-      } as unknown as AgentMessage),
+      testing.hasMeaningfulConversationContent(
+        castAgentMessage({
+          role: "assistant",
+          content: [{ type: "reasoning", summary: [] }],
+        }),
+      ),
     ).toBe(false);
   });
 

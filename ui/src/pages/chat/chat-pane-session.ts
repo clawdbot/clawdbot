@@ -61,6 +61,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
+      this.githubPublicationResult = null;
+      this.githubPublicationError = null;
+      this.githubPublicationIdempotencyKey = null;
+      this.githubPublicationBusy = false;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return;
@@ -86,21 +90,50 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       store.refresh(pullRequestKey);
     }
     const result = store.get(pullRequestKey);
-    if (
-      !result ||
-      result.status === "unavailable" ||
-      !this.isConnectionScopeCurrent(scope) ||
-      sessionKey !== scope.state.sessionKey
-    ) {
+    if (!this.isConnectionScopeCurrent(scope) || sessionKey !== scope.state.sessionKey) {
+      return;
+    }
+    if (!result) {
+      if (this.sessionPullRequests.length > 0 || this.sessionPullRequestsBranch !== undefined) {
+        scope.context.sessions.setPullRequestSummary(sessionKey, undefined, pullRequestEpoch);
+      }
+      this.sessionPullRequests = [];
+      this.sessionPullRequestsBranch = undefined;
+      this.sessionPullRequestsRateLimited = false;
+      this.dismissedSessionPullRequestIds = new Set();
+      this.requestUpdate();
+      return;
+    }
+    if (result.status === "unavailable") {
       return;
     }
     this.sessionPullRequests = result.pullRequests;
     if (!result.rateLimited || result.pullRequests.length > 0) {
+      const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
         sessionKey,
-        summarizeSessionPullRequests(result.pullRequests),
+        summarizeSessionPullRequests(result.pullRequests, previousSummary),
         pullRequestEpoch,
       );
+    }
+    const published =
+      this.githubPublicationResult?.status === "published"
+        ? this.githubPublicationResult
+        : undefined;
+    const publishedPullRequest = published
+      ? result.pullRequests.find((pullRequest) => pullRequest.url === published.url)
+      : undefined;
+    if (
+      result.branch &&
+      published &&
+      (result.branch.branch !== published.branch ||
+        (publishedPullRequest &&
+          publishedPullRequest.state !== "open" &&
+          publishedPullRequest.state !== "draft"))
+    ) {
+      this.githubPublicationResult = null;
+      this.githubPublicationError = null;
+      this.githubPublicationIdempotencyKey = null;
     }
     this.sessionPullRequestsBranch = result.branch;
     this.sessionPullRequestsRateLimited = result.rateLimited;
@@ -109,11 +142,16 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected resetSessionPullRequests(): void {
+    this.githubPublicationRequestVersion += 1;
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
     this.sessionPullRequestsRateLimited = false;
     this.sessionPullRequestsExpanded = false;
+    this.githubPublicationResult = null;
+    this.githubPublicationError = null;
+    this.githubPublicationIdempotencyKey = null;
+    this.githubPublicationBusy = false;
     this.dismissedSessionPullRequestIds = new Set();
   }
 
@@ -397,7 +435,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       this.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
       this.historyObserverArmed = false;
-      this.historyBootstrapPagesLoaded = 0;
       this.transcriptScrollTop = null;
       this.historyObserver?.disconnect();
       this.historyObserver = null;
@@ -434,6 +471,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         .map((item) => this.catalogItemMessage(item))
         .filter((message) => message !== null);
       const nextMessages = older ? this.prependUniqueCatalogMessages(messages) : messages;
+      const addedMessages = nextMessages.length > this.catalogMessages.length;
       // Exhaust when the cursor cannot make new forward progress: absent, unchanged,
       // or already visited this session (a provider cycling c1 -> c2 -> c1). Any of
       // these stops the re-armed observer from looping. An advancing, never-seen
@@ -449,7 +487,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       const currentState = this.state ?? state;
       currentState.lastError = null;
       scheduleChatScroll(currentState, !older);
-      return older ? !olderExhausted : true;
+      return !older || addedMessages || !olderExhausted;
     } catch (error) {
       if (isCurrent()) {
         (this.state ?? state).lastError = formatUiError(error);
@@ -462,7 +500,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           this.catalogLoading = false;
           currentState.chatLoading = false;
         }
-        currentState.requestUpdate();
+        if (!older) {
+          currentState.requestUpdate();
+        }
       }
     }
   }
