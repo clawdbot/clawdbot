@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveChannelPreferOverIds } from "../config/plugin-auto-enable.prefer-over.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
@@ -29,7 +30,6 @@ import {
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
-import { resolveManifestChannelPreferOverIds } from "./manifest-channel-preference.js";
 import {
   isPluginManifestInstallOwnerAmbiguous,
   resolvePluginManifestInstallOwner,
@@ -290,16 +290,23 @@ export function pushPluginValidationError(params: {
 }
 
 /**
- * Every channel this manifest declares a replacement preference for. Only channels that actually
+ * Every channel this plugin declares a replacement preference for. Only channels that actually
  * declare one are recorded, so the common case carries nothing. Channel registration needs the
  * declaration at load time: without it a contested channel is settled by discovery order.
+ *
+ * Resolved through the same function auto-enable and schema ownership use, not the manifest alone.
+ * A preference declared in the built-in channel registration or an external plugin catalog is
+ * invisible to the manifest lookup, and a runtime that could not see it would arbitrate by
+ * discovery order while validation had already selected the preferred plugin's schema.
  */
 function collectManifestChannelPreferOver(
   record: PluginManifestRecord,
+  env: NodeJS.ProcessEnv,
+  registry: PluginManifestRegistry,
 ): Record<string, readonly string[]> | undefined {
   const byChannel: Record<string, readonly string[]> = {};
   for (const channelId of record.channels ?? []) {
-    const preferOver = resolveManifestChannelPreferOverIds(record, channelId);
+    const preferOver = resolveChannelPreferOverIds({ record, channelId, env, registry });
     if (preferOver.length > 0) {
       byChannel[channelId] = [...preferOver];
     }
@@ -313,6 +320,8 @@ export function createManifestPluginRecord(params: {
   manifestRecord: PluginManifestRecord;
   enabled: boolean;
   activationState: PluginActivationState;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry: PluginManifestRegistry;
 }): PluginRecord {
   const { candidate, manifestRecord } = params;
   return createPluginRecord({
@@ -338,7 +347,11 @@ export function createManifestPluginRecord(params: {
     activationState: params.activationState,
     syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
     channelIds: manifestRecord.channels,
-    channelPreferOver: collectManifestChannelPreferOver(manifestRecord),
+    channelPreferOver: collectManifestChannelPreferOver(
+      manifestRecord,
+      params.env,
+      params.manifestRegistry,
+    ),
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,

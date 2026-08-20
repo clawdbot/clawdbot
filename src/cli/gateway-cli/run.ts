@@ -24,6 +24,7 @@ import {
   isInvalidConfigError,
 } from "../../config/io.invalid-config.js";
 import { CONFIG_PATH, normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js";
+import { setGatewayAmbientEnvTriggerPolicy } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
@@ -699,6 +700,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   // Gateways inherit the launching shell, so suppress ambient channel credentials unless the
   // operator explicitly allows them for this run.
   const ambientEnvTriggers = opts.ambientChannels || opts.devAmbientChannels ? "allow" : "suppress";
+  // Record it here, not only at server bootstrap: this run validates its startup config before the
+  // server starts, and that validation resolves channel schema ownership too. Recording later would
+  // let startup validation narrow under a different policy than every validation after it.
+  setGatewayAmbientEnvTriggerPolicy(ambientEnvTriggers);
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
     defaultRuntime.exit(1);

@@ -18,6 +18,7 @@ import {
   isPluginExplicitlySelectedByAlias,
   isPluginPolicyDisabled,
 } from "./plugin-replacement-eligibility.js";
+import { getGatewayAmbientEnvTriggerPolicy } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function createConfiguredChannelOwnershipPolicy(params: {
@@ -35,10 +36,10 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   env: NodeJS.ProcessEnv;
   /**
    * Must match what Gateway startup passes. `server-startup-bootstrap` defaults to `"suppress"`,
-   * so a channel seen only through inherited environment variables is deliberately left out of
-   * auto-enable. Defaulting to the helper's `"allow"` here would narrow ownership to `preferOver`
-   * candidates the running Gateway never activated, and the Control UI would offer a schema for an
-   * owner that is not loaded.
+   * but `--ambient-channels` raises it to `"allow"` for the whole run, so a fixed default here
+   * would disagree with activation on exactly the setups that opted in. Omitted callers fall back
+   * to the policy the running Gateway recorded at startup, and only then to `"suppress"` for a
+   * cold config file with no Gateway behind it.
    */
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): ChannelOwnershipPolicy {
@@ -75,7 +76,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
         sourceConfig,
         params.env,
         undefined,
-        params.ambientEnvTriggers ?? "suppress",
+        params.ambientEnvTriggers ?? getGatewayAmbientEnvTriggerPolicy() ?? "suppress",
       ),
     );
     return configuredChannelIds.has(channelId);
@@ -121,7 +122,12 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     isPluginExplicitlySelected: (pluginId) =>
       isPluginExplicitlySelectedByAlias(sourceConfig, pluginId, canonicalId),
     resolveChannelPreferOverIds: (record, channelId) =>
-      resolveChannelPreferOverIds({ record, channelId, env: params.env }),
+      resolveChannelPreferOverIds({
+        record,
+        channelId,
+        env: params.env,
+        registry: params.registry,
+      }),
   };
 }
 

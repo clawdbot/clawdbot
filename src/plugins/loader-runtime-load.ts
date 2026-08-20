@@ -228,6 +228,7 @@ function loadOpenClawPluginsInternal(
       loadRuntimePluginCandidate({
         candidate,
         manifestRecord,
+        manifestRegistry,
         context,
         options,
         onlyPluginIdSet,

@@ -208,13 +208,42 @@ function ownsChannelLevelDeclaration(
   return record.id === channelId || normalizeChatChannelId(record.id) === channelId;
 }
 
+/**
+ * `preferOver` is written by a plugin author, so it can name a claimant by a legacy id or one of
+ * its channel ids, while every consumer compares canonical ids. Resolving here is what keeps
+ * validation, auto-enable, and channel registration from disagreeing over one declaration. Memoized
+ * per registry because the map is rebuilt per call and loading resolves every channel of every
+ * record.
+ */
+const aliasResolverByRegistry = new WeakMap<PluginManifestRegistry, (pluginId: string) => string>();
+
+function canonicalizePreferOverIds(
+  ids: readonly string[],
+  registry: PluginManifestRegistry | undefined,
+): readonly string[] {
+  if (!registry || ids.length === 0) {
+    return ids;
+  }
+  let resolveAlias = aliasResolverByRegistry.get(registry);
+  if (!resolveAlias) {
+    resolveAlias = createManifestPluginAliasResolver(registry);
+    aliasResolverByRegistry.set(registry, resolveAlias);
+  }
+  return ids.map(resolveAlias);
+}
+
 export function resolveChannelPreferOverIds(params: {
   record: PluginManifestRecord | undefined;
   channelId: string;
   env: NodeJS.ProcessEnv;
+  /** Resolves the ids a declaration names; see `canonicalizePreferOverIds`. */
+  registry?: PluginManifestRegistry;
 }): readonly string[] {
   const manifestPreferOver = params.record
-    ? resolveManifestChannelPreferOverIds(params.record, params.channelId)
+    ? canonicalizePreferOverIds(
+        resolveManifestChannelPreferOverIds(params.record, params.channelId),
+        params.registry,
+      )
     : [];
   if (manifestPreferOver.length) {
     return manifestPreferOver;
@@ -224,14 +253,14 @@ export function resolveChannelPreferOverIds(params: {
     builtInChannelPreferOver.length &&
     ownsChannelLevelDeclaration(params.record, params.channelId)
   ) {
-    return builtInChannelPreferOver;
+    return canonicalizePreferOverIds(builtInChannelPreferOver, params.registry);
   }
   const catalogEntry = resolveExternalCatalogEntry(params.channelId, params.env);
   if (
     catalogEntry?.preferOver.length &&
     ownsChannelLevelDeclaration(params.record, params.channelId, catalogEntry)
   ) {
-    return catalogEntry.preferOver;
+    return canonicalizePreferOverIds(catalogEntry.preferOver, params.registry);
   }
   return [];
 }
@@ -248,6 +277,7 @@ function resolvePreferredOverIds(
       record: registry.plugins.find((record) => record.id === candidate.pluginId),
       channelId,
       env,
+      registry,
     }),
   ];
 }
@@ -316,7 +346,8 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     if (isPluginPolicyDisabled(params.config, other.pluginId, resolveAlias)) {
       continue;
     }
-    if (!getPreferredOverIds(other).some((id) => resolveAlias(id) === entryPluginId)) {
+    // Already canonical: `resolveChannelPreferOverIds` resolves the ids a declaration names.
+    if (!getPreferredOverIds(other).includes(entryPluginId)) {
       continue;
     }
     // A declaration is made FOR one channel, and it means one of two things depending on whether

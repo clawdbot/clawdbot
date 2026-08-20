@@ -1,7 +1,11 @@
 /** Covers how the configured channel ownership policy reads operator intent. */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createConfiguredChannelOwnershipPolicy } from "./channel-ownership-policy.js";
+import {
+  resetGatewayAmbientEnvTriggerPolicyForTest,
+  setGatewayAmbientEnvTriggerPolicy,
+} from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const registry = {
@@ -21,7 +25,44 @@ function policyFor(params: { config: OpenClawConfig; sourceConfig?: OpenClawConf
   });
 }
 
+afterEach(() => {
+  resetGatewayAmbientEnvTriggerPolicyForTest();
+});
+
+const EMPTY_REGISTRY = { diagnostics: [], plugins: [] } as unknown as PluginManifestRegistry;
+
+function ambientPolicyFor() {
+  return createConfiguredChannelOwnershipPolicy({
+    config: {} as OpenClawConfig,
+    registry: EMPTY_REGISTRY,
+    env: { TELEGRAM_BOT_TOKEN: "zz-proof" },
+  });
+}
+
 describe("createConfiguredChannelOwnershipPolicy", () => {
+  // `--ambient-channels` raises the policy to "allow" for the whole run, but ownership is rebuilt
+  // per Control UI config request with no access to those startup options. Under "allow" a channel
+  // seen only through inherited environment variables counts as configured, so ownership narrows to
+  // the claimants activation selected from; under "suppress" it is not configured at all and every
+  // claimant stays active. An unrelated claimant is active in exactly one of the two, which is the
+  // disagreement this pins.
+  it.each([
+    { name: "allow narrows to the activated claimants", recorded: "allow" as const, active: false },
+    {
+      name: "suppress leaves the channel unconfigured",
+      recorded: "suppress" as const,
+      active: true,
+    },
+  ])("$name", ({ recorded, active }) => {
+    setGatewayAmbientEnvTriggerPolicy(recorded);
+
+    expect(ambientPolicyFor().isPluginActive("zz-claimant", "telegram")).toBe(active);
+  });
+
+  it("falls back to suppress when no Gateway recorded a policy", () => {
+    expect(ambientPolicyFor().isPluginActive("zz-claimant", "telegram")).toBe(true);
+  });
+
   // Found by a live `openclaw config schema` run, not by unit tests: auto-enable writes
   // `plugins.entries.<id>.enabled` for every plugin it turns on, so reading explicit selection from
   // the materialized config reported auto-enabled plugins as hand-picked. That suppressed the

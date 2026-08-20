@@ -47,6 +47,7 @@ export function collectPluginIdsForConfiguredChannel(
           record,
           channelId: normalizedChannelId,
           env,
+          registry,
         }),
       });
     }
@@ -56,24 +57,21 @@ export function collectPluginIdsForConfiguredChannel(
     return builtInId ? [builtInId] : [];
   }
 
-  // `preferOver` is written by a plugin author, so it can name a claimant by a legacy id the
-  // manifest still lists. Comparing the raw value against canonical claimant ids drops the
-  // replacement edge entirely, and the id would also enter the candidate set as a plugin that does
-  // not exist. Startup canonicalizes ids through this same resolver.
+  // Claim ids and the ids a declaration names are both canonical here: `resolveChannelPreferOverIds`
+  // resolves the declaration, and a manifest record's own id is already the canonical one.
   const resolveAlias = createManifestPluginAliasResolver(registry);
-  const claimIds = new Set(claims.map((claim) => resolveAlias(claim.plugin.id)));
+  const claimIds = new Set(claims.map((claim) => claim.plugin.id));
   if (builtInId) {
     claimIds.add(resolveAlias(builtInId));
   }
   const preferredIds = new Set<string>();
   for (const claim of claims) {
-    for (const preferredOverId of claim.preferOver) {
-      const canonicalPreferredOverId = resolveAlias(preferredOverId);
+    for (const canonicalPreferredOverId of claim.preferOver) {
       if (claimIds.has(canonicalPreferredOverId)) {
         // Keep both sides as candidates. The preferOver filter later disables
         // the lower-priority plugin unless the preferred plugin is explicitly
         // disabled/denied, preserving fallback to bundled channel support.
-        preferredIds.add(resolveAlias(claim.plugin.id));
+        preferredIds.add(claim.plugin.id);
         preferredIds.add(canonicalPreferredOverId);
       }
     }

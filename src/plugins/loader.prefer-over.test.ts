@@ -277,6 +277,139 @@ describe("plugin loader preferOver activation", () => {
     );
   });
 
+  // The declaration does not have to live in the manifest. Auto-enable and schema ownership both
+  // resolve built-in and external-catalog preferences, so runtime arbitration has to see the same
+  // ones or it settles a catalog-declared replacement by discovery order instead.
+  it.each([
+    { name: "replacement discovered first", replacementFirst: true },
+    { name: "fallback discovered first", replacementFirst: false },
+  ])("honors a catalog-declared preference when the $name", ({ replacementFirst }) => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+    });
+    const catalogDir = makePluginLoaderTempDir();
+    const catalogPath = path.join(catalogDir, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/zz-replacement",
+            openclaw: {
+              plugin: { id: "zz-replacement" },
+              channel: { id: "zzalpha", preferOver: ["zz-fallback"] },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath,
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: {
+        load: {
+          paths: replacementFirst ? [replacementDir, fallbackDir] : [fallbackDir, replacementDir],
+        },
+      },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    const owner = (channelId: string) =>
+      registry.channels.find((entry) => entry.plugin.id === channelId)?.pluginId;
+    expect(owner("zzalpha")).toBe("zz-replacement");
+    expect(owner("zzbeta")).toBe("zz-fallback");
+    expect(registry.tools.map((tool) => tool.pluginId).toSorted()).toEqual([
+      "zz-fallback",
+      "zz-replacement",
+    ]);
+  });
+
+  // `preferOver` names a plugin the way its author wrote it, and a plugin's channel ids are among
+  // its aliases. The config layer resolves those spellings, so runtime arbitration has to see the
+  // same edge or it hands the channel to the plugin the declaration was written against.
+  it("honors a preference that names the claimant by one of its channel ids", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+    });
+    const catalogDir = makePluginLoaderTempDir();
+    const catalogPath = path.join(catalogDir, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/zz-replacement",
+            openclaw: {
+              plugin: { id: "zz-replacement" },
+              // `zzbeta` is a channel of zz-fallback, so it resolves to that plugin.
+              channel: { id: "zzalpha", preferOver: ["zzbeta"] },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath,
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    const owner = (channelId: string) =>
+      registry.channels.find((entry) => entry.plugin.id === channelId)?.pluginId;
+    expect(owner("zzalpha")).toBe("zz-replacement");
+    expect(registry.tools.map((tool) => tool.pluginId).toSorted()).toEqual([
+      "zz-fallback",
+      "zz-replacement",
+    ]);
+  });
+
   it("blocks tools from a plugin that loses a duplicate channel registration", () => {
     const bundledRoot = makePluginLoaderTempDir();
     writeChannelToolPlugin({

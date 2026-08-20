@@ -137,6 +137,8 @@ export async function loadOpenClawPluginCliRegistry(
         manifestRecord,
         enabled: false,
         activationState,
+        env: context.env,
+        manifestRegistry,
       });
       duplicate.status = "disabled";
       duplicate.error = `overridden by ${existingOrigin} plugin`;
@@ -160,6 +162,8 @@ export async function loadOpenClawPluginCliRegistry(
       manifestRecord,
       enabled: enableState.enabled,
       activationState,
+      env: context.env,
+      manifestRegistry,
     });
     applyPluginManifestRecordDetails(record, manifestRecord);
     const pushPluginLoadError = (message: string) =>
