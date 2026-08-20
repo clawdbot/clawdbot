@@ -8,7 +8,6 @@ import type {
   ProviderPlugin,
 } from "../plugins/types.js";
 import {
-  buildOpenAICompatibleLiveModels,
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogRecord,
@@ -36,6 +35,7 @@ export type LiveModelCatalogHeaderContext = {
 };
 
 export { clearLiveCatalogCacheForTests };
+export { buildOpenAICompatibleLiveModels } from "./provider-catalog-live-normalize.internal.js";
 export {
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
