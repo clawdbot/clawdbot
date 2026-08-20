@@ -138,11 +138,12 @@ describe("config form array integrity", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
+    const identifier = "1048113311314608148";
     renderArrayFixture(container, {
       schema: {
         type: "array",
         items: {
-          oneOf: [{ type: "string", minLength: 1 }, { type: "number" }],
+          oneOf: [{ enum: [identifier] }, { type: "number" }],
         },
       },
       value: [],
@@ -170,7 +171,6 @@ describe("config form array integrity", () => {
       await draftHost.updateComplete;
     };
 
-    const identifier = "1048113311314608148";
     await addDraftValue(identifier);
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [identifier]);
     expect(onPatch.mock.calls[0]?.[1]?.[0]).not.toBe(Number(identifier));

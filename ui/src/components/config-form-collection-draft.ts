@@ -4,7 +4,7 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
-import { schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { schemaMayAcceptString, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export type ConfigFormCollectionDraftProps = {
   schema: JsonSchema;
@@ -92,7 +92,7 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
     const valueType = schemaType(schema);
     const variants = schema.anyOf ?? schema.oneOf ?? [];
     const stringNumberUnion =
-      variants.some((variant) => schemaType(variant) === "string") &&
+      variants.some(schemaMayAcceptString) &&
       variants.some((variant) => ["number", "integer"].includes(schemaType(variant) ?? ""));
     if (valueType === "string") {
       return { ok: true, value: this.draftValue };

@@ -5,7 +5,11 @@ import {
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
-import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import {
+  schemaMayAcceptString,
+  schemaType,
+  type JsonSchema,
+} from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import {
   cloneConfigObject,
@@ -177,29 +181,6 @@ function coerceBooleanString(value: string): boolean | string {
     return false;
   }
   return value;
-}
-
-function schemaMayAcceptString(schema: JsonSchema): boolean {
-  const declaredTypes = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
-  if (declaredTypes.length > 0 && !declaredTypes.includes("string")) {
-    return false;
-  }
-  if (schema.const !== undefined && typeof schema.const !== "string") {
-    return false;
-  }
-  if (schema.enum && !schema.enum.some((entry) => typeof entry === "string")) {
-    return false;
-  }
-  if (schema.allOf && !schema.allOf.every(schemaMayAcceptString)) {
-    return false;
-  }
-  if (schema.anyOf && !schema.anyOf.some(schemaMayAcceptString)) {
-    return false;
-  }
-  if (schema.oneOf && !schema.oneOf.some(schemaMayAcceptString)) {
-    return false;
-  }
-  return true;
 }
 
 function coerceFormValues(value: unknown, schema: JsonSchema): unknown {

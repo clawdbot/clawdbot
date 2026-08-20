@@ -40,6 +40,10 @@ describe("config form schema constraints", () => {
       "-9.007199254740993e15",
     );
     expect(coerceConfigFormNumberString("0.10", false)).toBe(0.1);
+    expect(coerceConfigFormNumberString("1.0000000000000002", false)).toBe(1.0000000000000002);
+    expect(coerceConfigFormNumberString("1.0000000000000001", false)).toBe("1.0000000000000001");
+    expect(coerceConfigFormNumberString("9007199254740991.1", false)).toBe("9007199254740991.1");
+    expect(coerceConfigFormNumberString("1e-324", false)).toBe("1e-324");
 
     for (const spelling of [
       "0x10",
