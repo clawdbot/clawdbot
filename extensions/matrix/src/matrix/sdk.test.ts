@@ -1585,6 +1585,7 @@ describe("MatrixClient request hardening", () => {
   it.each([SyncState.Error, SyncState.Reconnecting])(
     "does not replace a poisoned %s generation until late transient work really releases",
     async (syncState) => {
+      vi.useFakeTimers();
       const accountId = `sdk-retirement-${syncState.toLowerCase()}`;
       const cfg = {
         channels: {
@@ -1668,14 +1669,14 @@ describe("MatrixClient request hardening", () => {
           () => ({ ok: true as const }),
           (error: unknown) => ({ ok: false as const, error }),
         );
-        await vi.waitFor(() => {
-          expect(firstSdkClient.classicSyncStop).toHaveBeenCalledOnce();
-        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(firstSdkClient.classicSyncStop).toHaveBeenCalledOnce();
         expect(borrowedSignal?.aborted).toBe(true);
         await expect(keepaliveOutcome).resolves.toBe("SyncApi.stop() was called");
         expect(syncInternals.connectionReturnedResolvers).toBeUndefined();
 
         expect(createSharedMatrixClientMock).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(5_000);
         await expect(monitorOutcome).resolves.toMatchObject({
           ok: false,
           error: { message: "Matrix transient leases did not drain within 5000ms" },
