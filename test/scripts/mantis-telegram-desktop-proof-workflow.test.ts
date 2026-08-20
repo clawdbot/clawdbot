@@ -355,6 +355,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(readFileSync(PREFLIGHT_PROMPT, "utf8")).toContain(
       "focus inspection, not to override the diff",
     );
+    expect(readFileSync(PREFLIGHT_PROMPT, "utf8")).toContain(
+      "changes are also internal-only unless they change what an end user sees in",
+    );
     expect(capture?.if).toContain("needs.resolve_request.outputs.visibility_decision != 'skip'");
     expect(noVisible?.if).toContain("needs.resolve_request.outputs.visibility_decision == 'skip'");
     const noVisibleComment = noVisible?.steps?.find(

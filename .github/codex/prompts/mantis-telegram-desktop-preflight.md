@@ -18,6 +18,8 @@ streaming, edits, deletion or wipes, media, buttons, commands, routing, topics,
 reactions, progress, audio, or timing. Use a maintainer's requested scenario to
 focus inspection, not to override the diff. Choose `skip` when the entire PR has
 no meaningful Telegram-visible result, such as docs, tests, build/CI, or
-internal-only plumbing. Uncertainty means `run`.
+internal-only plumbing. Mantis, QA harness, recording, proof, and GitHub workflow
+changes are also internal-only unless they change what an end user sees in
+Telegram. Uncertainty means `run`.
 
 Return only the required JSON decision.
