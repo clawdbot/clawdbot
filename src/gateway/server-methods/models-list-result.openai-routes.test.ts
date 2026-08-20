@@ -23,6 +23,7 @@ const IMPLICIT_CODEX_RUNTIME = {
 const IMPLICIT_OPENCLAW_RUNTIME = {
   id: "openclaw",
   cloudPlacementSupported: true,
+  cloudPlacementExecutionMode: "worker-turn",
   devicePlacementSupported: true,
   source: "implicit",
 } as const;
