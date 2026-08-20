@@ -9,6 +9,7 @@ import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
@@ -101,7 +102,8 @@ function createHarness(
 
 function blockAcceptedPromptAbort(harness: Harness) {
   const firstSettlement = vi.fn();
-  let releaseAbort: (() => void) | undefined;
+  const abortStarted = createDeferred();
+  const abortReleased = createDeferred();
   harness.requestSpy.mockImplementation(async (method, params) => {
     if (method === "chat.send") {
       const runId = expectDefined(
@@ -113,9 +115,8 @@ function blockAcceptedPromptAbort(harness: Harness) {
     }
     if (method === "chat.abort") {
       expect(firstSettlement).not.toHaveBeenCalled();
-      await new Promise<void>((resolve) => {
-        releaseAbort = resolve;
-      });
+      abortStarted.resolve();
+      await abortReleased.promise;
     }
     return {};
   });
@@ -123,14 +124,8 @@ function blockAcceptedPromptAbort(harness: Harness) {
     observeFirstSettlement(promise: Promise<PromptResponse>) {
       void promise.then(firstSettlement);
     },
-    async waitForAbort() {
-      await vi.waitFor(() => {
-        expect(releaseAbort).toBeDefined();
-      });
-    },
-    releaseAbort() {
-      expectDefined(releaseAbort, "blocked exact Gateway abort")();
-    },
+    waitForAbort: () => abortStarted.promise,
+    releaseAbort: abortReleased.resolve,
   };
 }
 
@@ -241,27 +236,25 @@ describe("acp translator cancel and run scoping", () => {
     },
   ])(
     "does not submit a replacement closed by $closure while its prior abort is pending",
-    async ({ close, closure }) => {
+    async ({ close }) => {
       const sessionKey = "agent:main:shared";
       const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
       const first = await startPendingPrompt(harness, "session-1");
-      let releaseAbort: (() => void) | undefined;
+      const abortStarted = createDeferred();
+      const abortReleased = createDeferred();
       harness.requestSpy.mockImplementationOnce(async (method: string) => {
         expect(method).toBe("chat.abort");
-        await new Promise<void>((resolve) => {
-          releaseAbort = resolve;
-        });
+        abortStarted.resolve();
+        await abortReleased.promise;
         return {};
       });
 
       const replacement = harness.agent.prompt(createPromptRequest("session-1"));
-      await vi.waitFor(() => {
-        expect(releaseAbort).toBeDefined();
-      });
+      await abortStarted.promise;
       const closed = close(harness);
 
       expect(harness.sentRunIds).toEqual([first.runId]);
-      expectDefined(releaseAbort, `${closure} owns the blocked prior abort`)();
+      abortReleased.resolve();
       await closed;
       await Promise.resolve();
 
@@ -306,7 +299,8 @@ describe("acp translator cancel and run scoping", () => {
   it("closes an admitted prompt when shutdown interrupts its blocked final snapshot", async () => {
     const sessionKey = "agent:main:shared";
     const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
-    let releaseSnapshot: (() => void) | undefined;
+    const snapshotStarted = createDeferred();
+    const snapshot = createDeferred<Record<string, unknown>>();
     harness.requestSpy.mockImplementation(async (method, params) => {
       if (method === "chat.send") {
         const runId = expectDefined(
@@ -317,9 +311,8 @@ describe("acp translator cancel and run scoping", () => {
         return { runId, status: "started" };
       }
       if (method === "sessions.list") {
-        return await new Promise<Record<string, unknown>>((resolve) => {
-          releaseSnapshot = () => resolve({ sessions: [] });
-        });
+        snapshotStarted.resolve();
+        return await snapshot.promise;
       }
       return {};
     });
@@ -327,9 +320,7 @@ describe("acp translator cancel and run scoping", () => {
     const terminalEvent = harness.agent.handleGatewayEvent(
       createChatEvent({ runId: pending.runId, sessionKey, seq: 1, state: "final" }),
     );
-    await vi.waitFor(() => {
-      expect(releaseSnapshot).toBeDefined();
-    });
+    await snapshotStarted.promise;
 
     const shutdownSettled = vi.fn();
     const shutdown = harness.agent.shutdown().then(shutdownSettled);
@@ -339,7 +330,7 @@ describe("acp translator cancel and run scoping", () => {
       });
       await expect(pending.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
     } finally {
-      expectDefined(releaseSnapshot, "blocked terminal session snapshot")();
+      snapshot.resolve({ sessions: [] });
       await terminalEvent;
       await shutdown;
     }
@@ -349,23 +340,21 @@ describe("acp translator cancel and run scoping", () => {
     const sessionKey = "agent:main:shared";
     const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
     const first = await startPendingPrompt(harness, "session-1");
-    let releaseAbort: (() => void) | undefined;
+    const abortStarted = createDeferred();
+    const abortReleased = createDeferred();
     harness.requestSpy.mockImplementationOnce(async (method: string) => {
       expect(method).toBe("chat.abort");
-      await new Promise<void>((resolve) => {
-        releaseAbort = resolve;
-      });
+      abortStarted.resolve();
+      await abortReleased.promise;
       return {};
     });
 
     const second = harness.agent.prompt(createPromptRequest("session-1"));
-    await vi.waitFor(() => {
-      expect(releaseAbort).toBeDefined();
-    });
+    await abortStarted.promise;
     const third = harness.agent.prompt(createPromptRequest("session-1"));
     const cancellation = harness.agent.cancel({ sessionId: "session-1" });
 
-    expectDefined(releaseAbort, "blocked prior abort")();
+    abortReleased.resolve();
     await cancellation;
     await Promise.resolve();
 
@@ -426,7 +415,7 @@ describe("acp translator cancel and run scoping", () => {
     const harness = createHarness([{ sessionId: "session-1", sessionKey }], {
       provenanceMode: "meta",
     });
-    let rejectFirstSend: ((error: Error) => void) | undefined;
+    const firstSend = createDeferred<Record<string, unknown>>();
     harness.requestSpy.mockImplementation(async (method, params) => {
       if (method !== "chat.send") {
         return {};
@@ -436,9 +425,7 @@ describe("acp translator cancel and run scoping", () => {
         harness.sentRunIds.push(runId);
       }
       if (harness.sentRunIds.length === 1) {
-        return await new Promise<Record<string, unknown>>((_, reject) => {
-          rejectFirstSend = reject;
-        });
+        return await firstSend.promise;
       }
       return await new Promise<Record<string, unknown>>(() => {});
     });
@@ -446,10 +433,7 @@ describe("acp translator cancel and run scoping", () => {
     const replacement = await startPendingPrompt(harness, "session-1");
     await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
 
-    expectDefined(
-      rejectFirstSend,
-      "blocked first chat.send request",
-    )(
+    firstSend.reject(
       Object.assign(new Error("system provenance fields require admin scope"), {
         name: "GatewayClientRequestError",
         gatewayCode: "INVALID_REQUEST",
@@ -468,13 +452,12 @@ describe("acp translator cancel and run scoping", () => {
     const sessionKey = "agent:main:shared";
     const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
     const first = await startPendingPrompt(harness, "session-1");
-    let releaseDelivery: (() => void) | undefined;
-    harness.sessionUpdateSpy.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseDelivery = resolve;
-        }),
-    );
+    const deliveryStarted = createDeferred();
+    const deliveryReleased = createDeferred();
+    harness.sessionUpdateSpy.mockImplementationOnce(async () => {
+      deliveryStarted.resolve();
+      await deliveryReleased.promise;
+    });
 
     const staleFinal = harness.agent.handleGatewayEvent(
       createChatEvent({
@@ -485,12 +468,10 @@ describe("acp translator cancel and run scoping", () => {
         message: { content: [{ type: "text", text: "old response" }] },
       }),
     );
-    await vi.waitFor(() => {
-      expect(releaseDelivery).toBeDefined();
-    });
+    await deliveryStarted.promise;
 
     const replacement = await startPendingPrompt(harness, "session-1");
-    expectDefined(releaseDelivery, "blocked session-update delivery")();
+    deliveryReleased.resolve();
     await staleFinal;
 
     expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(replacement.runId);
@@ -502,22 +483,20 @@ describe("acp translator cancel and run scoping", () => {
     const sessionKey = "agent:main:shared";
     const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
     const first = await startPendingPrompt(harness, "session-1");
-    let releaseAbort: (() => void) | undefined;
+    const abortStarted = createDeferred();
+    const abortReleased = createDeferred();
     harness.requestSpy.mockImplementationOnce(async (method: string) => {
       expect(method).toBe("chat.abort");
-      await new Promise<void>((resolve) => {
-        releaseAbort = resolve;
-      });
+      abortStarted.resolve();
+      await abortReleased.promise;
       return {};
     });
 
     const cancellation = harness.agent.cancel({ sessionId: "session-1" } as CancelNotification);
-    await vi.waitFor(() => {
-      expect(releaseAbort).toBeDefined();
-    });
+    await abortStarted.promise;
     const replacement = await startPendingPrompt(harness, "session-1");
 
-    expectDefined(releaseAbort, "blocked chat.abort request")();
+    abortReleased.resolve();
     await cancellation;
     await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
     expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(replacement.runId);
@@ -649,13 +628,12 @@ describe("acp translator cancel and run scoping", () => {
       const sessionKey = "agent:main:shared";
       const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
       const first = await startPendingPrompt(harness, "session-1");
-      let releaseThought: (() => void) | undefined;
-      harness.sessionUpdateSpy.mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve) => {
-            releaseThought = resolve;
-          }),
-      );
+      const thoughtStarted = createDeferred();
+      const thoughtReleased = createDeferred();
+      harness.sessionUpdateSpy.mockImplementationOnce(async () => {
+        thoughtStarted.resolve();
+        await thoughtReleased.promise;
+      });
 
       const staleSnapshot = harness.agent.handleGatewayEvent(
         createChatEvent({
@@ -671,12 +649,10 @@ describe("acp translator cancel and run scoping", () => {
           },
         }),
       );
-      await vi.waitFor(() => {
-        expect(releaseThought).toBeDefined();
-      });
+      await thoughtStarted.promise;
 
       const replacement = await startPendingPrompt(harness, "session-1");
-      expectDefined(releaseThought, "blocked stale thought delivery")();
+      thoughtReleased.resolve();
       await staleSnapshot;
 
       const visibleChunks = harness.sessionUpdateSpy.mock.calls.filter(
