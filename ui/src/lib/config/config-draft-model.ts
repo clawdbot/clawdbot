@@ -5,18 +5,16 @@ import {
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
-import {
-  schemaMayAcceptString,
-  schemaType,
-  type JsonSchema,
-} from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import {
   cloneConfigObject,
   removePathValue,
   sanitizeRedactedFormForSubmit,
+  schemaMayAcceptString,
+  schemaType,
   serializeConfigForm,
   setPathValue,
+  type JsonSchema,
 } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";

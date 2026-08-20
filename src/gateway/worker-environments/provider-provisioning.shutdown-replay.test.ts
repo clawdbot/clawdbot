@@ -100,6 +100,7 @@ describe("worker node provisioning shutdown replay", () => {
       createWorkerPlacementDispatchService({
         placements,
         environments,
+        runnerAvailability: { read: () => undefined, version: () => 0 },
         workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
         runLocalBarrier: async ({ startDispatch }) => startDispatch(),
         runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),

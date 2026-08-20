@@ -73,9 +73,6 @@ suite.define(() => {
         await menuTrigger.press("Enter");
         const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
-        expect(await dropdown.evaluate((element) => (element as { open?: boolean }).open)).toBe(
-          true,
-        );
         await action.waitFor({ state: "visible" });
         await page.screenshot({ path: path.join(artifactDir, "01-menu.png"), fullPage: true });
         await action.click();

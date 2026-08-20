@@ -254,6 +254,7 @@ describe("worker environment service provision replay", () => {
     const dispatch = createWorkerPlacementDispatchService({
       placements,
       environments: restarted,
+      runnerAvailability: { read: () => undefined, version: () => 0 },
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
       runRecoveryBarrier: recoveryBarrier,

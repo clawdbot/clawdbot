@@ -63,16 +63,12 @@ describe("account-scoped conversation binding expiry", () => {
     testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-account-bindings-"));
     process.env.OPENCLAW_STATE_DIR = testStateDir;
     resetAccountScopedConversationBindingsForTests({ stateKey });
-    currentConversationBindingTesting.resetCurrentConversationBindingsForTests({
-      deletePersistedFile: true,
-    });
+    currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
   });
 
   afterEach(async () => {
     resetAccountScopedConversationBindingsForTests({ stateKey });
-    currentConversationBindingTesting.resetCurrentConversationBindingsForTests({
-      deletePersistedFile: true,
-    });
+    currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
     closeOpenClawStateDatabaseForTest();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -97,7 +93,6 @@ describe("account-scoped conversation binding expiry", () => {
     );
 
     manager.stop();
-    currentConversationBindingTesting.resetCurrentConversationBindingsForTests();
     closeOpenClawStateDatabaseForTest();
 
     const restarted = createManager();
@@ -136,7 +131,6 @@ describe("account-scoped conversation binding expiry", () => {
     expect(manager.getByConversationId(conversation.conversationId)?.targetKind).toBe("acp");
 
     manager.stop();
-    currentConversationBindingTesting.resetCurrentConversationBindingsForTests();
     closeOpenClawStateDatabaseForTest();
     createManager();
 

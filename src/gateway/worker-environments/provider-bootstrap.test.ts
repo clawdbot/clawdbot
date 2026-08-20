@@ -180,6 +180,7 @@ describe("worker environment service", () => {
     const dispatch = createWorkerPlacementDispatchService({
       placements,
       environments: workerService,
+      runnerAvailability: { read: () => undefined, version: () => 0 },
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
       runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),

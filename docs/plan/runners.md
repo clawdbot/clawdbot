@@ -195,12 +195,13 @@ stated honestly (revision 1 undersold this):
   Device-side GC of per-session workspace dirs and superseded bundles is a
   milestone exit gate, not an open question:
   persistent machines otherwise leak the user's own disk.
-- **Placement `runner-offline`.** Pre-dispatch device loss waits up to 10
-  seconds, then returns an operator-visible coordination error without failing
-  the active placement or consuming model fallbacks. Idle active device
-  placements survive Gateway restart and validate their reconnect-scoped
-  tunnel lazily on the next turn. Durable status projection and the explicit
-  "continue on gateway" / "wait for device" actions remain milestone work.
+- **Placement runner availability.** Active device ownership stays `active`
+  while the device is offline. The Gateway derives the optional closed
+  `runner: { kind: "device", status }` projection from the environment's exact
+  device binding and current reconnect-scoped v5 runner proof. Restart begins
+  offline until reconnect. **Wait for device** is the default retained state;
+  explicit **Continue on Gateway…** durably abandons the source, fences its
+  authority, and resumes from the last Gateway-synced workspace without replay.
 - **Dispatch target union.** `sessions.dispatch` accepts
   `{ profileId } | { deviceId }`; the device → environment mapping resolves
   server-side. Devices are not smuggled through synthesized
@@ -398,11 +399,10 @@ speak. Additions:
   missing means false, and exact worker slots are never persisted. This adds
   one optional paired-node field without a schema-version bump or migration.
 - **Placement chip** on the session header: shows quiet current placement;
-  active cloud placements reclaim through `sessions.reclaim` with "Bring
-  home". Stop-and-continue moves arrive with milestone 8.
-- **Separate follow-up**: durable `runner-offline` session status and explicit
-  "Wait for device" / "Continue on Gateway" recovery actions remain owned by
-  placement recovery. This picker cutover does not synthesize that state.
+  available device placements say **Runs on device**, offline placements say
+  **Device offline**, and active placements still stop safely through
+  `sessions.reclaim`. Ordinary moves remain reconcile-first. Only the explicit
+  Gateway continuation path may abandon an offline device source.
 
 ### Cloud convergence (milestone 10)
 

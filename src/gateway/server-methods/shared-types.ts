@@ -58,6 +58,7 @@ import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type {
   WorkerPlacementDiskSpaceReader,
+  WorkerPlacementRunnerAvailabilityReader,
   WorkerSessionPlacementReader,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
@@ -372,6 +373,8 @@ type GatewayResidentBridgeContext = {
     Partial<WorkerSessionPlacementRetirementService>;
   /** Process-local health samples fenced to the exact active placement owner. */
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
+  /** Process-current paired-device runner proof for active placement projection. */
+  workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
   /** Use-time approval authority validation over the live run/worker owners. */
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */

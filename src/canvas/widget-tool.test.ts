@@ -210,6 +210,9 @@ describe("show_widget", () => {
       callGateway,
     });
 
+    expect(tool.description).toContain(
+      "Inline hosting is disabled; set pin=true to place it on this session's dashboard",
+    );
     await expect(
       tool.execute("unpinned", {
         title: "Diagram",
@@ -240,12 +243,6 @@ describe("show_widget", () => {
       }),
     );
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
-  });
-
-  it("tells the agent to use widgets proactively", () => {
-    expect(createShowWidgetTool().description).toMatch(
-      /^Visual helps\? Make widget\. Do not wait for ask\./,
-    );
   });
 
   it("keeps widget documents from duplicating host-owned metadata and controls", () => {

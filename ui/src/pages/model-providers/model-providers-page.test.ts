@@ -659,8 +659,39 @@ describe("ModelProvidersPage agent scope", () => {
     });
   });
 
+  it("stops queued provider probes after switching away from and back to the selected agent", async () => {
+    const { agentSelection, context, notifySelection, request } = createHarness("main");
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.data?.config).toEqual({}));
+    request.mockClear();
+    const firstProbe = deferred<ModelsProbeResult>();
+    request.mockImplementationOnce(() => firstProbe.promise);
+
+    const probing = page.probe("anthropic", ["anthropic", "claude-cli"]);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.probe", {
+        provider: "anthropic",
+        agentId: "main",
+      }),
+    );
+    agentSelection.state.selectedId = "writer";
+    agentSelection.state.scopeId = "writer";
+    notifySelection();
+    await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
+    agentSelection.state.selectedId = "main";
+    agentSelection.state.scopeId = "main";
+    notifySelection();
+    await vi.waitFor(() => expect(page.selectedAgentId).toBe("main"));
+    firstProbe.resolve({ provider: "anthropic", status: "ok", results: [] });
+    await probing;
+
+    expect(request.mock.calls.filter(([method]) => method === "models.probe")).toHaveLength(1);
+    expect(page.probeResults).toEqual({});
+    expect(page.busy).toEqual({});
+  });
+
   it("discards an in-flight probe result after the selected agent changes", async () => {
-    const { context, request } = createHarness("main");
+    const { agentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);
     await vi.waitFor(() => expect(page.data?.config).toEqual({}));
     const pending = deferred<ModelsProbeResult>();
@@ -673,7 +704,10 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
-    page.selectedAgentId = "writer";
+    agentSelection.state.selectedId = "writer";
+    agentSelection.state.scopeId = "writer";
+    notifySelection();
+    await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
     pending.resolve({ provider: "openai", status: "ok", results: [] });
     await probing;
 

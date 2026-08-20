@@ -10,7 +10,7 @@ import {
   collectNodeWorkerBundleStatusByNodeId,
   collectNodeWorkerCapacityByNodeId,
   createNodeRegistryRuntime,
-  setNodeRunnerInventoryChangedListener,
+  setNodeRunnerStateChangedListener,
 } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
@@ -94,7 +94,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   it("publishes explicit runner consent and launch capacity for the authenticated node", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
+    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
     const client = createWorkerSupervisorNodeClient();
     runtime.nodeRegistry.register(client, {
       pairingIdentity: "identity-1",
@@ -116,7 +116,10 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         expectedPairingGeneration: { nodeId: "node-1", key: "generation-1" },
       }),
     );
-    expect(inventoryChanged).toHaveBeenCalledWith("node-1");
+    expect(inventoryChanged).toHaveBeenCalledWith("node-1", {
+      inventoryChanged: true,
+      availabilityChanged: true,
+    });
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
         nodeId: "node-1",
@@ -270,7 +273,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   it("does not notify for an identical inventory publication", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
+    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
     const client = createWorkerSupervisorNodeClient();
     runtime.nodeRegistry.register(client, {
       pairingIdentity: "identity-1",
@@ -439,7 +442,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   it("keeps exact v1 inventory diagnostic-only until disconnect and v5 reconnect", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
+    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
     const legacyClient = createWorkerSupervisorNodeClient("conn-v1");
     runtime.nodeRegistry.register(legacyClient, {
       pairingIdentity: "identity-1",
@@ -464,7 +467,10 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         message: expect.stringContaining("openclaw update"),
       }),
     );
-    expect(inventoryChanged).toHaveBeenLastCalledWith("node-1");
+    expect(inventoryChanged).toHaveBeenLastCalledWith("node-1", {
+      inventoryChanged: true,
+      availabilityChanged: false,
+    });
     expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toEqual(
       NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
     );

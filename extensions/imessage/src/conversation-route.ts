@@ -36,23 +36,20 @@ export function resolveIMessageConversationRoute(params: {
     return { route, bindingResolution: null };
   }
 
+  const conversation = {
+    channel: "imessage",
+    accountId: params.accountId,
+    conversationId,
+  };
   const configuredRoute = resolveConfiguredBindingRoute({
     cfg: params.cfg,
     route,
-    conversation: {
-      channel: "imessage",
-      accountId: params.accountId,
-      conversationId,
-    },
+    conversation,
   });
 
   const runtimeRoute = resolveRuntimeConversationBindingRoute({
     route: configuredRoute.route,
-    conversation: {
-      channel: "imessage",
-      accountId: params.accountId,
-      conversationId,
-    },
+    conversation,
   });
   if (runtimeRoute.bindingRecord && !runtimeRoute.boundSessionKey) {
     logVerbose(`imessage: plugin-bound conversation ${conversationId}`);

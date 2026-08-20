@@ -954,6 +954,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     const decision = {
       kind: "dispatch" as const,
       route: { accountId: "default", agentId: "lobster", sessionKey: "k", mainSessionKey: "mk" },
+      bindingResolution: null,
       isGroup: false,
       sender: "+15555550123",
       senderId: "+15555550123",

@@ -1325,7 +1325,6 @@ extensions/telegram/src/sent-message-cache.legacy-state.ts	2
 extensions/telegram/src/sent-message-cache.ts	2
 extensions/telegram/src/state-migrations.ts	2
 extensions/telegram/src/status-issues.ts	1
-extensions/telegram/src/status-reaction-variants.ts	1
 extensions/telegram/src/sticker-cache-store.legacy-state.ts	1
 extensions/telegram/src/sticker-cache.ts	2
 extensions/telegram/src/target-writeback.test-shared.ts	12
@@ -2021,7 +2020,6 @@ src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	2
-src/agents/session-tool-result-guard-wrapper.ts	6
 src/agents/session-tool-result-guard.ts	26
 src/agents/session-transcript-repair.ts	15
 src/agents/sessions/agent-session-base.ts	3
@@ -3428,7 +3426,7 @@ src/media/configured-max-bytes.ts	3
 src/media/fetch.ts	2
 src/media/input-files.ts	1
 src/media/local-media-access.ts	1
-src/media/media-facts.ts	17
+src/media/media-facts.ts	16
 src/media/media-probe.ts	1
 src/media/playback-transcode.ts	1
 src/media/runtime-prompt-image-provenance.ts	1
