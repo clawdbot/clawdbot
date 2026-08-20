@@ -996,10 +996,7 @@ function parseOllamaNdjsonRecord(value: string): OllamaChatResponse {
       },
     );
   }
-  if (
-    !isRecord(parsed.message) ||
-    (parsed.done !== undefined && typeof parsed.done !== "boolean")
-  ) {
+  if (!isRecord(parsed.message) || typeof parsed.done !== "boolean") {
     throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
   }
   // SAFETY: Required Ollama chat-record fields are validated above; optional fields remain inert.
@@ -1016,13 +1013,10 @@ function decodeTerminalTail(
     // Validate only the raw bytes inside the tail window. A code point that
     // crosses the cutoff stays buffered and is intentionally not finalized.
     const inspected = value.subarray(0, Math.min(value.byteLength, remainingBytes));
-    decoder.decode(inspected, {
+    const decoded = decoder.decode(inspected, {
       stream: true,
     });
-    if (
-      inspected.includes(0x0a) &&
-      inspected.some((byte) => byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x20)
-    ) {
+    if (/[^	\n\r ]/.test(decoded)) {
       throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
     }
   }

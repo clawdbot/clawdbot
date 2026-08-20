@@ -137,6 +137,16 @@ describe("ollama production stream UTF-8 rejection over real HTTP", () => {
     });
   });
 
+  it("rejects an unframed non-whitespace tail after the terminal record", async () => {
+    const body = new TextEncoder().encode(`${TERMINAL_NDJSON}\nnot-json`);
+    await withOllamaServer([body], async (baseUrl) => {
+      const stream = createOllamaStreamFn(baseUrl)(model, context, {});
+      const events = await collectStreamEvents(await Promise.resolve(stream));
+      expect(events.some((event) => typeOf(event) === "done")).toBe(false);
+      expect(events.some((event) => typeOf(event) === "error")).toBe(true);
+    });
+  });
+
   it("completes successfully for a valid terminal stream", async () => {
     const bytes = new TextEncoder().encode(`${TERMINAL_NDJSON}\n`);
     await withOllamaServer([bytes], async (baseUrl) => {
