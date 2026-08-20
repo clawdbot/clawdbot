@@ -44,22 +44,22 @@ suite.define(() => {
       await expect.poll(() => panes.count()).toBe(2);
       const onboarding = page.locator(".chat-split-onboarding");
       await expect.poll(() => onboarding.count()).toBe(1);
-      const firstPane = panes.first();
-      const secondPane = panes.last();
-      await expect.poll(() => firstPane.locator(".chat-split-onboarding").count()).toBe(1);
-      expect(await secondPane.locator(".chat-split-onboarding").count()).toBe(0);
+      const inactivePane = panes.first();
+      const activePane = panes.last();
+      await expect.poll(() => activePane.locator(".chat-split-onboarding").count()).toBe(1);
+      expect(await inactivePane.locator(".chat-split-onboarding").count()).toBe(0);
 
-      const copy = firstPane.locator(".chat-split-onboarding__copy");
+      const copy = activePane.locator(".chat-split-onboarding__copy");
       await expect
         .poll(() => copy.textContent())
         .toBe("Select another session to show it in this column.");
-      const dismiss = firstPane.getByRole("button", { name: "Don't show again" });
+      const dismiss = activePane.getByRole("button", { name: "Don't show again" });
       await expect.poll(() => dismiss.isVisible()).toBe(true);
       expect(await page.evaluate(() => document.activeElement?.className ?? "")).not.toContain(
         "chat-split-onboarding__dismiss",
       );
 
-      const placement = await firstPane.evaluate((pane) => {
+      const placement = await activePane.evaluate((pane) => {
         const header = pane.querySelector<HTMLElement>(".chat-pane__header");
         const hint = pane.querySelector<HTMLElement>(".chat-split-onboarding");
         const cell = pane.closest<HTMLElement>(".chat-split-view__cell");

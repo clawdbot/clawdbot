@@ -595,7 +595,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const rightmostPane = this.narrow ? activeLocation?.pane : layout.columns.at(-1)?.panes.at(-1);
     const onboardingPaneId =
       splitMode && !this.splitOnboardingDismissed && layout.columns.length > 1
-        ? layout.columns[0]?.panes[0]?.id
+        ? layout.activePaneId
         : undefined;
     return html`
       <div class="chat-split-view ${this.narrow ? "chat-split-view--narrow" : ""}">
