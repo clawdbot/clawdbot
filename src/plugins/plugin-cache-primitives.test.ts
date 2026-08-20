@@ -1,5 +1,6 @@
 /** Tests primitive cache-key helpers used by plugin descriptor and metadata caches. */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   PluginLruCache,
@@ -115,6 +116,31 @@ describe("createConfigScopedPromiseLoader", () => {
 
     await expect(loader.load(config)).rejects.toThrow("transient");
     await expect(loader.load(config)).resolves.toBe("recovered");
+    expect(calls).toBe(2);
+  });
+
+  it.each([
+    { name: "config-scoped", config: {} as OpenClawConfig },
+    { name: "default", config: undefined },
+  ])("keeps the refreshed $name promise when a retired generation rejects", async ({ config }) => {
+    const retired = createDeferred<string>();
+    let calls = 0;
+    const loader = createConfigScopedPromiseLoader(() => {
+      calls += 1;
+      return calls === 1 ? retired.promise : Promise.resolve(`fresh-${calls}`);
+    });
+
+    const stale = loader.load(config);
+    const staleFailure = expect(stale).rejects.toThrow("retired generation");
+    await Promise.resolve();
+
+    clearPluginMetadataLifecycleCaches();
+
+    await expect(loader.load(config)).resolves.toBe("fresh-2");
+    retired.reject(new Error("retired generation"));
+    await staleFailure;
+
+    await expect(loader.load(config)).resolves.toBe("fresh-2");
     expect(calls).toBe(2);
   });
 
