@@ -660,6 +660,40 @@
   opacity: 1;
 }
 
+.chat-tool-card__modes {
+  --track-width: 0;
+}
+
+.chat-tool-card__modes::part(nav) {
+  padding: 4px 8px 0;
+}
+
+.chat-tool-card__modes::part(tabs) {
+  gap: 2px;
+}
+
+.chat-tool-card__modes::part(body) {
+  padding: 0;
+}
+
+.chat-tool-card__modes wa-tab::part(base) {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.chat-tool-card__modes wa-tab[active]::part(base) {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+.chat-tool-card__modes wa-tab-panel {
+  padding: 0;
+}
+
 /* Reserve the floating action box (button + its 6px inset) plus the block's own
    12px padding so command text never runs underneath it. */
 .chat-tool-card--flush:has(> .chat-tool-card__actions) .chat-tool-term__cmd {

@@ -1142,81 +1142,6 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
       "Refactored the render guard and reran the suite; all 12 tests pass.",
       workTurnBase + 172_000,
     ),
-    chatHistoryMessage(
-      "user",
-      "Inspect the command and terminal output, then update the tool-card layout.",
-      workTurnBase + 180_000,
-    ),
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "mock-layout-exec",
-          name: "exec",
-          arguments: {
-            command: "pnpm test ui/src/pages/chat/components/chat-tool-cards.test.ts",
-            workdir: "/workspace/openclaw",
-            timeout: 120000,
-          },
-        },
-      ],
-      timestamp: workTurnBase + 185_000,
-    },
-    {
-      role: "toolResult",
-      toolCallId: "mock-layout-exec",
-      toolName: "exec",
-      content: [{ type: "text", text: "PASS chat-tool-cards.test.ts\n18 tests passed" }],
-      timestamp: workTurnBase + 190_000,
-    },
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "mock-layout-terminal-read",
-          name: "terminal",
-          arguments: { action: "read", sessionId: "mock-layout-session", offset: 0 },
-        },
-      ],
-      timestamp: workTurnBase + 195_000,
-    },
-    {
-      role: "toolResult",
-      toolCallId: "mock-layout-terminal-read",
-      toolName: "terminal",
-      content: [
-        {
-          type: "text",
-          text: '{"sessionId":"mock-layout-session","text":"Watching for changes...\\nready"}',
-        },
-      ],
-      timestamp: workTurnBase + 200_000,
-    },
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "mock-layout-edit",
-          name: "edit",
-          arguments: {
-            path: "/workspace/openclaw/ui/src/styles/chat/tool-cards.css",
-            oldText: ".chat-tool-kv {\n  margin-top: 6px;\n}",
-            newText: ".chat-tool-kv {\n  padding: 10px 12px;\n}",
-          },
-        },
-      ],
-      timestamp: workTurnBase + 205_000,
-    },
-    {
-      role: "toolResult",
-      toolCallId: "mock-layout-edit",
-      toolName: "edit",
-      content: [{ type: "text", text: "Updated ui/src/styles/chat/tool-cards.css" }],
-      timestamp: workTurnBase + 210_000,
-    },
   );
 
   return messages;
@@ -1714,7 +1639,6 @@ async function createChatPickerScenario(
     sessionInfo: planSessionInfo,
     inFlightRun: planInFlightRun,
     thinkingLevel: null,
-    verboseLevel: "full",
   };
   const custodianHistory = {
     turns: [

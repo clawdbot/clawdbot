@@ -30,20 +30,6 @@ async function captureToolActivityProof(page: import("playwright").Page, name: s
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
 }
 
-async function expandVisibleToolDisclosures(page: import("playwright").Page) {
-  const collapsed = page.locator(
-    '.chat-activity-group__summary[aria-expanded="false"], .chat-tool-msg-summary[aria-expanded="false"]',
-  );
-  for (let pass = 0; pass < 8; pass += 1) {
-    const count = await collapsed.count();
-    if (count === 0) {
-      return;
-    }
-    await collapsed.first().click();
-  }
-  throw new Error("Tool disclosures did not settle after expansion");
-}
-
 async function captureFactrowProof(
   page: import("playwright").Page,
   activity: import("playwright").Locator,
@@ -163,8 +149,20 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".chat-tool-msg-summary").first().waitFor();
-      await expandVisibleToolDisclosures(page);
+      const activitySummary = page.locator(".chat-activity-group__summary").first();
+      await activitySummary.waitFor();
+      await activitySummary.click();
+      const toolRows = page.locator(".chat-activity-group__body .chat-tool-msg-summary");
+      await expect.poll(() => toolRows.count()).toBe(3);
+      for (let index = 0; index < (await toolRows.count()); index += 1) {
+        const row = toolRows.nth(index);
+        const fileToggle = row.locator(".chat-tool-row__toggle");
+        const toggle = (await fileToggle.count()) > 0 ? fileToggle : row;
+        if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+          await (toggle === row ? row.click() : row.click({ position: { x: 4, y: 4 } }));
+          await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+        }
+      }
 
       expect(await page.locator(".chat-tool-msg-body .chat-tool-msg-summary").count()).toBe(0);
       const bodyGeometry = await page.locator(".chat-tool-msg-body").evaluateAll((bodies) =>
@@ -174,11 +172,17 @@ suite.define(() => {
             body.querySelectorAll<HTMLElement>(
               ".chat-tool-kv, .chat-tool-card__block, .chat-tool-card__outcome",
             ),
-          );
+          ).filter((child) => child.getClientRects().length > 0);
           return {
             childrenContained: children.every((child) => {
               const rect = child.getBoundingClientRect();
               return rect.left >= bodyRect.left && rect.right <= bodyRect.right;
+            }),
+            escapedChildren: children.flatMap((child) => {
+              const rect = child.getBoundingClientRect();
+              return rect.left >= bodyRect.left && rect.right <= bodyRect.right
+                ? []
+                : [{ className: child.className, left: rect.left, right: rect.right }];
             }),
             footersLast: Array.from(body.querySelectorAll(".chat-tool-card__outcome")).every(
               (footer) => footer === footer.parentElement?.lastElementChild,
@@ -187,16 +191,20 @@ suite.define(() => {
         }),
       );
       expect(bodyGeometry.length).toBeGreaterThanOrEqual(3);
-      expect(bodyGeometry.every(({ childrenContained, footersLast }) => childrenContained && footersLast)).toBe(
-        true,
-      );
+      expect(
+        bodyGeometry.filter(
+          ({ childrenContained, footersLast }) => !childrenContained || !footersLast,
+        ),
+      ).toEqual([]);
 
-      const tabs = page.getByRole("tab");
-      await expect.poll(() => tabs.allTextContents()).toEqual(["Diff", "Raw"]);
-      const diffTab = page.getByRole("tab", { name: "Diff" });
-      const rawTab = page.getByRole("tab", { name: "Raw" });
-      const diffPanel = page.getByRole("tabpanel", { name: "Diff" });
-      const rawPanel = page.getByRole("tabpanel", { name: "Raw" });
+      const modeGroup = page.locator("wa-tab-group.chat-tool-card__modes");
+      await modeGroup.getByRole("tablist", { name: "Tool detail view" }).waitFor();
+      const tabs = modeGroup.getByRole("tab");
+      await expect.poll(() => tabs.count()).toBe(2);
+      const diffTab = modeGroup.getByRole("tab", { name: "Diff" });
+      const rawTab = modeGroup.getByRole("tab", { name: "Raw" });
+      const diffPanel = modeGroup.getByRole("tabpanel", { name: "Diff" });
+      const rawPanel = modeGroup.getByRole("tabpanel", { name: "Raw" });
       expect(await diffTab.getAttribute("aria-selected")).toBe("true");
       expect(await rawPanel.isHidden()).toBe(true);
       await rawTab.click();
@@ -460,8 +468,7 @@ suite.define(() => {
     expect(await page.locator(".chat-diff__row--add .chat-diff__text").allTextContents()).toEqual(
       expect.arrayContaining(["const after = true;", "export const created = true;"]),
     );
-    const rawDetails = page.getByRole("button", { name: "Raw details" });
-    await rawDetails.click();
+    await page.getByRole("tab", { name: "Raw" }).click();
     await page.getByText("Applied patch", { exact: true }).waitFor();
     await captureToolActivityProof(page, "parallel-multifile-expanded");
     await context.close();

@@ -2,9 +2,11 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
+import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
 import { t } from "../../../i18n/index.ts";
 import type {
   ToolApprovalReview,
@@ -131,49 +133,6 @@ function buildToolCardSidebarContent(card: ToolCard): string {
   }
 
   return sections.join("\n\n");
-}
-
-function handleToolCardModeChange(event: Event) {
-  const button = event.currentTarget as HTMLButtonElement | null;
-  const card = button?.closest(".chat-tool-card");
-  const mode = button?.dataset.mode;
-  if (!button || !card || (mode !== "diff" && mode !== "raw")) {
-    return;
-  }
-  for (const candidate of card.querySelectorAll<HTMLButtonElement>("[data-mode]")) {
-    const selected = candidate.dataset.mode === mode;
-    candidate.setAttribute("aria-selected", String(selected));
-    candidate.tabIndex = selected ? 0 : -1;
-  }
-  for (const body of card.querySelectorAll<HTMLElement>("[data-mode-body]")) {
-    body.hidden = body.dataset.modeBody !== mode;
-  }
-}
-
-function handleToolCardModeKeydown(event: KeyboardEvent) {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-    return;
-  }
-  const button = event.currentTarget as HTMLButtonElement | null;
-  const tabs = Array.from(
-    button?.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ??
-      [],
-  );
-  const index = button ? tabs.indexOf(button) : -1;
-  if (index < 0) {
-    return;
-  }
-  event.preventDefault();
-  const direction = button && getComputedStyle(button).direction === "rtl" ? -1 : 1;
-  const nextIndex =
-    event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? tabs.length - 1
-        : (index + (event.key === "ArrowRight" ? direction : -direction) + tabs.length) %
-          tabs.length;
-  tabs[nextIndex]?.click();
-  tabs[nextIndex]?.focus();
 }
 
 function handleRawDetailsToggle(event: Event) {
@@ -740,10 +699,7 @@ export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
   return label ? html`<div class="chat-tool-card__outcome">${label}</div>` : nothing;
 }
 
-function renderTerminalBlock(
-  command: string,
-  output: string | undefined,
-) {
+function renderTerminalBlock(command: string, output: string | undefined) {
   return html`
     <div class="chat-tool-term">
       <div class="chat-tool-term__cmd">
@@ -757,40 +713,39 @@ function renderTerminalBlock(
   `;
 }
 
-function renderToolCardModeControl(cardId: string) {
-  const diffTabId = `${cardId}-diff-tab`;
-  const rawTabId = `${cardId}-raw-tab`;
+function renderToolCardModes(
+  card: ToolCard,
+  diff: NonNullable<ToolCallView["diff"]>,
+  outcome: ToolCardOutcome,
+  isError: boolean,
+) {
+  const active = isError ? "raw" : "diff";
+  const modeLabel = t("chat.toolCards.viewMode");
   return html`
-    <div class="code-block-json-tabs" role="tablist" aria-label=${t("chat.toolCards.viewMode")}>
-      <button
-        class="code-block-json-tab"
-        type="button"
-        role="tab"
-        data-mode="diff"
-        id=${diffTabId}
-        aria-controls=${`${cardId}-diff-panel`}
-        aria-selected="true"
-        tabindex="0"
-        @click=${handleToolCardModeChange}
-        @keydown=${handleToolCardModeKeydown}
-      >
+    <wa-tab-group
+      class="chat-tool-card__modes"
+      aria-label=${modeLabel}
+      .active=${active}
+      activation="auto"
+      without-scroll-controls
+      ${ref((element) => syncTabGroupLabel(element, modeLabel))}
+    >
+      <wa-tab slot="nav" id=${`${card.id}-diff-tab`} panel="diff" ?active=${active === "diff"}>
         ${t("chat.toolCards.diff")}
-      </button>
-      <button
-        class="code-block-json-tab"
-        type="button"
-        role="tab"
-        data-mode="raw"
-        id=${rawTabId}
-        aria-controls=${`${cardId}-raw-panel`}
-        aria-selected="false"
-        tabindex="-1"
-        @click=${handleToolCardModeChange}
-        @keydown=${handleToolCardModeKeydown}
-      >
+      </wa-tab>
+      <wa-tab slot="nav" id=${`${card.id}-raw-tab`} panel="raw" ?active=${active === "raw"}>
         ${t("chat.toolCards.raw")}
-      </button>
-    </div>
+      </wa-tab>
+      <wa-tab-panel id=${`${card.id}-diff-panel`} name="diff" ?active=${active === "diff"}>
+        ${renderDiffBlock(diff, outcome)}
+      </wa-tab-panel>
+      <wa-tab-panel id=${`${card.id}-raw-panel`} name="raw" ?active=${active === "raw"}>
+        ${renderToolDataBlock({
+          ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+          text: card.outputText!,
+        })}
+      </wa-tab-panel>
+    </wa-tab-group>
   `;
 }
 
@@ -1100,8 +1055,8 @@ export function renderExpandedToolCardContent(
     `;
   }
 
-  // Edits and writes with a resolvable diff render it inline; the raw tool
-  // output stays reachable behind the raw-details toggle.
+  // Edits and writes with a resolvable diff render it inline. When raw output
+  // also exists, the shared tab primitive owns both views and their semantics.
   if ((view.kind === "edit" || view.kind === "write") && view.diff && view.diff.length > 0) {
     return html`
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
@@ -1111,32 +1066,11 @@ export function renderExpandedToolCardContent(
             workspaceFilePath,
             onOpenWorkspaceFile,
           )}
-          <div class="chat-tool-card__actions">
-            ${hasOutput ? renderToolCardModeControl(card.id) : nothing}${diffCopyAction}${sidebarAction}
-          </div>
-        </div>
-        <div
-          id=${`${card.id}-diff-panel`}
-          role="tabpanel"
-          aria-labelledby=${`${card.id}-diff-tab`}
-          data-mode-body="diff"
-        >
-          ${renderDiffBlock(view.diff, outcome)}
+          <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
         ${hasOutput
-          ? html`<div
-              id=${`${card.id}-raw-panel`}
-              role="tabpanel"
-              aria-labelledby=${`${card.id}-raw-tab`}
-              data-mode-body="raw"
-              hidden
-            >
-              ${renderToolDataBlock({
-                ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
-                text: card.outputText!,
-              })}
-            </div>`
-          : nothing}
+          ? renderToolCardModes(card, view.diff, outcome, isError)
+          : renderDiffBlock(view.diff, outcome)}
         ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;

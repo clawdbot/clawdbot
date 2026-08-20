@@ -339,9 +339,10 @@ export function renderGroupedMessage(
   const standaloneToolPayload =
     isStandaloneToolMessage &&
     Boolean(markdown) &&
+    !jsonResult &&
+    !hasImages &&
     singleToolCard?.outputText?.trim() === markdown?.trim();
   const bodyMarkdown = standaloneToolPayload ? null : markdown;
-  const bodyJsonResult = standaloneToolPayload ? null : jsonResult;
   // One expanded card already closes with its own outcome line; every other
   // shape renders inline rows only, so the message body records the failure.
   const expandsSingleToolCard =
@@ -536,7 +537,7 @@ export function renderGroupedMessage(
                             )}
                           </div>`
                         : nothing}
-                      ${bodyJsonResult
+                      ${jsonResult
                         ? html`<details
                             class="chat-json-collapse"
                             ?open=${Boolean(opts.autoExpandToolCalls)}
@@ -544,10 +545,10 @@ export function renderGroupedMessage(
                             <summary class="chat-json-summary">
                               <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
                               <span class="chat-json-label"
-                                >${jsonSummaryLabel(bodyJsonResult.parsed)}</span
+                                >${jsonSummaryLabel(jsonResult.parsed)}</span
                               >
                             </summary>
-                            <pre class="chat-json-content"><code>${bodyJsonResult.pretty}</code></pre>
+                            <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                           </details>`
                         : bodyMarkdown
                           ? renderMarkdownText(
@@ -611,13 +612,13 @@ export function renderGroupedMessage(
                 </div>`
               : nothing}
             ${assistantViewContent}
-            ${bodyJsonResult
+            ${jsonResult
               ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">
                     <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
-                    <span class="chat-json-label">${jsonSummaryLabel(bodyJsonResult.parsed)}</span>
+                    <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
                   </summary>
-                  <pre class="chat-json-content"><code>${bodyJsonResult.pretty}</code></pre>
+                  <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
               : bodyMarkdown
                 ? normalizedRole === "user"

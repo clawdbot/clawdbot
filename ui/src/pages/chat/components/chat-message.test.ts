@@ -3109,6 +3109,51 @@ describe("grouped chat rendering", () => {
     container.remove();
   });
 
+  it("renders an expanded orphan tool result without a nested disclosure", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          createToolResultMessage("call-orphan", "read", "Orphan tool output", {
+            id: "orphan-tool-result",
+          }),
+          "tool",
+        ),
+      ],
+      { isToolMessageExpanded: () => true },
+    );
+
+    expect(container.querySelector(".chat-tool-msg-body .chat-tool-msg-summary")).toBeNull();
+    expect(container.querySelectorAll(".chat-tool-card__block code")).toHaveLength(1);
+    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
+      "Orphan tool output",
+    );
+  });
+
+  it("keeps text visible beside an orphan tool-result image", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          createToolResultMessage("call-image", "image", [
+            { type: "text", text: "Generated image" },
+            { type: "image", data: "cG5n", mimeType: "image/png", alt: "Generated preview" },
+          ]),
+          "tool",
+        ),
+      ],
+      { isToolMessageExpanded: () => true },
+    );
+
+    expect(container.querySelector(".chat-text")?.textContent).toContain("Generated image");
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe("data:image/png;base64,cG5n");
+    expect(container.querySelector(".chat-tool-msg-body .chat-tool-msg-summary")).not.toBeNull();
+  });
+
   it("collapses an inline tool call while keeping matching tool output visible", () => {
     const container = document.createElement("div");
     const groups = [
