@@ -419,23 +419,28 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
-  it("accepts only the resolved trusted workflow identity", () => {
+  it("routes every documented workflow ref through exact direct and reusable identity", () => {
     const trustedSha = "b".repeat(40);
-    expect(runIdentityVerification({ expectedTrustedWorkflowSha: trustedSha }).status).toBe(0);
     const releaseCiBranch = `release-ci/${trustedSha.slice(0, 12)}-1787215404735`;
-    expect(
-      runIdentityVerification({
-        expectedTrustedWorkflowSha: trustedSha,
-        workflowBranch: releaseCiBranch,
-      }).status,
-    ).toBe(0);
-    expect(
-      runIdentityVerification({
-        expectedTrustedWorkflowSha: trustedSha,
-        invocation: "reusable",
-        workflowBranch: releaseCiBranch,
-      }).status,
-    ).toBe(0);
+    for (const workflowBranch of [
+      "main",
+      "release/2026.7.1",
+      "extended-stable/2026.7.33",
+      releaseCiBranch,
+    ]) {
+      for (const invocation of ["dispatch", "reusable"] as const) {
+        const result = runIdentityVerification({
+          expectedTrustedWorkflowSha: trustedSha,
+          invocation,
+          workflowBranch,
+        });
+        expect(result.status, `${workflowBranch}/${invocation}: ${result.stderr}`).toBe(0);
+      }
+    }
+  });
+
+  it("accepts only canonical exact-SHA workflow and target identities", () => {
+    const trustedSha = "b".repeat(40);
     for (const targetContextRef of [
       "release/2026.7.1",
       "extended-stable/2026.7.33",
@@ -466,13 +471,26 @@ describe("release Telegram QA workflow", () => {
         expectedTrustedWorkflowSha: trustedSha,
         workflowBranch: "release-ci/not-canonical",
       }).stderr,
-    ).toContain("must be exact main or canonical SHA-bound release-ci");
+    ).toContain("must be exact main, canonical release or extended-stable");
     expect(
       runIdentityVerification({
         expectedTrustedWorkflowSha: trustedSha,
         workflowBranch: `release-ci/${"c".repeat(12)}-1787215404735`,
       }).stderr,
     ).toContain("release-ci ref does not match the authorized tooling SHA");
+    for (const workflowBranch of [
+      "release/2026.0.1",
+      "release/2026.07.1",
+      "extended-stable/2026.13.33",
+      "extended-stable/2026.7.32",
+    ]) {
+      expect(
+        runIdentityVerification({
+          expectedTrustedWorkflowSha: trustedSha,
+          workflowBranch,
+        }).stderr,
+      ).toContain("must be exact main, canonical release or extended-stable");
+    }
   });
 
   it("accepts trusted release provenance and rejects same-repository PR heads", () => {

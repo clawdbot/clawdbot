@@ -18,10 +18,15 @@ Freeze the product-complete pre-changelog commit as the **Code SHA** and select
 one trusted workflow commit as the **Tooling SHA**, then run:
 
 ```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
 pnpm ci:full-release \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
+
+Record the Tooling SHA once for the release and reuse it for later Code-SHA,
+Release-SHA, and focused reruns. Do not refresh it from moving `main`.
 
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
 end-to-end agent turn. The helper infers the `beta` profile from alpha/beta
@@ -38,12 +43,12 @@ SHA for product validation or the Release SHA for changelog-only validation; it
 is not a third release identity. The workflow rejects malformed or mismatched
 expected SHAs before child dispatch. Every child must report the same Tooling
 SHA. Pass
-`-f reuse_evidence=false` to force a fresh run or
-`--workflow-sha <trusted-main-sha>` to select a compatible older workflow
-commit still reachable from current `origin/main`. The helper rejects a pinned
-Tooling SHA that does not declare the `expected_sha` dispatch input; it never
-silently substitutes newer tooling. The workflow never creates or updates
-repository refs itself.
+`-f reuse_evidence=false` to force a fresh run. Regular release-branch runs
+require `--workflow-sha` with the recorded full SHA, which must remain reachable
+from current `origin/main`. The helper rejects a pinned Tooling SHA that does
+not declare the current release-isolation contract or the `expected_sha`
+dispatch input; it never silently substitutes newer tooling. The workflow never
+creates or updates repository refs itself.
 
 ## Extended-stable exception
 

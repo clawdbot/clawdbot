@@ -121,8 +121,11 @@ jobs:
               exit 1
             fi
             expected_ref="${expected_repository}/${workflow_path}@${GITHUB_REF}"
+          elif [[ "$GITHUB_REF" =~ ^refs/heads/release/[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*$ ||
+                  "$GITHUB_REF" =~ ^refs/heads/extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33$ ]]; then
+            expected_ref="${expected_repository}/${workflow_path}@${GITHUB_REF}"
           else
-            echo "Telegram QA tooling ref must be exact main or canonical SHA-bound release-ci." >&2
+            echo "Telegram QA tooling ref must be exact main, canonical release or extended-stable, or canonical SHA-bound release-ci." >&2
             exit 1
           fi
           if [[ "$GITHUB_SHA" != "$EXPECTED_TRUSTED_WORKFLOW_SHA" ||

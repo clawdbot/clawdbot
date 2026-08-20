@@ -15,6 +15,8 @@ import { execGhRead } from "./lib/plain-gh.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
 const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
+const RELEASE_ISOLATION_TOOLING_CONTRACT = "1";
+const RELEASE_ISOLATION_TOOLING_CONTRACT_ENV = "RELEASE_ISOLATION_TOOLING_CONTRACT";
 const RELEASE_EVIDENCE_VERIFIER_PATHS = [
   "scripts/release-ci-summary.mjs",
   ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs",
@@ -29,9 +31,12 @@ const GH_READ_OPTIONS = {
   stdio: ["ignore", "pipe", "inherit"],
   timeout: GH_READ_TIMEOUT_MS,
 } satisfies ExecFileSyncOptionsWithStringEncoding;
-const RELEASE_BRANCH_PATTERN =
-  /^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u;
-const RELEASE_TAG_PATTERN = /^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)\.[0-9]+)?$/u;
+const RELEASE_BRANCH_PATTERN = /^release\/([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)$/u;
+const EXTENDED_STABLE_BRANCH_PATTERN = /^extended-stable\/([0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
+const RELEASE_CONTEXT_BRANCH_PATTERN =
+  /^(?:release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
+const RELEASE_TAG_PATTERN =
+  /^v([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*)?)$/u;
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const DEFAULT_INPUTS = {
   provider: "openai",
@@ -220,13 +225,13 @@ export function parseArgs(argv: string[]) {
   }
   if (
     args.targetRef &&
-    !RELEASE_BRANCH_PATTERN.test(args.targetRef) &&
+    !RELEASE_CONTEXT_BRANCH_PATTERN.test(args.targetRef) &&
     !RELEASE_TAG_PATTERN.test(args.targetRef)
   ) {
     throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
   }
   if (
-    RELEASE_BRANCH_PATTERN.test(args.targetRef) &&
+    RELEASE_CONTEXT_BRANCH_PATTERN.test(args.targetRef) &&
     !SHA_PATTERN.test(args.workflowSha.toLowerCase())
   ) {
     throw new Error(
@@ -240,7 +245,7 @@ export function resolveRemoteTargetRefSha(
   targetRef: string,
   executeGit: (args: string[]) => string = (args) => run("git", args),
 ) {
-  if (RELEASE_BRANCH_PATTERN.test(targetRef)) {
+  if (RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)) {
     return (
       executeGit(["ls-remote", "--heads", "origin", `refs/heads/${targetRef}`]).split(/\s+/u)[0] ??
       ""
@@ -258,6 +263,7 @@ export function resolveRemoteTargetRefSha(
 export function verifyTargetRef(
   targetRef: string,
   targetSha: string,
+  targetVersion: string,
   resolveRemoteSha: (ref: string) => string = resolveRemoteTargetRefSha,
   isAncestor: (ancestor: string, descendant: string) => boolean = (ancestor, descendant) =>
     runStatus("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
@@ -267,11 +273,36 @@ export function verifyTargetRef(
   if (!targetRef) {
     return targetSha;
   }
+  const releaseMatch = targetRef.match(RELEASE_BRANCH_PATTERN);
+  const extendedStableMatch = targetRef.match(EXTENDED_STABLE_BRANCH_PATTERN);
+  const tagMatch = targetRef.match(RELEASE_TAG_PATTERN);
+  if (releaseMatch) {
+    const releaseVersion = releaseMatch[1]!;
+    const prereleasePattern = new RegExp(
+      `^${releaseVersion.replaceAll(".", "\\.")}-(?:alpha|beta)\\.[1-9][0-9]*$`,
+      "u",
+    );
+    if (targetVersion !== releaseVersion && !prereleasePattern.test(targetVersion)) {
+      throw new Error(
+        `Target package version ${targetVersion} does not belong to release branch ${targetRef}`,
+      );
+    }
+  } else if (extendedStableMatch) {
+    if (targetVersion !== extendedStableMatch[1]) {
+      throw new Error(
+        `Target package version ${targetVersion} does not match extended-stable branch ${targetRef}`,
+      );
+    }
+  } else if (tagMatch && targetVersion !== tagMatch[1]) {
+    throw new Error(
+      `Target package version ${targetVersion} does not match release tag ${targetRef}`,
+    );
+  }
   const remoteSha = resolveRemoteSha(targetRef);
   if (!remoteSha) {
     throw new Error(`Target ref ${targetRef} does not resolve to a commit`);
   }
-  if (RELEASE_BRANCH_PATTERN.test(targetRef)) {
+  if (RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)) {
     if (!isAncestor(targetSha, remoteSha)) {
       throw new Error(
         `Target SHA ${targetSha} is not reachable from release branch ${targetRef} at ${remoteSha}`,
@@ -294,7 +325,7 @@ function fetchTargetRef(targetRef: string) {
   if (!targetRef) {
     return;
   }
-  const sourceRef = RELEASE_BRANCH_PATTERN.test(targetRef)
+  const sourceRef = RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)
     ? `refs/heads/${targetRef}`
     : `refs/tags/${targetRef}`;
   run("git", ["fetch", "--no-tags", "origin", sourceRef], {
@@ -319,10 +350,10 @@ function resolveTargetSha(requestedSha: string, targetRef: string) {
   return resolvedSha;
 }
 
-export function releaseProfileForTarget(
+function targetVersionForTarget(
   targetSha: string,
   readPackageJson: (sha: string) => string = (sha) => run("git", ["show", `${sha}:package.json`]),
-): "beta" | "stable" {
+): string {
   let version: unknown;
   try {
     version = JSON.parse(readPackageJson(targetSha)).version;
@@ -332,7 +363,18 @@ export function releaseProfileForTarget(
   if (typeof version !== "string" || !/^[0-9]{4}\.[0-9]+\.[0-9]+(?:-.+)?$/u.test(version)) {
     throw new Error(`Target SHA ${targetSha} has an invalid package version`);
   }
+  return version;
+}
+
+function releaseProfileForVersion(version: string): "beta" | "stable" {
   return /-(?:alpha|beta)\.[1-9][0-9]*$/u.test(version) ? "beta" : "stable";
+}
+
+export function releaseProfileForTarget(
+  targetSha: string,
+  readPackageJson: (sha: string) => string = (sha) => run("git", ["show", `${sha}:package.json`]),
+): "beta" | "stable" {
+  return releaseProfileForVersion(targetVersionForTarget(targetSha, readPackageJson));
 }
 
 function resolveTrustedWorkflowSha(requestedSha: string) {
@@ -545,6 +587,14 @@ export function assertTrustedWorkflowHarness(
   }
   if (
     !isJsonRecord(workflow) ||
+    !isJsonRecord(workflow.env) ||
+    workflow.env[RELEASE_ISOLATION_TOOLING_CONTRACT_ENV] !== RELEASE_ISOLATION_TOOLING_CONTRACT
+  ) {
+    throw new Error(
+      `Tooling SHA ${workflowSha} does not declare ${RELEASE_ISOLATION_TOOLING_CONTRACT_ENV}=${RELEASE_ISOLATION_TOOLING_CONTRACT} in ${TRUSTED_WORKFLOW_PATH}`,
+    );
+  }
+  if (
     !isJsonRecord(workflow.on) ||
     !isJsonRecord(workflow.on.workflow_dispatch) ||
     !isJsonRecord(workflow.on.workflow_dispatch.inputs) ||
@@ -611,9 +661,10 @@ function verifyReleaseEvidence(parentRunId: string, workflowSha: string) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetSha = resolveTargetSha(args.sha, args.targetRef);
-  args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
+  const targetVersion = targetVersionForTarget(targetSha);
+  args.inputs.release_profile ??= releaseProfileForVersion(targetVersion);
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
-  const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
+  const targetContextRef = verifyTargetRef(args.targetRef, targetSha, targetVersion);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   assertTrustedWorkflowHarness(workflowSha);
   const shortSha = workflowSha.slice(0, 12);

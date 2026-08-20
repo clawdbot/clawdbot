@@ -169,19 +169,21 @@ node scripts/full-release-validation-at-sha.mjs \
 ```
 
 For regular `release/*` validation, never raw-dispatch the workflow without
-`target_context_ref` (the helper's `--target-ref` records it); the
-extended-stable `.33+` canonical-branch dispatch below is the one exception —
-there the SHA-pinned helper's `release-ci/*` identity is rejected, so it
-dispatches without `target_context_ref` by design. Trusted-workflow
-release-branch CI passes `target_ref` + `release_candidate_ref`; never
-`release_gate` there — it requires workflow head == target. (The PR-head
-ci.yml fallback below is a different dispatch and does use
-`release_gate=true`.)
+`target_context_ref` (the helper's `--target-ref` records it). Canonical
+`release/*` and `extended-stable/*` workflow refs remain supported routes, but
+their Telegram child must retain the exact parent workflow ref and SHA through
+OIDC and attestation. Trusted-workflow release-branch CI passes `target_ref` +
+`release_candidate_ref`; never `release_gate` there — it requires workflow head
+== target. (The PR-head ci.yml fallback below is a different dispatch and does
+use `release_gate=true`.)
 
 The release branch may advance after the Code SHA is frozen. The helper accepts
 that frozen SHA only while it remains an ancestor of the canonical release
-branch; tags remain exact. Always pass the previously recorded full Tooling SHA
-for release-branch runs. Never replace it with a fresh `main` lookup.
+branch and its package version still belongs to that release line.
+Extended-stable branches and tags require an exact package-version match.
+Always pass the previously recorded full Tooling SHA for release-branch runs.
+Never replace it with a fresh `main` lookup. The Tooling SHA must declare the
+current release-isolation contract; older workflow revisions fail closed.
 
 For immutable workflow proof on a moving `main`, use
 `pnpm ci:full-release --sha <code-sha> --target-ref
@@ -209,8 +211,9 @@ publish workflow reads the effective profile from the full-validation manifest.
 
 ### Extended-stable validation
 
-For `.33+`, dispatch from and target the canonical branch; the regular
-SHA-pinned helper would produce a rejected `release-ci/*` identity:
+For `.33+`, dispatch from and target the canonical branch. This direct route is
+intentional: downstream extended-stable evidence requires the canonical branch
+identity, while Telegram still authenticates the exact branch SHA:
 
 ```bash
 RELEASE_SHA="$(git rev-parse HEAD)"
