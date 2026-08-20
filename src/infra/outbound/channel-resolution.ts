@@ -2,7 +2,11 @@
 // optional bootstrap for deliverable channels that are not loaded yet.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
-import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  getLoadedChannelPlugin,
+  listChannelPlugins,
+} from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -26,6 +30,25 @@ export function normalizeDeliverableOutboundChannel(raw?: string | null): string
 
 function getOutboundRuntimeRegistry(): PluginRegistry | null {
   return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
+}
+
+/** Lists channel plugins visible to this process, including registry handles in scope. */
+export function listRuntimeVisibleChannelPlugins(): ChannelPlugin[] {
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const plugins = listChannelPlugins();
+  if (!scopedRegistry) {
+    return plugins;
+  }
+  const seen = new Set(plugins.map((plugin) => plugin.id));
+  const merged = [...plugins];
+  for (const entry of scopedRegistry.channels) {
+    const plugin = entry?.plugin;
+    if (plugin?.id && !seen.has(plugin.id)) {
+      seen.add(plugin.id);
+      merged.push(plugin);
+    }
+  }
+  return merged;
 }
 
 function normalizeOutboundChannelForResolution(params: {

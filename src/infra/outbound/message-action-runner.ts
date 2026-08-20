@@ -432,6 +432,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     toolContext: input.toolContext,
     agentId: resolvedAgentId,
     deferExternalTargetResolution: defersExternalTargetResolution,
+    plugin: channelPlugin,
   });
 
   if (action === "send") {

@@ -105,7 +105,8 @@ function createOwnerAllowlistTargetTestPlugin(params: {
   return plugin;
 }
 
-vi.mock("./channel-resolution.js", () => ({
+vi.mock("./channel-resolution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-resolution.js")>()),
   normalizeDeliverableOutboundChannel: mocks.normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
 }));

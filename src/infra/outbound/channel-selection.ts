@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Channel selection chooses a deliverable message channel from explicit input,
 // tool context fallback, or configured plugin accounts.
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,6 +18,7 @@ import {
 import { createDedupeCache } from "../dedupe.js";
 import { formatErrorMessage } from "../errors.js";
 import {
+  listRuntimeVisibleChannelPlugins,
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
 } from "./channel-resolution.js";
@@ -182,7 +182,7 @@ async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): P
 
 async function listConfiguredMessageChannelPlugins(cfg: OpenClawConfig): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of listRuntimeVisibleChannelPlugins()) {
     if (!isDeliverableMessageChannel(plugin.id)) {
       continue;
     }

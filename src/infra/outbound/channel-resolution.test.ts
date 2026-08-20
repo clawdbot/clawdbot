@@ -6,6 +6,7 @@ const tryResolveAmbientOwnerAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
+const listChannelPluginsMock = vi.hoisted(() => vi.fn());
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const resolveDiscoverableScopedChannelPluginIdsMock = vi.hoisted(() => vi.fn());
 const resolveRuntimePluginRegistryMock = vi.hoisted(() => vi.fn());
@@ -22,6 +23,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+  listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -538,5 +540,52 @@ describe("outbound channel resolution", () => {
       }),
     ).toBe(plugin);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("listRuntimeVisibleChannelPlugins", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    listChannelPluginsMock.mockReset();
+    getActivePluginRegistryMock.mockReset();
+    getActivePluginRegistryMock.mockReturnValue(null);
+  });
+
+  it("returns the process-root list when no registry scope is active", async () => {
+    const rootPlugin = { id: "alpha" };
+    listChannelPluginsMock.mockReturnValue([rootPlugin]);
+    const channelResolution = await importChannelResolution("visible-no-scope");
+
+    expect(channelResolution.listRuntimeVisibleChannelPlugins()).toEqual([rootPlugin]);
+  });
+
+  it("appends registry-scoped channel plugins the process root does not know", async () => {
+    const rootPlugin = { id: "alpha" };
+    const scopedPlugin = { id: "zephyrchat" };
+    listChannelPluginsMock.mockReturnValue([rootPlugin]);
+    const channelResolution = await importChannelResolution("visible-scope-merge");
+    const { withPluginRuntimeRegistryScope } =
+      await import("../../plugins/runtime/gateway-request-scope.js");
+
+    const visible = withPluginRuntimeRegistryScope(
+      { channels: [{ plugin: scopedPlugin }] } as never,
+      () => channelResolution.listRuntimeVisibleChannelPlugins(),
+    );
+    expect(visible).toEqual([rootPlugin, scopedPlugin]);
+  });
+
+  it("keeps the process-root implementation when a scoped plugin collides on id", async () => {
+    const rootPlugin = { id: "alpha", meta: { label: "Root Alpha" } };
+    const scopedPlugin = { id: "alpha", meta: { label: "Scoped Alpha" } };
+    listChannelPluginsMock.mockReturnValue([rootPlugin]);
+    const channelResolution = await importChannelResolution("visible-scope-dedupe");
+    const { withPluginRuntimeRegistryScope } =
+      await import("../../plugins/runtime/gateway-request-scope.js");
+
+    const visible = withPluginRuntimeRegistryScope(
+      { channels: [{ plugin: scopedPlugin }] } as never,
+      () => channelResolution.listRuntimeVisibleChannelPlugins(),
+    );
+    expect(visible).toEqual([rootPlugin]);
   });
 });
