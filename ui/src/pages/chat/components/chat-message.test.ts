@@ -385,9 +385,13 @@ function createAssistantCanvasBlock(params: {
   url?: string;
   preferredHeight?: number;
   presentationTarget?: "assistant_message" | "tool_card";
+  mcpApp?: { viewId: string };
 }) {
   const viewId = `cv_inline_${params.suffix}`;
-  const preview = createCanvasPreview({ ...params, viewId });
+  const preview = {
+    ...createCanvasPreview({ ...params, viewId }),
+    ...(params.mcpApp ? { mcpApp: params.mcpApp } : {}),
+  };
   return {
     type: "canvas",
     preview,
@@ -5501,8 +5505,10 @@ describe("grouped chat rendering", () => {
 
   it("keeps MCP App raw details reachable from its widget menu", () => {
     const container = document.createElement("div");
-    const canvas = createAssistantCanvasBlock({ suffix: "mcp-raw" });
-    canvas.preview.mcpApp = { viewId: "view-mcp-raw" };
+    const canvas = createAssistantCanvasBlock({
+      suffix: "mcp-raw",
+      mcpApp: { viewId: "view-mcp-raw" },
+    });
     renderAssistantMessage(container, createAssistantMessage([canvas]), {
       sessionKey: "agent:main:main",
     });
