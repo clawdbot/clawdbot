@@ -261,6 +261,7 @@
   ],
   "contracts": {
     "mediaUnderstandingProviders": ["nvidia"],
+    "realtimeTranscriptionProviders": ["nvidia"],
     "speechProviders": ["nvidia"]
   },
   "mediaUnderstandingProviderMetadata": {

@@ -1,5 +1,5 @@
 ---
-summary: "Use NVIDIA models and Nemotron Speech HTTP APIs in OpenClaw"
+summary: "Use NVIDIA models and Nemotron Speech APIs in OpenClaw"
 read_when:
   - You want to use open models in OpenClaw for free
   - You need NVIDIA_API_KEY setup
@@ -78,8 +78,8 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
 
 ## Nemotron Speech over HTTP
 
-The NVIDIA plugin supports one-shot HTTP speech requests. It does not register
-a realtime or streaming speech provider.
+The NVIDIA plugin supports one-shot HTTP speech requests, Magpie online synthesis, and
+Nemotron realtime transcription for Talk and Voice Call.
 
 ### Speech to text
 
@@ -126,6 +126,51 @@ The supported aliases are converted to NVIDIA's HTTP form fields. Other
 primitive `providerOptions.nvidia` entries are converted to snake_case and
 forwarded as customization fields.
 
+### Realtime speech to text
+
+Talk and Voice Call use `nvidia/nemotron-asr-streaming` through the NVIDIA gRPC
+streaming endpoint. The Gateway expands the existing 8 kHz G.711 mu-law relay
+audio to 8 kHz PCM16 before sending it to NVIDIA and emits interim and final
+transcripts. Batch audio
+files continue to use Parakeet CTC.
+
+```json5
+{
+  talk: {
+    realtime: {
+      provider: "nvidia",
+      mode: "transcription",
+      transport: "gateway-relay",
+    },
+  },
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          streaming: {
+            enabled: true,
+            provider: "nvidia",
+            providers: {
+              nvidia: {
+                language: "en-US",
+                // Optional when NVIDIA_API_KEY or an NVIDIA auth profile exists.
+                apiKey: "${NVIDIA_API_KEY}",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The hosted function ID and default language come from the validated NVIDIA
+speech model catalog, with a bundled fallback for offline startup. `server` and
+`functionId` can be set together for a custom gRPC deployment; a custom server
+requires an explicit `apiKey` so an ambient NVIDIA credential is never sent to
+another origin.
+
 ### Text to speech
 
 Magpie Multilingual is the default TTS model and
@@ -149,8 +194,21 @@ fields.
       },
     },
   },
+  talk: {
+    provider: "nvidia",
+    providers: {
+      nvidia: {
+        voiceId: "Magpie-Multilingual.EN-US.Aria",
+      },
+    },
+  },
 }
 ```
+
+Magpie also supports online synthesis. OpenClaw requests
+`/v1/audio/synthesize_online`, bounds the returned PCM bytes, and wraps the
+chunks in a streaming WAV container for speech consumers. The `/voice` command
+lists the bundled Magpie multilingual voices.
 
 For separate keyless self-hosted ASR and TTS NIMs, configure each service at
 its owning surface. Do not use `models.providers.nvidia.baseUrl` for speech: it
@@ -193,6 +251,90 @@ different host port, such as `9001:9000`. OpenClaw then calls
 `http://127.0.0.1:9001/v1/audio/synthesize` for TTS. Custom origins are keyless
 unless `tts.providers.nvidia.apiKey` is set explicitly; `NVIDIA_API_KEY` and
 saved NVIDIA profiles are only sent to NVIDIA-hosted speech endpoints.
+
+### Custom authenticated HTTP endpoints
+
+Custom endpoint authentication and route shape are configured independently.
+For a service that expects the model in the URL, set `routeStyle` and
+`modelPath`; configure its bearer token through the generic request-auth
+surface. OpenClaw does not infer either behavior from the hostname.
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "nvidia",
+          model: "nvidia/parakeet-ctc",
+          capabilities: ["audio"],
+          baseUrl: "https://speech.example",
+          request: {
+            auth: {
+              mode: "authorization-bearer",
+              token: "${CUSTOM_SPEECH_TOKEN}",
+            },
+          },
+          providerOptions: {
+            nvidia: {
+              routeStyle: "model-path",
+              modelPath: "nvidia/parakeet-ctc",
+            },
+          },
+        },
+      ],
+      audio: { enabled: true },
+    },
+  },
+}
+```
+
+This sends the request to
+`https://speech.example/v1/audio/nvidia/parakeet-ctc/transcriptions`. The
+default `fixed-model` route remains `/v1/audio/transcriptions` and sends the
+model as a form field for custom endpoints.
+
+### Custom authenticated HTTP endpoints
+
+Custom endpoint authentication and route shape are configured independently.
+For a service that expects the model in the URL, set `routeStyle` and
+`modelPath`; configure its bearer token through the generic request-auth
+surface. OpenClaw does not infer either behavior from the hostname.
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "nvidia",
+          model: "nvidia/parakeet-ctc",
+          capabilities: ["audio"],
+          baseUrl: "https://speech.example",
+          request: {
+            auth: {
+              mode: "authorization-bearer",
+              token: "${CUSTOM_SPEECH_TOKEN}",
+            },
+          },
+          providerOptions: {
+            nvidia: {
+              routeStyle: "model-path",
+              modelPath: "nvidia/parakeet-ctc",
+            },
+          },
+        },
+      ],
+      audio: { enabled: true },
+    },
+  },
+}
+```
+
+This sends the request to
+`https://speech.example/v1/audio/nvidia/parakeet-ctc/transcriptions`. The
+default `fixed-model` route remains `/v1/audio/transcriptions` and sends the
+model as a form field for custom endpoints.
 
 ## Featured catalog
 

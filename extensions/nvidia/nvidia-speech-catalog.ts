@@ -15,6 +15,7 @@ export const NVIDIA_SPEECH_CATALOG_URL =
   "https://raw.githubusercontent.com/nvidia-riva/Nemotron-speech-skills/main/skills/nemotron-speech/references/speech-models.v1.json";
 
 export const NVIDIA_CATALOG_ASR_MODEL_ID = "nvidia/parakeet-ctc-1.1b-asr";
+export const NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID = "nvidia/nemotron-asr-streaming";
 export const NVIDIA_CATALOG_TTS_MODEL_ID = "nvidia/magpie-tts-multilingual";
 
 const CATALOG_FETCH_TIMEOUT_MS = 3_000;

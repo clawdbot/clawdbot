@@ -45,6 +45,8 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
         ? { language: trimToUndefined(params.language ?? params.languageCode) }
         : {}),
     }),
+    listVoices: async () => MAGPIE_VOICES.map((voice) => ({ id: voice, name: voice })),
+
     isConfigured: ({ providerConfig, cfg }) => {
       const config = normalizeNvidiaTtsConfig(providerConfig);
       return (
@@ -79,12 +81,50 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
           trimToUndefined(overrides.customConfiguration) ?? config.customConfiguration,
         timeoutMs: req.timeoutMs,
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        routeStyle: config.routeStyle,
+        modelPath: config.modelPath,
       });
       return {
         audioBuffer,
         outputFormat: "wav",
         fileExtension: ".wav",
         voiceCompatible: false,
+      };
+    },
+    streamSynthesize: async (req) => {
+      const config = normalizeNvidiaTtsConfig(req.providerConfig);
+      const apiKey = await resolveNvidiaSpeechApiKey(config.apiKey, config.baseUrl, req.cfg);
+      const overrides = req.providerOverrides ?? {};
+      const overrideVoice = trimToUndefined(overrides.voice);
+      const voice = overrideVoice ?? config.voice ?? NVIDIA_DEFAULT_VOICE;
+      const language =
+        trimToUndefined(overrides.language) ??
+        (overrideVoice ? resolveMagpieVoiceLanguage(voice) : undefined) ??
+        config.language ??
+        NVIDIA_DEFAULT_LANGUAGE;
+      const { magpieSynthesizeStream } = await import("./nvidia-speech-http.runtime.js");
+      const stream = await magpieSynthesizeStream({
+        text: req.text,
+        apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model,
+        voice,
+        language,
+        sampleRateHz: config.sampleRateHz,
+        customDictionary: trimToUndefined(overrides.customDictionary) ?? config.customDictionary,
+        customConfiguration:
+          trimToUndefined(overrides.customConfiguration) ?? config.customConfiguration,
+        timeoutMs: req.timeoutMs,
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        routeStyle: config.routeStyle,
+        modelPath: config.modelPath,
+      });
+      return {
+        audioStream: stream.audioStream,
+        outputFormat: "wav",
+        fileExtension: ".wav",
+        voiceCompatible: false,
+        release: stream.release,
       };
     },
   };

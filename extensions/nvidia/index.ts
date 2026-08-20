@@ -8,6 +8,7 @@ import {
   buildSelectableNvidiaProvider,
   buildSelectableLiveNvidiaProvider,
 } from "./provider-catalog.js";
+import { buildNvidiaRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildNvidiaSpeechProvider } from "./speech-provider.js";
 
 const PROVIDER_ID = "nvidia";
@@ -78,6 +79,7 @@ export default defineSingleProviderPluginEntry({
   },
   register(api) {
     api.registerMediaUnderstandingProvider(nvidiaMediaUnderstandingProvider);
+    api.registerRealtimeTranscriptionProvider(buildNvidiaRealtimeTranscriptionProvider());
     api.registerSpeechProvider(buildNvidiaSpeechProvider());
   },
 });

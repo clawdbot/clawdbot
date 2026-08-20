@@ -24,7 +24,35 @@ type NvidiaTtsConfig = {
   sampleRateHz: number;
   customDictionary?: string;
   customConfiguration?: string;
+  routeStyle: NvidiaSpeechRouteStyle;
+  modelPath?: string;
 };
+
+export type NvidiaSpeechRouteStyle = "fixed-model" | "model-path";
+
+export function normalizeNvidiaSpeechRouteStyle(value: unknown): NvidiaSpeechRouteStyle {
+  const normalized = trimToUndefined(value)?.toLowerCase();
+  if (!normalized || normalized === "fixed-model") {
+    return "fixed-model";
+  }
+  if (normalized === "model-path") {
+    return "model-path";
+  }
+  throw new Error("Invalid NVIDIA speech routeStyle");
+}
+
+export function normalizeNvidiaSpeechModelPath(value: unknown): string | undefined {
+  const normalized = trimToUndefined(value);
+  if (!normalized) {
+    return undefined;
+  }
+  const segmentPattern = new RegExp("^[A-Za-z0-9][A-Za-z0-9._-]{0,126}$");
+  const segments = normalized.split("/");
+  if (segments.length !== 2 || segments.some((segment) => !segmentPattern.test(segment))) {
+    throw new Error("Invalid NVIDIA speech modelPath (expected vendor/model)");
+  }
+  return normalized;
+}
 
 export function normalizeNvidiaBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -33,7 +61,8 @@ export function normalizeNvidiaBaseUrl(value: string): string {
 export function normalizeNvidiaTtsConfig(rawConfig: Record<string, unknown>): NvidiaTtsConfig {
   const providers = asObject(rawConfig.providers);
   const raw = asObject(providers?.nvidia) ?? asObject(rawConfig.nvidia) ?? rawConfig;
-  const voice = trimToUndefined(raw.voice) ?? NVIDIA_DEFAULT_VOICE;
+  const voice =
+    trimToUndefined(raw.voice ?? raw.voiceId ?? raw.speakerVoiceId) ?? NVIDIA_DEFAULT_VOICE;
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw.apiKey,
@@ -47,6 +76,8 @@ export function normalizeNvidiaTtsConfig(rawConfig: Record<string, unknown>): Nv
     sampleRateHz: asFiniteNumber(raw.sampleRateHz) ?? 44_100,
     customDictionary: trimToUndefined(raw.customDictionary),
     customConfiguration: trimToUndefined(raw.customConfiguration),
+    routeStyle: normalizeNvidiaSpeechRouteStyle(raw.routeStyle),
+    modelPath: normalizeNvidiaSpeechModelPath(raw.modelPath),
   };
 }
 

@@ -1,14 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildNvidiaSpeechProvider } from "./speech-provider.js";
 
-const { isProviderAuthProfileConfiguredMock, magpieSynthesizeMock, resolveApiKeyForProviderMock } =
-  vi.hoisted(() => ({
-    isProviderAuthProfileConfiguredMock: vi.fn(() => false),
-    magpieSynthesizeMock: vi.fn(async () => Buffer.from("wav-audio")),
-    resolveApiKeyForProviderMock: vi.fn(
-      async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
-    ),
-  }));
+const {
+  isProviderAuthProfileConfiguredMock,
+  magpieSynthesizeMock,
+  magpieSynthesizeStreamMock,
+  resolveApiKeyForProviderMock,
+} = vi.hoisted(() => ({
+  isProviderAuthProfileConfiguredMock: vi.fn(() => false),
+  magpieSynthesizeMock: vi.fn(async () => Buffer.from("wav-audio")),
+  magpieSynthesizeStreamMock: vi.fn(async () => ({
+    audioStream: new ReadableStream<Uint8Array>(),
+    release: vi.fn(async () => {}),
+  })),
+  resolveApiKeyForProviderMock: vi.fn(
+    async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
+  ),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
@@ -20,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("./nvidia-speech-http.runtime.js", () => ({
   magpieSynthesize: magpieSynthesizeMock,
+  magpieSynthesizeStream: magpieSynthesizeStreamMock,
 }));
 
 describe("NVIDIA Magpie speech provider", () => {
@@ -31,6 +40,7 @@ describe("NVIDIA Magpie speech provider", () => {
     isProviderAuthProfileConfiguredMock.mockReset();
     isProviderAuthProfileConfiguredMock.mockReturnValue(false);
     magpieSynthesizeMock.mockClear();
+    magpieSynthesizeStreamMock.mockClear();
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: undefined });
   });
@@ -63,6 +73,16 @@ describe("NVIDIA Magpie speech provider", () => {
 
     expect(config.customDictionary).toBe("Nemotron  pronunciation");
     expect(config.customConfiguration).toBe("key:value");
+  });
+
+  it("honors the voiceId written by the talk-voice /voice set command", () => {
+    const config = provider.resolveConfig!({
+      rawConfig: { voiceId: "Magpie-Multilingual.FR-FR.Pascal" },
+      cfg: {} as never,
+      timeoutMs: 30_000,
+    });
+    expect(config.voice).toBe("Magpie-Multilingual.FR-FR.Pascal");
+    expect(config.language).toBe("fr-FR");
   });
 
   it("infers language from a configured multilingual voice", () => {
@@ -191,5 +211,43 @@ describe("NVIDIA Magpie speech provider", () => {
       }),
     );
     expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("lists Magpie voices for the /voice command", async () => {
+    const voices = await provider.listVoices?.({ providerConfig: {} });
+    expect(voices?.map((voice) => voice.id)).toContain("Magpie-Multilingual.EN-US.Aria");
+  });
+
+  it("streams Magpie audio through the online synthesis endpoint", async () => {
+    process.env.NVIDIA_API_KEY = "hosted-secret";
+    const result = await provider.streamSynthesize?.({
+      text: "hello",
+      cfg: {},
+      providerConfig: {},
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+    expect(magpieSynthesizeStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello", apiKey: "hosted-secret" }),
+    );
+    expect(result).toMatchObject({ outputFormat: "wav", fileExtension: ".wav" });
+  });
+
+  it("normalizes explicit model-path routing independently from auth", () => {
+    const config = provider.resolveConfig!({
+      rawConfig: {
+        baseUrl: "https://speech.example",
+        apiKey: "endpoint-key",
+        routeStyle: "model-path",
+        modelPath: "nvidia/parakeet-ctc",
+      },
+      cfg: {} as never,
+      timeoutMs: 30_000,
+    });
+    expect(config).toMatchObject({
+      routeStyle: "model-path",
+      modelPath: "nvidia/parakeet-ctc",
+      apiKey: "endpoint-key",
+    });
   });
 });

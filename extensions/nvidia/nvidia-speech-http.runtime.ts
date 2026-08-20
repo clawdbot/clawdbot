@@ -6,6 +6,7 @@ import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
+import { createBoundedProviderBinaryStream } from "openclaw/plugin-sdk/provider-binary-stream";
 import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
@@ -30,6 +31,8 @@ import {
   isNvidiaHostedAsrBaseUrl,
   isNvidiaHostedTtsBaseUrl,
   normalizeNvidiaBaseUrl,
+  normalizeNvidiaSpeechModelPath,
+  normalizeNvidiaSpeechRouteStyle,
 } from "./nvidia-speech-config.js";
 
 const QUERY_FIELD_ALIASES: Readonly<Record<string, string>> = {
@@ -42,7 +45,14 @@ const QUERY_FIELD_ALIASES: Readonly<Record<string, string>> = {
 };
 
 const BOOSTED_WORD_KEYS = new Set(["boostedWords", "boostedLmWords", "boosted_lm_words"]);
-const RESERVED_ASR_FIELDS = new Set(["file", "language", "model", "response_format"]);
+const RESERVED_ASR_FIELDS = new Set([
+  "file",
+  "language",
+  "model",
+  "response_format",
+  "route_style",
+  "model_path",
+]);
 const RIFF_HEADER = Buffer.from("RIFF");
 const WAVE_HEADER = Buffer.from("WAVE");
 const OGG_HEADER = Buffer.from("OggS");
@@ -171,16 +181,31 @@ async function normalizeNvidiaAsrAudio(
   };
 }
 
-type AsrEndpoint = { baseUrl: string; model: string; hosted: boolean; defaultLanguage: string };
+type AsrEndpoint = {
+  baseUrl: string;
+  model: string;
+  hosted: boolean;
+  defaultLanguage: string;
+  routeStyle: "fixed-model" | "model-path";
+  modelPath?: string;
+};
 
-function resolveAsrTranscriptionUrl(baseUrl: string): string {
-  return baseUrl.endsWith("/v1")
-    ? `${baseUrl}/audio/transcriptions`
-    : `${baseUrl}/v1/audio/transcriptions`;
-}
-
-function resolveTtsSynthesisUrl(baseUrl: string): string {
-  return baseUrl.endsWith("/v1") ? `${baseUrl}/audio/synthesize` : `${baseUrl}/v1/audio/synthesize`;
+function resolveSpeechUrl(
+  baseUrl: string,
+  operation: "transcriptions" | "synthesize" | "synthesize_online",
+  routeStyle: "fixed-model" | "model-path" = "fixed-model",
+  modelPath?: string,
+): string {
+  const root = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+  if (routeStyle === "fixed-model") {
+    return `${root}/audio/${operation}`;
+  }
+  const normalizedModelPath = normalizeNvidiaSpeechModelPath(modelPath);
+  if (!normalizedModelPath) {
+    throw new Error("NVIDIA speech modelPath is required for model-path routing");
+  }
+  const encodedModelPath = normalizedModelPath.split("/").map(encodeURIComponent).join("/");
+  return `${root}/audio/${encodedModelPath}/${operation}`;
 }
 
 async function resolveAsrEndpoint(req: AudioTranscriptionRequest): Promise<AsrEndpoint> {
@@ -194,6 +219,8 @@ async function resolveAsrEndpoint(req: AudioTranscriptionRequest): Promise<AsrEn
       model,
       hosted: false,
       defaultLanguage: "en-US",
+      routeStyle: normalizeNvidiaSpeechRouteStyle(req.query?.routeStyle),
+      modelPath: normalizeNvidiaSpeechModelPath(req.query?.modelPath),
     };
   }
   if (req.model && req.model !== NVIDIA_DEFAULT_ASR_MODEL) {
@@ -209,6 +236,7 @@ async function resolveAsrEndpoint(req: AudioTranscriptionRequest): Promise<AsrEn
     model: NVIDIA_DEFAULT_ASR_MODEL,
     hosted: true,
     defaultLanguage: cloud?.defaultLanguage ?? "en-US",
+    routeStyle: "fixed-model",
   };
 }
 
@@ -236,14 +264,14 @@ async function transcribeAtEndpoint(
     mime: req.mime,
     fields: {
       language: req.language?.trim() || endpoint.defaultLanguage,
-      ...(endpoint.hosted ? {} : { model: endpoint.model }),
+      ...(endpoint.hosted || endpoint.routeStyle === "model-path" ? {} : { model: endpoint.model }),
       response_format: "json",
     },
   });
   appendAsrCustomizations(form, req.query);
 
   const { response, release } = await postTranscriptionRequest({
-    url: resolveAsrTranscriptionUrl(baseUrl),
+    url: resolveSpeechUrl(baseUrl, "transcriptions", endpoint.routeStyle, endpoint.modelPath),
     headers,
     body: form,
     timeoutMs: req.timeoutMs,
@@ -303,11 +331,15 @@ type MagpieSynthesizeParams = {
   customConfiguration?: string;
   timeoutMs: number;
   maxBytes?: number;
+  routeStyle?: "fixed-model" | "model-path";
+  modelPath?: string;
 };
 
 export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<Buffer> {
   const form = new FormData();
-  form.append("model", params.model);
+  if (params.routeStyle !== "model-path") {
+    form.append("model", params.model);
+  }
   form.append("text", params.text);
   form.append("language", params.language);
   form.append("voice", params.voice);
@@ -331,7 +363,7 @@ export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<
     headers.set("Authorization", `Bearer ${params.apiKey}`);
   }
   const { response, release } = await postMultipartRequest({
-    url: resolveTtsSynthesisUrl(baseUrl),
+    url: resolveSpeechUrl(baseUrl, "synthesize", params.routeStyle, params.modelPath),
     headers,
     body: form,
     timeoutMs: params.timeoutMs,
@@ -342,7 +374,11 @@ export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<
   try {
     await assertOkOrThrowHttpError(response, "NVIDIA Magpie TTS failed");
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (!contentType.startsWith("audio/") && !contentType.startsWith("application/octet-stream")) {
+    if (
+      contentType &&
+      !contentType.startsWith("audio/") &&
+      !contentType.startsWith("application/octet-stream")
+    ) {
       throw new Error(
         `NVIDIA Magpie TTS returned unexpected content type: ${contentType || "none"}`,
       );
@@ -357,5 +393,132 @@ export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<
     return audio;
   } finally {
     await release();
+  }
+}
+
+function createStreamingPcmWavHeader(sampleRateHz: number): Uint8Array {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(0xfffffff7, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRateHz, 24);
+  header.writeUInt32LE(sampleRateHz * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(0xffffffff, 40);
+  return header;
+}
+
+export async function magpieSynthesizeStream(params: MagpieSynthesizeParams): Promise<{
+  audioStream: ReadableStream<Uint8Array>;
+  release: () => Promise<void>;
+}> {
+  const form = new FormData();
+  if (params.routeStyle !== "model-path") {
+    form.append("model", params.model);
+  }
+  form.append("text", params.text);
+  form.append("language", params.language);
+  form.append("voice", params.voice);
+  form.append("encoding", "LINEAR_PCM");
+  form.append("sample_rate_hz", String(params.sampleRateHz));
+  if (params.customDictionary) {
+    form.append("custom_dictionary", params.customDictionary);
+  }
+  if (params.customConfiguration) {
+    form.append("custom_configuration", params.customConfiguration);
+  }
+
+  const configuredBaseUrl = normalizeNvidiaBaseUrl(params.baseUrl);
+  const catalogModel = isNvidiaHostedTtsBaseUrl(configuredBaseUrl)
+    ? await resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_TTS_MODEL_ID, modality: "tts" })
+    : undefined;
+  const catalogCloud = catalogModel?.cloud.transport === "http" ? catalogModel.cloud : undefined;
+  const baseUrl = catalogCloud?.baseUrl ?? configuredBaseUrl;
+  const headers = new Headers();
+  if (params.apiKey) {
+    headers.set("Authorization", `Bearer ${params.apiKey}`);
+  }
+  const { response, release } = await postMultipartRequest({
+    url: resolveSpeechUrl(baseUrl, "synthesize_online", params.routeStyle, params.modelPath),
+    headers,
+    body: form,
+    timeoutMs: params.timeoutMs,
+    fetchFn: fetch,
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+    auditContext: "NVIDIA Magpie streaming TTS",
+  });
+  let handedOff = false;
+  try {
+    await assertOkOrThrowHttpError(response, "NVIDIA Magpie streaming TTS failed");
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (
+      contentType &&
+      !contentType.startsWith("audio/") &&
+      !contentType.startsWith("application/octet-stream")
+    ) {
+      throw new Error(
+        `NVIDIA Magpie streaming TTS returned unexpected content type: ${contentType || "none"}`,
+      );
+    }
+    if (!response.body) {
+      throw new Error("NVIDIA Magpie streaming TTS response missing audio stream");
+    }
+    const bounded = createBoundedProviderBinaryStream(response.body, {
+      maxBytes: params.maxBytes ?? DEFAULT_TTS_MAX_BYTES,
+      createOverflowError: ({ maxBytes }) =>
+        new Error(`NVIDIA Magpie streaming TTS audio response exceeds ${maxBytes} bytes`),
+      createReleaseError: () => new Error("NVIDIA Magpie streaming TTS stream released"),
+    });
+    const reader = bounded.stream.getReader();
+    let releasePromise: Promise<void> | undefined;
+    const releaseAll = () => {
+      releasePromise ??= (async () => {
+        try {
+          await reader.cancel().catch(() => undefined);
+          reader.releaseLock();
+          await bounded.release();
+        } finally {
+          await release();
+        }
+      })();
+      return releasePromise;
+    };
+    let headerPending = true;
+    const audioStream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (headerPending) {
+          headerPending = false;
+          controller.enqueue(createStreamingPcmWavHeader(params.sampleRateHz));
+          return;
+        }
+        try {
+          const next = await reader.read();
+          if (next.done) {
+            controller.close();
+            await releaseAll();
+          } else {
+            controller.enqueue(next.value);
+          }
+        } catch (error) {
+          controller.error(error);
+          await releaseAll();
+        }
+      },
+      async cancel() {
+        await releaseAll();
+      },
+    });
+    handedOff = true;
+    return { audioStream, release: releaseAll };
+  } finally {
+    if (!handedOff) {
+      await release();
+    }
   }
 }

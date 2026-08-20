@@ -29,7 +29,11 @@ vi.mock("./nvidia-speech-catalog.js", () => ({
 }));
 
 import { NVIDIA_DEFAULT_ASR_MODEL } from "./nvidia-speech-config.js";
-import { magpieSynthesize, transcribeNvidiaAudio } from "./nvidia-speech-http.runtime.js";
+import {
+  magpieSynthesize,
+  magpieSynthesizeStream,
+  transcribeNvidiaAudio,
+} from "./nvidia-speech-http.runtime.js";
 
 function transcriptionRequest(overrides: Record<string, unknown> = {}) {
   return {
@@ -461,5 +465,53 @@ describe("NVIDIA speech HTTP runtime", () => {
         timeoutMs: 30_000,
       }),
     ).rejects.toThrow("unexpected content type");
+  });
+
+  it("supports an explicit model-in-path endpoint without inferring its auth policy", async () => {
+    mocks.postTranscriptionRequest.mockResolvedValue(okJson("custom transcript"));
+    await transcribeNvidiaAudio(
+      transcriptionRequest({
+        baseUrl: "https://speech.example",
+        model: "nvidia/parakeet-ctc",
+        auth: { kind: "none", source: "explicit-request-auth" },
+        apiKey: "",
+        request: {
+          auth: { mode: "authorization-bearer", token: "endpoint-secret" },
+        },
+        query: { routeStyle: "model-path", modelPath: "nvidia/parakeet-ctc" },
+      }),
+    );
+    const request = mocks.postTranscriptionRequest.mock.calls[0]?.[0];
+    expect(request.url).toBe("https://speech.example/v1/audio/nvidia/parakeet-ctc/transcriptions");
+    expect((request.body as FormData).get("model")).toBeNull();
+    expect((request.body as FormData).get("route_style")).toBeNull();
+    expect((request.body as FormData).get("model_path")).toBeNull();
+    expect((request.headers as Headers).get("authorization")).toBe("Bearer endpoint-secret");
+  });
+
+  it("streams Magpie PCM from synthesize_online as a bounded WAV stream", async () => {
+    const release = vi.fn();
+    mocks.postMultipartRequest.mockResolvedValue({
+      response: new Response(new Uint8Array([1, 2, 3, 4]), {}),
+      release,
+    });
+    const result = await magpieSynthesizeStream({
+      text: "hello",
+      apiKey: "nvapi-test",
+      baseUrl: "http://10.0.0.5:9000/v1",
+      model: "magpie-tts-multilingual",
+      voice: "Magpie-Multilingual.EN-US.Aria",
+      language: "en-US",
+      sampleRateHz: 44_100,
+      timeoutMs: 30_000,
+    });
+    const bytes = Buffer.from(await new Response(result.audioStream).arrayBuffer());
+    expect(mocks.postMultipartRequest.mock.calls[0]?.[0]?.url).toBe(
+      "http://10.0.0.5:9000/v1/audio/synthesize_online",
+    );
+    expect(bytes.subarray(0, 4).toString("ascii")).toBe("RIFF");
+    expect(bytes.readUInt32LE(24)).toBe(44_100);
+    expect([...bytes.subarray(44)]).toEqual([1, 2, 3, 4]);
+    expect(release).toHaveBeenCalledOnce();
   });
 });
