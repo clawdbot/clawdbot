@@ -76,6 +76,40 @@ it("keeps explicit custom-provider model state on the authored agent entry", () 
   ]);
 });
 
+it("preserves a list-form roster when applying custom-provider model state", () => {
+  const result = applyCustomApiConfig({
+    config: {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        list: [
+          { id: "main", name: "Main" },
+          { id: "ops", name: "Operations" },
+        ],
+      },
+    },
+    baseUrl: "https://llm.example.com/v1",
+    modelId: "foo-large",
+    compatibility: "openai",
+    providerId: "custom",
+    alias: "Custom",
+    target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+  });
+
+  expect(result.config.agents?.list).toBeUndefined();
+  expect(result.config.agents?.entries).toEqual({
+    main: { name: "Main" },
+    ops: {
+      name: "Operations",
+      model: { primary: "custom/foo-large" },
+      models: { "custom/foo-large": { alias: "Custom" } },
+    },
+  });
+  expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
+    "foo-large",
+  ]);
+});
+
 it("uses expanded max_tokens for openai verification probes", () => {
   const request = buildOpenAiVerificationProbeRequest({
     baseUrl: "https://example.com/v1",

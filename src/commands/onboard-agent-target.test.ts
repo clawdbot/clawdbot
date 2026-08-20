@@ -127,6 +127,66 @@ describe("onboarding agent target", () => {
     expect(updated.agents?.entries?.ops).toBeUndefined();
   });
 
+  it("preserves every list-form agent when applying the primary model", () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        list: [
+          { id: "main", name: "Main", model: { primary: "openai/main" } },
+          {
+            id: "OPS",
+            name: "Operations",
+            model: { primary: "openai/old", fallbacks: ["openai/fallback"] },
+            models: { "openai/old": { alias: "Old" } },
+          },
+        ],
+      },
+    };
+    const target = resolveOnboardingAgentTarget(config, "ops");
+
+    const updated = applyOnboardingPrimaryModel(config, target, "openai/new");
+
+    expect(updated.agents?.list).toBeUndefined();
+    expect(updated.agents?.entries).toEqual({
+      main: { name: "Main", model: { primary: "openai/main" } },
+      OPS: {
+        name: "Operations",
+        model: { primary: "openai/new", fallbacks: ["openai/fallback"] },
+        models: { "openai/old": { alias: "Old" }, "openai/new": {} },
+      },
+    });
+  });
+
+  it("preserves every list-form agent when projecting model policy", () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        list: [
+          { id: "main", modelPolicy: { allow: ["openai/main"] } },
+          { id: "ops", modelPolicy: { allow: ["openai/old"] } },
+        ],
+      },
+    };
+    const target = resolveOnboardingAgentTarget(config, "ops");
+
+    const updated = applyAgentModelDefaults(config, target, (projected) => ({
+      ...projected,
+      agents: {
+        ...projected.agents,
+        defaults: {
+          ...projected.agents?.defaults,
+          modelPolicy: { allow: ["openai/new"] },
+        },
+      },
+    }));
+
+    expect(updated.agents?.list).toBeUndefined();
+    expect(updated.agents?.entries).toEqual({
+      main: { modelPolicy: { allow: ["openai/main"] } },
+      ops: { modelPolicy: { allow: ["openai/new"] } },
+    });
+  });
+
   it("provisions the configured default agent workspace and sessions", async () => {
     const stateDir = tempDirs.make("openclaw-onboard-target-");
     const globalWorkspace = path.join(stateDir, "global-workspace");

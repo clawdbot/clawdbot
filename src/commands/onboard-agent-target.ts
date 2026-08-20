@@ -1,9 +1,11 @@
 // Resolves one concrete agent owner for onboarding auth, model, workspace, and session effects.
 import {
+  listAgentEntries,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveMutableAgentEntry,
   resolveSoleAgentId,
+  toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
@@ -12,6 +14,7 @@ import {
   resolveAgentModelFallbackValues,
 } from "../config/model-input.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
@@ -66,15 +69,37 @@ export async function ensureOnboardingAgentWorkspace(
   }
 }
 
+function replaceOnboardingAgentEntry(
+  config: OpenClawConfig,
+  updated: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  nextEntry: AgentEntryConfig,
+): OpenClawConfig {
+  const entries = listAgentEntries(config);
+  const index = entries.findIndex((entry) => normalizeAgentId(entry.id) === target.agentId);
+  const nextEntries = [...entries];
+  const replacement = { id: index >= 0 ? entries[index]!.id : target.agentId, ...nextEntry };
+  if (index >= 0) {
+    nextEntries[index] = replacement;
+  } else {
+    nextEntries.push(replacement);
+  }
+  const { list: _list, entries: _entries, ...agents } = config.agents ?? {};
+  return {
+    ...updated,
+    agents: {
+      ...agents,
+      entries: toAgentEntriesRecord(nextEntries),
+    },
+  };
+}
+
 export function applyOnboardingPrimaryModel(
   config: OpenClawConfig,
   target: OnboardingAgentTarget,
   model: string,
 ): OpenClawConfig {
-  const authoredEntryKey = Object.keys(config.agents?.entries ?? {}).find(
-    (key) => normalizeAgentId(key) === target.agentId,
-  );
-  const entry = authoredEntryKey ? config.agents?.entries?.[authoredEntryKey] : undefined;
+  const entry = resolveMutableAgentEntry(config, target.agentId);
   if (entry?.model === undefined && config.agents?.ownership !== "explicit") {
     return applyPrimaryModel(config, model);
   }
@@ -84,26 +109,17 @@ export function applyOnboardingPrimaryModel(
     normalizeAgentModelRefForConfig(fallback),
   );
   const models = normalizeAgentModelMapForConfig(entry?.models ?? {});
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      entries: {
-        ...config.agents?.entries,
-        [authoredEntryKey ?? target.agentId]: {
-          ...entry,
-          model: {
-            ...(fallbackValues.length > 0 ? { fallbacks: fallbackValues } : {}),
-            primary,
-          },
-          models: {
-            ...models,
-            [primary]: models[primary] ?? {},
-          },
-        },
-      },
+  return replaceOnboardingAgentEntry(config, config, target, {
+    ...entry,
+    model: {
+      ...(fallbackValues.length > 0 ? { fallbacks: fallbackValues } : {}),
+      primary,
     },
-  };
+    models: {
+      ...models,
+      [primary]: models[primary] ?? {},
+    },
+  });
 }
 
 /** Apply a model-default mutation to one agent without flattening it globally. */
@@ -140,9 +156,6 @@ export function projectAgentModelDefaults(
   }
   const updatedDefaults = updated.agents?.defaults;
   const { model: _model, models: _models, modelPolicy: _modelPolicy, ...entryRest } = entry ?? {};
-  const authoredEntryKey = Object.keys(config.agents?.entries ?? {}).find(
-    (key) => normalizeAgentId(key) === target.agentId,
-  );
   const nextEntry = {
     ...entryRest,
     ...(updatedDefaults?.model !== undefined ? { model: updatedDefaults.model } : {}),
@@ -151,14 +164,5 @@ export function projectAgentModelDefaults(
       ? { modelPolicy: updatedDefaults.modelPolicy }
       : {}),
   };
-  return {
-    ...updated,
-    agents: {
-      ...config.agents,
-      entries: {
-        ...config.agents?.entries,
-        [authoredEntryKey ?? target.agentId]: nextEntry,
-      },
-    },
-  };
+  return replaceOnboardingAgentEntry(config, updated, target, nextEntry);
 }
