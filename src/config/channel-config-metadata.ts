@@ -471,6 +471,12 @@ export function collectChannelSchemaMetadataWithOwnership(
           continue;
         }
       }
+      // Accepted tradeoff, recorded so it is a decision and not an oversight: a replacement that
+      // wins the channel supplies the schema, so a strict replacement can reject a key the operator
+      // set for the plugin it displaced. Core does not migrate it — a plugin declaring `preferOver`
+      // knows which keys it supersedes, and that repair belongs to its own doctor contract
+      // (`legacyConfigRules`, `normalizeCompatibilityConfig`). Nothing catalogued is affected: the
+      // only declared `preferOver` target accepts every property.
       const coreOwnedSchema =
         record.origin === "bundled" || channelConfig.schema === undefined
           ? channelConfig.schema
