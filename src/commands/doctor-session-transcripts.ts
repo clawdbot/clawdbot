@@ -33,6 +33,10 @@ import {
   type ReservedIncognitoKeyRepairReport,
 } from "./doctor-session-incognito-key-repair.js";
 import {
+  repairCanonicalSessionResolvedSkills,
+  type SessionResolvedSkillsRepairReport,
+} from "./doctor-session-resolved-skills.js";
+import {
   DoctorSqliteMaintenanceLockUnavailableError,
   withDoctorSqliteMaintenanceLock,
 } from "./doctor-sqlite-maintenance-lock.js";
@@ -523,6 +527,11 @@ async function noteSessionSqliteMigrationHealth(params: {
     repaired: 0,
     scannedStores: 0,
   };
+  let resolvedSkillsReport: SessionResolvedSkillsRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedStores: 0,
+  };
   let canonicalKeyReport: CanonicalSessionKeyRepairReport = {
     archivedTranscriptDirectories: [],
     foundGroups: 0,
@@ -564,6 +573,11 @@ async function noteSessionSqliteMigrationHealth(params: {
       env: params.env,
     });
     deliveryReport = repairCanonicalSessionDeliveryStates({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    resolvedSkillsReport = repairCanonicalSessionResolvedSkills({
       apply: params.shouldRepair,
       cfg: params.cfg ?? {},
       env: params.env,
@@ -610,6 +624,14 @@ async function noteSessionSqliteMigrationHealth(params: {
       params.shouldRepair
         ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
         : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
+      "Session SQLite",
+    );
+  }
+  if (resolvedSkillsReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Stripped the runtime-only skills catalog from ${resolvedSkillsReport.repaired} durable session row(s).`
+        : `- Found ${resolvedSkillsReport.found} durable session row(s) carrying a runtime-only skills catalog. Run "openclaw doctor --fix" to strip it.`,
       "Session SQLite",
     );
   }

@@ -2,8 +2,8 @@ import {
   rewriteDoctorSessionEntries,
   scanDoctorSessionEntriesTolerant,
 } from "../config/sessions/session-accessor.js";
+import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
@@ -11,18 +11,24 @@ import {
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 
-export type SessionDeliveryStateRepairReport = {
+export type SessionResolvedSkillsRepairReport = {
   found: number;
   repaired: number;
   scannedStores: number;
 };
 
-/** Scan or rewrite legacy delivery fields inside existing session row JSON. */
-export function repairCanonicalSessionDeliveryStates(params: {
+/**
+ * Strips the runtime-only `resolvedSkills` catalog from existing persisted
+ * session rows. New writes already drop it via the shared persistence
+ * projection, but rows written before the fix keep the full ~293 KB catalog in
+ * every `session_nodes.entry_json` — the reported source of database and heap
+ * pressure. Idempotent: a row already stripped is unchanged and skipped.
+ */
+export function repairCanonicalSessionResolvedSkills(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): SessionDeliveryStateRepairReport {
+}): SessionResolvedSkillsRepairReport {
   const targets = listExistingAgentDatabaseTargets(params.cfg, params.env);
   let found = 0;
   let repaired = 0;
@@ -35,19 +41,21 @@ export function repairCanonicalSessionDeliveryStates(params: {
         scanDoctorSessionEntriesTolerant(
           { agentId: target.agentId, env: params.env, storePath: target.storePath },
           ({ entry, recoveredFromProjections, sessionKey }) => {
-            if (!recoveredFromProjections && normalizeLegacySessionEntryDelivery(entry) !== entry) {
+            // Skip rows reconstructed from projections (no entry_json to repair);
+            // otherwise strip only when the runtime-only catalog is present.
+            if (!recoveredFromProjections && stripRuntimeOnlySessionSkillsFields(entry) !== entry) {
               sessionKeys.push(sessionKey);
             }
           },
         );
-        return { found: true, value: sessionKeys.length } as { found: true; value: number };
+        return sessionKeys.length;
       },
     });
-    if (!operation.ok || !operation.value.found) {
+    if (!operation.ok) {
       continue;
     }
-    found += operation.value.value;
-    if (!params.apply || operation.value.value === 0) {
+    found += operation.value;
+    if (!params.apply || operation.value === 0) {
       continue;
     }
     const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);
@@ -55,8 +63,7 @@ export function repairCanonicalSessionDeliveryStates(params: {
       repaired += rewriteDoctorSessionEntries({
         scope: { agentId: target.agentId, env: params.env, storePath: target.storePath },
         sessionKeys,
-        transform: normalizeLegacySessionEntryDelivery,
-        updateDeliveryProjection: true,
+        transform: stripRuntimeOnlySessionSkillsFields,
       });
     } finally {
       if (!wasOpen) {

@@ -37,6 +37,7 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
+import { stripRuntimeOnlySessionSkillsFields } from "./store-entry-shape.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
@@ -45,14 +46,7 @@ function projectSessionEntryForPersistenceRevision(params: {
   storePath: string;
   entry: SessionEntry;
 }): SessionEntry {
-  const snapshot = params.entry.skillsSnapshot;
-  const stripped =
-    snapshot?.resolvedSkills === undefined
-      ? params.entry
-      : {
-          ...params.entry,
-          skillsSnapshot: (({ resolvedSkills: _drop, ...rest }) => rest)(snapshot),
-        };
+  const stripped = stripRuntimeOnlySessionSkillsFields(params.entry);
   const projected = projectSessionStoreForPersistence({
     storePath: params.storePath,
     store: { entry: stripped },

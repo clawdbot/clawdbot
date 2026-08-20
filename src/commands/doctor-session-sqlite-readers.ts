@@ -15,6 +15,8 @@ import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
+import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
@@ -481,6 +483,27 @@ export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
   return resolveOpenClawAgentSqlitePath({
     agentId: sqliteTarget.agentId ?? target.agentId,
     ...(sqliteTarget.path ? { path: sqliteTarget.path } : {}),
+  });
+}
+
+/**
+ * Enumerates existing per-agent session SQLite databases for a Doctor repair.
+ * Deduplicates by resolved path (aliases collapse to one target) and skips
+ * databases that do not yet exist on disk. Shared by every session-row repair
+ * so target enumeration cannot drift between repair surfaces.
+ */
+export function listExistingAgentDatabaseTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
+  const seenPaths = new Set<string>();
+  return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
+    const sqlitePath = resolveTargetSqlitePath(target);
+    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
+      return [];
+    }
+    seenPaths.add(sqlitePath);
+    return [{ agentId: target.agentId, sqlitePath, storePath: target.storePath }];
   });
 }
 

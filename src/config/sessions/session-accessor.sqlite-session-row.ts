@@ -6,7 +6,10 @@ import {
 import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import {
+  projectCanonicalSessionEntryShape,
+  stripRuntimeOnlySessionSkillsFields,
+} from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
@@ -86,17 +89,9 @@ export function bindSessionNode(params: {
   const canonicalEntry = projectCanonicalSessionEntryShape({ ...params.entry });
   // resolvedSkills is runtime-only (SessionSkillSnapshot): persistence keeps the
   // lightweight catalog/prompt; consumers hydrate concrete SKILL.md paths from a
-  // fresh workspace scan on resume (snapshot-hydration). Stripping before the
-  // SQLite write mirrors the file-store path in session-accessor.entry-mutation
-  // and keeps every session_nodes.entry_json ~20× smaller (~293 KB → ~15 KB).
-  const skillsSnapshot = canonicalEntry.skillsSnapshot;
-  const persistedEntry =
-    skillsSnapshot?.resolvedSkills === undefined
-      ? canonicalEntry
-      : {
-          ...canonicalEntry,
-          skillsSnapshot: (({ resolvedSkills: _drop, ...rest }) => rest)(skillsSnapshot),
-        };
+  // fresh workspace scan on resume (snapshot-hydration). The shared persistence
+  // projection also runs in the file-store path and the Doctor cleanup.
+  const persistedEntry = stripRuntimeOnlySessionSkillsFields(canonicalEntry);
   const actor = params.entry.createdActor;
   const legacyActorId = normalizeText(
     (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,

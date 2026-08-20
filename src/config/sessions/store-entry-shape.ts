@@ -151,6 +151,23 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
   return canonicalValue as unknown as SessionEntry;
 }
 
+/**
+ * Strips the runtime-only `resolvedSkills` catalog before a session entry is
+ * persisted. The catalog (full parsed SKILL.md bodies) is rebuilt from a fresh
+ * workspace scan on cold resume (snapshot-hydration), so persisting it only
+ * bloats every stored row. One owner for file writes, SQLite writes, and the
+ * Doctor cleanup so a later field change cannot recreate storage-path drift.
+ */
+export function stripRuntimeOnlySessionSkillsFields(entry: SessionEntry): SessionEntry {
+  const snapshot = entry.skillsSnapshot;
+  return snapshot?.resolvedSkills === undefined
+    ? entry
+    : {
+        ...entry,
+        skillsSnapshot: (({ resolvedSkills: _drop, ...rest }) => rest)(snapshot),
+      };
+}
+
 function normalizePendingFinalDelivery(
   value: unknown,
 ): SessionEntry["pendingFinalDelivery"] | undefined {
