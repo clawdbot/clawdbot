@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import "../../../components/image-lightbox.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -53,6 +52,7 @@ export function renderChatImageLightbox(
   if (!item) {
     return nothing;
   }
+  void import("../../../components/image-lightbox.ts");
   return html`
     <openclaw-image-lightbox
       src=${item.src}
