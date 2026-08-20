@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../../failover-error.js";
 
 const mocks = vi.hoisted(() => ({
   sleepWithAbort: vi.fn(async () => {}),
@@ -87,25 +86,15 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     expect(mocks.sleepWithAbort).toHaveBeenCalledWith(10_000, undefined);
   });
 
-  it("escalates after exhausting the ordered auth profiles", async () => {
+  it("returns exhaustion to the outer fallback owner", async () => {
     const advanceAuthProfile = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const controller = createController(advanceAuthProfile, true);
 
     await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toMatchObject({
-      name: "FailoverError",
-      reason: "rate_limit",
-      status: 429,
-    } satisfies Partial<FailoverError>);
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toBeInstanceOf(
-      FailoverError,
-    );
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(false);
 
-    expect(advanceAuthProfile).toHaveBeenCalledTimes(3);
-    expect(rateLimitContext.logFallbackDecision).toHaveBeenCalledTimes(2);
-    expect(rateLimitContext.logFallbackDecision).toHaveBeenNthCalledWith(1, "fallback_model", {
-      status: 429,
-    });
+    expect(advanceAuthProfile).toHaveBeenCalledTimes(2);
+    expect(rateLimitContext.logFallbackDecision).not.toHaveBeenCalled();
   });
 
   it("tries every ordered profile before escalating to model fallback", async () => {
@@ -118,13 +107,9 @@ describe("createEmbeddedRunFailoverRetryController", () => {
 
     await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
     await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toMatchObject({
-      name: "FailoverError",
-      reason: "rate_limit",
-      status: 429,
-    } satisfies Partial<FailoverError>);
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(false);
 
     expect(advanceAuthProfile).toHaveBeenCalledTimes(3);
-    expect(rateLimitContext.logFallbackDecision).toHaveBeenCalledOnce();
+    expect(rateLimitContext.logFallbackDecision).not.toHaveBeenCalled();
   });
 });
