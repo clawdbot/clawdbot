@@ -1497,7 +1497,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const run = async (promptTokens: number) => {
         await updateSessionStoreAfterAgentRun({
           cfg,
-          contextTokensOverride: 1_000_000,
           sessionId,
           sessionKey,
           storePath,
@@ -1599,7 +1598,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -1680,7 +1678,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const finalize = async (sessionStore: Record<string, SessionEntry>, promptTokens: number) => {
         await updateSessionStoreAfterAgentRun({
           cfg,
-          contextTokensOverride: 1_000_000,
           sessionId,
           sessionKey,
           storePath,
@@ -1740,7 +1737,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -1814,7 +1810,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -3244,7 +3239,7 @@ describe("recordCliCompactionInStore", () => {
       );
 
       await recordCliCompactionInStore({
-        provider: "codex",
+        compactionKind: "native-harness",
         sessionKey,
         sessionStore,
         storePath,
