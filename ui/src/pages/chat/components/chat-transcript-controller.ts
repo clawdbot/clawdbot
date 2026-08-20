@@ -145,9 +145,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const target = event.target;
     const geometryControl =
       target instanceof Element
-        ? event.type === "wa-tab-show"
-          ? target.closest("wa-tab-group")
-          : target.closest("button[aria-expanded], button[aria-pressed], summary")
+        ? target.closest("button[aria-expanded], button[aria-pressed], summary")
         : null;
     const row = geometryControl?.closest<HTMLElement>(".chat-virtual-row") ?? null;
     if (!row) {
@@ -416,7 +414,6 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
             class="chat-thread-inner chat-thread-inner--virtual"
             ${ref(this.scrollElementRef)}
             @click=${this.captureInteractionResize}
-            @wa-tab-show=${this.captureInteractionResize}
           >
             <div
               class="chat-virtual-sizer"
