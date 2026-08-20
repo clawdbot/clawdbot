@@ -280,11 +280,10 @@ export function verifyTargetRef(
   const tagMatch = targetRef.match(RELEASE_TAG_PATTERN);
   if (releaseMatch) {
     const releaseVersion = releaseMatch[1]!;
-    const prereleasePattern = new RegExp(
-      `^${releaseVersion.replaceAll(".", "\\.")}-beta\\.[1-9][0-9]*$`,
-      "u",
+    const prereleaseMatch = targetVersion.match(
+      /^([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)-beta\.[1-9][0-9]*$/u,
     );
-    if (targetVersion !== releaseVersion && !prereleasePattern.test(targetVersion)) {
+    if (targetVersion !== releaseVersion && prereleaseMatch?.[1] !== releaseVersion) {
       throw new Error(
         `Target package version ${targetVersion} does not belong to release branch ${targetRef}; expected ${releaseVersion} or a beta prerelease of it`,
       );
