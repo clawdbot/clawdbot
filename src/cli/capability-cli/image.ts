@@ -332,7 +332,6 @@ function resolveImageGenerationOptions(opts: Record<string, unknown>, command: C
     quality: normalizeImageQuality(opts.quality as string | undefined),
     timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs as string | number | undefined),
     output: opts.output as string | undefined,
-    agent: typeof opts.agent === "string" ? opts.agent : undefined,
   };
 }
 

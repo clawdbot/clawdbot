@@ -303,7 +303,6 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
-          agent: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
