@@ -197,11 +197,12 @@ export class AcpTranslatorPromptStream {
       settled: createDeferredCore(),
     };
     this.pendingPromptAdmissions.set(params.sessionId, admission);
+    // Supersession keeps the predecessor's abort barrier; explicit closure alone releases it.
+    for (let previous = admission.previous; previous; previous = previous.previous) {
+      previous.closed = true;
+    }
 
     try {
-      if (admission.previous) {
-        await admission.previous.settled.promise;
-      }
       if (!this.ownsPromptAdmission(admission)) {
         return { stopReason: "cancelled" };
       }
@@ -215,7 +216,17 @@ export class AcpTranslatorPromptStream {
           return { stopReason: "cancelled" };
         }
       }
-      return this.submitPrompt(params, session);
+      if (admission.previous) {
+        // Abort the active owner first; explicit closure can still release a blocked predecessor.
+        await Promise.race([admission.previous.settled.promise, admission.closure.promise]);
+        if (!this.ownsPromptAdmission(admission)) {
+          return { stopReason: "cancelled" };
+        }
+      }
+      return await Promise.race([
+        this.submitPrompt(params, session),
+        admission.closure.promise.then(() => ({ stopReason: "cancelled" as const })),
+      ]);
     } finally {
       admission.settled.resolve();
       if (this.pendingPromptAdmissions.get(params.sessionId) === admission) {
@@ -436,21 +447,12 @@ export class AcpTranslatorPromptStream {
   }
 
   private ownsPromptAdmission(admission: AcpPendingPromptAdmission): boolean {
-    if (
-      this.stopped ||
-      admission.closed ||
-      this.sessionStore.getSession(admission.session.sessionId) !== admission.session
-    ) {
-      return false;
-    }
-    let current = this.pendingPromptAdmissions.get(admission.session.sessionId);
-    while (current) {
-      if (current === admission) {
-        return true;
-      }
-      current = current.previous;
-    }
-    return false;
+    return (
+      !this.stopped &&
+      !admission.closed &&
+      this.pendingPromptAdmissions.get(admission.session.sessionId) === admission &&
+      this.sessionStore.getSession(admission.session.sessionId) === admission.session
+    );
   }
 
   private pendingPromptKey(sessionId: string, runId: string): string {
