@@ -19,7 +19,7 @@ type BuiltPluginControlPlaneModuleFailure = BuiltPluginControlPlaneModule & {
   error: string;
 };
 
-type BuiltDoctorContractClosureViolation = BuiltPluginControlPlaneModule & {
+type BuiltPluginControlPlaneClosureViolation = BuiltPluginControlPlaneModule & {
   dependency: string;
   importerPath: string;
 };
@@ -31,6 +31,8 @@ type ProbeParams = {
 
 const ROOT = resolveRepoRoot(import.meta.url);
 const DIRECT_CONTRACT_FILES = ["contract-api.js", "doctor-contract-api.js"];
+const BROWSER_PLUGIN_REGISTRATION_FILE = "index.js";
+const BROWSER_PROXY_UPLOAD_CLEANUP_RUNTIME_FILE = "browser-proxy-upload-cleanup.runtime.js";
 const LEGACY_SETUP_PROPERTIES = new Map<string, string>([
   ["legacyStateMigrations", "channel-legacy-state-migrations"],
   ["legacySessionSurface", "channel-legacy-session-surface"],
@@ -46,7 +48,11 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 // rejects them. `doctor-contract-closure-guard.test.ts` owns the same invariant over
 // sources; bundling can merge runtime code into the artifact behind its back, so the
 // built closure is checked here.
-const FORBIDDEN_DOCTOR_CONTRACT_DEPENDENCIES = ["execa"];
+const FORBIDDEN_STATIC_CLOSURE_DEPENDENCIES = new Map<string, string[]>([
+  ["doctor-contract", ["execa"]],
+  ["browser-plugin-registration", ["openclaw/plugin-sdk/gateway-runtime", "playwright-core"]],
+  ["browser-proxy-upload-cleanup", ["openclaw/plugin-sdk/gateway-runtime", "playwright-core"]],
+]);
 const REQUIRE_PROBE_SOURCE = String.raw`
 const { createRequire } = require("node:module");
 const path = require("node:path");
@@ -118,6 +124,26 @@ export function listBuiltPluginControlPlaneModules(params: { rootDir?: string } 
         modules.set(relativePath, {
           pluginId,
           kind: fileName === "doctor-contract-api.js" ? "doctor-contract" : "contract",
+          relativePath,
+        });
+      }
+    }
+    if (pluginId === "browser") {
+      const registrationPath = path.join(pluginDir, BROWSER_PLUGIN_REGISTRATION_FILE);
+      if (fs.existsSync(registrationPath)) {
+        const relativePath = path.relative(rootDir, registrationPath).split(path.sep).join("/");
+        modules.set(relativePath, {
+          pluginId,
+          kind: "browser-plugin-registration",
+          relativePath,
+        });
+      }
+      const modulePath = path.join(pluginDir, BROWSER_PROXY_UPLOAD_CLEANUP_RUNTIME_FILE);
+      if (fs.existsSync(modulePath)) {
+        const relativePath = path.relative(rootDir, modulePath).split(path.sep).join("/");
+        modules.set(relativePath, {
+          pluginId,
+          kind: "browser-proxy-upload-cleanup",
           relativePath,
         });
       }
@@ -243,20 +269,31 @@ function collectBuiltModuleStaticDependencies(entryPath: string): Map<string, st
   return dependencies;
 }
 
-/** Fails when a built doctor artifact statically reaches a forbidden runtime dependency. */
-export function collectBuiltDoctorContractClosureViolations(
+function matchesForbiddenDependency(dependency: string, forbiddenDependency: string): boolean {
+  return dependency === forbiddenDependency || dependency.startsWith(`${forbiddenDependency}/`);
+}
+
+/** Fails when a built control-plane artifact statically reaches a forbidden runtime dependency. */
+export function collectBuiltPluginControlPlaneClosureViolations(
   modules: BuiltPluginControlPlaneModule[],
   params: { rootDir?: string } = {},
-): BuiltDoctorContractClosureViolation[] {
+): BuiltPluginControlPlaneClosureViolation[] {
   const rootDir = path.resolve(params.rootDir ?? ROOT);
-  const violations: BuiltDoctorContractClosureViolation[] = [];
-  for (const module of modules.filter((candidate) => candidate.kind === "doctor-contract")) {
+  const violations: BuiltPluginControlPlaneClosureViolation[] = [];
+  for (const module of modules) {
+    const forbiddenDependencies = FORBIDDEN_STATIC_CLOSURE_DEPENDENCIES.get(module.kind);
+    if (!forbiddenDependencies) {
+      continue;
+    }
     const dependencies = collectBuiltModuleStaticDependencies(
       path.join(rootDir, module.relativePath),
     );
-    for (const dependency of FORBIDDEN_DOCTOR_CONTRACT_DEPENDENCIES) {
-      const importer = dependencies.get(dependency);
-      if (importer) {
+    for (const [dependency, importer] of dependencies) {
+      if (
+        forbiddenDependencies.some((forbiddenDependency) =>
+          matchesForbiddenDependency(dependency, forbiddenDependency),
+        )
+      ) {
         violations.push({
           ...module,
           dependency,
@@ -279,18 +316,18 @@ export function verifyBuiltPluginControlPlaneModules(params: ProbeParams = {}) {
     );
     throw new Error(`built plugin control-plane module load failures:\n${details.join("\n")}`);
   }
-  const closureViolations = collectBuiltDoctorContractClosureViolations(modules, params);
+  const closureViolations = collectBuiltPluginControlPlaneClosureViolations(modules, params);
   if (closureViolations.length > 0) {
     const details = closureViolations.map(
       (violation) =>
         `- ${violation.pluginId} ${violation.relativePath} statically reaches ${violation.dependency} through ${violation.importerPath}`,
     );
     throw new Error(
-      `built doctor contract closures reach forbidden runtime dependencies:\n${details.join("\n")}`,
+      `built plugin control-plane closures reach forbidden runtime dependencies:\n${details.join("\n")}`,
     );
   }
   console.error(
-    `[plugin-control-plane-loads] verified ${modules.length} built modules with native require and checked doctor closures`,
+    `[plugin-control-plane-loads] verified ${modules.length} built modules with native require and checked guarded closures`,
   );
 }
 

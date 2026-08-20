@@ -45,6 +45,9 @@ const logger = createSubsystemLogger("browser");
 const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
   () => import("./register.runtime.js"),
 );
+const loadBrowserProxyUploadCleanupRuntimeModule = createLazyRuntimeModule(
+  () => import("./browser-proxy-upload-cleanup.runtime.js"),
+);
 
 function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
@@ -201,7 +204,7 @@ function createBrowserProxyNodeHostCommand(command: string): OpenClawPluginNodeH
     ...(command === BROWSER_PROXY_UPLOAD_COMMAND
       ? {
           watchAvailability: () => {
-            void loadBrowserRegistrationRuntimeModule()
+            void loadBrowserProxyUploadCleanupRuntimeModule()
               .then(({ ensureBrowserProxyUploadCleanup }) => ensureBrowserProxyUploadCleanup())
               .catch((error: unknown) => {
                 logger.warn(`browser proxy upload cleanup startup failed: ${String(error)}`);

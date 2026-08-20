@@ -77,6 +77,14 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).toContain("dist/extensions/codex/cli-metadata.js");
   });
 
+  it("emits the browser proxy upload cleanup runtime as a bundled build entry", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/browser/browser-proxy-upload-cleanup.runtime"]).toBe(
+      "extensions/browser/browser-proxy-upload-cleanup.runtime.ts",
+    );
+  });
+
   it("builds narrow QA runner public surfaces", () => {
     const entries = listBundledPluginBuildEntries();
 

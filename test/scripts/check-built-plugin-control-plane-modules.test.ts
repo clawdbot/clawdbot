@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  collectBuiltDoctorContractClosureViolations,
+  collectBuiltPluginControlPlaneClosureViolations,
   listBuiltPluginControlPlaneModules,
   probeBuiltPluginControlPlaneModules,
   verifyBuiltPluginControlPlaneModules,
@@ -123,9 +123,12 @@ describe("built doctor contract closures", () => {
     write(rootDir, "dist/exec-chunk.js", 'import "execa";\nexport const rule = 1;\n');
 
     expect(
-      collectBuiltDoctorContractClosureViolations(listBuiltPluginControlPlaneModules({ rootDir }), {
-        rootDir,
-      }),
+      collectBuiltPluginControlPlaneClosureViolations(
+        listBuiltPluginControlPlaneModules({ rootDir }),
+        {
+          rootDir,
+        },
+      ),
     ).toEqual([
       {
         pluginId: "demo",
@@ -153,9 +156,124 @@ describe("built doctor contract closures", () => {
     );
 
     expect(
-      collectBuiltDoctorContractClosureViolations(listBuiltPluginControlPlaneModules({ rootDir }), {
-        rootDir,
-      }),
+      collectBuiltPluginControlPlaneClosureViolations(
+        listBuiltPluginControlPlaneModules({ rootDir }),
+        {
+          rootDir,
+        },
+      ),
     ).toEqual([]);
+  });
+});
+
+describe("built browser startup closures", () => {
+  it("accepts narrow plugin registration and cleanup artifacts", () => {
+    const rootDir = makeRoot();
+    write(
+      rootDir,
+      "dist/extensions/browser/index.js",
+      'export { plugin } from "../../registration-chunk.js";\n',
+    );
+    write(
+      rootDir,
+      "dist/extensions/browser/browser-proxy-upload-cleanup.runtime.js",
+      'export { cleanup } from "../../cleanup-chunk.js";\n',
+    );
+    write(rootDir, "dist/registration-chunk.js", 'import "node:path";\nexport const plugin = 1;\n');
+    write(rootDir, "dist/cleanup-chunk.js", 'import "node:fs";\nexport const cleanup = 1;\n');
+
+    expect(
+      collectBuiltPluginControlPlaneClosureViolations(
+        listBuiltPluginControlPlaneModules({ rootDir }),
+        { rootDir },
+      ),
+    ).toEqual([]);
+  });
+
+  it("roots the Playwright guard at the emitted Browser plugin startup entry", () => {
+    const rootDir = makeRoot();
+    write(
+      rootDir,
+      "dist/extensions/browser/index.js",
+      'export { plugin } from "../../registration-chunk.js";\n',
+    );
+    write(
+      rootDir,
+      "dist/registration-chunk.js",
+      'import "playwright-core/lib/server";\nexport const plugin = 1;\n',
+    );
+
+    expect(
+      collectBuiltPluginControlPlaneClosureViolations(
+        listBuiltPluginControlPlaneModules({ rootDir }),
+        { rootDir },
+      ),
+    ).toEqual([
+      {
+        pluginId: "browser",
+        kind: "browser-plugin-registration",
+        relativePath: "dist/extensions/browser/index.js",
+        dependency: "playwright-core/lib/server",
+        importerPath: "dist/registration-chunk.js",
+      },
+    ]);
+  });
+
+  it("also guards the cleanup artifact's own emitted closure", () => {
+    const rootDir = makeRoot();
+    write(
+      rootDir,
+      "dist/extensions/browser/browser-proxy-upload-cleanup.runtime.js",
+      'export { cleanup } from "../../cleanup-chunk.js";\n',
+    );
+    write(
+      rootDir,
+      "dist/cleanup-chunk.js",
+      'import "playwright-core";\nexport const cleanup = 1;\n',
+    );
+
+    expect(
+      collectBuiltPluginControlPlaneClosureViolations(
+        listBuiltPluginControlPlaneModules({ rootDir }),
+        { rootDir },
+      ),
+    ).toEqual([
+      {
+        pluginId: "browser",
+        kind: "browser-proxy-upload-cleanup",
+        relativePath: "dist/extensions/browser/browser-proxy-upload-cleanup.runtime.js",
+        dependency: "playwright-core",
+        importerPath: "dist/cleanup-chunk.js",
+      },
+    ]);
+  });
+
+  it("rejects the broad Gateway runtime from Browser startup closures", () => {
+    const rootDir = makeRoot();
+    write(
+      rootDir,
+      "dist/extensions/browser/index.js",
+      'export { plugin } from "../../registration-chunk.js";\n',
+    );
+    write(
+      rootDir,
+      "dist/registration-chunk.js",
+      'import "openclaw/plugin-sdk/gateway-runtime";\nexport const plugin = 1;\n',
+    );
+
+    expect(
+      collectBuiltPluginControlPlaneClosureViolations(
+        listBuiltPluginControlPlaneModules({ rootDir }),
+        { rootDir },
+      ),
+    ).toEqual([
+      {
+        pluginId: "browser",
+        kind: "browser-plugin-registration",
+        relativePath: "dist/extensions/browser/index.js",
+        dependency: "openclaw/plugin-sdk/gateway-runtime",
+        importerPath: "dist/registration-chunk.js",
+      },
+    ]);
   });
 });
