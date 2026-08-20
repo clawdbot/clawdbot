@@ -305,13 +305,11 @@ export function assertNoForeignKeyViolationsAfterMigration(
   db: DatabaseSync,
   pathname: string,
 ): void {
-  // SAFETY: PRAGMA foreign_key_check returns rows with { table, rowid, parent, fkid } columns.
-  const violations = db.prepare("PRAGMA foreign_key_check;").all() as Array<{
-    table?: string;
-  }>;
+  const violations = db.prepare("PRAGMA foreign_key_check;").all();
   if (violations.length > 0) {
+    const firstTable = violations[0]?.table;
     throw new Error(
-      `Agent database schema migration completed with ${violations.length} foreign key violation(s) in ${pathname}; first table: ${violations[0]?.table ?? "?"}`,
+      `Agent database schema migration completed with ${violations.length} foreign key violation(s) in ${pathname}; first table: ${String(firstTable ?? "?")}`,
     );
   }
 }
