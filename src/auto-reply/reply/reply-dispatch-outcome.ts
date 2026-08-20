@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyDispatchSettledCounts } from "./reply-dispatcher.types.js";
 
+const REPLY_DISPATCH_DELIVERY_ERROR_CODE = "REPLY_DISPATCH_DELIVERY_ERROR";
+
 export type ReplyDispatchDeliveryOutcome =
   | "delivered"
   | "delivered-not-visible"
@@ -9,6 +11,8 @@ export type ReplyDispatchDeliveryOutcome =
   | "failed-deliver";
 
 export class ReplyDispatchDeliveryError extends Error {
+  readonly code = REPLY_DISPATCH_DELIVERY_ERROR_CODE;
+
   constructor(readonly outcome: ReplyDispatchDeliveryOutcome) {
     super("queued reply delivery failed");
     this.name = "ReplyDispatchDeliveryError";
@@ -16,7 +20,15 @@ export class ReplyDispatchDeliveryError extends Error {
 }
 
 export function isReplyDispatchDeliveryError(error: unknown): error is ReplyDispatchDeliveryError {
-  return error instanceof ReplyDispatchDeliveryError;
+  return (
+    isRecord(error) &&
+    error.code === REPLY_DISPATCH_DELIVERY_ERROR_CODE &&
+    (error.outcome === "delivered" ||
+      error.outcome === "delivered-not-visible" ||
+      error.outcome === "cancelled" ||
+      error.outcome === "failed-before-deliver" ||
+      error.outcome === "failed-deliver")
+  );
 }
 
 export function isReplyDispatchProvenInvisible(outcome: ReplyDispatchDeliveryOutcome): boolean {

@@ -186,6 +186,8 @@ export type EmbeddedAgentRunMeta = {
   providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
+  /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
+  intentionalTerminalCompletion?: "tool-batch";
   terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */

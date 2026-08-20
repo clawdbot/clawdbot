@@ -21,6 +21,15 @@ function createUntrackedDispatcher(overrides: Partial<ReplyDispatcher> = {}): Re
 }
 
 describe("requireQueuedReplyDelivery", () => {
+  it("rejects a branded delivery error with an invalid outcome", () => {
+    expect(
+      isReplyDispatchDeliveryError({
+        code: "REPLY_DISPATCH_DELIVERY_ERROR",
+        outcome: "invalid",
+      }),
+    ).toBe(false);
+  });
+
   it.each([
     ["delivered", true],
     ["delivered-not-visible", false],

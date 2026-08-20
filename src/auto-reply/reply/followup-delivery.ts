@@ -7,7 +7,10 @@ import {
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  hasDeliberateSilentTerminalReply,
+  hasIntentionalTerminalCompletion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import { logVerbose } from "../../globals.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
@@ -235,6 +238,7 @@ export function resolveFollowupDeliveryDecision(params: {
           result.meta?.yielded === true || (result.meta?.pendingToolCalls?.length ?? 0) > 0,
         hasExplicitSilentReply: hasDeliberateSilentTerminalReply(result),
         hasCommittedDelivery,
+        hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(result),
         sessionCtx: {
           ChatType: turn.queued.originatingChatType,
           Provider: turn.queued.run.messageProvider,

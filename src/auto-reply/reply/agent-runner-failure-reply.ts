@@ -332,6 +332,7 @@ export function buildEmptyInteractiveReplyPayload(params: {
   hasPendingContinuation: boolean;
   hasExplicitSilentReply: boolean;
   hasCommittedDelivery: boolean;
+  hasIntentionalTerminalCompletion: boolean;
   sessionCtx: ExternalFailureConversationContext;
   cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
@@ -342,7 +343,8 @@ export function buildEmptyInteractiveReplyPayload(params: {
     params.allowEmptyAssistantReplyAsSilent === true ||
     params.hasPendingContinuation ||
     params.hasExplicitSilentReply ||
-    params.hasCommittedDelivery
+    params.hasCommittedDelivery ||
+    params.hasIntentionalTerminalCompletion
   ) {
     return undefined;
   }
