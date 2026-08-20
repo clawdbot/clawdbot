@@ -321,6 +321,22 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
   });
 
+  it("limits evidence publishers to comment and PR-read permissions", () => {
+    const tokenSteps = [
+      workflowStep("Create Mantis GitHub App token"),
+      jobStep(
+        WORKFLOW,
+        "publish_existing_telegram_desktop_proof",
+        "Create Mantis GitHub App token",
+      ),
+    ];
+
+    for (const step of tokenSteps) {
+      expect(step.with?.["permission-issues"]).toBe("write");
+      expect(step.with?.["permission-pull-requests"]).toBe("read");
+    }
+  });
+
   it("uses the repo-owned Telegram user driver by default", () => {
     expect(existsSync(USER_DRIVER)).toBe(true);
     expect(readFileSync(PROOF_SCRIPT, "utf8")).toContain(

@@ -1009,7 +1009,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-issues: write
-          permission-pull-requests: write
+          permission-pull-requests: read
 
       - name: Comment PR with inline QA evidence
         if: ${{ always() && steps.trusted_evidence.outcome == 'success' && needs.resolve_request.outputs.pr_number != '' && steps.inspect.outputs.output_dir != '' }}
@@ -1112,7 +1112,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-issues: write
-          permission-pull-requests: write
+          permission-pull-requests: read
 
       - name: Comment PR with inline QA evidence
         env:
