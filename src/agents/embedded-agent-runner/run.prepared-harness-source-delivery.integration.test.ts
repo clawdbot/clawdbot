@@ -137,6 +137,7 @@ describe("prepared harness source delivery", () => {
     let modelVisiblePrompt = "";
     const recordModelVisiblePrompt = (attemptParams: {
       extraSystemPrompt?: string;
+      forceMessageTool?: boolean;
       sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     }) => {
       modelVisiblePrompt = buildEmbeddedSystemPrompt({
@@ -154,7 +155,7 @@ describe("prepared harness source delivery", () => {
           channel: "discord",
           chatType: "direct",
         },
-        tools: [],
+        tools: attemptParams.forceMessageTool ? [{ name: "message" } as never] : [],
         userTimezone: "UTC",
         userDate: "2026-08-11",
       });
