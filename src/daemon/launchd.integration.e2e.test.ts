@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { LOOPBACK_PORT_PROBE_HOSTS, probePortUsage } from "../infra/ports-probe.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import {
@@ -208,12 +209,22 @@ describeLaunchdIntegration("launchd integration", () => {
       });
       await waitForRunningRuntime({ env: gatewayEnv });
 
+      // Prove the gateway port is genuinely bound right now via a real TCP
+      // probe (no launchd-status inference) before exercising the node-host
+      // lifecycle against it. This closes the gap where a LaunchAgent could
+      // report "running" before its listener has actually bound the port.
+      await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
+
       await installLaunchAgent({
         env: nodeEnv,
         stdout,
         programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
       });
       const nodeBefore = await waitForRunningRuntime({ env: nodeEnv });
+
+      // Re-confirm the port is still genuinely busy immediately before the
+      // stop call, so the assertion below is tied to a real, current probe.
+      await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
 
       // The gateway port is genuinely still bound by the co-located gateway
       // LaunchAgent right now. Stopping the node-host LaunchAgent must not
@@ -234,6 +245,11 @@ describeLaunchdIntegration("launchd integration", () => {
       });
       await waitForRunningRuntime({ env: nodeEnv, pidNot: nodeBefore.pid });
       const nodeRunningBeforeRestart = await readLaunchAgentRuntime(nodeEnv);
+
+      // Re-probe immediately before restart too: the port must still be
+      // genuinely busy (real TCP probe, not inferred from launchd status)
+      // for this to be a valid proof of the restart-guard fix.
+      await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
 
       await expect(restartLaunchAgent({ env: nodeEnv, stdout })).resolves.not.toThrow();
       await expectRuntimePidReplaced({
