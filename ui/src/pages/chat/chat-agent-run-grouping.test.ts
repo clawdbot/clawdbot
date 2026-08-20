@@ -45,9 +45,13 @@ type AgentRunFrameRenderItem = Extract<
   { kind: "agent-run-frame" }
 >;
 
-function requireFrame(value: unknown): AgentRunFrameRenderItem {
-  expect(value).toMatchObject({ kind: "agent-run-frame" });
-  return value as AgentRunFrameRenderItem;
+function requireFrame(
+  value: ReturnType<typeof coalesceAgentRunFrames>[number] | undefined,
+): AgentRunFrameRenderItem {
+  if (value?.kind !== "agent-run-frame") {
+    throw new Error("expected an agent run frame");
+  }
+  return value;
 }
 
 describe("coalesceAgentRunFrames", () => {
@@ -94,6 +98,38 @@ describe("coalesceAgentRunFrames", () => {
     expect(history.key).toContain(JSON.stringify([runId, "send:send-1"]));
     expect(tooling.parts.map((part) => part.key)).toEqual([stream.key, activity.key]);
     expect(history.parts.map((part) => part.key)).toEqual([work.key, final.key]);
+  });
+
+  it("keeps the live send frame identity when a hidden boundary materializes in history", () => {
+    const runId = "run-heartbeat-handoff";
+    const stream: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream-run:heartbeat-handoff",
+      runId,
+      boundaryId: `send:${runId}`,
+      parts: [
+        {
+          kind: "reading-indicator",
+          key: "reading:heartbeat-handoff",
+          startedAt: 1,
+          runId,
+          boundaryId: `send:${runId}`,
+        },
+      ],
+    };
+    const live = requireFrame(coalesceAgentRunFrames([userBoundary(runId), stream])[1]);
+    const persistedBoundary = group("assistant", "persisted-after-heartbeat", runId, {
+      api: "cli",
+      idempotencyKey: `cli-assistant:${runId}`,
+      __openclaw: {
+        id: "persisted-after-heartbeat",
+        turnBoundary: true,
+      },
+    });
+    const history = requireFrame(coalesceAgentRunFrames([persistedBoundary])[0]);
+
+    expect(history.boundaryId).toBe(`send:${runId}`);
+    expect(history.key).toBe(live.key);
   });
 
   it("keeps different and missing run identities outside the same frame", () => {

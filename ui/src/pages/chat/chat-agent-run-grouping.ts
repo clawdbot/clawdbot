@@ -15,7 +15,7 @@ type AgentRunFramePart =
   | ActivityRunRenderItem
   | StreamRunRenderItem;
 
-type AgentRunFrameRenderItem = {
+export type AgentRunFrameRenderItem = {
   kind: "agent-run-frame";
   key: string;
   runId: string;
@@ -36,14 +36,35 @@ function itemGroups(item: AgentRunFramePart): MessageGroup[] {
   return [];
 }
 
+function cliPersistedRunId(group: MessageGroup): string | undefined {
+  const firstMessage = group.messages[0]?.message;
+  const message = asRecord(firstMessage);
+  const identity = readSessionMessageIdentity(firstMessage);
+  // CLI transcript persistence namespaces its idempotency key; only its marked
+  // assistant shape may recover the originating live Gateway run identity.
+  return message?.api === "cli" && identity?.idempotencyKey?.startsWith("cli-assistant:")
+    ? identity.idempotencyKey.slice("cli-assistant:".length).trim() || undefined
+    : undefined;
+}
+
+function groupRunId(group: MessageGroup): string | undefined {
+  const runId = group.runId;
+  const cliRunId = cliPersistedRunId(group);
+  if (!runId || !cliRunId) {
+    return runId;
+  }
+  const identity = readSessionMessageIdentity(group.messages[0]?.message);
+  return runId === identity?.runId || runId === cliRunId ? cliRunId : runId;
+}
+
 function itemRunId(item: AgentRunFramePart): string | undefined {
   if (item.kind === "stream-run") {
     return item.runId;
   }
-  const groups = itemGroups(item);
-  const runIds = new Set(groups.map((group) => group.runId).filter((value) => value !== undefined));
-  return groups.length > 0 && runIds.size === 1 && groups.every((group) => group.runId)
-    ? runIds.values().next().value
+  const runIds = itemGroups(item).map(groupRunId);
+  const uniqueRunIds = new Set(runIds.filter((value) => value !== undefined));
+  return runIds.length > 0 && uniqueRunIds.size === 1 && runIds.every(Boolean)
+    ? uniqueRunIds.values().next().value
     : undefined;
 }
 
@@ -69,11 +90,12 @@ function itemBoundaryId(item: AgentRunFramePart): string | undefined {
 function groupBoundaryId(group: MessageGroup): string | undefined {
   const firstMessage = group.messages[0]?.message;
   const identity = readSessionMessageIdentity(firstMessage);
-  if (group.role === "user" && identity?.runId) {
-    return `send:${identity.runId}`;
-  }
   if (!chatItemStartsUserTurn(group)) {
     return undefined;
+  }
+  const runId = cliPersistedRunId(group) ?? identity?.runId;
+  if (runId) {
+    return `send:${runId}`;
   }
   return identity?.id ? `entry:${identity.id}` : undefined;
 }
@@ -100,6 +122,32 @@ export function agentRunFrameTerminalAssistant(
 ): MessageGroup | undefined {
   const last = frame.parts.at(-1);
   return last?.kind === "group" && last.role === "assistant" ? last : undefined;
+}
+
+export function agentRunFrameActiveStatusParts(
+  frame: AgentRunFrameRenderItem,
+): StreamRunRenderItem["parts"] | undefined {
+  if (frame.state !== "active") {
+    return undefined;
+  }
+  const parts = frame.parts.flatMap((part) => (part.kind === "stream-run" ? part.parts : []));
+  return parts.length > 0 &&
+    frame.parts.every(
+      (part) =>
+        part.kind === "stream-run" &&
+        part.parts.every((streamPart) => streamPart.kind === "reading-indicator"),
+    )
+    ? parts
+    : undefined;
+}
+
+function isAgentRunFramePart(item: AgentRunFrameInput): item is AgentRunFramePart {
+  return (
+    item.kind === "group" ||
+    item.kind === "work-group" ||
+    item.kind === "activity-run" ||
+    item.kind === "stream-run"
+  );
 }
 
 /** Wrap semantic work/activity rows in one run-owned presentation frame. */
@@ -130,7 +178,13 @@ export function coalesceAgentRunFrames(
     runId = undefined;
   };
   for (const item of items) {
-    const candidate = item as AgentRunFramePart;
+    if (!isAgentRunFramePart(item)) {
+      flush();
+      result.push(item);
+      boundaryId = undefined;
+      continue;
+    }
+    const candidate = item;
     const boundaryGroup = itemBoundaryGroup(candidate);
     if (boundaryGroup) {
       flush();

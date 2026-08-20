@@ -22,6 +22,7 @@ import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
   buildCompactionDividerItem,
+  buildGuardianNoticeItem,
   buildResetDividerItem,
   clearWorkingProgress,
   projectContextCompactionActivity,
@@ -54,9 +55,15 @@ import {
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
   turnHasMatchingAssistant,
-  userTurnSendIdentity,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
+import {
+  findCurrentTurnBounds,
+  findRunTurnBounds,
+  optionalBoundaryIdentity,
+  optionalRunIdentity,
+  resolveRunInsertionBounds,
+} from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
@@ -91,107 +98,6 @@ export type BuildChatItemsProps = {
   searchOpen?: boolean;
   searchQuery?: string;
 };
-
-function optionalRunId(value: unknown): { runId: string } | undefined {
-  const runId = normalizeOptionalString(value);
-  return runId ? { runId } : undefined;
-}
-
-function optionalBoundaryId(value: unknown): { boundaryId: string } | undefined {
-  const boundaryRunId = normalizeOptionalString(value);
-  return boundaryRunId ? { boundaryId: `send:${boundaryRunId}` } : undefined;
-}
-
-function guardianNoticeItem(notice: ChatGuardianNotice): Extract<ChatItem, { kind: "notice" }> {
-  const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
-  if (notice.kind === "approved") {
-    return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
-      label: t("chat.systemNotice.guardian.approvedSummary", { action }),
-      text: "",
-      timestamp: notice.timestamp,
-    };
-  }
-  if (notice.kind === "warning") {
-    return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
-      label: t("chat.systemNotice.guardian.warningLabel"),
-      text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
-      timestamp: notice.timestamp,
-      tone: "danger",
-    };
-  }
-  return {
-    kind: "notice",
-    key: notice.key,
-    icon: "shieldCheck",
-    label: t("chat.systemNotice.guardian.deniedLabel"),
-    text: t("chat.systemNotice.guardian.deniedSummary", {
-      action,
-      risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
-      rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
-    }),
-    timestamp: notice.timestamp,
-    tone: "danger",
-  };
-}
-
-function isUserChatItem(item: ChatItem): boolean {
-  if (item.kind !== "message") {
-    return false;
-  }
-  const normalized = safeNormalizeMessage(item.message);
-  return normalized ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" : false;
-}
-
-function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
-  const index = items.findLastIndex(isUserChatItem);
-  const item = items[index];
-  return index >= 0 && item ? { afterKey: item.key } : null;
-}
-
-function findRunTurnBounds(items: ChatItem[], runId: string): TurnInsertionBounds | null {
-  const sendIdentity = `send:${runId}`;
-  const index = items.findIndex(
-    (item) =>
-      item.kind === "message" &&
-      isUserChatItem(item) &&
-      userTurnSendIdentity(item.message) === sendIdentity,
-  );
-  const item = items[index];
-  if (index < 0 || !item) {
-    return null;
-  }
-  const nextUser = items.slice(index + 1).find(isUserChatItem);
-  return { afterKey: item.key, ...(nextUser ? { beforeKey: nextUser.key } : {}) };
-}
-
-function resolveRunInsertionBounds(
-  items: ChatItem[],
-  runId: unknown,
-  currentRunId: string | null | undefined,
-  currentTurnBounds: TurnInsertionBounds | null,
-): TurnInsertionBounds | null {
-  if (typeof runId !== "string" || !runId.trim()) {
-    return currentRunId != null ? currentTurnBounds : null;
-  }
-  const runBounds = findRunTurnBounds(items, runId);
-  if (runId === currentRunId) {
-    // Active runs can span steers: the original prompt is a floor, not a ceiling.
-    return runBounds ? { afterKey: runBounds.afterKey } : currentTurnBounds;
-  }
-  if (runBounds || currentRunId == null) {
-    return runBounds;
-  }
-  // Legacy rows may lack the user-run identity needed for exact bounds. Keep
-  // their timestamp ordering across historical turns, but never cross the
-  // current prompt and become current-run output.
-  return currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null;
-}
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
@@ -514,7 +420,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   };
   if (!searchFiltering) {
     for (const notice of props.guardianNotices ?? []) {
-      const item = guardianNoticeItem(notice);
+      const item = buildGuardianNoticeItem(notice);
       timestampedProjectionItems.push(item);
       applyRunBounds(item.key, notice.runId);
     }
@@ -581,8 +487,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           text: visibleText,
           startedAt: segment.ts,
           isStreaming: false,
-          ...optionalRunId(segment.runId),
-          ...optionalBoundaryId(afterBoundaryBySegment.get(segment) ?? segment.runId),
+          ...optionalRunIdentity(segment.runId),
+          ...optionalBoundaryIdentity(afterBoundaryBySegment.get(segment) ?? segment.runId),
         };
         timestampedProjectionItems.push(streamItem);
         applyRunBounds(
@@ -651,8 +557,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       text,
       startedAt: segment.ts,
       isStreaming: false,
-      ...optionalRunId(segment.runId),
-      ...optionalBoundaryId(afterBoundaryBySegment.get(segment) ?? segment.runId),
+      ...optionalRunIdentity(segment.runId),
+      ...optionalBoundaryIdentity(afterBoundaryBySegment.get(segment) ?? segment.runId),
     };
     timestampedProjectionItems.push(commentaryItem);
     applyRunBounds(
@@ -735,8 +641,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,
-        ...optionalRunId(liveRunId),
-        ...optionalBoundaryId(latestBoundaryRunId ?? liveRunId),
+        ...optionalRunIdentity(liveRunId),
+        ...optionalBoundaryIdentity(latestBoundaryRunId ?? liveRunId),
       };
       const liveTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
       const liveTurnBounds = liveTurnRunId ? findRunTurnBounds(items, liveTurnRunId) : null;
@@ -755,8 +661,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
-      ...optionalRunId(workingRunId),
-      ...optionalBoundaryId(latestBoundaryRunId ?? workingRunId),
+      ...optionalRunIdentity(workingRunId),
+      ...optionalBoundaryIdentity(latestBoundaryRunId ?? workingRunId),
     });
   }
   // Future queued turns are a causal ceiling for every current-run projection.

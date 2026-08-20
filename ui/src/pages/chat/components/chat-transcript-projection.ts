@@ -1,7 +1,5 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { nothing, type TemplateResult } from "lit";
-import { guard } from "lit/directives/guard.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -13,6 +11,7 @@ import {
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
 } from "../../../lib/sessions/session-key.ts";
+import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -33,6 +32,7 @@ import {
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
+import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
@@ -41,8 +41,6 @@ import {
   getChatMediaRenderVersion,
   renderActivityGroup,
   renderMessageGroup,
-  renderMessageGroupContent,
-  renderStreamGroupParts,
   renderStreamGroup,
   renderWorkGroupSummary,
   type MessageReplyTarget,
@@ -54,13 +52,13 @@ import {
   closeTranscriptSearch,
   getTranscriptState,
   type ChatThreadProps,
-  type ChatThreadState,
 } from "./chat-thread-interactions.ts";
-import type {
-  ChatTranscriptSession,
-  TranscriptAnnouncement,
-  TranscriptRow,
-} from "./chat-transcript-controller.ts";
+import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
+import type { ChatTranscriptSession, TranscriptRow } from "./chat-transcript-controller.ts";
+import {
+  guardChatRenderItems,
+  trackTranscriptRenderDependencies,
+} from "./chat-transcript-render-guard.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
@@ -74,7 +72,6 @@ type ChatTranscriptProjection = {
 };
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
-const CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS = 500;
 
 type LoadedReplySource = {
   rowKey: string;
@@ -108,123 +105,6 @@ function projectResolvedReplyPreview(
     senderLabel: resolveMessageGroupSenderLabel(group, props),
     text,
   };
-}
-
-function latestTranscriptAnnouncement(
-  items: readonly ChatRenderItem[],
-): TranscriptAnnouncement | null {
-  const announcement = (key: string, text: string): TranscriptAnnouncement => ({
-    key,
-    text: truncateUtf16Safe(text, CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS),
-  });
-  const groupText = (group: MessageGroup): string | null => {
-    if (group.role.toLowerCase() !== "assistant") {
-      return null;
-    }
-    for (let index = group.messages.length - 1; index >= 0; index -= 1) {
-      const text = extractTextCached(group.messages[index]?.message)?.trim();
-      if (text) {
-        return text;
-      }
-    }
-    return null;
-  };
-  for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-    const item = items[itemIndex];
-    if (!item) {
-      continue;
-    }
-    if (item.kind === "agent-run-frame") {
-      for (let partIndex = item.parts.length - 1; partIndex >= 0; partIndex -= 1) {
-        const part = item.parts[partIndex];
-        if (!part) {
-          continue;
-        }
-        if (part.kind === "stream-run") {
-          for (let index = part.parts.length - 1; index >= 0; index -= 1) {
-            const streamPart = part.parts[index];
-            if (streamPart?.kind === "stream" && streamPart.text.trim()) {
-              return announcement(item.key, streamPart.text.trim());
-            }
-          }
-          continue;
-        }
-        const groups = part.kind === "group" ? [part] : part.groups;
-        for (let index = groups.length - 1; index >= 0; index -= 1) {
-          const group = groups[index];
-          const text = group ? groupText(group) : null;
-          if (text) {
-            return announcement(item.key, text);
-          }
-        }
-      }
-      continue;
-    }
-    const groups =
-      item.kind === "group"
-        ? [item]
-        : item.kind === "work-group" || item.kind === "activity-run"
-          ? item.groups.toReversed()
-          : [];
-    for (const group of groups) {
-      const text = groupText(group);
-      if (text) {
-        return announcement(item.key, text);
-      }
-    }
-  }
-  return null;
-}
-
-function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown[] {
-  if (item.kind === "stream-run") {
-    return [item.key, ...item.parts];
-  }
-  if (item.kind === "work-group") {
-    return [item.key, item.durationMs, ...item.groups];
-  }
-  if (item.kind === "activity-run") {
-    return [item.key, ...item.groups];
-  }
-  if (item.kind === "agent-run-frame") {
-    return [item.key, item.state, ...item.parts];
-  }
-  return [item];
-}
-
-function trackTranscriptRenderDependencies(
-  state: ChatThreadState,
-  dependencies: unknown[],
-): unknown[] {
-  const previous = state.transcriptRenderDependencies;
-  const nextLength = dependencies.length - 1;
-  let changed = previous.length !== nextLength;
-  for (let index = 0; !changed && index < nextLength; index += 1) {
-    changed = !Object.is(previous[index], dependencies[index + 1]);
-  }
-  if (changed) {
-    // The first dependency is chatItems. Keep the shared context stable when
-    // only the live row changes, but invalidate every row for presentation changes.
-    state.transcriptRenderDependencies = dependencies.slice(1);
-    state.transcriptRenderContext = {};
-  }
-  return dependencies;
-}
-
-function guardChatRenderItems(
-  state: ChatThreadState,
-  // Live run status is not derivable from a row's own item identity: ownership
-  // is decided by sibling rows, and the usage counter ticks on run patches that
-  // touch nothing else. Rows showing status must re-render on both, or the
-  // memoized copy stacks a second claw row or freezes the token count.
-  liveStatus: (item: ChatRenderItem) => string,
-  render: (item: ChatRenderItem) => unknown,
-) {
-  return (item: ChatRenderItem) =>
-    guard(
-      [...chatRenderItemGuardDependencies(item), state.transcriptRenderContext, liveStatus(item)],
-      () => render(item),
-    );
 }
 
 export function projectChatTranscript(
@@ -544,86 +424,21 @@ export function projectChatTranscript(
       return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
     }
     if (item.kind === "agent-run-frame") {
-      const groups = agentRunFrameGroups(item);
-      const statusOnly =
-        groups.length === 0 &&
-        item.parts.every(
-          (part) =>
-            part.kind === "stream-run" &&
-            part.parts.every((streamPart) => streamPart.kind === "reading-indicator"),
-        );
-      if (statusOnly) {
-        return renderStreamGroup(
-          item.parts.flatMap((part) => (part.kind === "stream-run" ? part.parts : [])),
-          {
-            ...streamGroupOptions,
-            questionPrompts,
-            startupPhase: props.startupStatus?.phase,
-            waitingApproval: props.waitingApproval,
-            runOutputTokens: props.runOutputTokens,
-          },
-        );
-      }
-      const firstAssistant = groups.find((group) => group.role === "assistant");
-      const terminalAssistant = agentRunFrameTerminalAssistant(item);
-      const representative = terminalAssistant ?? firstAssistant ?? groups[0];
-      const streamStarts = item.parts.flatMap((part) =>
-        part.kind === "stream-run" ? part.parts.map((streamPart) => streamPart.startedAt) : [],
-      );
-      const shell: MessageGroup = {
-        key: item.key,
-        kind: "group",
-        role: "assistant",
-        senderLabel: firstAssistant?.senderLabel,
-        replyToSender: firstAssistant?.replyToSender,
-        messages: terminalAssistant?.messages ?? representative?.messages ?? [],
-        timestamp: Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
-        isStreaming: item.state === "active",
-        runId: item.runId,
-      };
-      const shellOptions = renderGroupOptions(shell);
-      const renderFrameGroup = (group: MessageGroup) =>
-        renderMessageGroupContent(group, renderGroupOptions(group));
-      const frameContent = item.parts.map((part) => {
-        if (part.kind === "stream-run") {
-          return renderStreamGroupParts(
-            part.parts,
-            {
-              ...streamGroupOptions,
-              questionPrompts,
-              startupPhase: props.startupStatus?.phase,
-              waitingApproval: props.waitingApproval,
-              runOutputTokens: props.runOutputTokens,
-            },
-            "continuation",
-          );
-        }
-        if (part.kind === "work-group") {
-          const workExpanded = expandedToolCards.get(part.key) ?? false;
-          return html`
-            ${renderWorkGroupSummary(part, {
-              expanded: workExpanded,
-              onToggle: () => {
-                setExpansionState(expandedToolCards, part.key, !workExpanded);
-                requestUpdate();
-              },
-              presentation: "continuation",
-            })}
-            ${workExpanded ? part.groups.map(renderFrameGroup) : nothing}
-          `;
-        }
-        if (part.kind === "activity-run") {
-          return renderActivityGroup(
-            part.groups,
-            renderGroupOptions(part.groups[0]!),
-            "continuation",
-          );
-        }
-        return renderFrameGroup(part);
-      });
-      return renderMessageGroup(shell, {
-        ...shellOptions,
-        frameContent,
+      return renderAgentRunFrame(item, {
+        questionPrompts,
+        streamOptions: {
+          ...streamGroupOptions,
+          questionPrompts,
+          startupPhase: props.startupStatus?.phase,
+          waitingApproval: props.waitingApproval,
+          runOutputTokens: props.runOutputTokens,
+        },
+        renderGroupOptions,
+        isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
+        onToggleWork: (key, expanded) => {
+          setExpansionState(expandedToolCards, key, !expanded);
+          requestUpdate();
+        },
         turnRecap: turnRecapByGroupKey.get(item.key),
       });
     }
@@ -659,14 +474,16 @@ export function projectChatTranscript(
     props.runOutputTokens ?? null,
   );
   const transcriptItems = collapsedItems.filter((item, index) => {
-    if (item.kind !== "stream-run") {
-      return true;
-    }
     const previous = collapsedItems[index - 1];
-    const isActiveStatusRun = item.parts.every((part) => part.kind === "reading-indicator");
+    const activeStatusParts =
+      item.kind === "stream-run" && item.parts.every((part) => part.kind === "reading-indicator")
+        ? item.parts
+        : item.kind === "agent-run-frame"
+          ? agentRunFrameActiveStatusParts(item)
+          : undefined;
     if (
       previous?.kind !== "group" ||
-      !isActiveStatusRun ||
+      !activeStatusParts ||
       !assistantGroupCanOwnActiveRunStatus(previous)
     ) {
       return true;
@@ -674,7 +491,7 @@ export function projectChatTranscript(
     // A reply and its still-running state are one turn-level presentation.
     // Keeping the status in the reply avoids a second claw/assistant row.
     activeContinuationByGroupKey.set(previous.key, {
-      parts: item.parts,
+      parts: activeStatusParts,
       options: {
         ...streamGroupOptions,
         startupPhase: props.startupStatus?.phase,

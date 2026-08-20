@@ -594,7 +594,7 @@ suite.define(() => {
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      const indicator = page.locator(".chat-working-indicator");
+      const indicator = page.locator(".chat-reading-indicator");
       await indicator.waitFor({ timeout: 10_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
       await page.locator(".chat-working-indicator").evaluate(async (element) => {
@@ -630,7 +630,7 @@ suite.define(() => {
         const sample = () => {
           const originalRow = Reflect.get(window, "__openclawPendingWorkingRow");
           const currentRow = document
-            .querySelector(".chat-working-indicator")
+            .querySelector(".chat-reading-indicator")
             ?.closest<HTMLElement>(".chat-virtual-row");
           const rect = currentRow?.getBoundingClientRect();
           samples.push({

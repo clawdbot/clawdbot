@@ -1,6 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 
 type WorkingProgress = {
@@ -32,6 +32,46 @@ export function projectContextCompactionActivity(message: unknown): unknown {
 
 const workingProgressBySession = new Map<string, WorkingProgressCache>();
 let anonymousWorkingProgressId = 0;
+
+export function buildGuardianNoticeItem(
+  notice: ChatGuardianNotice,
+): Extract<ChatItem, { kind: "notice" }> {
+  const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  if (notice.kind === "approved") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.approvedSummary", { action }),
+      text: "",
+      timestamp: notice.timestamp,
+    };
+  }
+  if (notice.kind === "warning") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.warningLabel"),
+      text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
+      timestamp: notice.timestamp,
+      tone: "danger",
+    };
+  }
+  return {
+    kind: "notice",
+    key: notice.key,
+    icon: "shieldCheck",
+    label: t("chat.systemNotice.guardian.deniedLabel"),
+    text: t("chat.systemNotice.guardian.deniedSummary", {
+      action,
+      risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
+      rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
+    }),
+    timestamp: notice.timestamp,
+    tone: "danger",
+  };
+}
 
 export function buildCompactionDividerItem(
   marker: Record<string, unknown>,

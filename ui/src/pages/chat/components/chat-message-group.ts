@@ -5,10 +5,7 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import {
-  normalizeMessage,
-  normalizeRoleForGrouping,
-} from "../../../lib/chat/message-normalizer.ts";
+import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   readToolApprovalReviewOutcome,
@@ -112,6 +109,7 @@ type RenderMessageGroupOptions = {
   activeContinuation?: ActiveContinuation;
   turnRecap?: TurnRecap;
   frameContent?: unknown;
+  frameActionOwner?: MessageGroup["messages"][number] | null;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -451,7 +449,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     return renderActivityGroup([group], opts);
   }
 
-  const messageActionDetails = group.messages.map((item) =>
+  const ownsRunFrame = opts.frameContent !== undefined;
+  const actionOwners = ownsRunFrame
+    ? opts.frameActionOwner
+      ? [opts.frameActionOwner]
+      : []
+    : group.messages;
+  const messageActionDetails = actionOwners.map((item) =>
     resolveMessageActionDetails({
       message: item.message,
       messageId: item.key,
@@ -477,17 +481,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     }
   }
   const lastMessageIndex = group.messages.length - 1;
-  const ownsRunFrame = opts.frameContent !== undefined;
   const runFrameActive = ownsRunFrame && Boolean(group.isStreaming || opts.activeContinuation);
-  const lastMessage = group.messages[lastMessageIndex]?.message;
-  const runFrameHasTerminalAssistant =
-    !ownsRunFrame ||
-    (lastMessage !== undefined &&
-      normalizeRoleForGrouping(normalizeMessage(lastMessage).role) === "assistant");
-  const footerActionDetails =
-    runFrameActive || !runFrameHasTerminalAssistant
-      ? null
+  const footerActionDetails = runFrameActive
+    ? null
+    : ownsRunFrame
+      ? (messageActionDetails[0] ?? null)
       : (messageActionDetails[lastMessageIndex] ?? null);
+  const footerActionMessageKey = ownsRunFrame
+    ? opts.frameActionOwner?.key
+    : group.messages[lastMessageIndex]?.key;
   const hasUserFooterActions =
     normalizedRole === "user" &&
     Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onRewind);
@@ -495,7 +497,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     ? html`
         <div
           class="chat-group-footer-actions"
-          data-message-actions-for=${footerActionKey ?? nothing}
+          data-message-actions-for=${footerActionMessageKey ?? nothing}
         >
           ${footerActionDetails?.replyTarget && opts.onReply
             ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
@@ -604,7 +606,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 ? html`
                     <div
                       class="chat-group-footer-actions"
-                      data-message-actions-for=${footerActionKey ?? nothing}
+                      data-message-actions-for=${footerActionMessageKey ?? nothing}
                     >
                       ${renderMessageActionButtons(footerActionDetails, opts)}
                     </div>
