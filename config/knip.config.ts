@@ -66,6 +66,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
+  "scripts/generate-secretref-docs.ts!",
   "scripts/ios-release-cut.ts!",
   "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mts!",

@@ -104,6 +104,7 @@ function loadPluginContractModule(modulePath: string): BundledChannelContractApi
 function loadExternalChannelSecretContractFromRecord(
   record: PluginManifestRecord,
   env: NodeJS.ProcessEnv = process.env,
+  params?: { failOnLoadError?: boolean },
 ): BundledChannelSecretContractApi | undefined {
   const contractPath = resolvePluginContractApiPath(record.rootDir);
   if (!contractPath) {
@@ -131,6 +132,9 @@ function loadExternalChannelSecretContractFromRecord(
       return mod;
     }
   } catch (error) {
+    if (params?.failOnLoadError) {
+      throw error;
+    }
     if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
       const detail = error instanceof Error ? error.message : String(error);
       console.warn(
@@ -221,9 +225,12 @@ export function loadChannelSecretContractApi(params: {
 /** Loads a channel secret contract directly from a manifest record. */
 export function loadChannelSecretContractApiForRecord(
   record: PluginManifestRecord,
+  params?: { sourceTree?: boolean; failOnLoadError?: boolean },
 ): BundledChannelSecretContractApi | undefined {
-  if (record.origin === "bundled") {
+  if (record.origin === "bundled" && !params?.sourceTree) {
     return loadBundledChannelSecretContractApi(record.id);
   }
-  return loadExternalChannelSecretContractFromRecord(record);
+  return loadExternalChannelSecretContractFromRecord(record, process.env, {
+    failOnLoadError: params?.failOnLoadError,
+  });
 }

@@ -89,14 +89,24 @@ function listPluginConfigSecretTargetRegistryEntries(
 
 function listChannelSecretTargetRegistryEntries(
   channelPlugins: readonly PluginManifestRecord[],
+  params?: { sourceTree?: boolean; failOnChannelContractError?: boolean },
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
   for (const record of channelPlugins) {
     try {
-      const contractApi = loadChannelSecretContractApiForRecord(record);
+      const contractApi = loadChannelSecretContractApiForRecord(record, {
+        sourceTree: params?.sourceTree,
+        failOnLoadError: params?.failOnChannelContractError,
+      });
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
-    } catch {
+    } catch (error) {
+      if (params?.failOnChannelContractError) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to load channel secret contract for ${record.id}: ${detail}`, {
+          cause: error,
+        });
+      }
       // Ignore channels that do not expose a usable secret contract artifact.
     }
   }
@@ -445,6 +455,8 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
+  sourceTree?: boolean;
+  failOnChannelContractError?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
     ...(params.config !== undefined ? { config: params.config } : {}),
@@ -452,12 +464,16 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
     allowWorkspaceScopedCurrent: true,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
-  return buildSecretTargetRegistryFromPlugins(plugins);
+  return buildSecretTargetRegistryFromPlugins(plugins, {
+    sourceTree: params.sourceTree,
+    failOnChannelContractError: params.failOnChannelContractError,
+  });
 }
 
 /** Builds secret targets from one exact manifest-registry plugin set. */
 export function buildSecretTargetRegistryFromPlugins(
   plugins: readonly PluginManifestRecord[],
+  params?: { sourceTree?: boolean; failOnChannelContractError?: boolean },
 ): SecretTargetRegistryEntry[] {
   const channelPlugins = plugins.filter(
     (record) =>
@@ -476,7 +492,10 @@ export function buildSecretTargetRegistryFromPlugins(
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
     ...listPluginConfigSecretTargetRegistryEntries(plugins),
-    ...listChannelSecretTargetRegistryEntries(channelPlugins),
+    ...listChannelSecretTargetRegistryEntries(channelPlugins, {
+      sourceTree: params?.sourceTree,
+      failOnChannelContractError: params?.failOnChannelContractError,
+    }),
     ...listOfficialExternalChannelSecretTargetRegistryEntries(),
   ];
   const seen = new Set<string>();
@@ -502,6 +521,7 @@ export function getSecretTargetRegistry(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   sourceTree?: boolean;
+  failOnChannelContractError?: boolean;
 }): SecretTargetRegistryEntry[] {
   if (params?.sourceTree) {
     // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
@@ -511,6 +531,8 @@ export function getSecretTargetRegistry(params?: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
       },
       preferPersisted: false,
+      sourceTree: true,
+      failOnChannelContractError: params.failOnChannelContractError,
     });
   }
   if (params?.config) {
