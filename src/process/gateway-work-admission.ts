@@ -258,6 +258,21 @@ export function tryBeginGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLeas
 }
 
 /**
+ * Tracks a host-selected restart-startup recovery handshake without reopening admission.
+ * The caller still owns frame/auth validation; this lease grants no method authority.
+ */
+export function tryBeginGatewayRestartStartupRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
+  if (
+    (!GATEWAY_WORK_ADMISSION_STATE.restartDraining &&
+      !GATEWAY_WORK_ADMISSION_STATE.restartSignalPending) ||
+    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
+  ) {
+    return null;
+  }
+  return createGatewayRootWorkAdmission();
+}
+
+/**
  * Admits only the exact predecessor-bound restart selected by the RPC router.
  * The held root preserves signal-to-drain ordering without reopening suspension.
  */

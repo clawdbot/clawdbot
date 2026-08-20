@@ -5,11 +5,15 @@ import {
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import {
-  getDeviceBootstrapTokenProfile,
+  getBoundDeviceBootstrapContext,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
 import { verifyDeviceToken } from "../../../infra/device-pairing-tokens.js";
-import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
+import {
+  CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  deviceBootstrapProfilesEqual,
+  type DeviceBootstrapProfile,
+} from "../../../shared/device-bootstrap-profile.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
@@ -18,7 +22,11 @@ import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
-import { admitGatewayConnect, applyConnectionScopeCap } from "./connect-admission.js";
+import {
+  admitGatewayConnect,
+  applyConnectionScopeCap,
+  rejectGatewayStartupConnect,
+} from "./connect-admission.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import { isControlUiOperatorBootstrapProfile } from "./connect-device-metadata.js";
 import { verifyGatewayConnectDeviceProof } from "./connect-device-proof.js";
@@ -113,6 +121,7 @@ async function authenticateGatewayConnectCore(
     isBrowserOperatorUi,
     isWebchat,
     isNativeAppUi,
+    startupPending,
   } = admission;
 
   const deviceRaw = connectParams.device;
@@ -361,6 +370,7 @@ async function authenticateGatewayConnectCore(
     publicKey: device?.publicKey,
     role,
     scopes,
+    requireBootstrapToken: startupPending,
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
     async verifyBootstrapToken({
@@ -414,14 +424,45 @@ async function authenticateGatewayConnectCore(
     authMethod,
   });
   if (!authOk) {
+    if (startupPending) {
+      await rejectGatewayStartupConnect(context);
+      return undefined;
+    }
     rejectUnauthorized(authResult);
     return undefined;
   }
-  advanceHandshakePhase("auth_validated");
-  const issuedBootstrapProfile =
-    authMethod === "bootstrap-token" && bootstrapTokenCandidate
-      ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
+  const boundBootstrapContext =
+    authMethod === "bootstrap-token" && bootstrapTokenCandidate && device
+      ? await getBoundDeviceBootstrapContext({
+          token: bootstrapTokenCandidate,
+          deviceId: device.id,
+          publicKey: device.publicKey,
+        })
       : null;
+  if (startupPending) {
+    const setupId = boundBootstrapContext?.setupId?.trim();
+    const isCloudWorkerProfile = Boolean(
+      boundBootstrapContext &&
+      deviceBootstrapProfilesEqual(
+        boundBootstrapContext.profile,
+        CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      ),
+    );
+    let pendingSetup = false;
+    if (isCloudWorkerProfile && setupId && device) {
+      try {
+        pendingSetup = context.handler.isPendingWorkerNodeSetup?.(setupId, device.id) === true;
+      } catch {
+        pendingSetup = false;
+      }
+    }
+    if (!isCloudWorkerProfile || !pendingSetup) {
+      await rejectGatewayStartupConnect(context);
+      return undefined;
+    }
+  }
+  advanceHandshakePhase("auth_validated");
+  const issuedBootstrapProfile = boundBootstrapContext?.profile ?? null;
   const usesSharedGatewayAuth =
     authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
   const sharedGatewaySessionGeneration = usesSharedGatewayAuth

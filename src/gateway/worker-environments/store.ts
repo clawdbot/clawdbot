@@ -919,6 +919,33 @@ export function createWorkerEnvironmentStore(
       });
     },
     get: (environmentId: string) => find(read(), required(environmentId, "id")),
+    hasPendingNodeEnrollmentSetup(setupIdInput: string, deviceIdInput: string): boolean {
+      const setupId = setupIdInput.trim();
+      const deviceId = deviceIdInput.trim();
+      if (!setupId || !deviceId) {
+        return false;
+      }
+      const db = read();
+      const matches = executeSqliteQuerySync(
+        db,
+        query(db)
+          .selectFrom("worker_environments")
+          .select("environment_id")
+          .where("node_setup_id", "=", setupId)
+          .where("destroy_requested_at_ms", "is", null)
+          .where((eb) =>
+            eb.or([
+              eb.and([eb("state", "=", "provisioning"), eb("node_device_id", "is", null)]),
+              eb.and([
+                eb("state", "in", ["provisioning", "bootstrapping", "ready", "idle", "attached"]),
+                eb("node_device_id", "=", deviceId),
+              ]),
+            ]),
+          )
+          .limit(2),
+      ).rows;
+      return matches.length === 1;
+    },
     ensureNodeEnrollment(environmentIdInput: string): WorkerEnvironmentRecord {
       const environmentId = required(environmentIdInput, "id");
       return write((db) => {

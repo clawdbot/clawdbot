@@ -1366,6 +1366,46 @@ describe("Crabbox worker provider", () => {
     },
   );
 
+  it.each(["preparation", "completion"] as const)(
+    "preserves its fixed lease when the Gateway aborts enrollment %s",
+    async (phase) => {
+      const calls: string[][] = [];
+      const controller = new AbortController();
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        return argv[1] === "inspect"
+          ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+          : commandResult();
+      });
+
+      await expect(
+        provider.provision(PROFILE, OPERATION_ID, {
+          beginNodeEnrollment: async () => {
+            if (phase === "preparation") {
+              controller.abort();
+              controller.signal.throwIfAborted();
+            }
+            return {
+              mode: "resume" as const,
+              deviceId: "device-bound",
+              openclawVersion: "2026.8.1",
+              packageSpecs: ["openclaw@2026.8.1"],
+              displayName: "Bound worker",
+              signal: controller.signal,
+              waitForDeviceId: async () => {
+                controller.abort();
+                controller.signal.throwIfAborted();
+                return "device-bound";
+              },
+            };
+          },
+        }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+
+      expect(calls.some((argv) => argv[1] === "stop")).toBe(false);
+    },
+  );
+
   it("runs one fixed warmup, ignores its output, and inspects only the canonical id", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const provider = providerWithRunner(async (argv, options) => {

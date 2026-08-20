@@ -609,6 +609,9 @@ export function createCrabboxWorkerProvider(
       try {
         enrollment = await beginNodeEnrollment();
       } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
         return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
       }
       const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({ enrollment, leaseId });
@@ -625,6 +628,10 @@ export function createCrabboxWorkerProvider(
       try {
         deviceId = await enrollment.waitForDeviceId();
       } catch (error) {
+        // Gateway shutdown cancels its wait, not the fixed operation-owned provider lease.
+        if (enrollment.signal?.aborted) {
+          throw error;
+        }
         return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
       }
       heartbeats.start({

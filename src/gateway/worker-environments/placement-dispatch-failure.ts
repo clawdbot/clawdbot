@@ -15,6 +15,10 @@ export type WorkerActiveDispatchPlacement = Extract<
   { state: "active" }
 >;
 export type WorkerFailedDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "failed" }>;
+export type WorkerProvisioningDispatchPlacement = Extract<
+  WorkerDispatchPlacement,
+  { state: "provisioning" }
+>;
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerReconcilingDispatchPlacement = Extract<
   WorkerDispatchPlacement,

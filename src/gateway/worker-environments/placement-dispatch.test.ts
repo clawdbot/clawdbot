@@ -581,7 +581,7 @@ describe("worker placement dispatch", () => {
     );
   });
 
-  it.each(["requested", "provisioning", "syncing"] as const)(
+  it.each(["requested", "syncing"] as const)(
     "allows explicit redispatch after restart recovery fails an interrupted %s placement",
     async (interruptedState) => {
       let interrupted = placementStore.startDispatch(REQUEST);

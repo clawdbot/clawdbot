@@ -112,24 +112,17 @@ export type WorkerDesktopEndpoint = {
 export type WorkerExecutionMode = "worker-turn" | "remote-exec";
 
 /** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
-export type WorkerNodeEnrollment =
-  | {
-      mode: "connect";
-      setupCode: string;
-      setupId: string;
-      openclawVersion: string;
-      packageSpecs: readonly string[];
-      displayName: string;
-      waitForDeviceId: () => Promise<string>;
-    }
-  | {
-      mode: "resume";
-      deviceId: string;
-      openclawVersion: string;
-      packageSpecs: readonly string[];
-      displayName: string;
-      waitForDeviceId: () => Promise<string>;
-    };
+export type WorkerNodeEnrollment = {
+  openclawVersion: string;
+  packageSpecs: readonly string[];
+  displayName: string;
+  /** Gateway shutdown cancels enrollment without releasing its replay-owned provider lease. */
+  signal?: AbortSignal;
+  waitForDeviceId: () => Promise<string>;
+} & (
+  | { mode: "connect"; setupCode: string; setupId: string }
+  | { mode: "resume"; deviceId: string }
+);
 
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
