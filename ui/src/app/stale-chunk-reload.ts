@@ -38,7 +38,10 @@ type MissingStylesheetRecoveryDeps = {
   retry?: () => Promise<boolean>;
 };
 
-const lastAttemptAtByStorage = new WeakMap<object, Map<string, number>>();
+const recoveryByStorage = new WeakMap<
+  object,
+  { attemptsByBuild: Map<string, number>; latestBuildId: string }
+>();
 const unavailableStorage = {};
 let inFlightDocumentProbe: { buildId?: string; promise: Promise<boolean> } | null = null;
 
@@ -135,7 +138,11 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   }
   const now = deps.now?.() ?? Date.now();
   const storageIdentity = storage ?? unavailableStorage;
-  const attemptsByBuild = lastAttemptAtByStorage.get(storageIdentity) ?? new Map<string, number>();
+  const recovery = recoveryByStorage.get(storageIdentity) ?? {
+    attemptsByBuild: new Map<string, number>(),
+    latestBuildId: buildId,
+  };
+  const { attemptsByBuild } = recovery;
   for (const [attemptedBuildId, attemptedAt] of attemptsByBuild) {
     if (now - attemptedAt >= ATTEMPT_COOLDOWN_MS) {
       attemptsByBuild.delete(attemptedBuildId);
@@ -145,7 +152,8 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     return false;
   }
   attemptsByBuild.set(buildId, now);
-  lastAttemptAtByStorage.set(storageIdentity, attemptsByBuild);
+  recovery.latestBuildId = buildId;
+  recoveryByStorage.set(storageIdentity, recovery);
   // A newer build cannot inherit the failed probe started for an older build.
   const joinedOlderBuildProbe = Boolean(
     inFlightDocumentProbe && inFlightDocumentProbe.buildId !== buildId,
@@ -159,7 +167,7 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   // A reload resets the in-memory state, so without a persisted guard a broken
   // build would reload forever. When storage is unavailable or rejects the
   // write, leave recovery to the manual Retry path instead of reloading.
-  if (!persistGuardBuildId(storage, buildId)) {
+  if (recovery.latestBuildId !== buildId || !persistGuardBuildId(storage, buildId)) {
     return false;
   }
   (deps.reload ?? reloadControlUiDocument)();

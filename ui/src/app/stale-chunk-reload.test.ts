@@ -246,6 +246,35 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe("build-b");
   });
 
+  it("reloads only the newest build after a shared document probe succeeds", async () => {
+    const sharedProbe = deferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>(async () => sharedProbe.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const reload = vi.fn();
+    const storage = memoryStorage();
+
+    const olderBuild = scheduleStaleChunkReload({
+      now: () => 1000,
+      buildId: "build-a",
+      storage,
+      reload,
+    });
+    const newerBuild = scheduleStaleChunkReload({
+      now: () => 2000,
+      buildId: "build-b",
+      storage,
+      reload,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    sharedProbe.resolve(new Response(null, { status: 200 }));
+    await expect(Promise.all([olderBuild, newerBuild])).resolves.toEqual([false, true]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(storage.getItem(GUARD_KEY)).toBe("build-b");
+  });
+
   it("settles and aborts a hanging document probe after its deadline", async () => {
     vi.useFakeTimers();
     const reload = vi.fn();
