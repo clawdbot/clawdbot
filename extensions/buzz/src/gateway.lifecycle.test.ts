@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelGatewayContext } from "../runtime-api.js";
 import type { BuzzBus } from "./buzz-bus.js";
 import type { ResolvedBuzzAccount } from "./types.js";
@@ -152,6 +152,10 @@ describe("Buzz gateway lifecycle", () => {
     );
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("invalidates cached room targets after initial discovery and newer room metadata", async () => {
     const invalidateDirectoryCache = vi.fn();
     const { abortController, lifecycle } = startTestGateway({
@@ -169,6 +173,7 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("restarts the account lifecycle when the bus reports a failure", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     gatewayMocks.resolveAgentIdentity.mockReturnValue({ name: "Molt" });
     const setStatus = vi.fn();
     const { abortController, account, lifecycle } = startTestGateway({ setStatus });
@@ -189,6 +194,7 @@ describe("Buzz gateway lifecycle", () => {
       terminalDisconnect: undefined,
     });
     gatewayMocks.onFatalError?.(new Error("relay failed"));
+    await vi.advanceTimersByTimeAsync(1_200);
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
       timeout: 3_000,
@@ -416,8 +422,10 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("uses the rolling lookback after a failed initial session", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     gatewayMocks.startBuzzBus.mockRejectedValueOnce(new Error("connect failed"));
     const { abortController, lifecycle } = startTestGateway();
+    await vi.advanceTimersByTimeAsync(1_200);
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
       timeout: 3_000,
@@ -450,6 +458,7 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("reconnects with a rolling lookback without trusting sender time", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const invalidateDirectoryCache = vi.fn();
     const { abortController, lifecycle } = startTestGateway({ invalidateDirectoryCache });
 
@@ -470,6 +479,7 @@ describe("Buzz gateway lifecycle", () => {
     );
     const reconnectStartedAt = Math.floor(Date.now() / 1000);
     gatewayMocks.onFatalError?.(new Error("relay failed"));
+    await vi.advanceTimersByTimeAsync(1_200);
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
       timeout: 3_000,
