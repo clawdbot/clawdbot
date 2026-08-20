@@ -17,9 +17,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
-  >();
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>();
   return {
     ...actual,
     fetchRemoteEmbeddingVectors: mocks.fetchRemoteEmbeddingVectors,
