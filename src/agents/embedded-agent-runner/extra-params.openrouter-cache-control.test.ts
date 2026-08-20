@@ -49,6 +49,9 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
   afterEach(restoreCacheRetentionEnv);
 
   it("injects cache_control into system message for OpenRouter Anthropic models", () => {
+    // Pin short retention so ambient OPENCLAW_CACHE_RETENTION=long (CI live harness)
+    // does not flip the marker to ttl: "1h".
+    delete process.env.OPENCLAW_CACHE_RETENTION;
     const payload = {
       messages: [
         { role: "system", content: "You are a helpful assistant." },
@@ -69,6 +72,7 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
   });
 
   it("adds cache_control to last content block when system message is already array", () => {
+    delete process.env.OPENCLAW_CACHE_RETENTION;
     const payload = {
       messages: [
         {
