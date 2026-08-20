@@ -438,18 +438,11 @@ export function createCuaComputerProvider(
   const env = options.env ?? process.env;
   const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
   let ownedAvailabilityDriver: CuaDriverSession | undefined;
-  let stopped = false;
   const createDriver =
     options.createDriver ??
     (macOsEndpoint ? () => createCuaMcpDriver({ ...macOsEndpoint, env }) : createCuaDriver);
-  const availabilityDriver = () => {
-    if (stopped) {
-      throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
-    }
-    return options.driver ?? (ownedAvailabilityDriver ??= createDriver());
-  };
+  const availabilityDriver = () => options.driver ?? (ownedAvailabilityDriver ??= createDriver());
   const disposeAvailabilityDriver = async () => {
-    stopped = true;
     const current = ownedAvailabilityDriver;
     ownedAvailabilityDriver = undefined;
     await current?.dispose();
@@ -486,8 +479,15 @@ export function createCuaComputerProvider(
     }),
     isAvailable,
     watchAvailability: (_context, onChange) => {
+      // `stopped` is watch-scoped: session teardown must not latch the
+      // process-lifetime provider, so dispose only resets the lazily-owned
+      // driver and the guard silences this watch's already-queued callback.
+      let stopped = false;
       let knownAvailable = isAvailable();
       const timer = interval(() => {
+        if (stopped) {
+          return;
+        }
         availabilityDriver().resetAvailabilityCache();
         const available = isAvailable();
         if (available !== knownAvailable) {
@@ -497,14 +497,12 @@ export function createCuaComputerProvider(
       }, AVAILABILITY_POLL_MS);
       timer.unref?.();
       return () => {
+        stopped = true;
         clear(timer);
         void disposeAvailabilityDriver();
       };
     },
     openExecution: async () => {
-      if (stopped) {
-        throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
-      }
       const executionDriver = options.driver ?? createDriver();
       const resources = createLazyCuaExecutionResources();
       const executionState = { resources, recording: {} };

@@ -353,6 +353,40 @@ describe("cua-computer provider", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  it("keeps the process-lifetime provider usable after a watch session teardown", async () => {
+    const { session } = driver();
+    const createDriver = vi.fn(() => session);
+    const intervalCallbacks: Array<() => void> = [];
+    const provider = createCuaComputerProvider({
+      platform: "linux",
+      createDriver,
+      imageProcessor: {
+        encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
+      },
+      setInterval: vi.fn((callback: () => void) => {
+        intervalCallbacks.push(callback);
+        return Object.assign(intervalCallbacks.length, { unref: vi.fn() });
+      }) as never,
+      clearInterval: vi.fn() as never,
+    });
+
+    const stopFirst = provider.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
+    stopFirst?.();
+    await Promise.resolve();
+
+    expect(provider.isAvailable()).toBe(true);
+    const computer = await provider.openExecution({
+      executionId: "123e4567-e89b-42d3-a456-426614174000",
+    });
+    await computer.close("completion");
+
+    const stopSecond = provider.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
+    expect(intervalCallbacks).toHaveLength(2);
+    expect(() => intervalCallbacks[0]!()).not.toThrow();
+    expect(() => intervalCallbacks[1]!()).not.toThrow();
+    stopSecond?.();
+  });
+
   it("passes node invocation cancellation to the direct SDK", async () => {
     const { session, getDesktopState } = driver();
     const computer = await execution(session);
