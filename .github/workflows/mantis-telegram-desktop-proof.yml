@@ -667,7 +667,22 @@ jobs:
         run: |
           set -euo pipefail
           result=0
+          active_codex_pids() {
+            sudo ps -u codex -o pid=,stat= 2>/dev/null | awk '$2 !~ /^Z/ {print $1}' || true
+          }
           sudo pkill -TERM -u codex 2>/dev/null || true
+          deadline=$((SECONDS + 10))
+          while [[ -n "$(active_codex_pids)" ]] && ((SECONDS < deadline)); do
+            sleep 1
+          done
+          if [[ -n "$(active_codex_pids)" ]]; then
+            sudo pkill -KILL -u codex 2>/dev/null || true
+          fi
+          deadline=$((SECONDS + 5))
+          while [[ -n "$(active_codex_pids)" ]] && ((SECONDS < deadline)); do
+            sleep 1
+          done
+          test -z "$(active_codex_pids)"
           session_root="${{ steps.telegram_credential.outputs.session_root }}"
           if [[ -z "$session_root" ]]; then
             echo "safe_to_release=true" >> "$GITHUB_OUTPUT"
@@ -750,6 +765,11 @@ jobs:
           sudo test -f "$agent_manifest"
           sudo test ! -L "$agent_manifest"
           test "$(sudo stat -c %h "$agent_manifest")" = 1
+          trusted_agent_manifest="$RUNNER_TEMP/mantis-agent-manifest-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          sudo test ! -e "$trusted_agent_manifest"
+          sudo test ! -L "$trusted_agent_manifest"
+          sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"
+          agent_manifest="$trusted_agent_manifest"
           sudo install -d -m 0755 -o root -g root "$trusted_output"
           manifest="$trusted_output/mantis-evidence.json"
           judgment="$RUNNER_TEMP/mantis-agent-judgment.json"

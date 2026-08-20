@@ -170,6 +170,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const abandoned = workflowStep("Clean up abandoned Mantis sessions");
     expect(abandoned.if).toBe("${{ always() }}");
     expect(abandoned.run).toContain("sudo pkill -TERM -u codex");
+    expect(abandoned.run).toContain("active_codex_pids()");
+    expect(abandoned.run).toContain("sudo pkill -KILL -u codex");
+    expect(abandoned.run).toContain('test -z "$(active_codex_pids)"');
     expect(abandoned.run).toContain('lane_uid="$(sudo stat -c %u "/proc/$lane_pid")"');
     expect(abandoned.run).toContain('[[ "$lane_pgid" == "$lane_pid" ]]');
     expect(abandoned.run).toContain('[[ "$lane_exe" == /usr/local/lib/mantis-toolchain/node ]]');
@@ -261,8 +264,16 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain('agent_manifest="$quarantine/mantis-evidence.json"');
     expect(gate).toContain('sudo test ! -L "$agent_manifest"');
     expect(gate).toContain('test "$(sudo stat -c %h "$agent_manifest")" = 1');
-    expect(gate.indexOf('sudo mv -T "$agent_output" "$quarantine"')).toBeLessThan(
-      gate.indexOf("sudo jq -e '", gate.indexOf('agent_manifest="$quarantine')),
+    expect(gate).toContain(
+      'sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"',
+    );
+    expect(gate).toContain('agent_manifest="$trusted_agent_manifest"');
+    expect(
+      gate.indexOf(
+        'sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"',
+      ),
+    ).toBeLessThan(
+      gate.indexOf("sudo jq -e '", gate.indexOf('agent_manifest="$trusted_agent_manifest"')),
     );
     expect(gate).toContain(
       'baseline_status="$(sudo jq -r \'.comparison.baseline.status\' "$agent_manifest")"',
