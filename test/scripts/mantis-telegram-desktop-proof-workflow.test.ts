@@ -382,11 +382,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     // The CLI still drives the local-container desktop; only the brokered
     // coordinator path is gone, so none of its credentials may be wired.
     const crabbox = workflowStep("Install Crabbox CLI");
-    expect(crabbox.run).toContain("github.com/openclaw/crabbox.git");
-    // Every variable the restored step reads must exist, or `set -u` kills it.
-    expect((parse(workflowText) as Workflow).env?.CRABBOX_REF).toMatch(/^[0-9a-f]{40}$/u);
-    expect(crabbox.run).toContain(
-      'test "$(git -C "$install_dir/src" rev-parse HEAD)" = "$CRABBOX_REF"',
+    const workflow = parse(workflowText) as Workflow;
+    expect(workflow.env?.CRABBOX_VERSION).toMatch(/^\d+[.]\d+[.]\d+$/u);
+    expect(workflow.env?.CRABBOX_LINUX_AMD64_SHA256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(crabbox.run).toContain("releases/download/v${CRABBOX_VERSION}");
+    expect(crabbox.run).toContain("sha256sum --check --strict");
+    expect(crabbox.run).toContain('test "$(crabbox --version)" = "$CRABBOX_VERSION"');
+    expect(workflow.jobs?.run_telegram_desktop_proof?.steps).not.toContainEqual(
+      expect.objectContaining({ uses: expect.stringContaining("actions/setup-go@") }),
     );
     // Never pipe into `grep -q` under pipefail: the writer dies of SIGPIPE on the
     // first match and the assertion fails precisely when it should pass.

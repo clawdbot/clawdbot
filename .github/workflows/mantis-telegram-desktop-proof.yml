@@ -36,8 +36,9 @@ permissions:
   pull-requests: write
 
 env:
-  # Reviewed local-container recorder dependency. Moving refs make reruns non-reproducible.
-  CRABBOX_REF: 0f0110668bd6ea5757300794662e4266aef023e4
+  # Reviewed release binary. The published digest keeps reruns byte-identical.
+  CRABBOX_LINUX_AMD64_SHA256: c9d38e67af31e5383ab4117bae9b88a71a04c80da5d923f851fbd731ece3a3a4
+  CRABBOX_VERSION: 0.45.0
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
@@ -335,12 +336,6 @@ jobs:
           sudo -u mantis-sut /usr/local/lib/mantis-toolchain/telegram-mantis-lane --help >/dev/null
           /usr/local/bin/openclaw-telegram-desktop-recorder --help >/dev/null
 
-      - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version: "1.26.x"
-          cache: false
-
       # The recorder drives the local Docker desktop through the Crabbox CLI's
       # local-container provider. That provider is direct: no coordinator, no
       # broker credentials, no lease cost.
@@ -348,16 +343,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(uname -m)" = x86_64
           install_dir="${RUNNER_TEMP}/crabbox"
-          mkdir -p "$install_dir/src"
-          git init "$install_dir/src"
-          git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
-          timeout --signal=TERM --kill-after=10s 120s git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
-          git -C "$install_dir/src" checkout --detach FETCH_HEAD
-          test "$(git -C "$install_dir/src" rev-parse HEAD)" = "$CRABBOX_REF"
-          go build -C "$install_dir/src" -o "$install_dir/crabbox" ./cmd/crabbox
+          archive="$install_dir/crabbox.tar.gz"
+          mkdir -p "$install_dir"
+          curl --fail --location --silent --show-error \
+            --connect-timeout 15 --max-time 120 --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_VERSION}/crabbox_${CRABBOX_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$CRABBOX_LINUX_AMD64_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$install_dir" crabbox
           sudo install -m 0755 "$install_dir/crabbox" /usr/local/bin/crabbox
-          crabbox --version
+          test "$(crabbox --version)" = "$CRABBOX_VERSION"
           crabbox media preview --help >/dev/null
           # Capture first: piping into `grep -q` closes the pipe on the first match,
           # and pipefail then reports the writer's SIGPIPE as a failed assertion.
