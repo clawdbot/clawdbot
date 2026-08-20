@@ -812,6 +812,7 @@ describe("buildQaRuntimeEnv", () => {
         OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
         OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
         OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
+        "BASH_FUNC_sudo%%": "() { printf imported; }",
       },
     });
 
@@ -823,6 +824,7 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
+    expect(env["BASH_FUNC_sudo%%"]).toBeUndefined();
   });
 
   it.runIf(process.platform === "linux")(
@@ -830,6 +832,7 @@ describe("buildQaRuntimeEnv", () => {
     async () => {
       const tempRoot = await tempDirs.makeTempDir("qa-shell-startup-env-");
       const markerPath = path.join(tempRoot, "bash-env-ran");
+      const functionMarkerPath = path.join(tempRoot, "bash-function-ran");
       const bashEnvPath = path.join(tempRoot, "malicious-bash-env");
       const allowlistProbePath = path.join(tempRoot, "allowlist-probe.sh");
       await writeFile(bashEnvPath, `printf 'ran' > ${JSON.stringify(markerPath)}\n`, "utf8");
@@ -858,12 +861,14 @@ describe("buildQaRuntimeEnv", () => {
           BASHOPTS: "checkwinsize",
           ENV: bashEnvPath,
           SHELLOPTS: "braceexpand",
+          "BASH_FUNC_compgen%%": `() { printf 'ran' > ${JSON.stringify(functionMarkerPath)}; builtin compgen "$@"; }`,
         },
       });
 
       for (const key of ["BASH_ENV", "BASHOPTS", "ENV", "SHELLOPTS"]) {
         expect(env[key]).toBeUndefined();
       }
+      expect(env["BASH_FUNC_compgen%%"]).toBeUndefined();
 
       const result = spawnSync("/bin/bash", ["--noprofile", "--norc", allowlistProbePath], {
         encoding: "utf8",
@@ -873,6 +878,7 @@ describe("buildQaRuntimeEnv", () => {
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe("allowlist-survived");
       await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(functionMarkerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 

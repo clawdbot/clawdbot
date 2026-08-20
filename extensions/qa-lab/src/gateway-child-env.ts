@@ -34,6 +34,12 @@ function scrubQaGatewayChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   for (const envKey of QA_GATEWAY_CHILD_BLOCKED_ENV_VARS) {
     delete env[envKey];
   }
+  // Bash imports exported functions before the launcher can apply its allowlist.
+  for (const envKey of Object.keys(env)) {
+    if (envKey.startsWith("BASH_FUNC_")) {
+      delete env[envKey];
+    }
+  }
   return env;
 }
 
