@@ -29,7 +29,19 @@ const baseInput = {
 describe("resolveChannelAccountState", () => {
   it.each([
     [
-      "disabled wins over later states",
+      "disabled wins over later states, but keeps reporting stopped runtime liveness",
+      { enabled: false, configured: false, linked: false, runtime: { running: false } },
+      {
+        kind: "disabled",
+        configured: false,
+        linked: false,
+        reason: "disabled reason",
+        failure: null,
+        running: false,
+      },
+    ],
+    [
+      "disabled account still surfaces a live auto-loaded runtime instead of masking it",
       { enabled: false, configured: false, linked: false, runtime: { running: true } },
       {
         kind: "disabled",
@@ -37,6 +49,25 @@ describe("resolveChannelAccountState", () => {
         linked: false,
         reason: "disabled reason",
         failure: null,
+        running: true,
+      },
+    ],
+    [
+      "disabled + running account carries connectivity through like the running state does",
+      {
+        enabled: false,
+        configured: false,
+        linked: false,
+        runtime: { running: true, connected: true },
+      },
+      {
+        kind: "disabled",
+        configured: false,
+        linked: false,
+        reason: "disabled reason",
+        failure: null,
+        running: true,
+        connected: true,
       },
     ],
     [
@@ -98,11 +129,34 @@ describe("projectChannelAccountState", () => {
         linked: false,
         reason: "disabled",
         failure: null,
+        running: false,
       },
       {
         configured: false,
         linked: false,
         running: false,
+        stateReason: "disabled",
+        lastError: null,
+      },
+    ],
+    [
+      // Regression coverage for #111346: a config-disabled (e.g. not in
+      // plugins.allow) account that the gateway still records as running
+      // must keep reporting `running: true`, not a hard-coded `false`.
+      {
+        kind: "disabled",
+        configured: false,
+        linked: false,
+        reason: "disabled",
+        failure: null,
+        running: true,
+        connected: true,
+      },
+      {
+        configured: false,
+        linked: false,
+        running: true,
+        connected: true,
         stateReason: "disabled",
         lastError: null,
       },
