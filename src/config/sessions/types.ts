@@ -37,6 +37,7 @@ import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.
 import type { SessionSkillSnapshot } from "./session-prompt-types.js";
 import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 import type { SessionToolOverrides } from "./session-tool-overrides.js";
+import type { SessionThinkingLevelSelection } from "./thinking-level-selection.js";
 
 export type { SessionToolOverrides } from "./session-tool-overrides.js";
 export type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
@@ -622,6 +623,8 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Exact model/runtime fact that validated the persisted thinking override. */
+  thinkingLevelSelection?: SessionThinkingLevelSelection;
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */

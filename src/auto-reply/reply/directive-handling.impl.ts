@@ -8,6 +8,7 @@ import {
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
+import { updateSessionThinkingLevelSelection } from "../../agents/session-thinking-level-selection.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -452,6 +453,9 @@ export async function handleDirectiveOnly(
   if (shouldRemapUnsupportedThinkLevel && !touchedSessionFields.includes("thinkingLevel")) {
     touchedSessionFields.push("thinkingLevel");
   }
+  if (directives.hasThinkDirective || modelSelection || shouldRemapUnsupportedThinkLevel) {
+    touchedSessionFields.push("thinkingLevelSelection");
+  }
   // Validated, authorized directives have already named every field they can mutate.
   const shouldPersistSessionEntry = touchedSessionFields.length > 0;
   const fastModeChanged =
@@ -488,6 +492,14 @@ export async function handleDirectiveOnly(
       });
       const appliedRuntime = applyModelRuntimeDirective(sessionEntry, modelRuntimeResolution);
       modelSelectionUpdated = applied.updated || appliedRuntime.updated;
+    }
+    if (directives.hasThinkDirective || modelSelection || shouldRemapUnsupportedThinkLevel) {
+      updateSessionThinkingLevelSelection(sessionEntry, {
+        provider: resolvedProvider,
+        model: resolvedModel,
+        agentRuntime: thinkingRuntime,
+        level: sessionEntry.thinkingLevel,
+      });
     }
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;

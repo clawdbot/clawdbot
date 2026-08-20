@@ -48,7 +48,7 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
   return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
-/** Freezes route-bound thinking capability from the selected prepared catalog row. */
+/** Freezes thinking capability from the selected prepared catalog row. */
 function prepareModelThinkingCapability(params: {
   entry: ModelCatalogEntry | undefined;
   route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
@@ -107,7 +107,7 @@ export function prepareModelRunCapabilities(
     modelHasVision: modelSupportsInput(entry, "image"),
     modelThinkingCapability: prepareModelThinkingCapability({
       entry: entry ?? configuredEntry,
-      route: configuredEntry ?? (agentRuntime === "openclaw" ? entry : undefined),
+      route: agentRuntime === "openclaw" ? (configuredEntry ?? entry) : undefined,
       agentRuntime,
     }),
   };

@@ -5,6 +5,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
   sessionDiffBaselineCapture: undefined,
+  thinkingLevelSelection: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
@@ -12,6 +13,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lifecycleRunId",
   "mainRestartRecovery",
   "sessionDiffBaselineCapture",
+  "thinkingLevelSelection",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
 function stripPrivateSessionEntryFields(entry: InternalSessionEntry): SessionEntry;

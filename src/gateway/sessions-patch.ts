@@ -24,6 +24,10 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import {
+  readSessionThinkingLevelSelection,
+  updateSessionThinkingLevelSelection,
+} from "../agents/session-thinking-level-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -653,15 +657,16 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
+  if ("thinkingLevel" in patch || "model" in patch) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+    let thinkingRuntime: string | undefined;
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {
-      const thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
+      const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+      thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
       if (
         !isThinkingLevelSupported({
           provider: effectiveProvider,
@@ -685,6 +690,12 @@ export async function projectSessionsPatchEntry(params: {
         });
       }
     }
+    updateSessionThinkingLevelSelection(next, {
+      provider: effectiveProvider,
+      model: effectiveModel,
+      agentRuntime: thinkingRuntime,
+      level: next.thinkingLevel,
+    });
   }
 
   // A thinkingLevel change made on its own (no model switch) never touches the
@@ -696,8 +707,16 @@ export async function projectSessionsPatchEntry(params: {
     next.modelFallback?.source === "agent-patch"
   ) {
     next.modelFallback = next.thinkingLevel
-      ? { ...next.modelFallback, prevThinkingLevel: next.thinkingLevel }
-      : { ...next.modelFallback, prevThinkingLevel: undefined };
+      ? {
+          ...next.modelFallback,
+          prevThinkingLevel: next.thinkingLevel,
+          prevThinkingLevelSelection: readSessionThinkingLevelSelection(next),
+        }
+      : {
+          ...next.modelFallback,
+          prevThinkingLevel: undefined,
+          prevThinkingLevelSelection: undefined,
+        };
   }
 
   if ("sendPolicy" in patch) {

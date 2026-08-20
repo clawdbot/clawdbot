@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePreparedModelThinkingCompat } from "../model-catalog-lookup.js";
+import {
+  prepareModelRunCapabilities,
+  resolvePreparedModelThinkingCompat,
+} from "../model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 
 const STATIC_MODEL_ID = "claude-haiku-4-5";
@@ -271,6 +275,41 @@ describe("embedded model resolution consistency", () => {
         agentRuntime: "openclaw",
       }),
     ).toEqual(capability.compat);
+  });
+
+  it("keeps configured provider routes off harness-scoped thinking capability", () => {
+    const compat = { supportedReasoningEfforts: ["max", "ultra"] };
+    const preparedCatalog: ModelCatalogEntry[] = [
+      {
+        provider: PROVIDER,
+        id: STATIC_MODEL_ID,
+        name: STATIC_MODEL_ID,
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.example/codex",
+        compat,
+      },
+    ];
+    const configuredCatalog: ModelCatalogEntry[] = [
+      {
+        provider: PROVIDER,
+        id: STATIC_MODEL_ID,
+        name: STATIC_MODEL_ID,
+        api: "anthropic-messages",
+        baseUrl: staticCatalogModel.baseUrl,
+      },
+    ];
+
+    expect(
+      prepareModelRunCapabilities(
+        [preparedCatalog, configuredCatalog],
+        [PROVIDER, STATIC_MODEL_ID, "codex"],
+      ).modelThinkingCapability,
+    ).toEqual({
+      provider: PROVIDER,
+      modelId: STATIC_MODEL_ID,
+      agentRuntime: "codex",
+      compat,
+    });
   });
 
   it("resolves harness-scoped thinking compatibility across prepared auth routes", () => {
