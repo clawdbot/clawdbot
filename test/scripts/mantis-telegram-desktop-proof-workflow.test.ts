@@ -357,6 +357,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
     const classifier = resolver?.steps?.find((step) => step.name === "Classify visible behavior");
     expect(classifier?.uses).toContain("openai/codex-action@");
+    expect(classifier?.with?.["codex-version"]).toBe("0.148.0");
     expect(classifier?.with?.sandbox).toBe("read-only");
     expect(classifier?.with?.effort).toBe("low");
     expect(classifier?.with?.["output-schema"]).toContain('"enum": ["run", "skip"]');

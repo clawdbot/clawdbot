@@ -218,6 +218,7 @@ jobs:
           MANTIS_PR_CONTEXT: ${{ steps.resolve.outputs.pr_context }}
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          codex-version: 0.148.0
           prompt-file: .github/codex/prompts/mantis-telegram-desktop-preflight.md
           output-schema: |
             {
