@@ -989,6 +989,10 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const sharedStateTarget =
         candidate.agentDir === undefined &&
         resolveSharedAuthStoreOwnership(env).location === "state-db";
+      const transactionAgentDir =
+        sharedStateTarget || candidate.agentDir !== undefined
+          ? candidate.agentDir
+          : resolveSharedMainAuthAgentDir(env);
       let sourceReceipts = candidateSourcePaths.filter(fs.existsSync).map((pathname) =>
         prepareAuthProfileSourceReceipt({
           pathname,
@@ -1160,7 +1164,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         try {
           assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
           verifiedStore = runAuthProfileWriteTransaction(
-            candidate.agentDir,
+            transactionAgentDir,
             (database) => {
               const authoritative = loadAuthProfileMigrationTargetStore(
                 candidate.agentDir,

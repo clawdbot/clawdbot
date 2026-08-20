@@ -10,6 +10,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { resolveUserPath } from "../../utils.js";
+import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnership,
@@ -152,6 +153,10 @@ function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
   }
   const sourcePath = path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
   try {
+    if (listLegacyAuthProfileSources({ env }).length > 0) {
+      inspectedLegacySharedAuthOwnerships.add(ownership);
+      return;
+    }
     const rows = inspectSharedAuthLegacyRowsReadOnly(sourcePath);
     if (rows.store || rows.state || hasPendingSharedAuthCleanup(env, sourcePath)) {
       inspectedLegacySharedAuthOwnerships.add(ownership);

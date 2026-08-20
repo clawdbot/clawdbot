@@ -355,6 +355,40 @@ describe("auth profile sqlite store", () => {
     });
   });
 
+  it("keeps legacy ownership when a retired-file probe fails", async () => {
+    await withAgentDirEnv("openclaw-auth-shared-file-probe-error-", async (agentDir) => {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const realExistsSync = fs.existsSync.bind(fs);
+      let authPathProbes = 0;
+      const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
+        if (path.resolve(String(pathname)) === path.resolve(authPath)) {
+          authPathProbes += 1;
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        return realExistsSync(pathname);
+      });
+
+      try {
+        writePersistedAuthProfileStoreRaw(apiKeyStore("sk-first"));
+        writePersistedAuthProfileStoreRaw(apiKeyStore("sk-second"));
+        expect(authPathProbes).toBe(1);
+      } finally {
+        existsSpy.mockRestore();
+      }
+
+      const sharedDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      expect(
+        sharedDatabase
+          .prepare(
+            "SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'",
+          )
+          .get(),
+      ).toBeUndefined();
+      sharedDatabase.close();
+      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("readable");
+    });
+  });
+
   it("does not read legacy auth-profiles.json at runtime", async () => {
     await withAgentDirEnv("openclaw-auth-no-json-fallback-", (agentDir) => {
       fs.writeFileSync(
