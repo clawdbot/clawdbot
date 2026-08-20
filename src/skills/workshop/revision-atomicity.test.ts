@@ -42,6 +42,30 @@ vi.mock("../../infra/fs-safe.js", async (importOriginal) => {
               revisionFault.trip("generation exclusive create");
             };
           }
+          if (property === "openWritable") {
+            return async (...openArgs: Parameters<typeof target.openWritable>) => {
+              const writable = await target.openWritable(...openArgs);
+              const handle = new Proxy(writable.handle, {
+                get(handleTarget, handleProperty, handleReceiver) {
+                  if (handleProperty === "sync") {
+                    return async () => {
+                      await handleTarget.sync();
+                      revisionFault.trip("generation file durability sync");
+                    };
+                  }
+                  const handleValue = Reflect.get(
+                    handleTarget,
+                    handleProperty,
+                    handleReceiver,
+                  ) as unknown;
+                  return typeof handleValue === "function"
+                    ? handleValue.bind(handleTarget)
+                    : handleValue;
+                },
+              });
+              return { ...writable, handle };
+            };
+          }
           if (property === "move") {
             return async (...moveArgs: Parameters<typeof target.move>) => {
               await target.move(...moveArgs);
@@ -192,6 +216,7 @@ describe("Skill Workshop revision generation atomicity", () => {
   it.each([
     "generation staging start",
     "generation exclusive create",
+    "generation file durability sync",
     "generation finalization",
     "generation parent durability sync",
     "CAS before commit",
