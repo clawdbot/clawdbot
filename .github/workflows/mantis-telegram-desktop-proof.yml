@@ -367,7 +367,15 @@ jobs:
           crabbox_warmup_help="$(crabbox warmup --help 2>&1)"
           grep -q -- "-desktop" <<<"$crabbox_warmup_help"
 
+      # Observed 2026-08: rebuilding the unchanged desktop image cost 43s per run.
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        with:
+          max-cache-size-mb: 800000
+
       - name: Build local Telegram Desktop image
+        env:
+          OPENCLAW_DOCKER_BUILD_USE_BUILDX: "1"
         shell: bash
         run: |
           set -euo pipefail
@@ -764,6 +772,19 @@ jobs:
           candidate_status="$(jq -r '.comparison.candidate.status' "$agent_manifest")"
           [[ "$baseline_status" == "pass" || "$baseline_status" == "fail" ]]
           [[ "$candidate_status" == "pass" || "$candidate_status" == "fail" ]]
+          copy_verified_artifacts() {
+            local lane="$1"
+            local facts_file="$2"
+            local source
+            while IFS=$'\t' read -r artifact_name artifact_file artifact_bytes artifact_sha; do
+              [[ "$artifact_file" == "$(basename "$artifact_file")" ]]
+              source="$SESSION_ROOT/published/$lane/$artifact_file"
+              sudo test -f "$source"
+              test "$(sudo stat -c %s "$source")" = "$artifact_bytes"
+              test "$(sudo sha256sum "$source" | cut -d ' ' -f1)" = "$artifact_sha"
+              sudo install -m 0644 "$source" "$trusted_output/$lane/$artifact_file"
+            done < <(sudo jq -r '.artifacts | to_entries[] | [.key, .value.file, (.value.bytes | tostring), .value.sha256] | @tsv' "$facts_file")
+          }
           for lane in baseline candidate; do
             lane_status="$(jq -r --arg lane "$lane" '.comparison[$lane].status' "$agent_manifest")"
             [[ "$lane_status" != "skipped" ]]
@@ -810,15 +831,9 @@ jobs:
               sudo test -f "$attempt_facts" || continue
               sudo install -m 0644 "$attempt_facts" \
                 "$trusted_output/$lane/$(basename "$attempt_facts")"
+              copy_verified_artifacts "$lane" "$attempt_facts"
             done
-            while IFS=$'\t' read -r artifact_name artifact_file artifact_bytes artifact_sha; do
-              [[ "$artifact_file" == "$(basename "$artifact_file")" ]]
-              source="$SESSION_ROOT/published/$lane/$artifact_file"
-              sudo test -f "$source"
-              test "$(sudo stat -c %s "$source")" = "$artifact_bytes"
-              test "$(sudo sha256sum "$source" | cut -d ' ' -f1)" = "$artifact_sha"
-              sudo install -m 0644 "$source" "$trusted_output/$lane/$artifact_file"
-            done < <(sudo jq -r '.artifacts | to_entries[] | [.key, .value.file, (.value.bytes | tostring), .value.sha256] | @tsv' "$verdict")
+            copy_verified_artifacts "$lane" "$verdict"
             gif_file="$(sudo jq -r '.artifacts.previewGifCropped.file // empty' "$verdict")"
             video_file="$(sudo jq -r '.artifacts.trimmedVideoCropped.file // empty' "$verdict")"
             screenshot_file="$(sudo jq -r '.artifacts.screenshot.file // empty' "$verdict")"

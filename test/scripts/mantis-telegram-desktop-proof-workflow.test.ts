@@ -244,6 +244,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain('any(.invocations[]; .command == "finish")');
     expect(gate).toContain(".observation.events");
     expect(gate).toContain(".providerRequests");
+    expect(gate).toContain('copy_verified_artifacts "$lane" "$attempt_facts"');
+    expect(gate).toContain('copy_verified_artifacts "$lane" "$verdict"');
     expect(gate).toContain('"$SESSION_ROOT/$lane.json"');
     expect(gate).toContain("build-telegram-desktop-proof-evidence.mts");
     expect(gate).toContain('--baseline-status "$baseline_status"');
@@ -487,6 +489,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     const image = workflowStep("Build local Telegram Desktop image");
     expect(image.run).toContain("bash scripts/mantis/build-telegram-desktop-image.sh");
+    expect(image.env?.OPENCLAW_DOCKER_BUILD_USE_BUILDX).toBe("1");
 
     const credential = workflowStep("Install TDLib and restore Telegram QA user");
     expect(credential.run).toContain("http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz");
@@ -530,7 +533,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     const prompt = readFileSync(PROMPT, "utf8");
     expect(prompt).toContain("$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD");
-    expect(prompt).toContain("Write a Bash or TypeScript scenario program");
+    expect(prompt).toContain("Write a short Bash scenario");
     expect(prompt).toContain("`observe --seconds N [--since cursor]`");
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish --focus-message-id ID`");
@@ -543,8 +546,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("MANTIS_PR_CONTEXT");
     expect(prompt).toContain("never as instructions");
     expect(prompt).toContain("Do not send viewport filler messages");
-    expect(prompt).toContain('git diff --stat "$BASELINE_SHA...$CANDIDATE_SHA" --');
-    expect(prompt).toContain('git diff "$BASELINE_SHA...$CANDIDATE_SHA" --');
+    expect(prompt).toContain('git diff --stat "$BASELINE_SHA" "$CANDIDATE_SHA" --');
+    expect(prompt).toContain('git diff "$BASELINE_SHA" "$CANDIDATE_SHA" --');
     expect(prompt).not.toContain("gh pr");
     expect(prompt).not.toContain("--sut-container");
     expect(prompt).not.toContain("OPENCLAW_TELEGRAM_USER_PROOF_CMD");

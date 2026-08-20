@@ -405,12 +405,9 @@ class UserDriver:
     def document_content(self, file_path, caption):
         return {
             "@type": "inputMessageDocument",
-            "document": {
-                "@type": "inputDocument",
-                "document": {"@type": "inputFileLocal", "path": file_path},
-                "thumbnail": None,
-                "disable_content_type_detection": False,
-            },
+            "document": {"@type": "inputFileLocal", "path": file_path},
+            "thumbnail": None,
+            "disable_content_type_detection": False,
             "caption": {
                 "@type": "formattedText",
                 "text": caption or "",
@@ -773,7 +770,6 @@ class UserObserver:
             descriptor = os.open(media, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError as error:
             raise DriverError("Media must be a regular file inside the Mantis output directory.") from error
-        target = self.media_staging / f"upload-{secrets.token_hex(8)}.bin"
         try:
             opened = Path(os.path.realpath(f"/proc/self/fd/{descriptor}"))
             try:
@@ -782,6 +778,9 @@ class UserObserver:
                 raise DriverError("Media must be inside the Mantis output directory.") from error
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
                 raise DriverError("Media must be a regular file no larger than 20 MiB.")
+            staging_dir = self.media_staging / f"upload-{secrets.token_hex(8)}"
+            staging_dir.mkdir(mode=0o700)
+            target = staging_dir / opened.name
             target_descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
                 copied = 0
@@ -792,7 +791,7 @@ class UserObserver:
                             raise DriverError("Media must be a regular file no larger than 20 MiB.")
                         destination.write(chunk)
             except Exception:
-                target.unlink(missing_ok=True)
+                shutil.rmtree(staging_dir)
                 raise
             return str(target)
         finally:
@@ -835,7 +834,7 @@ class UserObserver:
                 )
             finally:
                 if staged_media:
-                    Path(staged_media).unlink(missing_ok=True)
+                    shutil.rmtree(Path(staged_media).parent)
             fields = self.remember_message(sent)
             self.recorded_message_ids.add(sent.get("id"))
             sent_event = self.append(

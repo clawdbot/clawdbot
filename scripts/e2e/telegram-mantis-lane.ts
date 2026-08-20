@@ -125,15 +125,16 @@ const commandOptions: Record<string, readonly string[]> = {
   screenshot: ["--lane"],
   send: ["--lane", "--text", "--text-file", "--media", "--reply-to"],
   start: ["--lane", "--repo-root", "--config"],
-  status: ["--lane"],
   turn: ["--lane", "--text", "--text-file", "--media", "--reply-to", "--observe-seconds"],
   view: ["--lane", "--message-id"],
 };
+// Observed 2026-08: a hand-maintained advertised list omitted `turn`, discarding a 68s lane.
+const commandNames = Object.keys(commandOptions);
 
 function usageText(): string {
   return [
     "Usage: openclaw-telegram-mantis-lane <command> --lane <baseline|candidate> ...",
-    "Commands: start, mock, send, turn, observe, requests, view, screenshot, press, delete, finish, block, abort, status",
+    `Commands: ${commandNames.join(", ")}`,
   ].join("\n");
 }
 
@@ -676,18 +677,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
         maxSends: MAX_SENDS,
         sessionSeconds: MAX_SESSION_MS / 1000,
       },
-      capabilities: [
-        "mock-response",
-        "send",
-        "media",
-        "observe",
-        "requests",
-        "view",
-        "screenshot",
-        "press-callback",
-        "delete-own",
-        "finish",
-      ],
+      commands: commandNames.filter((command) => command !== "start"),
     });
   } catch (error) {
     const cleanupErrors: string[] = [];
@@ -1035,6 +1025,7 @@ function copyArtifacts(
   files: Record<string, string>,
   privatePublished: string,
   publicOutput: string,
+  attempt: number,
 ): Record<string, ReturnType<typeof artifact>> {
   fs.mkdirSync(privatePublished, { recursive: true });
   fs.mkdirSync(publicOutput, { recursive: true });
@@ -1043,7 +1034,7 @@ function copyArtifacts(
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
       continue;
     }
-    const filename = path.basename(source);
+    const filename = `attempt-${attempt}-${path.basename(source)}`;
     const privateTarget = path.join(privatePublished, filename);
     fs.copyFileSync(source, privateTarget);
     fs.copyFileSync(source, path.join(publicOutput, filename));
@@ -1223,6 +1214,7 @@ async function finalize(
       publishableRecorderArtifacts(recorderArtifacts),
       privatePublished,
       publicOutput,
+      state.attempt,
     );
   } catch (error) {
     primaryError ??= error;
@@ -1325,6 +1317,7 @@ async function abort(state: ActiveSession, roots: Roots): Promise<void> {
       publishableRecorderArtifacts(recorderArtifacts),
       privatePublished,
       publicOutput,
+      state.attempt,
     );
   } catch (error) {
     errors.push(coerceErrorMessage(error));
@@ -1454,14 +1447,6 @@ async function main(): Promise<void> {
     } else if (cli.command === "abort") {
       await abort(state, roots);
       return;
-    } else if (cli.command === "status") {
-      outputJson({
-        attempt: state.attempt,
-        lane,
-        lastCursor: state.lastCursor,
-        sendCount: state.sendCount,
-        status: "active",
-      });
     } else {
       throw new Error(usageText());
     }

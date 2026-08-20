@@ -295,7 +295,7 @@ describe("Telegram Mantis free-form lane", () => {
     const harness = await setupHarness();
     fs.writeFileSync(path.join(harness.sessionRoot, "harness.lock"), `${process.pid}\n`);
     try {
-      await expect(runLane(harness.env, ["status", "--lane", "candidate"])).rejects.toThrow(
+      await expect(runLane(harness.env, ["requests", "--lane", "candidate"])).rejects.toThrow(
         "shared Telegram harness already has a command in progress",
       );
       expect(harness.requests).toEqual([]);

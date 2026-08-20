@@ -57,7 +57,8 @@ with tempfile.TemporaryDirectory() as root:
     (public / "proof.txt").write_text("visible media")
     staged_media = Path(observer.resolve_media("proof.txt"))
     staged_media_content = staged_media.read_text()
-    staged_media_private = staged_media.parent == private / "media"
+    staged_media_private = staged_media.parent.parent == private / "media"
+    staged_media_name = staged_media.name
     (private / "credential.txt").write_text("do not upload")
     (public / "credential-link").symlink_to(private / "credential.txt")
     try:
@@ -164,6 +165,7 @@ with tempfile.TemporaryDirectory() as root:
     print(json.dumps({
         "bystanderError": bystander_error,
         "deleted": deleted,
+        "documentContent": module.UserDriver.document_content(None, "/tmp/proof.txt", "proof"),
         "events": observer.events,
         "mediaError": media_error,
         "pressed": pressed,
@@ -171,6 +173,7 @@ with tempfile.TemporaryDirectory() as root:
         "sent": sent,
         "stagedMediaContent": staged_media_content,
         "stagedMediaPrivate": staged_media_private,
+        "stagedMediaName": staged_media_name,
         "truncated": observer.truncated,
         "terminated": child.returncode is not None,
     }))
@@ -212,8 +215,16 @@ describe("Telegram user observer", () => {
     expect(value.mediaError).toBe(
       "Media must be a regular file inside the Mantis output directory.",
     );
+    expect(value.documentContent).toEqual({
+      "@type": "inputMessageDocument",
+      caption: { "@type": "formattedText", entities: [], text: "proof" },
+      disable_content_type_detection: false,
+      document: { "@type": "inputFileLocal", path: "/tmp/proof.txt" },
+      thumbnail: null,
+    });
     expect(value.stagedMediaContent).toBe("visible media");
     expect(value.stagedMediaPrivate).toBe(true);
+    expect(value.stagedMediaName).toBe("proof.txt");
     expect(value.sent.sent).toMatchObject({ actor: "user", messageId: "124" });
     expect(value.sent.events).toMatchObject([
       { actor: "user", messageId: "124" },
