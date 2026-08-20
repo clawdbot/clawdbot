@@ -223,6 +223,45 @@ describe("firecrawl tools", () => {
     expect((failure as Error).message.length).toBeLessThan(5_000);
   });
 
+  it("does not cache failed target statuses and observes recovery", async () => {
+    const targetStatuses = [404, 404, 200];
+    const fetchMock = vi.fn(async () => {
+      const statusCode = targetStatuses.shift();
+      return Response.json({
+        success: true,
+        data: {
+          markdown: `target status ${statusCode}`,
+          metadata: {
+            sourceURL: "https://example.com/firecrawl-target-recovery",
+            statusCode,
+          },
+        },
+      });
+    });
+    global.fetch = fetchMock as typeof fetch;
+    const params = {
+      cfg: {
+        plugins: {
+          entries: { firecrawl: { config: { webFetch: { apiKey: "firecrawl-owner-test" } } } },
+        },
+      } as OpenClawConfig,
+      url: "https://example.com/firecrawl-target-recovery",
+      extractMode: "markdown" as const,
+    };
+
+    await expect(runActualFirecrawlScrape(params)).rejects.toThrow(
+      "Firecrawl fetch failed (404): target returned an unsuccessful HTTP status.",
+    );
+    await expect(runActualFirecrawlScrape(params)).rejects.toThrow(
+      "Firecrawl fetch failed (404): target returned an unsuccessful HTTP status.",
+    );
+    const recovered = await runActualFirecrawlScrape(params);
+
+    expect(recovered.status).toBe(200);
+    expect(recovered.cached).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it.each(["search", "scrape"] as const)(
     "propagates exact %s cancellation into the actual guarded fetch signal",
     async (operation) => {

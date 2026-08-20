@@ -12,7 +12,7 @@ import {
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
-import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { emitAgentEventIfCurrent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
@@ -320,9 +320,9 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
       ) {
         throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
       }
-      return {
+      return Object.assign({}, entry, {
         activeWriterRunId: params.runId,
-      } as Partial<InternalSessionEntry> as Partial<SessionEntry>;
+      });
     },
     { skipMaintenance: true },
   );

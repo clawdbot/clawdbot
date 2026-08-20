@@ -183,6 +183,15 @@ describe("matrix exec approvals", () => {
     );
   });
 
+  it("requires an exact Matrix id for exec approval authorization", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["user:@\u212A:example.org"] });
+
+    expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@\u212A:example.org" })).toBe(
+      true,
+    );
+    expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@k:example.org" })).toBe(false);
+  });
+
   it("ignores wildcard allowlist entries when inferring exec approvers", () => {
     const cfg = buildConfig({ enabled: true }, { dm: { allowFrom: ["*"] } });
 
@@ -225,6 +234,30 @@ describe("matrix exec approvals", () => {
     expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@other:example.org" })).toBe(
       false,
     );
+  });
+
+  it("requires an exact Matrix id for approval target recipients", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok",
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "matrix", to: "user:@\u212A:example.org" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@\u212A:example.org" })).toBe(
+      true,
+    );
+    expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@k:example.org" })).toBe(false);
   });
 
   it("suppresses local prompts only when the native client is enabled", () => {
@@ -436,31 +469,6 @@ describe("matrix exec approvals", () => {
       true,
     );
     expect(shouldHandleMatrixExecApprovalRequest({ cfg, accountId: "ops", request })).toBe(true);
-  });
-
-  it("rejects unbound foreign-channel approvals even when only one matrix account can handle them", () => {
-    const cfg = buildMultiAccountMatrixConfig({
-      opsExecApprovals: {
-        enabled: false,
-        approvers: ["@owner:example.org"],
-      },
-    });
-    const request = makeChannelApprovalRequest({ id: "req-5" });
-
-    expect(
-      shouldHandleMatrixExecApprovalRequest({
-        cfg,
-        accountId: "default",
-        request,
-      }),
-    ).toBe(false);
-    expect(
-      shouldHandleMatrixExecApprovalRequest({
-        cfg,
-        accountId: "ops",
-        request,
-      }),
-    ).toBe(false);
   });
 
   it("uses request filters when checking unbound matrix account eligibility", () => {

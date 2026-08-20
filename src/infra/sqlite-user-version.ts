@@ -7,6 +7,12 @@ type SqliteUserVersionReader = {
   prepare: (sql: string) => { get: () => unknown };
 };
 
+const SQLITE_SCHEMA_VERSION_ERROR_NAME = "SqliteSchemaVersionError";
+
+export function isSqliteSchemaVersionError(error: unknown): error is Error {
+  return error instanceof Error && error.name === SQLITE_SCHEMA_VERSION_ERROR_NAME;
+}
+
 export function readSqliteUserVersion(db: SqliteUserVersionReader): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
   return Number(row?.user_version ?? 0);
@@ -39,6 +45,6 @@ export function createNewerSqliteSchemaVersionError(
       `Run a build that supports schema ${schemaVersion} or newer against this state directory — rebuild or update the install above — or point this build at a different OPENCLAW_STATE_DIR. ` +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
-  error.name = "SqliteSchemaVersionError";
+  error.name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
   return error;
 }

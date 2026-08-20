@@ -125,7 +125,7 @@ function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean 
   return true;
 }
 
-/** Evaluates OS gating and runtime requirements for skill/plugin entry eligibility. */
+/** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
 export function evaluateRuntimeEligibility(
   params: {
     os?: string[];

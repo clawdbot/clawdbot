@@ -13,9 +13,9 @@ import {
   rollbackGatewayRestartSignalFence,
   runWithGatewayIndependentRootWorkContinuation,
   runOutsideGatewayRootWorkAdmission,
+  tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
-  waitForActiveGatewayRootWork,
 } from "./gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "./gateway-work-admission.test-helpers.js";
 
@@ -39,17 +39,6 @@ it("counts one nested root chain once and excludes the preparing caller", async 
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 
-it("waits for admitted roots and reports a bounded timeout", async () => {
-  const root = tryBeginGatewayRootWorkAdmission();
-  expect(root).not.toBeNull();
-  const pending = waitForActiveGatewayRootWork();
-  await expect(waitForActiveGatewayRootWork(0)).resolves.toEqual({ drained: false, active: 1 });
-
-  root?.release();
-
-  await expect(pending).resolves.toEqual({ drained: true, active: 0 });
-});
-
 it("rolls back or releases a generation-bound suspension without resetting roots", () => {
   const invalidated = vi.fn();
   const preparing = tryBeginGatewaySuspendAdmission(invalidated);
@@ -65,6 +54,34 @@ it("rolls back or releases a generation-bound suspension without resetting roots
   expect(prepared?.release()).toBe(false);
   expect(invalidated).not.toHaveBeenCalled();
   expect(isGatewayWorkAdmissionClosed()).toBe(false);
+});
+
+it("admits a targeted restart root only from prepared suspension", () => {
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
+
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension).not.toBeNull();
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
+  expect(suspension?.commit()).toBe(true);
+
+  const restartRoot = tryBeginGatewayPreparedRestartRootWorkAdmission();
+  expect(restartRoot?.ownsRoot).toBe(true);
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
+  restartRoot?.release();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(suspension?.release()).toBe(true);
+
+  const prepared = tryBeginGatewaySuspendAdmission(() => {});
+  expect(prepared?.commit()).toBe(true);
+  const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
+  expect(pendingSignal?.rollback()).toBe(true);
+  expect(prepared?.release()).toBe(true);
+
+  markGatewayRestartDraining();
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
 });
 
 it("lets an admitted root cross only the reversible suspension fence", async () => {

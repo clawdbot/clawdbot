@@ -54,7 +54,7 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
   readonly renderRoot = document.createElement("div");
-  readonly basePath = "";
+  readonly resourceBasePath = "";
   readonly authToken = null;
   available = true;
   isConnected = true;

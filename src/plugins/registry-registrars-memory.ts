@@ -79,50 +79,10 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     registry.memoryCorpusSupplements.push({ pluginId: record.id, supplement });
   };
 
-  const registerMemoryEmbeddingProvider = (
-    record: PluginRecord,
-    adapter: Parameters<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>[0],
-  ) => {
-    if (hasKind(record.kind, "memory")) {
-      if (!requireMemorySlot(record, "embedding provider")) {
-        return;
-      }
-    } else if (!(record.contracts?.memoryEmbeddingProviders ?? []).includes(adapter.id)) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: ${adapter.id}`,
-      });
-      return;
-    }
-    const existing = registry.memoryEmbeddingProviders.find(
-      (entry) => entry.provider.id === adapter.id,
-    );
-    if (existing) {
-      const ownerDetail = existing.pluginId ? ` (owner: ${existing.pluginId})` : "";
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `memory embedding provider already registered: ${adapter.id}${ownerDetail}`,
-      });
-      return;
-    }
-    registry.memoryEmbeddingProviders.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      provider: adapter,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
-  };
-
   return {
     registerMemoryCapability,
     registerMemoryPromptSupplement,
     registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
-    registerMemoryEmbeddingProvider,
   };
 }

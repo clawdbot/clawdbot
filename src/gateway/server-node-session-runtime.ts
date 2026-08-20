@@ -31,6 +31,7 @@ export function createGatewayNodeSessionRuntime(params: {
   listRegisteredNodePluginToolCommands?: NodeRegistryOptions["listRegisteredNodePluginToolCommands"];
   nodePluginToolsEnabled?: boolean;
   nodeSkillsEnabled?: boolean;
+  onRunnerInventoryChanged?: (nodeId: string) => void;
   resolveCurrentPairingState?: NodeRegistryOptions["resolveCurrentPairingState"];
   isPairingStateCurrent?: NodeRegistryOptions["isPairingStateCurrent"];
   onPairingInvalidated?: NodeRegistryOptions["onPairingInvalidated"];
@@ -60,6 +61,7 @@ export function createGatewayNodeSessionRuntime(params: {
   );
   setNodeRunnerInventoryChangedListener(nodeRegistry, (nodeId) => {
     params.broadcast(GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED, { nodeId }, { dropIfSlow: true });
+    params.onRunnerInventoryChanged?.(nodeId);
   });
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const sessionEventSubscribers = params.sessionEventSubscribers;

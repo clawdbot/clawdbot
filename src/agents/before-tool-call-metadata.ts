@@ -1,3 +1,4 @@
+import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export type BeforeToolCallDiagnosticOptions = {
@@ -9,18 +10,39 @@ export const BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS = Symbol("beforeToolCallDiagnos
 export const BEFORE_TOOL_CALL_SOURCE_TOOL = Symbol("beforeToolCallSourceTool");
 export const BEFORE_TOOL_CALL_HOOK_CONTEXT = Symbol("beforeToolCallHookContext");
 
+type BeforeToolCallMetadataTool = AnyAgentTool & {
+  [BEFORE_TOOL_CALL_WRAPPED]?: true;
+  [BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS]?: BeforeToolCallDiagnosticOptions;
+  [BEFORE_TOOL_CALL_SOURCE_TOOL]?: AnyAgentTool;
+  [BEFORE_TOOL_CALL_HOOK_CONTEXT]?: HookContext;
+};
+
+function withBeforeToolCallMetadata(tool: AnyAgentTool): BeforeToolCallMetadataTool {
+  return tool;
+}
+
+export function getBeforeToolCallSourceTool(tool: AnyAgentTool): AnyAgentTool | undefined {
+  return withBeforeToolCallMetadata(tool)[BEFORE_TOOL_CALL_SOURCE_TOOL];
+}
+
+export function getBeforeToolCallHookContext(tool: AnyAgentTool): HookContext | undefined {
+  return withBeforeToolCallMetadata(tool)[BEFORE_TOOL_CALL_HOOK_CONTEXT];
+}
+
+export function clearBeforeToolCallWrappedMarker(tool: AnyAgentTool): void {
+  delete withBeforeToolCallMetadata(tool)[BEFORE_TOOL_CALL_WRAPPED];
+}
+
 /** Return true when a tool already carries the before_tool_call wrapper marker. */
 export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
+  return withBeforeToolCallMetadata(tool)[BEFORE_TOOL_CALL_WRAPPED] === true;
 }
 
 /** Toggle diagnostic event emission on an existing before_tool_call wrapper. */
 export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled: boolean): void {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  const options = taggedTool[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
-  if (options && typeof options === "object" && "emitDiagnostics" in options) {
-    (options as BeforeToolCallDiagnosticOptions).emitDiagnostics = enabled;
+  const options = withBeforeToolCallMetadata(tool)[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
+  if (options) {
+    options.emitDiagnostics = enabled;
   }
 }
 
@@ -33,15 +55,21 @@ export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAg
     value: true,
     enumerable: true,
   });
-  const taggedSource = source as unknown as Record<symbol, unknown>;
-  const sourceTool = taggedSource[BEFORE_TOOL_CALL_SOURCE_TOOL];
-  if (sourceTool && typeof sourceTool === "object") {
+  const diagnosticOptions = withBeforeToolCallMetadata(source)[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
+  if (diagnosticOptions) {
+    Object.defineProperty(target, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
+      value: diagnosticOptions,
+      enumerable: false,
+    });
+  }
+  const sourceTool = getBeforeToolCallSourceTool(source);
+  if (sourceTool) {
     Object.defineProperty(target, BEFORE_TOOL_CALL_SOURCE_TOOL, {
       value: sourceTool,
       enumerable: false,
     });
   }
-  const hookContext = taggedSource[BEFORE_TOOL_CALL_HOOK_CONTEXT];
+  const hookContext = getBeforeToolCallHookContext(source);
   Object.defineProperty(target, BEFORE_TOOL_CALL_HOOK_CONTEXT, {
     value: hookContext,
     enumerable: false,

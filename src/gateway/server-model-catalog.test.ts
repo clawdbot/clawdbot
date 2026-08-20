@@ -3,6 +3,7 @@ import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
+import { markPreparedModelCatalogFull } from "../agents/prepared-model-runtime.facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadDeferredCatalog,
@@ -100,6 +101,22 @@ describe("gateway prepared model catalog", () => {
       readOnly: true,
       workspaceDir: "/tmp/gateway-workspace",
     });
+  });
+
+  it("projects whether the published owner already contains a full catalog", async () => {
+    const config = ownerConfig();
+    const fullCatalog = markPreparedModelCatalogFull({
+      entries: [{ provider: "openai", id: "text-only", name: "Text only", input: ["text"] }],
+      routeVariants: [],
+    });
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () =>
+          ownerSnapshot(config, fullCatalog),
+      }),
+    ).resolves.toMatchObject({ catalogComplete: true });
   });
 
   it("refreshes auth only for the explicit deferred projection", async () => {

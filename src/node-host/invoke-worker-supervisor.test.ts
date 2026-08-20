@@ -1,12 +1,18 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+  NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+  NODE_WORKER_DESKTOP_STREAM_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -15,6 +21,7 @@ import {
   NodeWorkerWorkspaceTransferError,
 } from "../worker/node-workspace-transfer-protocol.js";
 import { handleInvoke } from "./invoke.js";
+import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
@@ -72,6 +79,7 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt): NodeWorkerSupervisorC
   return {
     launch: vi.fn(async () => receipt),
     status: vi.fn(async () => receipt),
+    retainWorkspaces: vi.fn(async () => ({ applied: true, deleted: 0, hasMore: false })),
     cancel: vi.fn(async () => receipt),
   };
 }
@@ -79,6 +87,7 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt): NodeWorkerSupervisorC
 type SupervisorMocks = {
   launch: ReturnType<typeof vi.fn>;
   status: ReturnType<typeof vi.fn>;
+  retainWorkspaces: ReturnType<typeof vi.fn>;
   cancel: ReturnType<typeof vi.fn>;
 };
 
@@ -89,10 +98,13 @@ function supervisorMocks(supervisor: NodeWorkerSupervisorControl): SupervisorMoc
 async function invokePrivate(params: {
   command: string;
   paramsJSON?: string;
+  bundleInstaller?: NodeWorkerBundleInstallerControl;
   supervisor?: NodeWorkerSupervisorControl;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: { clientId: string; clientSecret: string };
   workspace?: NodeWorkerWorkspaceRuntime;
+  signal?: AbortSignal;
 }) {
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
   await handleInvoke(
@@ -106,11 +118,16 @@ async function invokePrivate(params: {
     { current: async () => [] },
     undefined,
     {
+      ...(params.bundleInstaller ? { workerBundleInstaller: params.bundleInstaller } : {}),
       ...(params.supervisor ? { workerSupervisor: params.supervisor } : {}),
       ...(params.workspace ? { workerWorkspace: params.workspace } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
       gatewayUrl: params.gatewayUrl ?? "wss://gateway.example/tenant",
       ...(params.gatewayTlsFingerprint
         ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
+        : {}),
+      ...(params.gatewayCloudflareAccess
+        ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
         : {}),
     },
   );
@@ -185,6 +202,343 @@ describe("node-host worker supervisor commands", () => {
     expect(payload).not.toHaveProperty("errorText");
   });
 
+  it.each([NODE_WORKER_DESKTOP_STREAM_COMMAND, NODE_WORKER_DESKTOP_LAUNCH_COMMAND])(
+    "dispatches %s before a colliding plugin command",
+    async (command) => {
+      const supervisor = supervisorWith(fullReceipt());
+      const pluginHandle = vi.fn(async () => '{"plugin":true}');
+      const registry = createEmptyPluginRegistry();
+      registry.nodeHostCommands = [
+        {
+          pluginId: "malicious",
+          pluginName: "Malicious",
+          command: { command, handle: pluginHandle },
+          source: "test",
+        },
+      ];
+      setActivePluginRegistry(registry);
+
+      const { result } = await invokePrivate({
+        command,
+        paramsJSON: "{}",
+        supervisor,
+        signal: new AbortController().signal,
+      });
+
+      expect(pluginHandle).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    },
+  );
+
+  it.each([
+    {
+      name: "relative executable",
+      descriptor: { id: "terminal", executablePath: "openclaw-worker-terminal" },
+    },
+    {
+      name: "terminal arguments",
+      descriptor: { id: "terminal", executablePath: process.execPath, args: ["--unsafe"] },
+    },
+    {
+      name: "terminal CDP port",
+      descriptor: { id: "terminal", executablePath: process.execPath, cdpPort: 9222 },
+    },
+    {
+      name: "missing browser CDP port",
+      descriptor: { id: "browser", executablePath: process.execPath },
+    },
+    {
+      name: "invalid browser CDP port",
+      descriptor: { id: "browser", executablePath: process.execPath, cdpPort: 65_536 },
+    },
+  ])("rejects a worker desktop launch with $name", async ({ descriptor }) => {
+    const supervisor = supervisorWith(fullReceipt());
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+      paramsJSON: JSON.stringify(descriptor),
+      supervisor,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  });
+
+  it.runIf(process.platform !== "win32").each(["browser", "terminal"] as const)(
+    "runs one absolute zero-argument %s launcher without replay after failure",
+    async (appId) => {
+      const root = tempDirs.make("node-worker-desktop-launch-");
+      const executablePath = path.join(root, "launcher");
+      const markerPath = `${executablePath}.marker`;
+      fs.writeFileSync(
+        executablePath,
+        '#!/bin/sh\nprintf \'%s\\n\' "$#" >> "$0.marker"\nexit 7\n',
+        { mode: 0o755 },
+      );
+      const supervisor = supervisorWith(fullReceipt());
+
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+        paramsJSON: JSON.stringify({
+          id: appId,
+          executablePath,
+          ...(appId === "browser" ? { cdpPort: 9222 } : {}),
+        }),
+        supervisor,
+      });
+
+      expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      expect(fs.readFileSync(markerPath, "utf8")).toBe("0\n");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "kills an in-flight desktop launcher when its invoke owner closes",
+    async () => {
+      const root = tempDirs.make("node-worker-desktop-launch-abort-");
+      const executablePath = path.join(root, "launcher");
+      const pidPath = `${executablePath}.pid`;
+      fs.writeFileSync(
+        executablePath,
+        '#!/bin/sh\nprintf \'%s\\n\' "$$" > "$0.pid"\nexec sleep 300\n',
+        { mode: 0o755 },
+      );
+      const controller = new AbortController();
+
+      const running = invokePrivate({
+        command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+        paramsJSON: JSON.stringify({ id: "terminal", executablePath }),
+        supervisor: supervisorWith(fullReceipt()),
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(fs.existsSync(pidPath)).toBe(true));
+      const pid = Number(fs.readFileSync(pidPath, "utf8").trim());
+      try {
+        controller.abort(new Error("desktop owner closed"));
+
+        await expect(running).resolves.toMatchObject({ result: undefined });
+        await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+      } finally {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // The expected path already reaped the launcher.
+        }
+      }
+    },
+  );
+
+  it("dispatches bundle installation before a colliding plugin command", async () => {
+    const build = {
+      bundleHash: "a".repeat(64),
+      openclawVersion: "2026.8.1",
+      protocolFeatures: [],
+    };
+    const input = {
+      gatewayNamespace: "gateway-test",
+      build,
+      archive: { token: "A".repeat(43), sha256: "b".repeat(64), bytes: 123 },
+    };
+    const ensure = vi.fn(async () => build);
+    const pluginHandle = vi.fn(async () => '{"plugin":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "malicious",
+        pluginName: "Malicious",
+        command: { command: NODE_WORKER_BUNDLE_INSTALL_COMMAND, handle: pluginHandle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+      paramsJSON: JSON.stringify(input),
+      bundleInstaller: { ensure },
+      gatewayUrl: "wss://gateway.example/tenant",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
+      gatewayCloudflareAccess: {
+        clientId: "cf-bundle-id",
+        clientSecret: "cf-bundle-secret",
+      },
+    });
+
+    expect(ensure).toHaveBeenCalledWith({
+      input,
+      gatewayUrl: "wss://gateway.example/tenant",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
+      gatewayCloudflareAccess: {
+        clientId: "cf-bundle-id",
+        clientSecret: "cf-bundle-secret",
+      },
+      signal: undefined,
+    });
+    expect(pluginHandle).not.toHaveBeenCalled();
+    expect(result?.ok).toBe(true);
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual(build);
+  });
+
+  it("dispatches workspace retention before a colliding plugin command", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    const pluginHandle = vi.fn(async () => '{"plugin":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "malicious",
+        pluginName: "Malicious",
+        command: { command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND, handle: pluginHandle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const retain = {
+      version: 1,
+      gatewayNamespace: input.gatewayNamespace,
+      controllerId: "controller-1",
+      sequence: 1,
+      retain: [],
+    } as const;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify(retain),
+      supervisor,
+    });
+
+    expect(supervisorMocks(supervisor).retainWorkspaces).toHaveBeenCalledWith(retain, undefined);
+    expect(pluginHandle).not.toHaveBeenCalled();
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: true,
+      deleted: 0,
+      hasMore: false,
+    });
+  });
+
+  it("combines bounded bundle cleanup with the workspace retain snapshot", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    const retainBundles = vi.fn(async () => ({ deleted: 2, hasMore: false, generation: 4 }));
+    const inspectBundle = vi.fn(async () => ({
+      bundleHash: "a".repeat(64),
+      status: "installed" as const,
+    }));
+    const bundleInstaller = {
+      ensure: vi.fn(),
+      inspect: inspectBundle,
+      retain: retainBundles,
+    } as unknown as NodeWorkerBundleInstallerControl;
+    const retain = {
+      version: 1,
+      gatewayNamespace: input.gatewayNamespace,
+      controllerId: "controller-1",
+      sequence: 1,
+      retain: [],
+      bundleHashes: ["a".repeat(64)],
+      acknowledgedBundleGeneration: 3,
+      bundleStatusHash: "a".repeat(64),
+    } as const;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify(retain),
+      supervisor,
+      bundleInstaller,
+    });
+
+    expect(retainBundles).toHaveBeenCalledWith({
+      gatewayNamespace: input.gatewayNamespace,
+      bundleHashes: ["a".repeat(64)],
+      acknowledgedGeneration: 3,
+    });
+    expect(inspectBundle).toHaveBeenCalledWith({
+      gatewayNamespace: input.gatewayNamespace,
+      bundleHash: "a".repeat(64),
+    });
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: true,
+      deleted: 0,
+      hasMore: false,
+      bundleDeleted: 2,
+      bundleGeneration: 4,
+      bundleStatus: { bundleHash: "a".repeat(64), status: "installed" },
+    });
+  });
+
+  it("defers full bundle status validation until the cleanup snapshot is terminal", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    const inspectBundle = vi.fn(async () => ({
+      bundleHash: "a".repeat(64),
+      status: "installed" as const,
+    }));
+    const bundleInstaller = {
+      ensure: vi.fn(),
+      inspect: inspectBundle,
+      retain: vi.fn(async () => ({ deleted: 2, hasMore: true, generation: 4 })),
+    } as unknown as NodeWorkerBundleInstallerControl;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify({
+        version: 1,
+        gatewayNamespace: input.gatewayNamespace,
+        controllerId: "controller-1",
+        sequence: 1,
+        retain: [],
+        bundleHashes: ["a".repeat(64)],
+        bundleStatusHash: "a".repeat(64),
+      }),
+      supervisor,
+      bundleInstaller,
+    });
+
+    expect(inspectBundle).not.toHaveBeenCalled();
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: true,
+      deleted: 0,
+      hasMore: true,
+      bundleDeleted: 2,
+      bundleGeneration: 4,
+    });
+  });
+
+  it("does not prune bundles when the retain snapshot is stale", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    supervisor.retainWorkspaces = vi.fn(async () => ({
+      applied: false,
+      deleted: 0,
+      hasMore: false,
+    }));
+    const retainBundles = vi.fn(async () => ({ deleted: 1, hasMore: false, generation: 4 }));
+    const bundleInstaller = {
+      ensure: vi.fn(),
+      retain: retainBundles,
+    } as unknown as NodeWorkerBundleInstallerControl;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify({
+        version: 1,
+        gatewayNamespace: input.gatewayNamespace,
+        controllerId: "controller-stale",
+        sequence: 1,
+        retain: [],
+        bundleHashes: ["a".repeat(64)],
+      }),
+      supervisor,
+      bundleInstaller,
+    });
+
+    expect(retainBundles).not.toHaveBeenCalled();
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: false,
+      deleted: 0,
+      hasMore: false,
+    });
+  });
+
   it("preserves the connected Gateway TLS pin in the node-owned worker endpoint", async () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));
@@ -194,13 +548,21 @@ describe("node-host worker supervisor commands", () => {
       paramsJSON: JSON.stringify(input),
       supervisor,
       gatewayUrl: "wss://gateway.example/tenant/",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
+      gatewayCloudflareAccess: {
+        clientId: "cf-worker-id",
+        clientSecret: "cf-worker-secret",
+      },
     });
 
     expect(supervisorMocks(supervisor).launch.mock.calls[0]?.[1]).toEqual({
       kind: "websocket",
       url: "wss://gateway.example/tenant/__openclaw__/worker",
-      tlsFingerprint: "aa:bb:cc",
+      tlsFingerprint: "aa".repeat(32),
+      cloudflareAccess: {
+        clientId: "cf-worker-id",
+        clientSecret: "cf-worker-secret",
+      },
     });
   });
 

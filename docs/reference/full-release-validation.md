@@ -279,7 +279,7 @@ Valid filter ids are defined in the reusable live/E2E workflow, including
 `docker-live-models`, `live-gateway-docker`,
 `live-gateway-anthropic-docker`, `live-gateway-google-docker`,
 `live-gateway-minimax-docker`, `live-gateway-advisory-docker`,
-`live-cli-backend-docker`, `live-acp-bind-docker`, and
+`live-cli-backend-docker`, `live-cli-cache-docker`, `live-acp-bind-docker`, and
 `live-codex-harness-docker`.
 
 For a focused QA transport rerun, set `rerun_group=qa-live` and use the

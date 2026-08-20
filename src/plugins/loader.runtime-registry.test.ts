@@ -1,14 +1,19 @@
 // Verifies plugin loader runtime registry behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
+  getRegisteredEmbeddingProvider,
+  registerEmbeddingProvider,
+} from "./embedding-providers.js";
+import {
   loadInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "./installed-plugin-index-records.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
+import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
   clearPluginRegistryLoadCache,
   loadAndActivateRootPluginRegistry,
@@ -20,10 +25,6 @@ import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
 } from "./loader.test-fixtures.js";
-import {
-  getRegisteredMemoryEmbeddingProvider,
-  registerMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -42,8 +43,26 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
   expect(getActivePluginRegistry()).toBe(root);
 });
 
+it("keeps injected instance runtime surfaces independent of the broad runtime module", () => {
+  const gateway = {} as PluginRuntime["gateway"];
+  const nodes = {} as PluginRuntime["nodes"];
+  const subagent = {} as PluginRuntime["subagent"];
+  const loadPluginModule = vi.fn((_modulePath: string): unknown => {
+    throw new Error("broad runtime should stay lazy");
+  });
+  const runtime = createLazyPluginRuntime({
+    loadPluginModule,
+    runtimeOptions: { gateway, nodes, subagent },
+  });
+
+  expect(runtime.gateway).toBe(gateway);
+  expect(runtime.nodes).toBe(nodes);
+  expect(runtime.subagent).toBe(subagent);
+  expect(loadPluginModule).not.toHaveBeenCalled();
+});
+
 function requireMemoryEmbeddingProvider(providerId: string) {
-  const provider = getRegisteredMemoryEmbeddingProvider(providerId)?.adapter;
+  const provider = getRegisteredEmbeddingProvider(providerId)?.adapter;
   if (!provider) {
     throw new Error(`expected ${providerId} memory embedding provider`);
   }
@@ -316,7 +335,7 @@ describe("resolveRuntimePluginRegistry", () => {
 
 describe("clearPluginRegistryLoadCache", () => {
   it("preserves plugin-owned runtime registries while invalidating load snapshots", () => {
-    registerMemoryEmbeddingProvider({
+    registerEmbeddingProvider({
       id: "still-live",
       create: async () => ({ provider: null }),
     });

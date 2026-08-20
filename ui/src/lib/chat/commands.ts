@@ -30,6 +30,7 @@ export type SlashCommandDef = {
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: SlashCommandTier;
   source?: "native" | "plugin" | "skill";
+  skillDisplayName?: string;
   skillModelVisible?: boolean;
   clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
@@ -49,6 +50,7 @@ type CommandLike = {
   category?: string;
   tier?: string;
   source?: "native" | "plugin" | "skill";
+  skillDisplayName?: string;
   skillModelVisible?: boolean;
   clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
@@ -261,6 +263,7 @@ function toSlashCommand(
     argOptions: getArgOptions(command),
     tier: source === "local" ? mapTier(command) : "standard",
     ...(resolvedSource ? { source: resolvedSource } : {}),
+    ...(command.skillDisplayName ? { skillDisplayName: command.skillDisplayName } : {}),
     ...(command.skillModelVisible !== undefined
       ? { skillModelVisible: command.skillModelVisible }
       : {}),
@@ -424,6 +427,10 @@ function normalizeCommandEntry(
       entry.source === "native" || entry.source === "plugin" || entry.source === "skill"
         ? entry.source
         : undefined,
+    skillDisplayName:
+      typeof entry.skillDisplayName === "string"
+        ? clampText(entry.skillDisplayName, MAX_REMOTE_NAME_LENGTH).trim() || undefined
+        : undefined,
     skillModelVisible:
       typeof entry.skillModelVisible === "boolean" ? entry.skillModelVisible : undefined,
     clientPresentation:
@@ -545,20 +552,29 @@ export function getSlashCommandCompletions(
   });
 }
 
+export function getSkillDisplayName(command: SlashCommandDef): string {
+  return command.skillDisplayName?.trim() || command.name;
+}
+
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
-  const normalized = lower.replace(/-/gu, "_");
+  const normalized = lower.replace(/[\s_]+/gu, "-");
   return SLASH_COMMANDS.filter(
     (command) => command.source === "skill" && command.skillModelVisible === true,
   )
-    .filter(
-      (command) =>
+    .filter((command) => {
+      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
+      const displayLookup = displayName.replace(/[\s_]+/gu, "-");
+      const commandLookup = normalizeLowercaseStringOrEmpty(command.name).replace(/[\s_]+/gu, "-");
+      return (
         !lower ||
-        command.name.startsWith(lower) ||
-        command.name.replace(/-/gu, "_").startsWith(normalized) ||
-        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower),
-    )
-    .toSorted((left, right) => left.name.localeCompare(right.name));
+        displayName.includes(lower) ||
+        displayLookup.includes(normalized) ||
+        commandLookup.startsWith(normalized) ||
+        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower)
+      );
+    })
+    .toSorted((left, right) => getSkillDisplayName(left).localeCompare(getSkillDisplayName(right)));
 }
 
 type ParsedSlashCommand = {

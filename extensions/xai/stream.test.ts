@@ -3,6 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
   type Api,
+  type AssistantMessage,
   type Context,
   type Model,
   type ModelThinkingLevel,
@@ -18,6 +19,26 @@ import {
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 type StreamEvent = Record<string, unknown> & { type?: string };
 const PAYLOAD_CAPTURE_TIMEOUT_MS = 5_000;
+
+function xaiAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+  return {
+    role: "assistant" as const,
+    content,
+    api: "openai-responses" as const,
+    provider: "xai",
+    model: "grok-4.3",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: 1,
+  };
+}
 
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
   const events: StreamEvent[] = [];
@@ -321,18 +342,18 @@ describe("xai stream wrappers", () => {
   it("promotes standalone Grok-style tool text to a structured tool call", async () => {
     const rawToolText = '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}';
     const baseStream = buildEventStreamFn([
-      { type: "start", partial: { content: [] } },
-      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "start", partial: xaiAssistantMessage([]) },
+      {
+        type: "text_start",
+        contentIndex: 0,
+        partial: xaiAssistantMessage([{ type: "text", text: "" }]),
+      },
       { type: "text_delta", contentIndex: 0, delta: rawToolText },
       { type: "text_end", contentIndex: 0, content: rawToolText },
       {
         type: "done",
         reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: rawToolText }],
-          stopReason: "stop",
-        },
+        message: xaiAssistantMessage([{ type: "text", text: rawToolText }]),
       },
     ]);
     const wrapped = wrapXaiProviderStream({

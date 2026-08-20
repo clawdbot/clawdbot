@@ -33,6 +33,13 @@ describe("resolveCompactionFailureReason", () => {
 });
 
 describe("classifyCompactionReason", () => {
+  it.each([
+    'No API key found for "anthropic".',
+    "Authentication failed for \"anthropic\". Credentials may have expired or network is unavailable. Run '/login anthropic' to re-authenticate.",
+  ])("classifies known authentication guidance as auth_failed: %s", (reason) => {
+    expect(classifyCompactionReason(reason)).toBe("auth_failed");
+  });
+
   it('classifies "nothing to compact" as a skip-like reason', () => {
     expect(classifyCompactionReason("Nothing to compact (session too small)")).toBe(
       "no_compactable_entries",

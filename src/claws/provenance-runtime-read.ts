@@ -28,7 +28,7 @@ type ClawInstallSchemaVersionSnapshot =
     }
   | { kind: "uninitialized" };
 
-// Install provenance is process-stable; only the state lifecycle and Claw mutations refresh it.
+// Refresh on every runtime config snapshot because another process may mutate Claw provenance.
 const snapshotsByPath = new Map<string, ClawInstallSchemaVersionSnapshot>();
 const snapshotListeners = new Set<() => void>();
 
@@ -142,20 +142,35 @@ export function initializeCachedClawInstallSchemaVersions(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   const path = resolveSnapshotPath(options);
-  if (snapshotsByPath.has(path)) {
-    return;
-  }
+  const previous = snapshotsByPath.get(path);
   try {
     const snapshot = withExistingOpenClawStateDatabaseReadOnly(({ db, path: pathname }) => {
       assertOpenClawStateDatabaseOwner(db, { pathname });
       return readSchemaVersions(db);
     }, options);
-    snapshotsByPath.set(path, snapshot ?? { kind: "ready", schemaVersions: new Map() });
+    if (snapshot) {
+      snapshotsByPath.set(path, snapshot);
+    } else {
+      const previousAgentIds = knownAgentIds(previous);
+      snapshotsByPath.set(
+        path,
+        previousAgentIds.size > 0 || (previous !== undefined && isOwnershipUnknown(previous))
+          ? {
+              kind: "state-error",
+              error: new Error(
+                "OpenClaw state database disappeared after Claw ownership was observed.",
+              ),
+              knownAgentIds: previousAgentIds,
+              ownershipUnknown: true,
+            }
+          : { kind: "ready", schemaVersions: new Map() },
+      );
+    }
   } catch (error) {
     snapshotsByPath.set(path, {
       kind: "state-error",
       error,
-      knownAgentIds: new Set(),
+      knownAgentIds: knownAgentIds(previous),
       ownershipUnknown: true,
     });
   }

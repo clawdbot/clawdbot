@@ -1,5 +1,5 @@
 // Commander registration for onboard setup flags and lazy onboard runtime execution.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
@@ -31,13 +31,6 @@ export function resolveInstallDaemonFlag(command: Command): boolean | undefined 
     return Boolean(command.getOptionValue("installDaemon"));
   }
   return undefined;
-}
-
-export function resolveTailscaleResetOnExitFlag(command: Command): boolean | undefined {
-  if (command.getOptionValueSource("tailscaleResetOnExit") !== "cli") {
-    return undefined;
-  }
-  return Boolean(command.getOptionValue("tailscaleResetOnExit"));
 }
 
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
@@ -239,8 +232,8 @@ export function registerOnboardCommand(program: Command): void {
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
-    .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
-    .option("--no-tailscale-reset-on-exit", "Keep tailscale serve/funnel after exit")
+    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
+    .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
@@ -251,7 +244,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
-    .option("--suppress-gateway-token-output", "Suppress token-bearing Gateway/UI output")
+    .option("--suppress-gateway-token-output", "Disable the guided Control UI handoff")
     .option("--skip-hooks", "Skip hook setup")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--import-from <provider>", "Migration provider to run during onboarding")
@@ -352,7 +345,6 @@ export function registerOnboardCommand(program: Command): void {
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime);
-      const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
       const gatewayPort = parseGatewayPortOption(opts.gatewayPort, "--gateway-port");
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
@@ -375,7 +367,6 @@ export function registerOnboardCommand(program: Command): void {
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
           tailscale: opts.tailscale as TailscaleMode | undefined,
-          tailscaleResetOnExit,
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,

@@ -12,6 +12,7 @@ import {
   type GatewayMethodHandler,
   type GatewayMethodDescriptorInput,
   type GatewayMethodOwner,
+  type GatewayMethodProfileAccess,
   type GatewayMethodRegistryView,
   NODE_GATEWAY_METHOD_SCOPE,
 } from "./descriptor.js";
@@ -43,6 +44,8 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
     ...input,
     name,
     scope: normalizedScope,
+    profileAccess:
+      input.profileAccess ?? (input.owner.kind === "core" ? "independent" : "required"),
     ...(input.startup === "unavailable-until-sidecars"
       ? { startup: "unavailable-until-sidecars" }
       : {}),
@@ -77,6 +80,7 @@ export function createGatewayMethodRegistry(
     getScope: (name) => byName.get(name)?.scope,
     isStartupUnavailable: (name) => byName.get(name)?.startup === "unavailable-until-sidecars",
     isControlPlaneWrite: (name) => byName.get(name)?.controlPlaneWrite === true,
+    requiresAuthenticatedProfile: (name) => byName.get(name)?.profileAccess === "required",
     descriptors: () => descriptors,
   };
 }
@@ -109,12 +113,14 @@ export function createPluginGatewayMethodDescriptor(params: {
   name: string;
   handler: GatewayMethodHandler;
   scope?: OperatorScope;
-}): GatewayMethodDescriptorInput {
+  profileAccess?: GatewayMethodProfileAccess;
+}): GatewayMethodDescriptor {
   const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
   return {
     name: params.name,
     handler: params.handler,
     owner: { kind: "plugin", pluginId: params.pluginId },
+    profileAccess: params.profileAccess ?? "required",
     scope: normalizedScope ?? ADMIN_SCOPE,
   };
 }

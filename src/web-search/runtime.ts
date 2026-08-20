@@ -137,9 +137,10 @@ export function isWebSearchProviderConfigured(params: {
     | "requiresCredential"
   >;
   config?: OpenClawConfig;
+  agentDir?: string;
 }): boolean {
   const config = resolveWebSearchRuntimeConfig({ config: params.config });
-  return hasEntryCredential(params.provider, config, resolveSearchConfig(config));
+  return hasEntryCredential(params.provider, config, resolveSearchConfig(config), params.agentDir);
 }
 
 /** Lists runtime web_search providers after applying runtime config snapshots. */

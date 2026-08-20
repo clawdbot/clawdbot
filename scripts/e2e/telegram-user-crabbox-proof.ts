@@ -15,18 +15,40 @@ import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseStrictBooleanArg } from "../lib/arg-utils.mts";
-import { coerceErrorMessage, toStringifiedError } from "../lib/error-format.mts";
+import { coerceErrorMessage } from "../lib/error-format.mts";
+import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep } from "../lib/sleep.mjs";
-import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import { readTextFileTail } from "./lib/text-file-utils.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
+import {
+  COMMAND_TIMEOUT_MS,
+  crabboxSshArgs,
+  createCroppedMotionPreview as createSharedCroppedMotionPreview,
+  createDesktopCrabboxWarmupArgs,
+  createMotionPreview as createSharedMotionPreview,
+  extractCrabboxLeaseId,
+  inspectCrabbox as inspectSharedCrabbox,
+  type CrabboxInspect,
+  type CommandResult,
+  type TelegramCrop,
+  renderTelegramViewCommand,
+  runCommand,
+  scpFromRemote as sharedScpFromRemote,
+  scpToRemote as sharedScpToRemote,
+  selectedCrabboxSshArgs,
+  selectCrabboxSshPort,
+  shellQuote,
+  sshRun as sharedSshRun,
+  startRemoteRecording as startSharedRemoteRecording,
+  stopRemoteRecording as stopSharedRemoteRecording,
+  TELEGRAM_DESKTOP_CROP,
+  TELEGRAM_DESKTOP_WINDOW,
+  telegramPrivatePostLink,
+} from "./telegram-desktop-crabbox.ts";
 
-type CommandResult = {
-  stderr: string;
-  stdout: string;
-};
+export { COMMAND_TIMEOUT_MS, runCommand, selectCrabboxSshPort };
 
 type GatewaySpawnSpec = {
   args: string[];
@@ -38,25 +60,14 @@ type JsonObject = Record<string, unknown>;
 
 type PreviewCrop = "telegram-window";
 
-type CrabboxInspect = {
-  host?: string;
-  id?: string;
-  slug?: string;
-  sshHost?: string;
-  sshFallbackPorts?: string[];
-  sshKey?: string;
-  sshPort?: string;
-  sshUser?: string;
-  state?: string;
-  tailscale?: unknown;
-};
-
 type Options = {
   crabboxClass: string;
   command:
     | "finish"
+    | "inspect"
     | "probe"
     | "publish"
+    | "restart"
     | "run"
     | "screenshot"
     | "send"
@@ -64,6 +75,8 @@ type Options = {
     | "status"
     | "view";
   crabboxBin: string;
+  credentialRole: "ci" | "maintainer";
+  chat?: string;
   desktopChatTitle: string;
   dryRun: boolean;
   envFile?: string;
@@ -155,8 +168,10 @@ type SessionFile = {
   };
   localRoot: string;
   localSut: {
+    configPath?: string;
     containerName?: string;
     sutAttestation?: { lane: "baseline" | "candidate"; sha: string };
+    gatewayPort?: number;
     gatewayLog: string;
     gatewayPid: number;
     mockLog: string;
@@ -180,12 +195,6 @@ const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
 const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
-const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
-const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
-const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
-export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
-const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
-const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 25;
 export const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
@@ -194,19 +203,6 @@ export function readTelegramUserProofLogTailBytes(env: NodeJS.ProcessEnv = proce
 }
 
 const LOG_READY_TAIL_BYTES = readTelegramUserProofLogTailBytes();
-const TELEGRAM_PROOF_WINDOW = {
-  height: 1000,
-  width: 650,
-  x: 635,
-  y: 40,
-};
-const TELEGRAM_PROOF_CROP = {
-  cropWidth: 430,
-  height: TELEGRAM_PROOF_WINDOW.height,
-  width: 430,
-  x: TELEGRAM_PROOF_WINDOW.x + 220,
-  y: TELEGRAM_PROOF_WINDOW.y,
-};
 
 function usageText() {
   return [
@@ -214,6 +210,8 @@ function usageText() {
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts [probe] [--text /status] [--expect OpenClaw]",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts start [--tdlib-url <url>]",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts send --session <session.json> --text <text>",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts inspect --session <session.json>",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts restart --session <session.json>",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts run --session <session.json> -- <remote command>",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts view --session <session.json> --message-id <id>",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts screenshot --session <session.json>",
@@ -223,6 +221,8 @@ function usageText() {
     "",
     "Useful options:",
     "  --class <name>                Crabbox machine class. Default: standard.",
+    "  --credential-role <role>      Convex role: maintainer or ci. Defaults by CI state.",
+    "  --chat <id|username>          Telegram chat override for send (for example @bot for DM).",
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
     "  --human-delay-fixed-ms <ms>   Set a fixed custom human delay before Gateway startup.",
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
@@ -311,13 +311,31 @@ function createTelegramProofRunId() {
   return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
 }
 
+function isTruthyCi(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+export function resolveTelegramUserProofCredentialRole(
+  value: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Options["credentialRole"] {
+  const normalized = value?.trim().toLowerCase() || (isTruthyCi(env.CI) ? "ci" : "maintainer");
+  if (normalized === "ci" || normalized === "maintainer") {
+    return normalized;
+  }
+  throw new Error(`Credential role must be one of maintainer or ci, got "${value}".`);
+}
+
 export function parseArgs(argvInput: string[]): Options {
   let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
   const commands = new Set([
     "finish",
+    "inspect",
     "probe",
     "publish",
+    "restart",
     "run",
     "screenshot",
     "send",
@@ -330,6 +348,7 @@ export function parseArgs(argvInput: string[]): Options {
     crabboxClass: "standard",
     command,
     crabboxBin: trimToValue(process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN) ?? "crabbox",
+    credentialRole: resolveTelegramUserProofCredentialRole(process.env.OPENCLAW_QA_CREDENTIAL_ROLE),
     desktopChatTitle:
       trimToValue(process.env.OPENCLAW_TELEGRAM_USER_DESKTOP_CHAT_TITLE) ?? "OpenClaw Testing",
     dryRun: false,
@@ -341,7 +360,7 @@ export function parseArgs(argvInput: string[]): Options {
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, createTelegramProofRunId()),
-    previewCropWidth: TELEGRAM_PROOF_CROP.cropWidth,
+    previewCropWidth: TELEGRAM_DESKTOP_CROP.cropWidth,
     previewFps: 24,
     previewWidth: 1920,
     provider: process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER?.trim() || "aws",
@@ -388,8 +407,12 @@ export function parseArgs(argvInput: string[]): Options {
     };
     if (arg === "--class") {
       opts.crabboxClass = readValue();
+    } else if (arg === "--chat") {
+      opts.chat = readValue();
     } else if (arg === "--crabbox-bin") {
       opts.crabboxBin = readValue();
+    } else if (arg === "--credential-role") {
+      opts.credentialRole = resolveTelegramUserProofCredentialRole(readValue());
     } else if (arg === "--desktop-chat-title") {
       opts.desktopChatTitle = readValue();
     } else if (arg === "--dry-run") {
@@ -496,7 +519,17 @@ export function parseArgs(argvInput: string[]): Options {
     throw new Error("run requires a remote command after --.");
   }
   if (
-    ["finish", "publish", "run", "screenshot", "send", "status", "view"].includes(command) &&
+    [
+      "finish",
+      "inspect",
+      "publish",
+      "restart",
+      "run",
+      "screenshot",
+      "send",
+      "status",
+      "view",
+    ].includes(command) &&
     !opts.sessionFile
   ) {
     throw new Error(`${command} requires --session.`);
@@ -509,6 +542,9 @@ export function parseArgs(argvInput: string[]): Options {
   }
   if (command !== "start" && opts.humanDelayFixedMs !== undefined) {
     throw new Error("--human-delay-fixed-ms is available only for start sessions.");
+  }
+  if (command !== "send" && opts.chat) {
+    throw new Error("--chat is available only for held-session sends.");
   }
   if (opts.mcpAppFixture && command !== "start") {
     throw new Error("--mcp-app-fixture is available only for start sessions.");
@@ -685,315 +721,40 @@ export function createOpenClawGatewaySpawnSpec(params: {
   };
 }
 
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-type AppendCommandStdoutResult = { ok: true; value: string } | { ok: false; message: string };
-
-function appendCommandTextTail(current: string, chunk: string, maxChars: number): string {
-  const next = current + chunk;
-  return next.length > maxChars ? sliceUtf16Safe(next, -maxChars) : next;
-}
-
-function appendCommandStdout(
-  current: string,
-  chunk: string,
-  maxChars = COMMAND_STDOUT_MAX_CHARS,
-): AppendCommandStdoutResult {
-  const next = current + chunk;
-  if (next.length > maxChars) {
-    return { ok: false, message: `command stdout exceeded ${maxChars} characters` };
-  }
-  return { ok: true, value: next };
-}
-
-function appendCommandStderrTail(
-  current: string,
-  chunk: string,
-  maxChars = COMMAND_STDERR_TAIL_CHARS,
-): string {
-  return appendCommandTextTail(current, chunk, maxChars);
-}
-
-function commandFailureOutput(stdout: string, stderr: string): string {
-  const stdoutTail =
-    stdout.length > COMMAND_FAILURE_STDOUT_TAIL_CHARS
-      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${sliceUtf16Safe(stdout, -COMMAND_FAILURE_STDOUT_TAIL_CHARS)}`
-      : stdout;
-  return `${stdoutTail}${stderr}`;
-}
-
-function timedOutError(message: string) {
-  return Object.assign(new Error(message), { code: "ETIMEDOUT" });
-}
-
-const activeCommandChildren = new Set<ChildProcess>();
-let commandCleanupHandlersInstalled = false;
-
-type CommandTreeTarget = Pick<ChildProcess, "kill" | "pid">;
-
-export function signalCommandTree(
-  child: CommandTreeTarget,
-  signal: NodeJS.Signals,
-  {
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: NodeJS.Platform;
-    runTaskkill?: (
-      command: string,
-      args: readonly string[],
-      options: { stdio: "ignore" },
-    ) => { error?: Error; status: number | null };
-    useProcessGroup?: boolean;
-  } = {},
-) {
-  if (child.pid && useProcessGroup) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {}
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  child.kill(signal);
-}
-
-function commandProcessTreeAlive(child: ChildProcess) {
-  if (!child.pid || process.platform === "win32") {
-    return child.exitCode === null && child.signalCode === null;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return error && typeof error === "object" && "code" in error && error.code === "EPERM";
-  }
-}
-
-async function waitForCommandProcessTreeExit(child: ChildProcess, timeoutMs: number) {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!commandProcessTreeAlive(child)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
-    });
-  }
-  return !commandProcessTreeAlive(child);
-}
-
-async function finishTimedOutCommandProcessTree(
-  child: ChildProcess,
-  options: {
-    forceKillAt: number | undefined;
-    timeoutKillGraceMs: number;
-  },
-) {
-  if (!commandProcessTreeAlive(child)) {
-    activeCommandChildren.delete(child);
-    return;
-  }
-  const graceRemainingMs =
-    options.forceKillAt === undefined
-      ? options.timeoutKillGraceMs
-      : Math.max(0, options.forceKillAt - Date.now());
-  if (graceRemainingMs > 0) {
-    await waitForCommandProcessTreeExit(child, graceRemainingMs);
-  }
-  if (commandProcessTreeAlive(child)) {
-    signalCommandTree(child, "SIGKILL");
-    await waitForCommandProcessTreeExit(child, options.timeoutKillGraceMs);
-  }
-  activeCommandChildren.delete(child);
-}
-
-function untrackCommandChild(child: ChildProcess) {
-  if (!commandProcessTreeAlive(child)) {
-    activeCommandChildren.delete(child);
-  }
-}
-
-function signalActiveCommandChildren(signal: NodeJS.Signals) {
-  for (const child of activeCommandChildren) {
-    signalCommandTree(child, signal);
-  }
-}
-
-function installCommandCleanupHandlers() {
-  if (commandCleanupHandlersInstalled) {
-    return;
-  }
-  commandCleanupHandlersInstalled = true;
-  process.once("exit", () => {
-    signalActiveCommandChildren("SIGTERM");
-  });
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      signalActiveCommandChildren(signal);
-      process.kill(process.pid, signal);
-    });
-  }
-}
-
-export function runCommand(params: {
+export function createOpenClawCliSpawnSpec(params: {
   args: string[];
-  command: string;
-  cwd: string;
-  env?: NodeJS.ProcessEnv;
-  outputFile?: string;
-  stdio?: "inherit" | "pipe";
-  stdin?: string;
-  timeoutKillGraceMs?: number;
-  timeoutMs?: number;
-}) {
-  return new Promise<CommandResult>((resolve, reject) => {
-    if (params.outputFile) {
-      fs.writeFileSync(params.outputFile, "");
-    }
-    const child = spawn(params.command, params.args, {
-      cwd: params.cwd,
-      detached: process.platform !== "win32",
-      env: params.env ?? process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    activeCommandChildren.add(child);
-    installCommandCleanupHandlers();
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let stdoutLimitError: string | null = null;
-    let timeoutError: Error | null = null;
-    let forceKillAt: number | undefined;
-    let killTimer: NodeJS.Timeout | undefined;
-    const timeoutMs = resolveTelegramProofTimerTimeoutMs(params.timeoutMs ?? COMMAND_TIMEOUT_MS);
-    const timeoutKillGraceMs = resolveTelegramProofTimerTimeoutMs(
-      params.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS,
-    );
-    const clearTimers = () => {
-      clearTimeout(timeout);
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
+  env: NodeJS.ProcessEnv;
+  repoRoot: string;
+  nodeExecPath?: string;
+  npmExecPath?: string;
+  pnpmExecPath?: string;
+  platform?: NodeJS.Platform;
+}): GatewaySpawnSpec {
+  if (params.pnpmExecPath) {
+    return {
+      args: ["openclaw", ...params.args],
+      command: params.pnpmExecPath,
+      options: { cwd: params.repoRoot, env: params.env, shell: false },
     };
-    const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      timeoutError = timedOutError(
-        `${params.command} ${params.args.join(" ")} timed out after ${timeoutMs}ms\n${commandFailureOutput(
-          stdout,
-          stderr,
-        )}`,
-      );
-      signalCommandTree(child, "SIGTERM");
-      forceKillAt = Date.now() + timeoutKillGraceMs;
-      killTimer = setTimeout(() => {
-        signalCommandTree(child, "SIGKILL");
-      }, timeoutKillGraceMs);
-      killTimer.unref?.();
-    }, timeoutMs);
-    timeout.unref?.();
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (params.outputFile) {
-        fs.appendFileSync(params.outputFile, chunk);
-        stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
-      } else if (params.stdio === "inherit") {
-        stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
-      } else {
-        const appended = appendCommandStdout(stdout, chunk);
-        if (!appended.ok) {
-          stdoutLimitError = appended.message;
-          signalCommandTree(child, "SIGKILL");
-        } else {
-          stdout = appended.value;
-        }
-      }
-      if (params.stdio === "inherit") {
-        process.stdout.write(chunk);
-      }
-    });
-    child.stderr.on("data", (chunk: string) => {
-      if (params.outputFile) {
-        fs.appendFileSync(params.outputFile, chunk);
-      }
-      stderr = appendCommandStderrTail(stderr, chunk);
-      if (params.stdio === "inherit") {
-        process.stderr.write(chunk);
-      }
-    });
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      untrackCommandChild(child);
-      clearTimers();
-      reject(error);
-    });
-    child.on("close", (code, signal) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      untrackCommandChild(child);
-      if (timeoutError) {
-        const error = timeoutError;
-        clearTimers();
-        void finishTimedOutCommandProcessTree(child, {
-          forceKillAt,
-          timeoutKillGraceMs,
-        }).then(
-          () => reject(error),
-          (cleanupError: unknown) => reject(toStringifiedError(cleanupError)),
-        );
-        return;
-      }
-      clearTimers();
-      if (stdoutLimitError) {
-        reject(new Error(`${params.command} ${params.args.join(" ")} failed: ${stdoutLimitError}`));
-        return;
-      }
-      if (code === 0) {
-        resolve({ stdout, stderr });
-        return;
-      }
-      const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      reject(
-        new Error(
-          `${params.command} ${params.args.join(" ")} failed with ${detail}\n${commandFailureOutput(
-            stdout,
-            stderr,
-          )}`,
-        ),
-      );
-    });
-    if (params.stdin) {
-      child.stdin.end(params.stdin);
-    } else {
-      child.stdin.end();
-    }
+  }
+  const spec = createPnpmRunnerSpawnSpec({
+    cwd: params.repoRoot,
+    env: params.env,
+    nodeExecPath: params.nodeExecPath,
+    npmExecPath: params.npmExecPath,
+    platform: params.platform,
+    pnpmArgs: ["openclaw", ...params.args],
   });
+  return {
+    args: spec.args,
+    command: spec.command,
+    options: {
+      cwd: spec.options.cwd,
+      env: spec.options.env,
+      shell: spec.options.shell,
+      windowsVerbatimArguments: spec.options.windowsVerbatimArguments,
+    },
+  };
 }
 
 function spawnLogged(command: string, args: string[], options: SpawnOptionsWithoutStdio) {
@@ -1065,17 +826,10 @@ function killTree(child: ChildProcess | undefined) {
   if (!child) {
     return;
   }
-  if (!child.pid) {
-    return;
-  }
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    child.kill("SIGTERM");
-  }
+  terminateManagedChild(child, "SIGTERM");
 }
 
-function killPidTree(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM") {
+export function signalPidTree(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM") {
   if (!pid) {
     return;
   }
@@ -1126,11 +880,11 @@ async function waitForPidTreeExit(pid: number, timeoutMs: number) {
 }
 
 async function stopPidTreeAndWait(pid: number) {
-  killPidTree(pid);
+  signalPidTree(pid);
   if (await waitForPidTreeExit(pid, 5_000)) {
     return;
   }
-  killPidTree(pid, "SIGKILL");
+  signalPidTree(pid, "SIGKILL");
   if (!(await waitForPidTreeExit(pid, 2_000))) {
     throw new Error(`Local SUT process group ${pid} did not exit.`);
   }
@@ -1192,6 +946,47 @@ export async function waitForLog(
   const text = readLogTail(logPath);
   throw new Error(
     `${label} did not become ready within ${timeoutMs}ms\n${sliceUtf16Safe(text, -4000)}`,
+  );
+}
+
+export function readLogAfterOffset(
+  logPath: string,
+  offset: number,
+  maxBytes = LOG_READY_TAIL_BYTES,
+) {
+  const size = fs.statSync(logPath).size;
+  if (size <= offset) {
+    return "";
+  }
+  const start = Math.max(offset, size - Math.max(1, maxBytes));
+  const buffer = Buffer.alloc(size - start);
+  const fd = fs.openSync(logPath, "r");
+  try {
+    fs.readSync(fd, buffer, 0, buffer.length, start);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return buffer.toString("utf8");
+}
+
+export async function waitForLogAfterOffset(params: {
+  label: string;
+  logPath: string;
+  offset: number;
+  pattern: RegExp;
+  timeoutMs: number;
+}) {
+  const started = Date.now();
+  while (Date.now() - started < params.timeoutMs) {
+    const text = readLogAfterOffset(params.logPath, params.offset);
+    if (params.pattern.test(text)) {
+      return text;
+    }
+    await sleep(250);
+  }
+  const text = readLogAfterOffset(params.logPath, params.offset);
+  throw new Error(
+    `${params.label} was not observed within ${params.timeoutMs}ms\n${sliceUtf16Safe(text, -4000)}`,
   );
 }
 
@@ -1289,7 +1084,7 @@ export function writeSutConfig(params: {
     },
     // Exercise the opt-in message audit surface: the DM probe should produce
     // inbound/outbound rows under the privacy-sensitive "direct" mode.
-    logging: { audit: { enabled: true, messages: "direct" } },
+    logging: { audit: { enabled: true, executionIdentity: true, messages: "direct" } },
     channels: {
       telegram: {
         allowFrom: [params.testerId],
@@ -1323,7 +1118,7 @@ export function writeSutConfig(params: {
           bind: "loopback",
           mode: "local",
           port: params.gatewayPort,
-          tailscale: { mode: "funnel", resetOnExit: true },
+          tailscale: { mode: "funnel" },
         }
       : { auth: { mode: "none" }, bind: "loopback", mode: "local", port: params.gatewayPort },
     ...(params.mcpAppFixture
@@ -1877,32 +1672,21 @@ async function startLocalSutDaemon(params: {
   }
 }
 
-function extractLeaseId(output: string) {
-  return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
-}
-
 export function createCrabboxWarmupArgs(
   opts: Pick<
     Options,
     "crabboxClass" | "idleTimeout" | "mcpAppFixture" | "provider" | "target" | "ttl"
   >,
 ) {
-  return [
-    "warmup",
-    "--provider",
-    opts.provider,
-    "--target",
-    opts.target,
-    "--desktop",
-    "--browser",
-    "--class",
-    opts.crabboxClass,
-    "--idle-timeout",
-    opts.idleTimeout,
-    "--ttl",
-    opts.ttl,
-    ...(opts.mcpAppFixture ? ["--tailscale"] : []),
-  ];
+  return createDesktopCrabboxWarmupArgs({
+    browser: true,
+    crabboxClass: opts.crabboxClass,
+    idleTimeout: opts.idleTimeout,
+    provider: opts.provider,
+    tailscale: opts.mcpAppFixture,
+    target: opts.target,
+    ttl: opts.ttl,
+  });
 }
 
 async function warmupCrabbox(opts: Options, root: string) {
@@ -1912,7 +1696,7 @@ async function warmupCrabbox(opts: Options, root: string) {
     cwd: root,
     stdio: "inherit",
   });
-  const leaseId = extractLeaseId(`${result.stdout}\n${result.stderr}`);
+  const leaseId = extractCrabboxLeaseId(`${result.stdout}\n${result.stderr}`);
   if (!leaseId) {
     throw new Error("Crabbox warmup did not print a lease id.");
   }
@@ -1926,246 +1710,66 @@ async function createMotionPreview(params: {
   root: string;
   videoPath: string;
 }) {
-  const preview = await runCommand({
-    command: params.opts.crabboxBin,
-    args: [
-      "media",
-      "preview",
-      "--input",
-      params.videoPath,
-      "--output",
-      params.motionGifPath,
-      "--fps",
-      String(params.opts.previewFps),
-      "--width",
-      String(params.opts.previewWidth),
-      "--trimmed-video-output",
-      params.motionVideoPath,
-      "--json",
-    ],
+  return await createSharedMotionPreview({
+    crabboxBin: params.opts.crabboxBin,
     cwd: params.root,
-    stdio: "inherit",
+    fps: params.opts.previewFps,
+    gifPath: params.motionGifPath,
+    trimmedVideoPath: params.motionVideoPath,
+    videoPath: params.videoPath,
+    width: params.opts.previewWidth,
   });
-  return JSON.parse(preview.stdout) as JsonObject;
 }
 
 function previewCrop(opts: Options) {
   return opts.previewCrop === "telegram-window"
-    ? { ...TELEGRAM_PROOF_CROP, cropWidth: opts.previewCropWidth }
+    ? { ...TELEGRAM_DESKTOP_CROP, cropWidth: opts.previewCropWidth }
     : undefined;
 }
 
 async function createCroppedMotionPreview(params: {
-  crop: typeof TELEGRAM_PROOF_CROP;
+  crop: TelegramCrop;
   croppedGifPath: string;
   croppedVideoPath: string;
   opts: Options;
   root: string;
   videoPath: string;
 }) {
-  const crop = `crop=${params.crop.width}:${params.crop.height}:${params.crop.x}:${params.crop.y}`;
-  const scale = `scale=${params.crop.cropWidth}:-2:flags=lanczos`;
-  await runCommand({
-    command: "ffmpeg",
-    args: [
-      "-y",
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-i",
-      params.videoPath,
-      "-vf",
-      `${crop},${scale}`,
-      "-pix_fmt",
-      "yuv420p",
-      params.croppedVideoPath,
-    ],
+  return await createSharedCroppedMotionPreview({
+    crop: params.crop,
+    croppedGifPath: params.croppedGifPath,
+    croppedVideoPath: params.croppedVideoPath,
     cwd: params.root,
-    stdio: "inherit",
-  });
-  await runCommand({
-    command: "ffmpeg",
-    args: [
-      "-y",
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-i",
-      params.videoPath,
-      "-filter_complex",
-      `${crop},fps=${params.opts.previewFps},${scale},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
-      params.croppedGifPath,
-    ],
-    cwd: params.root,
-    stdio: "inherit",
-  });
-  return {
-    crop,
     fps: params.opts.previewFps,
-    outputWidth: params.crop.cropWidth,
-  };
+    videoPath: params.videoPath,
+  });
 }
 
 async function inspectCrabbox(opts: Options, root: string, leaseId: string) {
-  const result = await runCommand({
-    command: opts.crabboxBin,
-    args: [
-      "inspect",
-      "--provider",
-      opts.provider,
-      "--target",
-      opts.target,
-      "--id",
-      leaseId,
-      "--json",
-    ],
+  return await inspectSharedCrabbox({
+    crabboxBin: opts.crabboxBin,
     cwd: root,
+    leaseId,
+    provider: opts.provider,
+    target: opts.target,
   });
-  return JSON.parse(result.stdout) as CrabboxInspect;
-}
-
-function crabboxSshPortCandidates(inspect: Pick<CrabboxInspect, "sshFallbackPorts" | "sshPort">) {
-  const ports = [inspect.sshPort?.trim() || "22", ...(inspect.sshFallbackPorts ?? [])];
-  return [...new Set(ports.map((port) => port.trim()).filter(Boolean))];
-}
-
-function sshArgs(inspect: CrabboxInspect, sshPort = inspect.sshPort?.trim() || "22") {
-  const sshHost = inspect.sshHost || inspect.host;
-  if (!sshHost || !inspect.sshKey || !inspect.sshUser) {
-    throw new Error("Crabbox inspect output is missing SSH details.");
-  }
-  return {
-    base: [
-      "-i",
-      inspect.sshKey,
-      "-p",
-      sshPort,
-      "-o",
-      "IdentitiesOnly=yes",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=accept-new",
-      "-o",
-      "ConnectTimeout=15",
-    ],
-    scpBase: [
-      "-i",
-      inspect.sshKey,
-      "-P",
-      sshPort,
-      "-o",
-      "IdentitiesOnly=yes",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=accept-new",
-      "-o",
-      "ConnectTimeout=15",
-    ],
-    sshPort,
-    target: `${inspect.sshUser}@${sshHost}`,
-  };
-}
-
-function isTransientSshFailure(error: unknown) {
-  const message = coerceErrorMessage(error);
-  return /Connection (?:closed|reset)|Operation timed out|Connection timed out/u.test(message);
-}
-
-function isSshConnectionFailure(error: unknown) {
-  const message = coerceErrorMessage(error);
-  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-  return (
-    code === "ETIMEDOUT" ||
-    isTransientSshFailure(error) ||
-    /Connection refused|Network is unreachable|No route to host/u.test(message)
-  );
-}
-
-export async function selectCrabboxSshPort(params: {
-  inspect: Pick<CrabboxInspect, "sshFallbackPorts" | "sshPort">;
-  probe: (port: string) => Promise<void>;
-}) {
-  let lastError: unknown;
-  for (const port of crabboxSshPortCandidates(params.inspect)) {
-    try {
-      await params.probe(port);
-      return port;
-    } catch (error) {
-      if (!isSshConnectionFailure(error)) {
-        throw error;
-      }
-      lastError = error;
-    }
-  }
-  throw lastError;
-}
-
-async function runRemoteCommand(params: {
-  args: string[];
-  command: string;
-  cwd: string;
-  outputFile?: string;
-  stdio?: "inherit" | "pipe";
-  timeoutMs?: number;
-}) {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
-    try {
-      return await runCommand(params);
-    } catch (error) {
-      lastError = error;
-      if (attempt === 4 || !isTransientSshFailure(error)) {
-        throw error;
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, attempt * 3000);
-      });
-    }
-  }
-  throw lastError;
-}
-
-const selectedSshPorts = new WeakMap<CrabboxInspect, string>();
-
-async function selectedSshArgs(root: string, inspect: CrabboxInspect) {
-  let sshPort = selectedSshPorts.get(inspect);
-  if (!sshPort) {
-    // Probe with a no-op so fallback selection cannot replay a remote command or file transfer.
-    sshPort = await selectCrabboxSshPort({
-      inspect,
-      probe: async (port) => {
-        const ssh = sshArgs(inspect, port);
-        await runCommand({
-          args: [...ssh.base, ssh.target, "exit 0"],
-          command: "ssh",
-          cwd: root,
-        });
-      },
-    });
-    selectedSshPorts.set(inspect, sshPort);
-  }
-  return sshArgs(inspect, sshPort);
 }
 
 async function scpToRemote(root: string, inspect: CrabboxInspect, local: string, remote: string) {
-  const ssh = await selectedSshArgs(root, inspect);
-  await runRemoteCommand({
-    command: "scp",
-    args: [...ssh.scpBase, local, `${ssh.target}:${remote}`],
+  await sharedScpToRemote({
     cwd: root,
-    stdio: "inherit",
+    inspect,
+    local,
+    remote,
   });
 }
 
 async function scpFromRemote(root: string, inspect: CrabboxInspect, remote: string, local: string) {
-  const ssh = await selectedSshArgs(root, inspect);
-  await runRemoteCommand({
-    command: "scp",
-    args: [...ssh.scpBase, `${ssh.target}:${remote}`, local],
+  await sharedScpFromRemote({
     cwd: root,
-    stdio: "inherit",
+    inspect,
+    local,
+    remote,
   });
 }
 
@@ -2175,19 +1779,17 @@ async function sshRun(
   remoteCommand: string,
   options: { outputFile?: string; timeoutMs?: number } = {},
 ) {
-  const ssh = await selectedSshArgs(root, inspect);
-  return await runRemoteCommand({
-    command: "ssh",
-    args: [...ssh.base, ssh.target, remoteCommand],
+  return await sharedSshRun({
+    command: remoteCommand,
     cwd: root,
+    inspect,
     outputFile: options.outputFile,
-    stdio: "inherit",
     timeoutMs: options.timeoutMs,
   });
 }
 
 export function renderTailscaleSshProxy(params: { gatewayPort: number; inspect: CrabboxInspect }) {
-  const ssh = sshArgs(params.inspect);
+  const ssh = crabboxSshArgs(params.inspect);
   return `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 
@@ -2222,7 +1824,7 @@ async function startTailscaleFunnelBridge(params: {
   // Keep the SUT local while letting its real Gateway lifecycle own Funnel on
   // the Tailscale-enabled desktop lease; no Tailscale credential leaves Crabbox.
   const proxyPath = path.join(params.localRoot, "tailscale");
-  const ssh = await selectedSshArgs(params.localRoot, params.inspect);
+  const ssh = await selectedCrabboxSshArgs(params.localRoot, params.inspect, runCommand);
   await writeExecutable(
     proxyPath,
     renderTailscaleSshProxy({
@@ -2263,8 +1865,7 @@ async function stopTailscaleFunnelBridge(
   bridge: Pick<FunnelBridge, "proxyPath" | "tunnelPid">,
 ) {
   try {
-    // Explicit reset is the backstop when Gateway shutdown loses its async
-    // resetOnExit cleanup; the public route must not outlive this fresh lease.
+    // The proof owns this fresh Funnel lease, so it explicitly removes the route.
     await runCommand({
       args: ["funnel", "reset"],
       command: bridge.proxyPath,
@@ -2272,7 +1873,7 @@ async function stopTailscaleFunnelBridge(
       timeoutMs: 30_000,
     });
   } finally {
-    killPidTree(bridge.tunnelPid);
+    signalPidTree(bridge.tunnelPid);
   }
 }
 
@@ -2395,7 +1996,7 @@ click_window_ratio() {
   sleep 1
 }
 read_qr_link() {
-  scrot "$root/telegram-login-qr.png"
+  scrot -o "$root/telegram-login-qr.png"
   { zbarimg --raw "$root/telegram-login-qr.png" 2>/dev/null || true; } | awk 'index($0, "tg://login?token=") == 1 {print; exit}'
 }
 wait_for_qr_link() {
@@ -2453,6 +2054,7 @@ sleep 1
 }
 
 export function renderRemoteProbe(params: {
+  chat?: string;
   expect: string[];
   outputPath?: string;
   sutUsername: string;
@@ -2469,6 +2071,9 @@ export function renderRemoteProbe(params: {
     params.outputPath ?? `${REMOTE_ROOT}/probe.json`,
     "--json",
   ];
+  if (params.chat) {
+    args.push("--chat", params.chat);
+  }
   for (const expected of params.expect) {
     args.push("--expect", expected);
   }
@@ -2535,6 +2140,8 @@ async function leaseCredential(params: { localRoot: string; opts: Options; root:
     leaseFile,
     "--payload-output",
     payloadFile,
+    "--credential-role",
+    params.opts.credentialRole,
   ];
   if (params.opts.envFile) {
     args.push("--env-file", params.opts.envFile);
@@ -2785,40 +2392,25 @@ EOF
 }
 
 async function startRemoteRecording(root: string, inspect: CrabboxInspect, opts: Options) {
-  const command = `set -euo pipefail
-export DISPLAY="\${DISPLAY:-:99}"
-root=${REMOTE_ROOT}
-video="$root/session.mp4"
-log="$root/ffmpeg.log"
-pid_file="$root/ffmpeg.pid"
-rm -f "$video" "$log" "$pid_file"
-size="$(xdpyinfo | awk '/dimensions:/ {size=$2} END {if (!size) exit 1; print size}')"
-nohup ffmpeg -y -hide_banner -loglevel warning -f x11grab -framerate ${opts.recordFps} -video_size "$size" -i "$DISPLAY" -pix_fmt yuv420p "$video" >"$log" 2>&1 &
-echo $! >"$pid_file"`;
-  await sshRun(root, inspect, command);
-  return {
-    log: `${REMOTE_ROOT}/ffmpeg.log`,
-    pidFile: `${REMOTE_ROOT}/ffmpeg.pid`,
-    remoteVideo: `${REMOTE_ROOT}/session.mp4`,
-  };
+  const paths = await startSharedRemoteRecording({
+    cwd: root,
+    inspect,
+    paths: {
+      ffmpegLog: `${REMOTE_ROOT}/ffmpeg.log`,
+      ffmpegPid: `${REMOTE_ROOT}/ffmpeg.pid`,
+      video: `${REMOTE_ROOT}/session.mp4`,
+    },
+    recordFps: opts.recordFps,
+  });
+  return { log: paths.ffmpegLog, pidFile: paths.ffmpegPid, remoteVideo: paths.video };
 }
 
 async function stopRemoteRecording(root: string, inspect: CrabboxInspect, session: SessionFile) {
-  await sshRun(
-    root,
+  await stopSharedRemoteRecording({
+    cwd: root,
     inspect,
-    `set -euo pipefail
-pid_file=${shellQuote(session.recorder.pidFile)}
-if [ -s "$pid_file" ]; then
-  pid="$(cat "$pid_file")"
-  kill -INT "$pid" >/dev/null 2>&1 || true
-  for _ in $(seq 1 20); do
-    kill -0 "$pid" >/dev/null 2>&1 || exit 0
-    sleep 0.5
-  done
-  kill -TERM "$pid" >/dev/null 2>&1 || true
-fi`,
-  );
+    pidFile: session.recorder.pidFile,
+  });
 }
 
 async function terminateRemoteDesktopSession(root: string, inspect: CrabboxInspect) {
@@ -2851,9 +2443,12 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   fs.mkdirSync(localRoot, { mode: 0o700, recursive: true });
 
   const convexEnvFile = expandHome(opts.envFile ?? DEFAULT_CONVEX_ENV_FILE);
+  const roleSecret =
+    opts.credentialRole === "ci"
+      ? process.env.OPENCLAW_QA_CONVEX_SECRET_CI
+      : process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER;
   const hasConvexEnv =
-    trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) &&
-    trimToValue(process.env.OPENCLAW_QA_CONVEX_SECRET_CI);
+    trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) && trimToValue(roleSecret);
   if (!hasConvexEnv && !fs.existsSync(convexEnvFile)) {
     throw new Error(`Missing Convex env file: ${opts.envFile ?? DEFAULT_CONVEX_ENV_FILE}`);
   }
@@ -2941,7 +2536,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
         testerUsername: credential.testerUsername,
       },
       localRoot,
-      localSut,
+      localSut: { ...localSut, gatewayPort: opts.gatewayPort },
       outputDir,
       recorder,
       remoteRoot: REMOTE_ROOT,
@@ -2960,6 +2555,8 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       webvnc: `${opts.crabboxBin} webvnc --provider ${opts.provider} --target ${opts.target} --id ${leaseId} --open`,
       commands: {
         send: `openclaw-telegram-user-crabbox-proof send --session ${path.relative(root, pathname)} --text '/status'`,
+        inspect: `openclaw-telegram-user-crabbox-proof inspect --session ${path.relative(root, pathname)}`,
+        restart: `openclaw-telegram-user-crabbox-proof restart --session ${path.relative(root, pathname)}`,
         view: `openclaw-telegram-user-crabbox-proof view --session ${path.relative(root, pathname)} --message-id <message-id>`,
         run: `openclaw-telegram-user-crabbox-proof run --session ${path.relative(root, pathname)} -- bash -lc 'source ${REMOTE_ROOT}/env.sh && python3 ${REMOTE_ROOT}/user-driver.py transcript --limit 20 --json'`,
         finish: `openclaw-telegram-user-crabbox-proof finish --session ${path.relative(root, pathname)} --preview-crop telegram-window`,
@@ -3019,6 +2616,7 @@ async function sendSessionProbe(root: string, opts: Options, outputDir: string) 
   await writeExecutable(
     probeScript,
     renderRemoteProbe({
+      chat: opts.chat?.replaceAll("{sut}", session.credential.sutUsername),
       expect: opts.expect,
       outputPath: remoteProbe,
       sutUsername: session.credential.sutUsername,
@@ -3089,35 +2687,272 @@ async function statusSession(root: string, opts: Options, outputDir: string) {
   };
 }
 
-function telegramPrivatePostLink(groupId: string, messageId: string) {
-  if (!/^-100\d+$/u.test(groupId)) {
-    throw new Error(`Telegram privatepost links require a -100 group id, got ${groupId}.`);
+function sessionSutConfigPath(session: SessionFile) {
+  return session.localSut.configPath ?? path.join(session.localSut.tempRoot, "openclaw.json");
+}
+
+async function runSessionAuditCli(
+  root: string,
+  opts: Options,
+  session: SessionFile,
+  args: string[],
+) {
+  const spec = createOpenClawCliSpawnSpec({
+    args,
+    env: {
+      ...childProcessBaseEnv(),
+      OPENCLAW_CONFIG_PATH: sessionSutConfigPath(session),
+      OPENCLAW_STATE_DIR: session.localSut.stateDir,
+    },
+    repoRoot: root,
+    nodeExecPath: opts.nodeBin,
+    pnpmExecPath: opts.pnpmBin,
+  });
+  const cwd = spec.options.cwd;
+  return await runCommand({
+    command: spec.command,
+    args: spec.args,
+    cwd: typeof cwd === "string" ? cwd : cwd ? fileURLToPath(cwd) : root,
+    env: spec.options.env,
+    shell: spec.options.shell,
+    timeoutMs: opts.timeoutMs,
+    windowsVerbatimArguments: spec.options.windowsVerbatimArguments,
+  });
+}
+
+function parseCommandJson(result: CommandResult, label: string): JsonObject {
+  try {
+    const parsed = JSON.parse(result.stdout) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("expected a JSON object");
+    }
+    return parsed as JsonObject;
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON: ${coerceErrorMessage(error)}`, {
+      cause: error,
+    });
   }
-  return `tg://privatepost?channel=${groupId.slice(4)}&post=${messageId}`;
+}
+
+function inspectIdentityContext(result: JsonObject): JsonObject | undefined {
+  const identity = result.identity;
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+    return undefined;
+  }
+  const record = identity as JsonObject;
+  return record.state === "present" && record.context && typeof record.context === "object"
+    ? (record.context as JsonObject)
+    : undefined;
+}
+
+async function inspectSessionIdentity(root: string, opts: Options, outputDir: string) {
+  const { session } = readSession(root, opts, outputDir);
+  const listed = parseCommandJson(
+    await runSessionAuditCli(root, opts, session, [
+      "audit",
+      "--kind",
+      "agent_run",
+      "--limit",
+      "500",
+      "--json",
+    ]),
+    "audit activity list",
+  );
+  const events = Array.isArray(listed.events) ? listed.events : [];
+  const runIds = [
+    ...new Set(
+      events.flatMap((event) => {
+        if (!event || typeof event !== "object" || Array.isArray(event)) {
+          return [];
+        }
+        const runId = (event as JsonObject).runId;
+        return typeof runId === "string" && runId.trim() ? [runId] : [];
+      }),
+    ),
+  ];
+  const inspections: Array<{ human: string; json: JsonObject; runId: string }> = [];
+  for (const runId of runIds) {
+    const json = parseCommandJson(
+      await runSessionAuditCli(root, opts, session, [
+        "audit",
+        "--run",
+        runId,
+        "--explain",
+        "--json",
+      ]),
+      `audit inspection ${runId}`,
+    );
+    const context = inspectIdentityContext(json);
+    if (!context) {
+      continue;
+    }
+    const ingress = context.ingress;
+    if (
+      !ingress ||
+      typeof ingress !== "object" ||
+      Array.isArray(ingress) ||
+      (ingress as JsonObject).kind !== "channel"
+    ) {
+      continue;
+    }
+    const human = (
+      await runSessionAuditCli(root, opts, session, ["audit", "--run", runId, "--explain"])
+    ).stdout;
+    inspections.push({ human, json, runId });
+  }
+  if (inspections.length < 2) {
+    throw new Error(
+      `Telegram DM/group proof requires at least two admitted channel runs; found ${inspections.length}.`,
+    );
+  }
+  const contextsByRun = Object.fromEntries(
+    inspections.map(({ json, runId }) => [runId, inspectIdentityContext(json)]),
+  );
+  const serialized = JSON.stringify({ contextsByRun, inspections });
+  for (const raw of [
+    session.credential.groupId,
+    session.credential.testerUserId,
+    session.credential.testerUsername,
+  ]) {
+    if (raw && serialized.includes(raw)) {
+      throw new Error("Telegram audit inspection retained a raw participant or room identifier.");
+    }
+  }
+  const principalRefs = new Set<string>();
+  for (const inspection of inspections) {
+    const context = inspectIdentityContext(inspection.json);
+    const invoker = context?.invoker;
+    const principal =
+      invoker && typeof invoker === "object" && !Array.isArray(invoker)
+        ? (invoker as JsonObject).principal
+        : undefined;
+    const principalRef =
+      principal && typeof principal === "object" && !Array.isArray(principal)
+        ? (principal as JsonObject).principalRef
+        : undefined;
+    const decisions = Array.isArray(inspection.json.decisions) ? inspection.json.decisions : [];
+    const hasChannelDecision = decisions.some((decision) => {
+      if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
+        return false;
+      }
+      const action = (decision as JsonObject).action;
+      return (
+        action &&
+        typeof action === "object" &&
+        !Array.isArray(action) &&
+        (action as JsonObject).family === "channel" &&
+        (action as JsonObject).operation === "admission"
+      );
+    });
+    if (
+      !invoker ||
+      typeof invoker !== "object" ||
+      Array.isArray(invoker) ||
+      (invoker as JsonObject).state !== "present" ||
+      !principal ||
+      typeof principal !== "object" ||
+      Array.isArray(principal) ||
+      (principal as JsonObject).kind !== "person" ||
+      typeof principalRef !== "string" ||
+      !hasChannelDecision ||
+      !inspection.human.includes("Invoker [present]") ||
+      !inspection.human.includes("Decisions")
+    ) {
+      throw new Error(`Telegram run ${inspection.runId} omitted participant CLI evidence.`);
+    }
+    principalRefs.add(principalRef);
+  }
+  if (principalRefs.size !== 1) {
+    throw new Error("Telegram DM and group runs did not retain the same participant principal.");
+  }
+
+  const jsonPath = path.join(session.outputDir, "telegram-execution-identity.private.json");
+  const textPath = path.join(session.outputDir, "telegram-execution-identity.private.txt");
+  const previous = readJsonFile(jsonPath);
+  const previousContexts =
+    previous.contextsByRun &&
+    typeof previous.contextsByRun === "object" &&
+    !Array.isArray(previous.contextsByRun)
+      ? (previous.contextsByRun as JsonObject)
+      : undefined;
+  const stableAcrossRestart = previousContexts
+    ? Object.entries(previousContexts).every(
+        ([runId, context]) => JSON.stringify(contextsByRun[runId]) === JSON.stringify(context),
+      )
+    : undefined;
+  if (stableAcrossRestart === false) {
+    throw new Error("Telegram execution identity context changed across Gateway restart.");
+  }
+  fs.writeFileSync(
+    jsonPath,
+    `${JSON.stringify({ contextsByRun, runIds: inspections.map((item) => item.runId) }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  fs.chmodSync(jsonPath, 0o600);
+  fs.writeFileSync(
+    textPath,
+    inspections.map((item) => `# ${item.runId}\n${item.human.trim()}\n`).join("\n"),
+    { mode: 0o600 },
+  );
+  fs.chmodSync(textPath, 0o600);
+  return {
+    inspectionCount: inspections.length,
+    json: path.relative(root, jsonPath),
+    runIds: inspections.map((item) => item.runId),
+    stableAcrossRestart: stableAcrossRestart ?? null,
+    status: "pass",
+    text: path.relative(root, textPath),
+  };
+}
+
+export async function restartSessionGateway(root: string, opts: Options, outputDir: string) {
+  const { session } = readSession(root, opts, outputDir);
+  if (session.localSut.containerName) {
+    throw new Error(
+      "Held-session restart requires the lifecycle-owned host Gateway; container sessions are unsupported.",
+    );
+  }
+  const gatewayPort = session.localSut.gatewayPort ?? opts.gatewayPort;
+  const offset = fs.statSync(session.localSut.gatewayLog).size;
+  const restart = parseCommandJson(
+    await runSessionAuditCli(root, opts, session, [
+      "gateway",
+      "call",
+      "gateway.restart.request",
+      "--port",
+      String(gatewayPort),
+      "--params",
+      JSON.stringify({ reason: "telegram-user-crabbox-proof" }),
+      "--json",
+    ]),
+    "Gateway restart request",
+  );
+  if (restart.ok !== true || restart.status !== "scheduled") {
+    throw new Error(`Gateway restart request was not scheduled: ${JSON.stringify(restart)}`);
+  }
+  await waitForLogAfterOffset({
+    label: "Gateway restart boundary",
+    logPath: session.localSut.gatewayLog,
+    offset,
+    pattern: /received SIGUSR1; restarting/u,
+    timeoutMs: opts.timeoutMs,
+  });
+  await waitForLogAfterOffset({
+    label: "Gateway restart readiness",
+    logPath: session.localSut.gatewayLog,
+    offset,
+    pattern: /gateway ready|restart trace: restart\.ready/u,
+    timeoutMs: opts.timeoutMs,
+  });
+  return { gatewayPort, logOffset: offset, status: "pass" };
 }
 
 function renderProofViewCommand(link: string) {
-  return `set -euo pipefail
-export DISPLAY="\${DISPLAY:-:99}"
-root=${REMOTE_ROOT}
-win="$(wmctrl -lxG | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
-if [ -z "$win" ]; then
-  echo "Telegram Desktop window not found." >&2
-  exit 1
-fi
-wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz,fullscreen
-wmctrl -ir "$win" -e 0,${TELEGRAM_PROOF_WINDOW.x},${TELEGRAM_PROOF_WINDOW.y},${TELEGRAM_PROOF_WINDOW.width},${TELEGRAM_PROOF_WINDOW.height}
-telegram="$root/Telegram/Telegram"
-test -x "$telegram"
-set +e
-timeout 5 "$telegram" -workdir "$root/desktop" ${shellQuote(link)}
-status="$?"
-set -e
-if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-  exit "$status"
-fi
-sleep 1
-wmctrl -lxG | awk 'tolower($0) ~ /telegramdesktop/'`;
+  return renderTelegramViewCommand({
+    binary: `${REMOTE_ROOT}/Telegram/Telegram`,
+    link,
+    workdir: `${REMOTE_ROOT}/desktop`,
+  });
 }
 
 async function viewSession(root: string, opts: Options, outputDir: string) {
@@ -3135,8 +2970,8 @@ async function viewSession(root: string, opts: Options, outputDir: string) {
     outputFile: logPath,
   });
   return {
-    crop: TELEGRAM_PROOF_CROP,
-    geometry: TELEGRAM_PROOF_WINDOW,
+    crop: TELEGRAM_DESKTOP_CROP,
+    geometry: TELEGRAM_DESKTOP_WINDOW,
     link,
     log: path.relative(root, logPath),
     status: "pass",
@@ -3386,6 +3221,14 @@ async function main() {
     console.log(JSON.stringify(await sendSessionProbe(root, opts, outputDir), null, 2));
     return;
   }
+  if (opts.command === "inspect") {
+    console.log(JSON.stringify(await inspectSessionIdentity(root, opts, outputDir), null, 2));
+    return;
+  }
+  if (opts.command === "restart") {
+    console.log(JSON.stringify(await restartSessionGateway(root, opts, outputDir), null, 2));
+    return;
+  }
   if (opts.command === "run") {
     console.log(JSON.stringify(await runSessionCommand(root, opts, outputDir), null, 2));
     return;
@@ -3427,9 +3270,12 @@ async function main() {
 
   try {
     const convexEnvFile = expandHome(opts.envFile ?? DEFAULT_CONVEX_ENV_FILE);
+    const roleSecret =
+      opts.credentialRole === "ci"
+        ? process.env.OPENCLAW_QA_CONVEX_SECRET_CI
+        : process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER;
     const hasConvexEnv =
-      trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) &&
-      trimToValue(process.env.OPENCLAW_QA_CONVEX_SECRET_CI);
+      trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) && trimToValue(roleSecret);
     if (!hasConvexEnv && !fs.existsSync(convexEnvFile)) {
       throw new Error(`Missing Convex env file: ${opts.envFile ?? DEFAULT_CONVEX_ENV_FILE}`);
     }

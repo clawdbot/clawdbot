@@ -18,7 +18,9 @@ Results are meant to be pasted into other commands, especially `openclaw message
 - `--account <id>`: account id (default: channel default)
 - `--json`: output JSON
 
-Default (non-JSON) output is `id` (and sometimes `name`) separated by a tab.
+Default output renders IDs and names in a table. Empty list results name the channel and account
+that were queried; JSON list output uses an empty array (`[]`). Failures exit nonzero and use an
+`{ "error": "..." }` object in JSON mode.
 
 ## Notes
 
@@ -51,6 +53,32 @@ openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 
 ```bash
 openclaw directory self --channel zalouser
+```
+
+A channel may legitimately return no self identity. This is a successful empty result (exit code
+`0`), not a failed lookup. Channels without a self resolver report that the channel does not expose
+a self identity, without suggesting account troubleshooting:
+
+```json
+{
+  "status": "unavailable",
+  "channel": "telegram",
+  "accountId": "default",
+  "reason": "self-identity-unsupported"
+}
+```
+
+When a channel implements self lookup but returns no identity, the text output names the channel and
+account and suggests checking its configuration and authentication. JSON callers can distinguish
+that case by its reason:
+
+```json
+{
+  "status": "unavailable",
+  "channel": "msteams",
+  "accountId": "default",
+  "reason": "plugin-returned-no-self-identity"
+}
 ```
 
 ## Peers (contacts/users)

@@ -66,6 +66,7 @@ type DiscordSendOpts = {
   components?: DiscordSendComponents;
   embeds?: DiscordSendEmbeds;
   silent?: boolean;
+  threadId?: string | number;
   suppressEmbeds?: boolean;
   allowedMentions?: DiscordAllowedMentions;
   /** Persist each concrete platform send before any later chunk can fail. */
@@ -491,7 +492,7 @@ export async function sendPollDiscord(
     "poll",
     { safety: "nonce-protected-create" },
   )) as { id: string; channel_id: string };
-  return toDiscordSendResult(res, channelId, { kind: "card" });
+  return toDiscordSendResult(res, channelId, { kind: "poll", threadId: opts.threadId });
 }
 
 async function resolveDiscordStructuredSendContext(

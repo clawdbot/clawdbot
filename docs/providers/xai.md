@@ -147,6 +147,7 @@ below or under known limits.
 | xAI capability             | OpenClaw surface                        | Status                                               |
 | -------------------------- | --------------------------------------- | ---------------------------------------------------- |
 | Chat / Responses           | `xai/<model>` model provider            | Yes                                                  |
+| Context compaction         | `/compact` and threshold compaction     | Yes via `/v1/responses/compact`                      |
 | Server-side web search     | `web_search` provider `grok`            | Yes                                                  |
 | Server-side X search       | `x_search` tool                         | Yes                                                  |
 | Server-side code execution | `code_execution` tool                   | Yes                                                  |
@@ -601,6 +602,42 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
       },
     }
     ```
+
+  </Accordion>
+
+  <Accordion title="Context compaction">
+    Native `api.x.ai` Responses routes use xAI's server-side
+    [`/responses/compact`](https://docs.x.ai/developers/advanced-api-usage/context-compaction)
+    endpoint by default for manual `/compact` and threshold-driven preflight
+    compaction. The session keeps its OpenClaw transcript unchanged and stores
+    xAI's opaque checkpoint for the next request. Completion notices report
+    the provider's before and after token counts.
+
+    Disable the endpoint for one model with:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "xai/grok-4.5": {
+              params: { responsesCompactEndpoint: false },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Other Responses-compatible providers can opt in with
+    `params.responsesCompactEndpoint: true`; non-Responses routes ignore the
+    setting. OpenAI's native Responses API does not need this option because
+    its `context_management` compaction is already managed by
+    `responsesServerCompaction`.
+
+    Endpoint failures fall back to OpenClaw's client-side summarization.
+    Overflow recovery never calls the endpoint because xAI requires the input
+    to fit the model context window before compaction.
 
   </Accordion>
 

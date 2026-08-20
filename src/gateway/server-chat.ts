@@ -52,27 +52,30 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
-import { loadGatewaySessionLifecycleSnapshot } from "./server-chat.load-gateway-session-row.runtime.js";
-import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
-import { buildGatewaySessionEventRow } from "./session-event-payload.js";
+import {
+  buildGatewaySessionEventRow,
+  projectSessionEventActiveRunIds,
+} from "./session-event-payload.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
+  persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionLifecycleSnapshot,
+} from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
   createChatAbortMarker,
-  createChatRunRegistry,
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
-  createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 export type {
   ChatAbortMarker,
@@ -137,10 +140,6 @@ function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown 
     projectedData.bridgeVerb = target.bridgeVerb;
   }
   return { ...payload, data: projectedData };
-}
-
-function resolveHeartbeatAckMaxChars(): number {
-  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 function resolveHeartbeatContext(runId: string, sourceRunId?: string) {
@@ -208,7 +207,7 @@ function normalizeHeartbeatChatFinalText(params: {
 
   const stripped = stripHeartbeatToken(params.text, {
     mode: "heartbeat",
-    maxAckChars: resolveHeartbeatAckMaxChars(),
+    maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   });
   if (!stripped.didStrip) {
     return { suppress: false, text: params.text };
@@ -344,6 +343,7 @@ export type AgentEventHandlerOptions = {
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   loadGatewaySessionLifecycleSnapshotForEvent?: typeof loadGatewaySessionLifecycleSnapshot;
+  persistGatewaySessionLifecycleEventForEvent?: typeof persistGatewaySessionLifecycleEvent;
   lifecycleErrorRetryGraceMs?: number;
   isChatSendRunActive?: (runId: string) => boolean;
   clearTrackedActiveRun?: (params: {
@@ -375,7 +375,7 @@ export type AgentEventHandlerOptions = {
     canonicalKey: string;
     sessionId?: string;
     agentId?: string;
-  }) => { active: boolean; runIds: string[] };
+  }) => { active: boolean; runIds?: string[] };
 };
 
 type AgentEventHandler = ((event: AgentEventPayload) => void) & {
@@ -449,6 +449,7 @@ export function createAgentEventHandler({
   sessionEventSubscribers,
   sessionMessageSubscribers,
   loadGatewaySessionLifecycleSnapshotForEvent = loadGatewaySessionLifecycleSnapshot,
+  persistGatewaySessionLifecycleEventForEvent = persistGatewaySessionLifecycleEvent,
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
   clearTrackedActiveRun,
@@ -604,10 +605,13 @@ export function createAgentEventHandler({
           ...(agentId ? { agentId } : {}),
         })
       : undefined;
-    // Agent lifecycle broadcasts merge into cached session rows in the UI.
-    // Always replace run identity so a newer start cannot inherit a completed run.
+    // Agent lifecycle broadcasts merge into cached session rows in the UI. Replace
+    // run identities only when the Gateway owns the complete exact set.
     const activeRunFields = activeRunState
-      ? { hasActiveRun: activeRunState.active, activeRunIds: activeRunState.runIds }
+      ? {
+          hasActiveRun: activeRunState.active,
+          activeRunIds: projectSessionEventActiveRunIds(activeRunState),
+        }
       : {};
     const clearsLastRunError =
       Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
@@ -817,12 +821,9 @@ export function createAgentEventHandler({
         ))
     ) {
       if (!isAborted) {
+        // peek() (chatLink) and this shift() run in one synchronous frame, so
+        // the shifted head is exactly the peeked entry.
         const finished = chatLink ? chatRunState.registry.shift(evt.runId) : undefined;
-        if (chatLink && !finished) {
-          clearRunContextForEvent(evt);
-          return;
-        }
-
         const terminalSessionKey = finished?.sessionKey ?? sessionKey;
         const terminalRunId = finished?.clientRunId ?? eventRunId;
         const terminalAgentId = finished?.agentId ?? sessionAgentId;
@@ -885,7 +886,7 @@ export function createAgentEventHandler({
     if (sessionKey) {
       clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
       if (!suppressRestartRecoveryProjection && projectSessionLifecycle) {
-        const persistence = persistGatewaySessionLifecycleEvent({
+        const persistence = persistGatewaySessionLifecycleEventForEvent({
           sessionKey,
           agentId: sessionAgentId,
           event: evt,
@@ -1762,7 +1763,7 @@ export function createAgentEventHandler({
     }
 
     if (projectSessionLifecycle && sessionKey && lifecyclePhase === "start") {
-      void persistGatewaySessionLifecycleEvent({
+      void persistGatewaySessionLifecycleEventForEvent({
         sessionKey,
         agentId: sessionAgentId,
         event: evt,

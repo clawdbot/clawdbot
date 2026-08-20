@@ -26,7 +26,6 @@ import { createCronVitestConfig } from "./vitest/vitest.cron.config.ts";
 import { createDaemonVitestConfig } from "./vitest/vitest.daemon.config.ts";
 import { createExtensionAcpxVitestConfig } from "./vitest/vitest.extension-acpx.config.ts";
 import { createExtensionBrowserVitestConfig } from "./vitest/vitest.extension-browser.config.ts";
-import { createExtensionChannelsVitestConfig } from "./vitest/vitest.extension-channels.config.ts";
 import { createExtensionDiffsVitestConfig } from "./vitest/vitest.extension-diffs.config.ts";
 import { createExtensionDiscordVitestConfig } from "./vitest/vitest.extension-discord.config.ts";
 import { createExtensionFeishuVitestConfig } from "./vitest/vitest.extension-feishu.config.ts";
@@ -524,7 +523,6 @@ describe("scoped vitest configs", () => {
   const defaultCliConfig = createCliVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
   const defaultExtensionAcpxConfig = createExtensionAcpxVitestConfig({});
-  const defaultExtensionChannelsConfig = createExtensionChannelsVitestConfig({});
   const defaultExtensionBrowserConfig = createExtensionBrowserVitestConfig({});
   const defaultExtensionDiffsConfig = createExtensionDiffsVitestConfig({});
   const defaultExtensionDiscordConfig = createExtensionDiscordVitestConfig({});
@@ -584,7 +582,6 @@ describe("scoped vitest configs", () => {
     for (const config of [
       defaultAcpConfig,
       defaultExtensionsConfig,
-      defaultExtensionChannelsConfig,
       defaultExtensionDiscordConfig,
       defaultExtensionImessageConfig,
       defaultExtensionLineConfig,

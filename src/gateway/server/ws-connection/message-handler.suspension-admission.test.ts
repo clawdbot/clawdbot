@@ -79,7 +79,7 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
     }),
   } as unknown as WebSocket;
   const close = vi.fn();
-  const send = vi.fn();
+  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
   const setCloseCause = vi.fn();
   const setClient = vi.fn((next: unknown) => {
     client = next;
@@ -92,6 +92,14 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
       headers: { host: "127.0.0.1:19001" },
       socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
     } as unknown as IncomingMessage,
+    ingressAttribution: {
+      kind: "direct-local",
+      clientIp: "127.0.0.1",
+      rateLimit: {
+        subject: { key: "127.0.0.1" },
+        resetOnSuccess: true,
+      },
+    },
     connId: "suspension-connect",
     remoteAddr: "127.0.0.1",
     localAddr: "127.0.0.1",

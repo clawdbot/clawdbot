@@ -511,11 +511,6 @@ describe("calculateMaxToolResultChars", () => {
     expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(16_000);
   });
 
-  it("auto-scales above the low-context cap for very large windows", () => {
-    const result = calculateMaxToolResultChars(2_000_000); // 2M token window
-    expect(result).toBeGreaterThan(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
-  });
-
   it("uses a larger auto cap for 128K contexts", () => {
     const result = calculateMaxToolResultChars(128_000);
     expect(result).toBe(32_000);

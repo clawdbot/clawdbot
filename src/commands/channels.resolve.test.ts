@@ -111,6 +111,7 @@ describe("channelsResolveCommand", () => {
 
     await channelsResolveCommand(
       {
+        agent: "ops",
         channel: "whatsapp",
         entries: ["friends"],
       },
@@ -122,6 +123,12 @@ describe("channelsResolveCommand", () => {
       mocks.resolveInstallableChannelPlugin,
       "installable channel resolution",
     );
+    const commandSecretRequest = requireFirstMockArg(
+      mocks.resolveCommandSecretRefsViaGateway,
+      "command secret resolution",
+    );
+    expect(commandSecretRequest.agentId).toBe("ops");
+    expect(pluginResolutionRequest.agentId).toBe("ops");
     expect(pluginResolutionRequest.rawChannel).toBe("whatsapp");
     expect(pluginResolutionRequest.allowInstall).toBe(false);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();

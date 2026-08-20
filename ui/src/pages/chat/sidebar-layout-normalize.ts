@@ -1,22 +1,33 @@
 import { isRecord } from "@openclaw/normalization-core";
-import type {
-  SidebarColumn,
-  SidebarLayout,
-  SidebarPanel,
-  SidebarSlotId,
-} from "./sidebar-layout-types.ts";
+import type { SidebarLayout, SidebarPanel, SidebarSlotId } from "./sidebar-layout-types.ts";
 
-const DEFAULT_WIDTH = 360;
-const CHAT_DEFAULT_WIDTH = 480;
+const DEFAULT_WIDTH = 480;
+const DEFAULT_HEIGHT = 360;
 const MIN_WIDTH = 260;
+const MIN_HEIGHT = 220;
 const MAX_WIDTH = 1_200;
+const MAX_HEIGHT = 800;
 
 function isSlotId(value: unknown): value is SidebarSlotId {
-  return value === "chat" || value === "discussion" || value === "detail";
+  return (
+    value === "browser" ||
+    value === "chat" ||
+    value === "companion" ||
+    value === "desktop" ||
+    value === "detail" ||
+    value === "discussion" ||
+    value === "tasks" ||
+    value === "terminal" ||
+    value === "workspace"
+  );
 }
 
 function clampWidth(width: number): number {
   return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width));
+}
+
+function clampHeight(height: number): number {
+  return Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, height));
 }
 
 function uniqueId(value: unknown, fallback: string, used: Set<string>): string {
@@ -32,12 +43,15 @@ function uniqueId(value: unknown, fallback: string, used: Set<string>): string {
 
 export function normalizeSidebarLayout(value: unknown): SidebarLayout {
   if (!isRecord(value) || !Array.isArray(value.columns)) {
-    return { columns: [] };
+    return { columns: [], open: false, expanded: false };
   }
   const usedColumnIds = new Set<string>();
   const usedPanelIds = new Set<string>();
   const usedSlots = new Set<SidebarSlotId>();
-  const columns: SidebarColumn[] = [];
+  const panels: SidebarPanel[] = [];
+  let activePanelId = "";
+  let width = DEFAULT_WIDTH;
+  let height = DEFAULT_HEIGHT;
   for (const rawColumn of value.columns) {
     if (
       !isRecord(rawColumn) ||
@@ -46,8 +60,8 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     ) {
       continue;
     }
-    const columnId = uniqueId(rawColumn.id, "column", usedColumnIds);
-    const panels: SidebarPanel[] = [];
+    uniqueId(rawColumn.id, "column", usedColumnIds);
+    const columnPanels: SidebarPanel[] = [];
     const panelIds = new Map<string, string>();
     for (const rawPanel of rawColumn.panels) {
       if (!isRecord(rawPanel) || !isSlotId(rawPanel.slot) || usedSlots.has(rawPanel.slot)) {
@@ -60,22 +74,42 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
         panelIds.set(sourceId, panelId);
       }
       usedSlots.add(rawPanel.slot);
-      panels.push({ id: panelId, slot: rawPanel.slot });
+      columnPanels.push({ id: panelId, slot: rawPanel.slot });
     }
-    if (panels.length === 0) {
+    if (columnPanels.length === 0) {
       continue;
     }
     const requestedActiveId =
       typeof rawColumn.activePanelId === "string" ? rawColumn.activePanelId.trim() : "";
-    const activePanelId = panelIds.get(requestedActiveId) ?? panels[0]!.id;
-    const fallbackWidth = panels.some((panel) => panel.slot === "chat")
-      ? CHAT_DEFAULT_WIDTH
-      : DEFAULT_WIDTH;
-    const width =
+    activePanelId = panelIds.get(requestedActiveId) ?? activePanelId;
+    width =
       typeof rawColumn.width === "number" && Number.isFinite(rawColumn.width)
         ? clampWidth(rawColumn.width)
-        : fallbackWidth;
-    columns.push({ id: columnId, side: rawColumn.side, panels, activePanelId, width });
+        : width;
+    height =
+      typeof rawColumn.height === "number" && Number.isFinite(rawColumn.height)
+        ? clampHeight(rawColumn.height)
+        : height;
+    panels.push(...columnPanels);
   }
-  return { columns };
+  const columns = panels.length
+    ? [
+        {
+          id: usedColumnIds.values().next().value ?? "side-panel-column",
+          side: "right" as const,
+          panels,
+          activePanelId: panels.some((panel) => panel.id === activePanelId)
+            ? activePanelId
+            : panels[0]!.id,
+          height,
+          width,
+        },
+      ]
+    : [];
+  return {
+    columns,
+    dock: value.dock === "bottom" ? "bottom" : "right",
+    open: typeof value.open === "boolean" ? value.open : columns.length > 0,
+    expanded: value.expanded === true,
+  };
 }

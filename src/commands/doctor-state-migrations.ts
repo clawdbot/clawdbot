@@ -8,6 +8,7 @@ export {
   autoMigrateLegacyState,
   detectLegacyStateMigrations,
   migrateLegacyAgentDir,
+  migrateHistoricalTranscriptDirectives,
   migrateLegacyMediaPersistence,
   resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyTaskStateSidecarsForTest,

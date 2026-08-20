@@ -45,6 +45,8 @@ const STATE_V5_ADDITIVE_TABLES = [
 const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   5: STATE_V5_ADDITIVE_TABLES,
   6: STATE_V6_ADDITIVE_TABLES,
+  7: STATE_V6_ADDITIVE_TABLES,
+  8: STATE_V6_ADDITIVE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -176,6 +178,22 @@ export function assertOpenClawStateDatabaseV6ForMigration(
   options: { pathname: string },
 ): void {
   assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 6 });
+}
+
+/** Require every stable v7 table before the v8 placement migration can run. */
+export function assertOpenClawStateDatabaseV7ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 7 });
+}
+
+/** Require every stable v8 table before the v9 registry migration can run. */
+export function assertOpenClawStateDatabaseV8ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 8 });
 }
 
 export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {

@@ -96,6 +96,7 @@ export async function runEmbeddedFallbackCandidate(params: {
   notifyUserAboutCompaction: boolean;
   messageToolDeliveryState: MessageToolDeliveryState;
   preserveProgressCallbackStartOrder: boolean;
+  githubPublicationAvailable: boolean;
   presentation: EmbeddedPresentation;
   timing: AgentTurnTimingTracker;
   onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
@@ -164,6 +165,9 @@ export async function runEmbeddedFallbackCandidate(params: {
           sessionId: embeddedContext.sessionId,
           requesterAccountId: embeddedContext.agentAccountId,
           requesterSenderId: senderContext.senderId,
+          requesterSenderName: senderContext.senderName,
+          requesterSenderUsername: senderContext.senderUsername,
+          requesterSenderE164: senderContext.senderE164,
           toolContext: {
             currentChannelId: embeddedContext.currentChannelId,
             currentChatType: embeddedContext.chatType,
@@ -210,6 +214,7 @@ export async function runEmbeddedFallbackCandidate(params: {
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
         preparedRunAdmission: params.preparedRunAdmission,
+        githubPublicationAvailable: params.githubPublicationAvailable,
         ...embeddedContext,
         messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),
@@ -244,6 +249,9 @@ export async function runEmbeddedFallbackCandidate(params: {
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+        // Heartbeat ambient routes are delivery context, never implicit message recipients.
+        // Omit false so subagent sessions keep their downstream default.
+        ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
         silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
         suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
         onUserMessagePersisted: params.notifyUserMessagePersisted,
@@ -256,8 +264,7 @@ export async function runEmbeddedFallbackCandidate(params: {
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
         })(),
         toolProgressDetail: turn.toolProgressDetail,
-        suppressToolErrorWarnings:
-          turn.opts?.shouldSuppressToolErrorWarnings ?? turn.opts?.suppressToolErrorWarnings,
+        suppressToolErrorWarnings: turn.opts?.suppressToolErrorWarnings,
         toolsAllow: turn.opts?.toolsAllow,
         disableTools: turn.opts?.disableTools,
         toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(

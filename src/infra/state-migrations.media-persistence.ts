@@ -43,7 +43,7 @@ import { replaceFileAtomicSync } from "./replace-file.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-import { resolveAgentDatabaseMediaMigrationTargets } from "./state-migrations.media-persistence-targets.js";
+import { resolveAgentDatabaseMigrationTargets } from "./state-migrations.media-persistence-targets.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const PREVIOUS_MEDIA_SCHEMA_VERSION = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
@@ -601,7 +601,7 @@ export function migrateLegacyMediaPersistence(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
-  const targets = resolveAgentDatabaseMediaMigrationTargets({
+  const targets = resolveAgentDatabaseMigrationTargets({
     changes,
     configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
     env,

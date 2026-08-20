@@ -25,7 +25,6 @@ type QuickstartGatewayOptionOverrides = Pick<
   | "gatewayTokenRefEnv"
   | "gatewayPassword"
   | "tailscale"
-  | "tailscaleResetOnExit"
 >;
 
 export function hasQuickstartGatewayOverrides(
@@ -38,8 +37,7 @@ export function hasQuickstartGatewayOverrides(
     overrides.gatewayToken !== undefined ||
     overrides.gatewayTokenRefEnv !== undefined ||
     overrides.gatewayPassword !== undefined ||
-    overrides.tailscale !== undefined ||
-    overrides.tailscaleResetOnExit !== undefined
+    overrides.tailscale !== undefined
   );
 }
 
@@ -234,7 +232,5 @@ export function resolveQuickstartGatewayDefaults(
         : (overrides.gatewayToken ?? baseConfig.gateway?.auth?.token),
     password: overrides.gatewayPassword ?? baseConfig.gateway?.auth?.password,
     customBindHost: baseConfig.gateway?.customBindHost,
-    tailscaleResetOnExit:
-      overrides.tailscaleResetOnExit ?? baseConfig.gateway?.tailscale?.resetOnExit ?? false,
   };
 }

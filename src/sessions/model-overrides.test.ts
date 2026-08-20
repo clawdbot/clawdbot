@@ -96,6 +96,7 @@ describe("applyModelOverrideToSessionEntry", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       contextTokens: 160_000,
+      contextTokensSource: "runtime",
       contextBudgetStatus: contextBudgetStatus({
         updatedAt: before,
         provider: "anthropic",
@@ -115,6 +116,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(result.updated).toBe(true);
     expectRuntimeModelFieldsCleared(entry, before);
     expect(entry.contextTokens).toBeUndefined();
+    expect(entry.contextTokensSource).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
     expect(entry.fallbackNotice).toBeUndefined();
     expect(entry.modelOverrideSource).toBe("user");
@@ -157,6 +159,7 @@ describe("applyModelOverrideToSessionEntry", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       contextTokens: 200_000,
+      contextTokensSource: "runtime",
       contextBudgetStatus: contextBudgetStatus({
         updatedAt: before,
         provider: "openai",
@@ -178,6 +181,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.model).toBe("gpt-5.4");
     expect(entry.modelOverrideSource).toBe("user");
     expect(entry.contextTokens).toBe(200_000);
+    expect(entry.contextTokensSource).toBe("runtime");
     expect(entry.contextBudgetStatus?.contextTokenBudget).toBe(200_000);
     expect((entry.updatedAt ?? 0) >= before).toBe(true);
   });

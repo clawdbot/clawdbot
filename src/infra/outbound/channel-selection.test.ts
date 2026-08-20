@@ -363,7 +363,8 @@ describe("resolveMessageChannelSelection", () => {
   it.each([
     {
       params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "not-a-channel" },
-      expectedMessage: "Unknown channel: channel:c123",
+      expectedMessage:
+        'Unknown channel "channel:c123". Run `openclaw channels list --all` to see configured and installable channels.',
     },
     {
       setup: () => {

@@ -23,14 +23,10 @@ import {
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
+const loadGatewaySessionLifecycleSnapshotMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.fn();
 const normalizeLiveAssistantBufferedTextMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRow = vi.hoisted(() => vi.fn());
-
-vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
-  persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
-    persistGatewaySessionLifecycleEventMock(...args),
-}));
 
 vi.mock("../logger.js", () => ({
   logError: (...args: unknown[]) => logErrorMock(...args),
@@ -59,10 +55,6 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
   })),
 }));
 
-vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
-  loadGatewaySessionLifecycleSnapshot: vi.fn(),
-}));
-
 vi.mock("./session-utils.js", () => {
   const loadSessionEntry = vi.fn(() => ({
     cfg: {},
@@ -76,6 +68,8 @@ vi.mock("./session-utils.js", () => {
   return {
     loadSessionEntry,
     loadGatewaySessionEntryReadOnly: loadSessionEntry,
+    loadGatewaySessionLifecycleSnapshot: (...args: unknown[]) =>
+      loadGatewaySessionLifecycleSnapshotMock(...args),
   };
 });
 
@@ -94,11 +88,9 @@ import {
   createSessionEventSubscriberRegistry,
   createChatAbortMarker,
   createSessionMessageSubscriberRegistry,
-  createToolEventRecipientRegistry,
   resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
-import { loadGatewaySessionLifecycleSnapshot } from "./server-chat.load-gateway-session-row.runtime.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -130,7 +122,7 @@ describe("agent event handler", () => {
         legacyKey: undefined,
       });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
-    vi.mocked(loadGatewaySessionLifecycleSnapshot)
+    loadGatewaySessionLifecycleSnapshotMock
       .mockReset()
       .mockImplementation((sessionKey, options) => ({
         row: options
@@ -169,7 +161,7 @@ describe("agent event handler", () => {
       vi.fn<NonNullable<AgentEventHandlerOptions["clearTrackedActiveRun"]>>();
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
-    const toolEventRecipients = createToolEventRecipientRegistry();
+    const toolEventRecipients = chatRunState.toolEventRecipients;
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
 
@@ -184,7 +176,8 @@ describe("agent event handler", () => {
       toolEventRecipients,
       sessionEventSubscribers,
       sessionMessageSubscribers,
-      loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshot,
+      loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
+      persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
       clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
@@ -1486,7 +1479,6 @@ describe("agent event handler", () => {
     emitLifecycleEnd(handler, "run-no-dup-flush");
 
     const chatCalls = chatBroadcastCalls(broadcast);
-    expect(chatCalls).toHaveLength(3);
     expect(chatCalls.map(([, payload]) => (payload as { state?: string }).state)).toEqual([
       "delta",
       "delta",
@@ -2278,6 +2270,50 @@ describe("agent event handler", () => {
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
   });
 
+  it("tombstones exact run ids when lifecycle events expose only aggregate liveness", async () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-projected",
+      kind: "direct",
+      sessionId: "session-id",
+      updatedAt: 1_000,
+      status: "running",
+    });
+    const resolveSessionActiveRunState = vi
+      .fn<NonNullable<AgentEventHandlerOptions["resolveSessionActiveRunState"]>>()
+      .mockReturnValue({ active: true });
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-projected",
+      resolveSessionActiveRunState,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    emitAgentEvent(
+      handler,
+      "projected-run",
+      "lifecycle",
+      { phase: "start", startedAt: 1_000 },
+      { sessionKey: "session-projected", sessionId: "session-id", ts: 1_000 },
+    );
+
+    await waitForFast(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
+    const payload = requireRecord(
+      broadcastToConnIds.mock.calls.find(([event]) => event === "sessions.changed")?.[1],
+      "sessions changed payload",
+    );
+    expectRecordFields(payload, {
+      hasActiveRun: true,
+      activeRunIds: null,
+    });
+    expectRecordFields(requireRecord(payload.session, "sessions changed session"), {
+      hasActiveRun: true,
+      activeRunIds: null,
+    });
+  });
+
   it("publishes run lifecycle changes to plugins without websocket subscribers", async () => {
     const sessionKey = "agent:main:headless-run";
     const received = vi.fn();
@@ -2385,7 +2421,7 @@ describe("agent event handler", () => {
   ])(
     "projects older lifecycle timestamps only for the owning run ($eventRunId)",
     async ({ eventRunId, expectedStartedAt }) => {
-      vi.mocked(loadGatewaySessionLifecycleSnapshot).mockReturnValue({
+      loadGatewaySessionLifecycleSnapshotMock.mockReturnValue({
         lifecycleRunId: "run-current",
         row: {
           key: "session-owned",
@@ -3289,8 +3325,8 @@ describe("agent event handler", () => {
 
   it.each([
     {
-      name: "older timestamp",
-      marker: () => 1_000,
+      name: "older sequence",
+      marker: () => ({ abortedAtMs: 1_000, sequence: -2 }),
     },
     {
       name: "same-millisecond older sequence",
@@ -4422,7 +4458,8 @@ describe("agent event handler", () => {
       isControlUiVisible: false,
       verboseLevel: "off",
     });
-    chatRunState.getOrCreate("run-hidden-commentary-aborted").abortMarker = 1_000;
+    chatRunState.getOrCreate("run-hidden-commentary-aborted").abortMarker =
+      createChatAbortMarker(1_000);
 
     emitAgentEvent(handler, "run-hidden-commentary-aborted", "assistant", {
       text: "This aborted commentary must not be mirrored.",

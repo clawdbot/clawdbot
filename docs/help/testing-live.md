@@ -176,6 +176,7 @@ openclaw models list --json
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
   - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
+  - `OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1` to run a fresh Claude CLI turn plus two native resumes and require at least 90% prompt-cache reuse on the second resume. This probe disables the image, MCP, and model-switch probes.
   - `OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=1` to opt into the Claude Sonnet -> Opus same-session continuity probe when the selected model supports a switch target. Off by default, including in Docker recipes.
   - `OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=1` to opt into the MCP/tool loopback probe. Off by default in Docker recipes.
 
@@ -209,6 +210,7 @@ Single-provider Docker recipes:
 
 ```bash
 pnpm test:docker:live-cli-backend:claude
+pnpm test:docker:live-cli-backend:claude:cache
 pnpm test:docker:live-cli-backend:claude-subscription
 pnpm test:docker:live-cli-backend:gemini
 ```
@@ -216,6 +218,7 @@ pnpm test:docker:live-cli-backend:gemini
 Notes:
 
 - The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
+- `pnpm test:docker:live-cli-backend:claude:cache` requires Anthropic API-key auth. It logs normalized cache usage for both resumes and fails when the second resume falls below 90% reuse.
 - It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user.
 - It resolves CLI smoke metadata from the owning plugin, then installs the matching Linux CLI package (`@anthropic-ai/claude-code` or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 - `codex-cli` is no longer a bundled CLI backend; use `openai/*` with the Codex app-server runtime instead (see [Live: Codex app-server harness smoke](#live-codex-app-server-harness-smoke)).

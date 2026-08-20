@@ -91,7 +91,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       enqueueValid("valid-b");
 
       const entries = loadDeliveryQueueEntries(QUEUE, stateDir);
-      expect(entries).toHaveLength(2);
       expect(entries.map((e) => e.id).toSorted()).toEqual(["valid-a", "valid-b"]);
     });
 

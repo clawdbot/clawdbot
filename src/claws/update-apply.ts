@@ -4,6 +4,7 @@ import { listAgentEntries } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { clawTargetPackages } from "./application-provenance.js";
 import {
@@ -99,6 +100,7 @@ export async function applyClawUpdatePlan(
     sourceMcpServers: Record<string, Record<string, unknown>>;
     consentPlanIntegrity: string | undefined;
     packagePreflight?: ClawAddPlanContext["packagePreflight"];
+    runtime?: RuntimeEnv;
     commitConfig?: ConfigCommit;
     rebuildPlan?: typeof buildClawUpdatePlan;
     buildAddPlan?: typeof buildClawAddPlan;

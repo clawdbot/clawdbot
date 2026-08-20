@@ -46,7 +46,7 @@ Top-level fields:
 | `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                                    |
 | `codexPlugins`             | disabled                 | Native Codex plugin/app support, including opt-in access to connected account apps. See [Native Codex plugins](/plugins/codex-native-plugins). |
 | `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                               |
-| `sessionCatalog`           | enabled                  | Native Codex session discovery for the sidebar. Set `enabled: false` to disable discovery without disabling the provider or harness.           |
+| `sessionCatalog`           | enabled                  | Native Codex session discovery for the sidebar. Set `enabled: false` to disable it, or set `homes` to include additional local Codex stores.   |
 | `supervision`              | disabled                 | Agent-facing native-session transcript and write-control policy. See [Codex supervision](/plugins/codex-supervision).                          |
 
 ## Supervision
@@ -70,6 +70,47 @@ computer and opted-in paired nodes by default. Disable only that catalog with:
   },
 }
 ```
+
+Discovery automatically covers the Gateway process Codex home (`CODEX_HOME` or
+`~/.codex`) and the Codex home of every configured OpenClaw agent. Register
+additional local Codex stores only when sessions live in a home OpenClaw does
+not already know about, for example a store created with a custom `CODEX_HOME`
+outside OpenClaw:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          sessionCatalog: {
+            homes: [
+              "/path/to/additional-codex-home",
+              { path: "/path/to/review-codex-home", label: "Review sessions" },
+            ],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Configured stores appear in the sidebar alongside automatically discovered
+ones, labeled `Local Codex · <label>` and grouped by each session's working
+directory. String entries and objects without `label` use the basename of the
+canonicalized home directory; an explicit `label` overrides that default.
+Sessions in these stores support the same view, continue, and archive actions,
+and the selected OpenClaw agent still owns the resulting connection; `homes`
+only adds catalog sources.
+
+Only existing directories are included. Equivalent paths are canonicalized and
+deduplicated against the automatic homes, and automatic homes keep priority
+under the 100-source catalog cap. Changes require a Gateway restart.
+`sessionCatalog.homes` needs the default managed stdio app-server transport;
+Unix and WebSocket transports reject it with a visible error because they
+cannot start a source-bound app-server for each home.
 
 `supervision` separately controls agent-facing tools:
 
@@ -149,6 +190,21 @@ desktop-first rule applies when an isolated agent home's effective Codex config
 enables native Computer Use. If no desktop app bundle is installed, OpenClaw
 falls back to the pinned package binary.
 
+Before cutting over a staged OpenClaw package, run the opt-in managed-binary
+check against the candidate installation:
+
+```bash
+openclaw doctor --lint --only codex/managed-app-server --json
+```
+
+The check is read-only. For every configured Codex agent it applies the same
+final command selection as a live harness turn, then verifies that a selected
+package-owned native binary exists and reports the plugin's exact pinned
+version. A selected Codex Desktop binary, an explicit custom command, and a
+remote app-server are outside this package check. The command exits nonzero on
+an error-level finding, so a deployer can reject the candidate before cutover
+without changing Codex state or app-server settings.
+
 Executable handoff and native-config fencing coordinate clients inside one
 running Gateway process. Restart the Gateway after another process changes the
 native Codex plugin config.
@@ -201,7 +257,7 @@ managed stdio or the local Unix control socket for production workloads.
 | `headers`                                     | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                                                                  |
 | `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                                                                |
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. OpenClaw maps the local cwd into this root and transfers authoritative remote attachments over an output-capped, no-shell `command/exec` reader. Paths escaping either workspace, symbolic links, oversized files, and unbounded attachment batches fail closed; uploads retain the configured channel identity and app-server request timeout.                                            |
-| `loopDetectionPreToolUseRelay`                | `true`                                                 | Install the Codex `PreToolUse` subprocess used only for OpenClaw loop detection and its explicit no-policy marker. Set `false` to reduce per-tool process fan-out. Before-tool plugin hooks and trusted-tool policy still install their required relay.                                                                                                                                                                            |
+| `loopDetectionPreToolUseRelay`                | `true`                                                 | Enables the Codex `PreToolUse` relay for loop detection when OpenClaw loop detection is enabled. OpenClaw installs no `PreToolUse` relay when no before-tool plugin hook, trusted-tool policy, or enabled loop detector has local work. Set `false` to disable the loop-detection relay even when detection is enabled; before-tool plugin hooks and trusted-tool policy still install their required fail-closed relay.           |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                                                        |
 | `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                                                                                       |
 | `turnAssistantCompletionIdleTimeoutMs`        | `10000`                                                | Quiet window after a final/non-commentary assistant item or pre-tool raw assistant completion arms the assistant-output release while OpenClaw still waits for `turn/completed`. Raising it gives Codex more time to emit `turn/completed` before OpenClaw interrupts and releases the session lane.                                                                                                                               |
@@ -261,10 +317,11 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin accepts exactly stable Codex app-server `0.147.0`. Older or newer
-versions, prereleases, build-suffixed versions, and unversioned app-server
-handshakes are rejected. The same exact-version requirement applies to explicit
-custom executables, remote app-servers, and macOS desktop binaries.
+The plugin ships Codex app-server `0.147.0` and accepts external versions at or
+above that minimum. Older, malformed, and unversioned handshakes are rejected.
+Build metadata does not affect SemVer precedence. The same minimum applies to
+explicit custom executables, remote app-servers, and macOS desktop binaries;
+admission is not readiness proof.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
@@ -313,7 +370,7 @@ configured plugin's details to reserve the denied app IDs. It does not scan
 unrelated marketplaces or install, enable, or authenticate the disabled plugin;
 missing ownership fails closed.
 
-Only connect OpenClaw to a `0.147.0` remote app-server trusted to accept
+Only connect OpenClaw to a remote app-server in the supported range trusted to accept
 configured marketplace plugin installs and inventory refreshes. Missing modern
 inventory methods and server, authentication, or transport failures fail closed.
 
@@ -439,6 +496,20 @@ this mode. Import that file explicitly as described below. Set
 `appServer.homeScope: "user"` only when the app-server should instead own and
 use the operator's native Codex account.
 
+No credential file is written in this mode, in either home. A subscription
+profile is handed over as an `account/login/start` request of type
+`chatgptAuthTokens`, which Codex installs as in-memory external auth rather
+than persisting; the ephemeral credential store covers the API-key login,
+which would otherwise write `CODEX_HOME/auth.json`.
+
+Token refresh is inverted so the long-lived secret never leaves OpenClaw. Codex
+holds only a short-lived access token, and on an unauthorized response it sends
+an `account/chatgptAuthTokens/refresh` request back to OpenClaw over the same
+connection. OpenClaw refreshes against its own auth profile store and returns a
+fresh access token, so the refresh token stays in SQLite. A refresh that does
+not answer within the app-server's timeout fails that turn rather than falling
+back to another credential.
+
 When OpenClaw sees a ChatGPT subscription-style Codex auth profile (OAuth or
 token credential type), it removes `CODEX_API_KEY` and `OPENAI_API_KEY` from
 the spawned Codex child process. That keeps Gateway-level API keys available
@@ -545,11 +616,14 @@ Codex's own tool-search surface:
 - `apply_patch`
 - `exec`
 - `process`
-- `update_plan`
 - `tool_call`
 - `tool_describe`
 - `tool_search`
 - `tool_search_code`
+
+`progress_card` is not filtered with those native workspace tools. It remains
+available through the OpenClaw dynamic-tool bridge as the durable session status
+surface.
 
 When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
 empty execution-environment selection. In that direct, unsandboxed case,
@@ -596,7 +670,7 @@ first available timeout in this order:
 - For `image_generate`, `agents.defaults.mediaModels.image.timeoutMs`.
 - For `image_generate` without a configured timeout, the 120 second
   image-generation default.
-- For the media-understanding `image` tool, the selected image-capable `tools.media.models[]` entry's `timeoutSeconds`
+- For the media-understanding `view_image` tool, the selected image-capable `tools.media.models[]` entry's `timeoutSeconds`
   converted to milliseconds, or the 60 second media default. For image
   understanding, this applies to the request itself and is not reduced by
   earlier preparation work.

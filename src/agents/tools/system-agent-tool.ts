@@ -13,7 +13,7 @@ import {
   isPersistentSystemAgentOperation,
   type SystemAgentOperation,
 } from "../../system-agent/operations.js";
-import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install.js";
+import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install-spec.js";
 import { stringEnum } from "../schema/typebox.js";
 import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
 

@@ -33,6 +33,44 @@ function configResponse(config: Record<string, unknown>, hash: string, appliedCo
   };
 }
 
+function configSchemaResponse() {
+  return {
+    generatedAt: "2026-08-03T00:00:00.000Z",
+    schema: {
+      type: "object",
+      properties: {
+        laboratory: {
+          type: "object",
+          title: "Safe writes",
+          properties: {
+            endpoint: {
+              type: "string",
+              title: "Endpoint",
+              description: "Endpoint selected by the operator.",
+            },
+            retryBudget: {
+              type: "integer",
+              title: "Retry budget",
+              minimum: 0,
+              maximum: 10,
+            },
+          },
+        },
+        tools: {
+          type: "object",
+          title: "Tools",
+          additionalProperties: true,
+        },
+      },
+    },
+    uiHints: {
+      "laboratory.endpoint": { advanced: false },
+      "laboratory.retryBudget": { advanced: false },
+    },
+    version: "e2e",
+  };
+}
+
 function mutationParams(request: MockGatewayRequest): {
   baseHash?: string;
   note?: string;
@@ -75,6 +113,9 @@ suite.define(() => {
       {
         colorScheme: "dark",
         locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: uiProofArtifactDir, size: { height: 1000, width: 1440 } }
+          : undefined,
         serviceWorkers: "block",
         viewport: { height: 1000, width: 1440 },
       },
@@ -90,41 +131,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "config.get": configResponse(initialConfig, "snapshot-1"),
-            "config.schema": {
-              generatedAt: "2026-08-03T00:00:00.000Z",
-              schema: {
-                type: "object",
-                properties: {
-                  laboratory: {
-                    type: "object",
-                    title: "Safe writes",
-                    properties: {
-                      endpoint: {
-                        type: "string",
-                        title: "Endpoint",
-                        description: "Endpoint selected by the operator.",
-                      },
-                      retryBudget: {
-                        type: "integer",
-                        title: "Retry budget",
-                        minimum: 0,
-                        maximum: 10,
-                      },
-                    },
-                  },
-                  tools: {
-                    type: "object",
-                    title: "Tools",
-                    additionalProperties: true,
-                  },
-                },
-              },
-              uiHints: {
-                "laboratory.endpoint": { advanced: false },
-                "laboratory.retryBudget": { advanced: false },
-              },
-              version: "e2e",
-            },
+            "config.schema": configSchemaResponse(),
           },
         });
 
@@ -171,6 +178,10 @@ suite.define(() => {
 
         await gateway.deferNext("config.set");
         await endpoint.fill("form-api");
+        // A revert to the loaded value here means a boot-time config refresh
+        // ate the edit (the focused-field guard in config-form.node.scalar.ts
+        // protects this); fail loudly instead of timing out on config.set.
+        await expect.poll(() => endpoint.inputValue()).toBe("form-api");
         const staleSetParams = mutationParams(await gateway.waitForRequest("config.set"));
         expect(staleSetParams.baseHash).toBe("snapshot-2");
         expect(JSON.parse(String(staleSetParams.raw))).toMatchObject({
@@ -229,10 +240,12 @@ suite.define(() => {
 }
 `;
         await rawEditor.fill(rawDraft);
+        const rawSave = page.getByRole("button", { name: "Save", exact: true });
+        await expect.poll(() => rawSave.isEnabled()).toBe(true);
         await capture(page, "02-raw-draft.png");
 
         const setRequestsBeforeRawSave = (await gateway.getRequests("config.set")).length;
-        await page.getByRole("button", { name: "Save", exact: true }).click();
+        await rawSave.click();
         await expect
           .poll(async () => (await gateway.getRequests("config.set")).length)
           .toBe(setRequestsBeforeRawSave + 1);
@@ -263,6 +276,172 @@ suite.define(() => {
           .toBe(0);
         await expect.poll(() => rawEditor.inputValue()).toBe(rawDraft);
         await capture(page, "04-apply-complete.png");
+      },
+    );
+  });
+
+  it("refreshes config after reconnect and client replacement before the next save", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: uiProofArtifactDir, size: { height: 1000, width: 1440 } }
+          : undefined,
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const initialConfig = {
+          laboratory: { endpoint: "initial-api", retryBudget: 2 },
+          tools: {},
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(initialConfig, "snapshot-initial"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
+
+        expect(
+          (
+            await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`)
+          )?.status(),
+        ).toBe(200);
+        const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
+        await expect.poll(() => endpoint.inputValue()).toBe("initial-api");
+        const initialConfigGets = (await gateway.getRequests("config.get")).length;
+
+        await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
+        await page.waitForURL(/\/settings\/connection$/u);
+        const reconnectedConfig = {
+          laboratory: { endpoint: "reconnected-api", retryBudget: 4 },
+          tools: {},
+        };
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(reconnectedConfig, "snapshot-reconnected"),
+        );
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await expect
+          .poll(async () => (await gateway.getRequests("config.get")).length)
+          .toBe(initialConfigGets + 1);
+
+        await page.locator('.settings-sidebar__item[href="/settings/advanced"]').click();
+        await page.waitForURL(/\/settings\/advanced/u);
+        await expect.poll(() => endpoint.inputValue()).toBe("reconnected-api");
+        await capture(page, "05-reconnected-config.png");
+
+        await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
+        await page.waitForURL(/\/settings\/connection$/u);
+        const replacementConfig = {
+          laboratory: { endpoint: "replacement-api", retryBudget: 6 },
+          tools: {},
+        };
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(replacementConfig, "snapshot-replacement"),
+        );
+        const configGetsBeforeReplacement = (await gateway.getRequests("config.get")).length;
+        const connectsBeforeReplacement = (await gateway.getRequests("connect")).length;
+        await page.getByRole("textbox", { name: "WebSocket URL" }).fill("ws://127.0.0.1:19999");
+        await page.getByRole("button", { name: "Connect", exact: true }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("connect")).length)
+          .toBe(connectsBeforeReplacement + 1);
+        await expect
+          .poll(async () => (await gateway.getRequests("config.get")).length)
+          .toBe(configGetsBeforeReplacement + 1);
+
+        await page.locator('.settings-sidebar__item[href="/settings/advanced"]').click();
+        await page.waitForURL(/\/settings\/advanced/u);
+        await expect.poll(() => endpoint.inputValue()).toBe("replacement-api");
+        await gateway.deferNext("config.set");
+        const setsBeforeEdit = (await gateway.getRequests("config.set")).length;
+        await endpoint.fill("saved-on-replacement");
+        const save = mutationParams(await gateway.waitForRequest("config.set"));
+        expect(save.baseHash).toBe("snapshot-replacement");
+        expect(JSON.parse(String(save.raw))).toEqual({
+          laboratory: { endpoint: "saved-on-replacement", retryBudget: 6 },
+          tools: {},
+        });
+        expect(await gateway.getRequests("config.set")).toHaveLength(setsBeforeEdit + 1);
+        await gateway.resolveDeferred("config.set", { hash: "snapshot-saved" });
+        await expect
+          .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+          .toContain("Saved");
+        await capture(page, "06-replacement-save.png");
+      },
+    );
+  });
+
+  it("keeps a dirty draft and adopts an opaque revision after an unchanged reconnect", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: uiProofArtifactDir, size: { height: 1000, width: 1440 } }
+          : undefined,
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const config = {
+          laboratory: { endpoint: "initial-api", retryBudget: 2 },
+          tools: {},
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(config, "legacy-raw-hash"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
+
+        expect(
+          (
+            await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`)
+          )?.status(),
+        ).toBe(200);
+        const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
+        await expect.poll(() => endpoint.inputValue()).toBe("initial-api");
+        await endpoint.fill("retained-draft");
+
+        const getsBeforeReconnect = (await gateway.getRequests("config.get")).length;
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(config, "hmac-sha256:v1:opaque-current"),
+        );
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await expect
+          .poll(async () => (await gateway.getRequests("config.get")).length)
+          .toBe(getsBeforeReconnect + 1);
+        await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
+
+        const saveIndicator = page.locator("openclaw-settings-save-indicator");
+        await expect
+          .poll(() => saveIndicator.textContent())
+          .toContain("Autosave paused after reconnect");
+        await capture(page, "07-opaque-revision-reconnect.png");
+
+        await gateway.deferNext("config.set");
+        await saveIndicator.getByRole("button", { name: "Save", exact: true }).click();
+        const save = mutationParams(await gateway.waitForRequest("config.set"));
+        expect(save.baseHash).toBe("hmac-sha256:v1:opaque-current");
+        expect(JSON.parse(String(save.raw))).toMatchObject({
+          laboratory: { endpoint: "retained-draft", retryBudget: 2 },
+        });
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(
+            { ...config, laboratory: { ...config.laboratory, endpoint: "retained-draft" } },
+            "hmac-sha256:v1:opaque-next",
+          ),
+        );
+        await gateway.resolveDeferred("config.set", { hash: "hmac-sha256:v1:opaque-next" });
+        await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
       },
     );
   });

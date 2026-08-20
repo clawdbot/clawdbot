@@ -11,6 +11,7 @@ import {
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -412,6 +413,21 @@ export async function finalizeCodexAttempt(
         bindingStore,
         identity: bindingIdentity,
         threadId: resourceState.thread.threadId,
+        // Only turns whose prompt WAS a no-engine continuity projection may
+        // calibrate: a dense direct or active-engine prompt must never persist a
+        // sample that later shrinks continuity history it did not measure.
+        // Normalized usage splits total input into uncached + cacheRead + cacheWrite;
+        // the density sample needs the full input cost, or the derived ratio loosens
+        // the continuity cap in the unsafe direction.
+        continuityCalibration: context.promptState.noEngineContinuityProjectionApplied
+          ? buildCodexContinuityCalibration({
+              promptChars: prompt.turnState.codexTurnPromptText.length,
+              inputTokens:
+                (result.attemptUsage?.input ?? 0) +
+                (result.attemptUsage?.cacheRead ?? 0) +
+                (result.attemptUsage?.cacheWrite ?? 0),
+            })
+          : undefined,
       });
     } catch (error) {
       if (resourceState.thread.connectionScope === "supervision") {
@@ -481,6 +497,9 @@ export async function finalizeCodexAttempt(
   );
   const finalizedResult: EmbeddedRunAttemptResult = {
     ...result,
+    ...(toolState.yieldAcknowledgment
+      ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
+      : {}),
     terminal: attemptTerminal.normalize({
       timedOut: effectiveTimedOut,
       aborted: finalAborted,
@@ -494,6 +513,7 @@ export async function finalizeCodexAttempt(
     ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
+    ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),

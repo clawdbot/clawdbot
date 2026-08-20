@@ -72,11 +72,14 @@ describe("executeAgentTurn contract", () => {
       },
     };
 
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({ replyOperation: unsettledOperation }),
-    );
+    const params = createMinimalRunAgentTurnParams({ replyOperation: unsettledOperation });
+    params.followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    const result = await executeAgentTurn(params);
 
     expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
     expect(complete).toHaveBeenCalledOnce();
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "mute", runStatus: "aborted" }),
+    );
   });
 });

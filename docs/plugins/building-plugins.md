@@ -304,6 +304,11 @@ Optional tools control whether a tool is exposed to the model. Use
 or hook should ask for approval after the model selects it and before the
 action runs.
 
+`toolMetadata.<tool>.profiles` adds a plugin tool to named built-in profile
+allowlists. For example, `"profiles": ["coding", "messaging"]` exposes it in
+those profiles without adding a core catalog entry. Explicit operator
+allowlists and deny rules remain authoritative.
+
 Use optional tools for side effects, unusual binaries, or capabilities that
 should not be exposed by default. Tool names must not conflict with core tool
 names; conflicts are skipped and reported in plugin diagnostics. Malformed

@@ -9,6 +9,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
+    case progressCardChanged(ProgressCardChangedEvent)
     case task(OpenClawChatTaskEvent)
     case questionRequested(QuestionRecord)
     case questionResolved(OpenClawQuestionResolvedEvent)
@@ -87,6 +88,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     let observerDigestPresent: Bool
     let statusPresent: Bool
     let lastRunErrorPresent: Bool
+    let activeRunIdsPresent: Bool
 
     public init(
         sessionKey: String?,
@@ -114,7 +116,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         agentStatusPresent: Bool? = nil,
         observerDigestPresent: Bool? = nil,
         statusPresent: Bool? = nil,
-        lastRunErrorPresent: Bool? = nil)
+        lastRunErrorPresent: Bool? = nil,
+        activeRunIdsPresent: Bool? = nil)
     {
         self.sessionKey = sessionKey
         self.agentId = agentId
@@ -131,7 +134,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.status = status
         self.lastRunError = lastRunError
         self.hasActiveRun = hasActiveRun
-        self.activeRunIds = activeRunIds
+        self.activeRunIds = activeRunIds ?? session?.activeRunIds
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.swarmGroupId = swarmGroupId
@@ -142,6 +145,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.observerDigestPresent = observerDigestPresent ?? (observerDigest != nil)
         self.statusPresent = statusPresent ?? (status != nil)
         self.lastRunErrorPresent = lastRunErrorPresent ?? (lastRunError != nil)
+        self.activeRunIdsPresent = activeRunIdsPresent ?? (activeRunIds != nil || session?.activeRunIds != nil)
     }
 
     public init(from decoder: Decoder) throws {
@@ -189,6 +193,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.observerDigestPresent = container.contains(.observerDigest) || nested?.contains(.observerDigest) == true
         self.statusPresent = container.contains(.status) || nested?.contains(.status) == true
         self.lastRunErrorPresent = container.contains(.lastRunError) || nested?.contains(.lastRunError) == true
+        self.activeRunIdsPresent = container.contains(.activeRunIds) || nested?.contains(.activeRunIds) == true
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -208,7 +213,13 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         try container.encodeIfPresent(self.status, forKey: .status)
         try container.encodeIfPresent(self.lastRunError, forKey: .lastRunError)
         try container.encodeIfPresent(self.hasActiveRun, forKey: .hasActiveRun)
-        try container.encodeIfPresent(self.activeRunIds, forKey: .activeRunIds)
+        if self.activeRunIdsPresent {
+            if let activeRunIds {
+                try container.encode(activeRunIds, forKey: .activeRunIds)
+            } else {
+                try container.encodeNil(forKey: .activeRunIds)
+            }
+        }
         try container.encodeIfPresent(self.startedAt, forKey: .startedAt)
         try container.encodeIfPresent(self.endedAt, forKey: .endedAt)
         try container.encodeIfPresent(self.swarmGroupId, forKey: .swarmGroupId)
@@ -695,8 +706,10 @@ public protocol OpenClawChatTransport: Sendable {
         worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
+    func gatewayAdvertisesProgressCardStore() async -> Bool?
+    func fetchProgressCard(sessionKey: String) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
-    func listModels() async throws -> [OpenClawChatModelChoice]
+    func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
     func isSwarmEnabled(sessionKey: String) async throws -> Bool
     var supportsSlashCommandCatalog: Bool { get }
     func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice]
@@ -745,6 +758,7 @@ public protocol OpenClawChatTransport: Sendable {
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease?
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
+    func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String
     func rewindSession(sessionKey: String, entryId: String) async throws -> OpenClawChatRewindResponse
     func forkSessionAtMessage(
         sessionKey: String,
@@ -791,6 +805,14 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func gatewayAdvertisesProgressCardStore() async -> Bool? {
+        nil
+    }
+
+    public func fetchProgressCard(sessionKey _: String) async throws -> ProgressCard? {
+        nil
+    }
+
     public func loadMediaArtifact(
         sessionKey _: String,
         artifactId _: String,
@@ -1098,6 +1120,10 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.create fork not supported by this transport"])
     }
 
+    public func forkSession(parentKey: String, fromLastCompleted _: Bool) async throws -> String {
+        try await self.forkSession(parentKey: parentKey)
+    }
+
     public func rewindSession(
         sessionKey _: String,
         entryId _: String) async throws -> OpenClawChatRewindResponse
@@ -1135,7 +1161,7 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.branches.switch not supported by this transport"])
     }
 
-    public func listModels() async throws -> [OpenClawChatModelChoice] {
+    public func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,

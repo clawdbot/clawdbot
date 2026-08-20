@@ -1,10 +1,9 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClickClackInboundAccess } from "./access.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
-import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
+import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
 
@@ -60,33 +59,6 @@ function createAccount(): ResolvedClickClackAccount {
   };
 }
 
-function createAccess(params: {
-  eventId: string;
-  conversationId?: string;
-}): ClickClackInboundAccess {
-  const conversationId = params.conversationId ?? "chn_model_loop";
-  return {
-    shouldDispatch: true,
-    commandAuthorized: false,
-    mentionFacts: { canDetectMention: false, wasMentioned: false },
-    botLoopProtection: {
-      scopeId: "wsp_model_loop",
-      conversationId,
-      senderId: "usr_model_sender",
-      receiverId: "usr_model_receiver",
-      eventId: params.eventId,
-      config: { maxEventsPerWindow: 1, windowSeconds: 60, cooldownSeconds: 60 },
-      defaultEnabled: true,
-    },
-    preparedRoute: {
-      isDirect: false,
-      target: `channel:${conversationId}`,
-      route: { agentId: "service-bot" } as ClickClackInboundAccess["preparedRoute"]["route"],
-      revoked: false,
-    },
-  };
-}
-
 describe("ClickClack direct-model bot loop protection", () => {
   beforeEach(() => {
     sendClickClackTextMock.mockClear();
@@ -99,28 +71,31 @@ describe("ClickClack direct-model bot loop protection", () => {
     const message = {
       id: "msg_01arz3ndektsv4rrffq69g5fbx",
       workspace_id: "wsp_model_loop",
-      channel_id: "chn_model_loop",
+      direct_conversation_id: "dm_model_loop_suppression",
       author_id: "usr_model_sender",
       thread_root_id: "msg_01arz3ndektsv4rrffq69g5fbx",
       body: "hello from the other bot",
       body_format: "markdown" as const,
       created_at: "2026-05-09T12:00:00.000Z",
-    };
+      author: {
+        id: "usr_model_sender",
+        kind: "bot" as const,
+        display_name: "Model sender",
+        handle: "model-sender",
+        avatar_url: "",
+        created_at: "2026-05-09T12:00:00.000Z",
+      },
+    } satisfies ClickClackMessage;
 
     await handleClickClackInbound({
       account,
       config: {} as CoreConfig,
       message,
-      access: createAccess({ eventId: message.id, conversationId: "chn_model_loop_suppression" }),
     });
     await handleClickClackInbound({
       account,
       config: {} as CoreConfig,
       message: { ...message, id: "msg_01arz3ndektsv4rrffq69g5fby" },
-      access: createAccess({
-        eventId: "msg_01arz3ndektsv4rrffq69g5fby",
-        conversationId: "chn_model_loop_suppression",
-      }),
     });
 
     expect(runtime.llm.complete).toHaveBeenCalledTimes(1);
@@ -136,22 +111,26 @@ describe("ClickClack direct-model bot loop protection", () => {
     const message = {
       id: "msg_01arz3ndektsv4rrffq69g5fbz",
       workspace_id: "wsp_model_loop",
-      channel_id: "chn_model_loop_retry",
+      direct_conversation_id: "dm_model_loop_retry",
       author_id: "usr_model_sender",
       thread_root_id: "msg_01arz3ndektsv4rrffq69g5fbz",
       body: "retry this message",
       body_format: "markdown" as const,
       created_at: "2026-05-09T12:00:00.000Z",
-    };
-    const access = createAccess({
-      eventId: message.id,
-      conversationId: "chn_model_loop_retry",
-    });
+      author: {
+        id: "usr_model_sender",
+        kind: "bot" as const,
+        display_name: "Model sender",
+        handle: "model-sender",
+        avatar_url: "",
+        created_at: "2026-05-09T12:00:00.000Z",
+      },
+    } satisfies ClickClackMessage;
 
     await expect(
-      handleClickClackInbound({ account, config: {} as CoreConfig, message, access }),
+      handleClickClackInbound({ account, config: {} as CoreConfig, message }),
     ).rejects.toThrow("transient model failure");
-    await handleClickClackInbound({ account, config: {} as CoreConfig, message, access });
+    await handleClickClackInbound({ account, config: {} as CoreConfig, message });
 
     expect(complete).toHaveBeenCalledTimes(2);
     expect(sendClickClackTextMock).toHaveBeenCalledTimes(1);

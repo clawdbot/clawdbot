@@ -40,6 +40,13 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: "b".repeat(64),
   sessionId: SESSION_ID,
   runId: "run-worker-transcript",
+  turnClaim: {
+    sessionId: SESSION_ID,
+    claimId: "claim-worker-transcript",
+    runId: "run-worker-transcript",
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-a", ownerEpoch: RUN_EPOCH },
+  },
   ownerEpoch: RUN_EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-transcript-commit-v1"],

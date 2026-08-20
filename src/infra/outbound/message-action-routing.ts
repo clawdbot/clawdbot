@@ -29,6 +29,10 @@ import {
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import { enforceCrossContextPolicy } from "./outbound-policy.js";
+import {
+  invalidMessageActionTargetError,
+  missingMessageActionTargetError,
+} from "./target-errors.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 
@@ -216,7 +220,7 @@ async function resolveResolvedTargetOrThrow(params: {
   }
   const validationError = params.validateResolvedTarget?.(resolved.target);
   if (validationError) {
-    throw new Error(validationError);
+    throw invalidMessageActionTargetError(validationError);
   }
   return resolved.target;
 }
@@ -348,7 +352,7 @@ export async function prepareMessageRoute(params: {
   // Missing targets must fail before channel discovery, which can bootstrap or
   // probe configured plugins. Non-standard params may still be owner aliases.
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, actionParams)) {
-    throw new Error(`Action ${action} requires a target.`);
+    throw missingMessageActionTargetError(action);
   }
 
   const selection = await resolveChannel(cfg, actionParams, input.toolContext, action, agentId);

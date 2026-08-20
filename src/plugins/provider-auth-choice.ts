@@ -5,7 +5,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -330,52 +330,12 @@ export async function runProviderPluginAuthMethod(params: {
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
 }): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
-  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
-  const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
-  const result = await runProviderPluginAuthMethodUnpersisted({
-    config: params.config,
-    env: params.env,
-    runtime: params.runtime,
-    prompter: params.prompter,
-    method: params.method,
-    agentDir,
-    workspaceDir,
-    ...(params.signal ? { signal: params.signal } : {}),
-    ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
-    secretInputMode: params.secretInputMode,
-    allowSecretRefPrompt: params.allowSecretRefPrompt,
-    opts: params.opts,
-  });
-
-  if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
-    await params.prompter.note(result.notes.join("\n"), "Provider notes");
-  }
-
-  await params.beforePersistentEffect?.();
-  for (const profile of result.profiles) {
-    await upsertAuthProfileWithLockOrThrow({
-      profileId: profile.profileId,
-      credential: profile.credential,
-      agentDir,
-    });
-  }
-
-  const nextConfig = applyProviderPluginAuthMethodResultConfig({
-    config: params.config,
-    result,
-  });
-
-  const defaultModel = result.defaultModel
-    ? normalizeAgentModelRefForConfig(result.defaultModel)
-    : undefined;
+  const prepared = await prepareProviderPluginAuthMethod(params);
+  await prepared.persistAuthProfiles();
 
   return {
-    config: nextConfig,
-    ...(defaultModel ? { defaultModel } : {}),
+    config: prepared.config,
+    ...(prepared.defaultModel ? { defaultModel: prepared.defaultModel } : {}),
   };
 }
 
@@ -426,15 +386,11 @@ async function prepareProviderPluginAuthMethod(
       return;
     }
     await params.beforePersistentEffect?.();
-    for (const profile of profiles) {
-      const { profileId, credential } = profile;
-      await upsertAuthProfileWithLockOrThrow({
-        profileId,
-        credential,
-        agentDir,
-        stateDir: params.env?.OPENCLAW_STATE_DIR,
-      });
-    }
+    await persistAuthProfileBatch({
+      profiles,
+      agentDir,
+      stateDir: params.env?.OPENCLAW_STATE_DIR,
+    });
     profilesPersisted = true;
   };
 

@@ -3,6 +3,8 @@
  * websocket, and dispatching user messages into OpenClaw.
  */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -68,6 +70,7 @@ async function processEvent(params: {
   client: ReturnType<typeof createClickClackClient>;
   event: ClickClackEvent;
   botUserId: string;
+  buildContext?: typeof buildChannelInboundEventContext;
   log?: { info: (message: string) => void; warn?: (message: string) => void };
 }) {
   if (params.event.type !== "message.created" && params.event.type !== "thread.reply_created") {
@@ -118,6 +121,7 @@ async function processEvent(params: {
     config: params.config,
     message,
     access,
+    buildContext: params.buildContext,
     ...(correlationId ? { correlationId } : {}),
   });
 }
@@ -182,6 +186,8 @@ export async function startClickClackGatewayAccount(
       client,
       event,
       botUserId: account.botUserId,
+      buildContext: (ctx.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       log: ctx.log,
     });
   if (account.commandMenu) {

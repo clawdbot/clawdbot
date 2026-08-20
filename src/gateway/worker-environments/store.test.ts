@@ -644,6 +644,22 @@ describe("worker environment store", () => {
     ).toThrow("owner epoch changed");
   });
 
+  it("revokes one environment credential without changing lifecycle state", () => {
+    const bootstrapping = seedBootstrapping("worker-revocation", "lease-revocation");
+    store.transition({
+      environmentId: bootstrapping.environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: readyPatch(),
+    });
+    expect(store.getCredential(bootstrapping.environmentId)).toBeDefined();
+
+    store.revokeEnvironmentCredential(bootstrapping.environmentId);
+
+    expect(store.getCredential(bootstrapping.environmentId)).toBeUndefined();
+    expect(store.get(bootstrapping.environmentId)?.state).toBe("ready");
+  });
+
   it("allocates globally distinct owner epochs when a session moves environments", () => {
     const makeReady = (environmentId: string, leaseId: string) => {
       const bootstrapping = seedBootstrapping(environmentId, leaseId);
@@ -756,48 +772,6 @@ describe("worker environment store", () => {
         patch: { leaseId: "different-lease" },
       }),
     ).toThrow("lease id is immutable");
-  });
-
-  it("persists a credential-bound local receipt without SSH metadata", () => {
-    createIntent("worker-node", { settings: { device: "device-1" } });
-    store.transition({ environmentId: "worker-node", from: "requested", to: "provisioning" });
-
-    const ready = store.transition({
-      environmentId: "worker-node",
-      from: "provisioning",
-      to: "ready",
-      patch: {
-        leaseId: "device-lease-1",
-        sshEndpoint: null,
-        sharedHost: true,
-        ...readyPatch({ ...BOOTSTRAP_RECEIPT, installKind: "local" }),
-      },
-    });
-
-    expect(ready).toMatchObject({
-      state: "ready",
-      leaseId: "device-lease-1",
-      sshEndpoint: null,
-      bootstrapReceipt: {
-        ...BOOTSTRAP_RECEIPT,
-        protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
-        installKind: "local",
-      },
-      sharedHost: true,
-      ownerEpoch: 1,
-    });
-    expect(store.get("worker-node")).toEqual(ready);
-    expect(
-      database.db
-        .prepare(
-          "SELECT ssh_host, ssh_host_key, bootstrap_install_kind FROM worker_environments WHERE environment_id = ?",
-        )
-        .get("worker-node"),
-    ).toEqual({
-      ssh_host: null,
-      ssh_host_key: null,
-      bootstrap_install_kind: "local",
-    });
   });
 
   it("enforces one credential-bound session and teardown fencing", () => {

@@ -349,7 +349,6 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "node invoke policy registration missing commands",
     "trusted tool policy registration requires id, description, and evaluate()",
     "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
-    "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
     "plugin must declare contracts.tools for: kitchen-sink-tool",
     'channel "kitchen-sink-channel-probe" registration missing required config helpers',
     'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',

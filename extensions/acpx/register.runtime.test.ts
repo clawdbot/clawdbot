@@ -21,6 +21,15 @@ const { realRuntime, realServiceStartMock, realServiceStopMock, createRealServic
           sessionKey: input.sessionKey,
         };
       },
+      startTurn(input: { requestId: string }) {
+        return {
+          requestId: input.requestId,
+          events: (async function* () {})(),
+          result: Promise.resolve({ status: "completed", stopReason: "end_turn" }),
+          cancel: async () => {},
+          closeStream: async () => {},
+        };
+      },
       async *runTurn() {},
       async cancel() {},
       async close() {},
@@ -163,11 +172,8 @@ describe("acpx register runtime service", () => {
       requestId: "turn-1",
     });
     await expect(turn.result).resolves.toEqual({
-      status: "failed",
-      error: {
-        code: "ACP_TURN_FAILED",
-        message: "ACP turn ended without a terminal done event.",
-      },
+      status: "completed",
+      stopReason: "end_turn",
     });
 
     await service.stop?.(ctx as never);

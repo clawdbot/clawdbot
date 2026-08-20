@@ -3,14 +3,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearSkillScanCacheForTest,
-  isScannable,
-  scanDirectoryWithSummary,
-  scanSkillContent,
-  scanSource,
-} from "./scanner.js";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { isScannable, scanDirectoryWithSummary, scanSkillContent, scanSource } from "./scanner.js";
 import type { SkillScanOptions } from "./scanner.js";
 
 // ---------------------------------------------------------------------------
@@ -139,10 +133,6 @@ type SummaryCase = {
     expectedPresent?: boolean;
   };
 };
-
-afterEach(() => {
-  clearSkillScanCacheForTest();
-});
 
 // ---------------------------------------------------------------------------
 // scanSource
@@ -815,7 +805,6 @@ describe("scanDirectoryWithSummary", () => {
             testCase.expected.expectedPresent,
           );
         }
-        clearSkillScanCacheForTest();
       });
     }
   });

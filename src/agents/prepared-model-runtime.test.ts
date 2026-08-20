@@ -1,4 +1,9 @@
-import "./prepared-model-runtime.test-harness.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
@@ -6,6 +11,7 @@ import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
+  acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -17,10 +23,6 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
-import {
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -45,6 +47,26 @@ describe("prepared model runtime snapshots", () => {
       pluginGeneration: expect.any(Object),
     });
     await expect(build.completion).resolves.toBeUndefined();
+  });
+
+  it("publishes a run owner from the caller-selected metadata generation", async () => {
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        config: {},
+        agentId: "main",
+        agentDir: "/tmp/selected-metadata-agent",
+        workspaceDir: "/tmp/selected-metadata-workspace",
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+      },
+      {
+        catalogMode: "static",
+        pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
+      },
+    );
+
+    expect(lease.snapshot.metadataSnapshot).toBe(mocks.pluginMetadataSnapshot);
+    lease.release();
   });
 
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
@@ -110,12 +132,15 @@ describe("prepared model runtime snapshots", () => {
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
 
     expect(
-      prepareWorkspacePluginRegistries({
-        config: {},
-        agentDir: "/tmp/native-provider-probe",
-        readOnly: true,
-        loadRuntimePlugins: true,
-      }).runtimePluginRegistry,
+      prepareWorkspacePluginRegistries(
+        {
+          config: {},
+          agentDir: "/tmp/native-provider-probe",
+          readOnly: true,
+          loadRuntimePlugins: true,
+        },
+        mocks.pluginMetadataSnapshot as never,
+      ).runtimePluginRegistry,
     ).toBe(pluginRegistry);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
       expect.objectContaining({ selections: undefined }),
@@ -179,6 +204,7 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
       env: process.env,
+      metadataSnapshot: mocks.pluginMetadataSnapshot,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
       selections: undefined,
     });
@@ -896,7 +922,7 @@ describe("prepared model runtime snapshots", () => {
     const skippedConfig = { agents: { defaults: { model: "openai/gpt-5.4" } } };
     const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(initialConfig);
-    let finishLatestBuild!: () => void;
+    let finishLatestBuild: (() => void) | undefined;
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(
       async () =>
         await new Promise<{ agentDir: string; wrote: boolean }>((resolve) => {
@@ -927,7 +953,8 @@ describe("prepared model runtime snapshots", () => {
         Promise.resolve("pending"),
       ]),
     ).resolves.toBe("pending");
-    finishLatestBuild();
+    await vi.waitFor(() => expect(finishLatestBuild).toEqual(expect.any(Function)));
+    finishLatestBuild?.();
     await latest;
     await expect(read).resolves.toMatchObject({ config: latestConfig });
   });

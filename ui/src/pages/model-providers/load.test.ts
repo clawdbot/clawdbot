@@ -70,6 +70,7 @@ describe("loadModelProvidersData", () => {
     expect(request).toHaveBeenCalledWith("models.list", {
       view: "configured",
       agentId: "writer",
+      refresh: true,
     });
     expect(request).toHaveBeenCalledWith("usage.status");
     const sessionUsageCall = request.mock.calls.find(([method]) => method === "sessions.usage");
@@ -111,7 +112,7 @@ describe("loadModelProvidersData", () => {
   it("surfaces an explicit catalog refresh failure while retaining cached configured models", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "models.list" && (params as { view?: string } | undefined)?.view === "all") {
-        throw new Error("catalog refresh failed");
+        throw new Error("catalog refresh failed: OPENAI_API_KEY=sk-1234567890abcdef");
       }
       switch (method) {
         case "models.authStatus":
@@ -139,7 +140,7 @@ describe("loadModelProvidersData", () => {
 
     const result = await loadModelProvidersData(client, { refresh: true, agentId: "writer" });
 
-    expect(result.catalogError).toBe("catalog refresh failed");
+    expect(result.catalogError).toBe("catalog refresh failed: OPENAI_API_KEY=sk-123...cdef");
     expect(result.models).toEqual([{ id: "cached", name: "Cached", provider: "openai" }]);
     expect(
       request.mock.calls.filter(

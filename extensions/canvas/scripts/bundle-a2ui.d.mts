@@ -2,3 +2,15 @@ export declare function isBundleHashInputPath(filePath: string, repoRoot?: strin
 export declare function getLocalRolldownCliCandidates(repoRoot?: string): string[];
 export declare function getBundleHashRepoInputPaths(repoRoot?: string): string[];
 export declare function compareNormalizedPaths(left: string, right: string): number;
+
+export declare function listTrackedInputFiles(
+  runGit: (
+    command: string,
+    args: string[],
+    options: object,
+  ) => {
+    status: number | null;
+    stdout: string;
+  },
+  repoRoot?: string,
+): string[] | null;

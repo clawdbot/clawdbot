@@ -37,7 +37,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     await i18n.setLocale("en");
   });
 
-  it("attaches a detached session from a fresh browser profile", async () => {
+  it("attaches an agent-owned session from the picker in a fresh browser profile", async () => {
     const controllers = [createTerminalController(), createTerminalController()] as const;
     createGhosttyTerminalMock
       .mockResolvedValueOnce(controllers[0])
@@ -61,6 +61,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
                 cwd: "/work/detached",
                 confined: false,
                 attached: false,
+                owner: "agent:agent:main:background-task",
                 createdAtMs: 2,
               },
               {
@@ -109,7 +110,11 @@ describe("OpenClawTerminalPanel reconnect", () => {
     });
     const menuText = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
     expect(menuText).toContain("/work/detached");
-    expect(menuText).toContain("detached");
+    expect(
+      [...panel.renderRoot.querySelectorAll<HTMLElement>(".tp-session")]
+        .find((row) => row.textContent?.includes("detached-agent"))
+        ?.querySelector(".tp-session__state")?.textContent,
+    ).toContain("agent");
     expect(menuText).toContain("attached");
     expect(menuText).toContain("current");
     const detachedRow = [
@@ -126,6 +131,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
       "detached history",
     );
+    expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["current-1", "detached-1"]),
     );

@@ -25,19 +25,16 @@ export function isThinkingBlock(block: AssistantContentBlock): boolean {
 function stripSignatureFieldsFromThinkingBlock(
   block: AssistantContentBlock,
 ): AssistantContentBlock {
-  const record = block as unknown as Record<string, unknown>;
-  const stripped: Record<string, unknown> = {};
-  for (const key of Object.keys(record)) {
-    if (key === "thinkingSignature" || key === "signature" || key === "thought_signature") {
-      continue;
-    }
-    // data is the signature payload for redacted_thinking blocks
-    if (key === "data" && record.type === "redacted_thinking") {
-      continue;
-    }
-    stripped[key] = record[key];
+  const stripped = { ...block };
+  Reflect.deleteProperty(stripped, "thinkingSignature");
+  Reflect.deleteProperty(stripped, "signature");
+  Reflect.deleteProperty(stripped, "thought_signature");
+  // data is the signature payload for redacted_thinking blocks
+  const type: unknown = Reflect.get(block, "type");
+  if (type === "redacted_thinking") {
+    Reflect.deleteProperty(stripped, "data");
   }
-  return stripped as unknown as AssistantContentBlock;
+  return stripped;
 }
 
 function stripThinkingSignaturesFromMessage(message: AgentMessage): AgentMessage {
@@ -51,12 +48,12 @@ function stripThinkingSignaturesFromMessage(message: AgentMessage): AgentMessage
       newContent.push(block);
       continue;
     }
-    const record = block as unknown as Record<string, unknown>;
+    const type: unknown = Reflect.get(block, "type");
     const hasSignature =
-      record.thinkingSignature != null ||
-      record.signature != null ||
-      record.thought_signature != null ||
-      (record.type === "redacted_thinking" && record.data != null);
+      Reflect.get(block, "thinkingSignature") != null ||
+      Reflect.get(block, "signature") != null ||
+      Reflect.get(block, "thought_signature") != null ||
+      (type === "redacted_thinking" && Reflect.get(block, "data") != null);
     if (!hasSignature) {
       newContent.push(block);
       continue;

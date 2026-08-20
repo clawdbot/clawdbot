@@ -1,11 +1,15 @@
 /** CLI runner for node-host stdin/stdout command dispatch. */
 import { isDeepStrictEqual } from "node:util";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
@@ -13,11 +17,18 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_BUNDLE_RETENTION_VERSION,
+  NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
 import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
+import {
+  resolveNodeHostCloudflareAccess,
+  type NodeHostCloudflareAccessConfig,
+} from "./gateway-cloudflare-access.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
@@ -31,11 +42,14 @@ type NodeHostRunOptions = {
   gatewayPort: number;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: NodeHostCloudflareAccessConfig;
   gatewayCandidates?: NodeHostGatewayConfig[];
   gatewayBootstrapToken?: string;
   preferGatewayBootstrapToken?: boolean;
   /** Stop cleanly after the first authenticated hello (used before service install). */
   stopAfterFirstConnect?: boolean;
+  /** Host worker sessions for this process even when durable node config is disabled. */
+  forceWorkerRuns?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -79,6 +93,7 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
@@ -203,6 +218,10 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
     return config;
   }
   const nextConfig = structuredClone(config);
+  copyConfigResolutionFactsExcept(config, nextConfig, [
+    "gateway.remote.token",
+    "gateway.remote.password",
+  ]);
   if (nextConfig.gateway?.remote) {
     // Local node-host must not inherit gateway.remote.* auth material, which can
     // suppress GatewayClient device-token fallback and cause local token mismatches.
@@ -216,12 +235,14 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   // Operator-approved startup is a second authorized entry point for Doctor-owned
   // state migrators. Runtime invokes those owners here and never migrates inline.
   await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
+  const cfg = getRuntimeConfig();
   const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
-    tls: opts.gatewayTls ?? getRuntimeConfig().gateway?.tls?.enabled ?? false,
+    tls: opts.gatewayTls ?? cfg.gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
     contextPath: opts.gatewayContextPath,
+    cloudflareAccess: opts.gatewayCloudflareAccess,
   };
   const fallbackDisplayName = await getMachineDisplayName();
   const config = await configureNodeHost({
@@ -234,17 +255,47 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const nodeId = config.nodeId;
   const displayName = config.displayName ?? fallbackDisplayName;
   const gateway = config.gateway ?? plannedGateway;
-  const gatewayCandidates = opts.gatewayCandidates?.length ? opts.gatewayCandidates : [gateway];
+  const gatewayCandidates = opts.gatewayCandidates?.length
+    ? opts.gatewayCandidates.map((candidate, index) =>
+        index === 0 && gateway.cloudflareAccess && !candidate.cloudflareAccess
+          ? { ...candidate, cloudflareAccess: gateway.cloudflareAccess }
+          : candidate,
+      )
+    : [gateway];
 
-  const cfg = getRuntimeConfig();
+  const plaintextAccessCandidate = gatewayCandidates.find(
+    (candidate) => candidate.cloudflareAccess && candidate.tls !== true,
+  );
+  if (plaintextAccessCandidate) {
+    throw new Error("Cloudflare Access credentials require a TLS Gateway connection");
+  }
+
+  const resolvedCloudflareAccess = await Promise.all(
+    gatewayCandidates.map(
+      async (candidate) =>
+        await resolveNodeHostCloudflareAccess({
+          value: candidate.cloudflareAccess,
+          config: cfg,
+          env: process.env,
+        }),
+    ),
+  );
+  const cloudflareAccessByCandidate = new Map<NodeHostGatewayConfig, CloudflareAccessCredentials>();
+  gatewayCandidates.forEach((candidate, index) => {
+    const credentials = resolvedCloudflareAccess[index];
+    if (credentials) {
+      cloudflareAccessByCandidate.set(candidate, credentials);
+    }
+  });
   const preparedRuntime = await prepareNodeHostRuntime({
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
     enableWorkerRuns: true,
+    forceWorkerRuns: opts.forceWorkerRuns,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  const { token, password } = opts.preferGatewayBootstrapToken
+  const { token, password } = opts.gatewayBootstrapToken
     ? {}
     : await resolveNodeHostGatewayCredentials({
         config: cfg,
@@ -252,10 +303,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
 
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
-  let workerRunsAvailable = false;
+  let workerCapacity: NodeWorkerCapacitySnapshot | undefined;
   let gatewayHelloReceived = false;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
+  let gatewaySupportsBundleRetention = false;
+  let gatewaySupportsBundleStatus = false;
   let optionalPublicationStates = new Map<
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
@@ -272,6 +325,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     gatewayConnectionGeneration += 1;
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
+    gatewaySupportsBundleRetention = false;
+    gatewaySupportsBundleStatus = false;
     retireOptionalPublications();
   };
 
@@ -460,15 +515,24 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   };
 
   const publishRunnerInventory = () => {
-    // The handshake keeps the immutable build ceiling. Live inventory withdraws
-    // only new-launch eligibility while full, leaving status/cancel negotiated.
     queueOptionalPublication(
       NODE_RUNNER_INVENTORY_UPDATE_METHOD,
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        ...(workerRunsAvailable && preparedRuntime.manifest.workerRuns
-          ? { workerRuns: preparedRuntime.manifest.workerRuns }
-          : {}),
+        workerHost:
+          preparedRuntime.workerHostingEnabled && workerCapacity
+            ? {
+                enabled: true,
+                capacity: workerCapacity,
+                bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
+                ...(gatewaySupportsBundleRetention
+                  ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
+                  : {}),
+                ...(gatewaySupportsBundleRetention && gatewaySupportsBundleStatus
+                  ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
+                  : {}),
+              }
+            : { enabled: false },
       },
       "runner inventory",
     );
@@ -488,6 +552,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
 
   const client = createNodeHostGatewayCandidateConnection({
     candidates: gatewayCandidates,
+    cloudflareAccessByCandidate,
     clientOptions: {
       token: token || undefined,
       bootstrapToken: opts.gatewayBootstrapToken,
@@ -507,7 +572,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       caps: preparedRuntime.manifest.caps,
       commands: preparedRuntime.manifest.commands,
       computerUse: preparedRuntime.manifest.computerUse,
-      workerRuns: preparedRuntime.manifest.workerRuns,
       pathEnv: preparedRuntime.manifest.pathEnv,
       permissions: undefined,
       deviceIdentity: loadOrCreateDeviceIdentity(),
@@ -535,12 +599,22 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         void activeRuntime.invoke(payload);
       }
     },
-    onHelloOk: (hello, url, tlsFingerprint) => {
+    onHelloOk: (hello, url, tlsFingerprint, cloudflareAccess) => {
       writeStderrLine(`node host gateway connected: ${url}`);
-      activeRuntime.updateGatewayConnection({ url, ...(tlsFingerprint ? { tlsFingerprint } : {}) });
+      activeRuntime.updateGatewayConnection({
+        url,
+        ...(tlsFingerprint ? { tlsFingerprint } : {}),
+        ...(cloudflareAccess ? { cloudflareAccess } : {}),
+      });
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
       connectedGatewayProtocol = hello.protocol;
+      gatewaySupportsBundleRetention =
+        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) ===
+        true;
+      gatewaySupportsBundleStatus =
+        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS) ===
+        true;
       retireOptionalPublications();
       optionalPublicationStates = new Map();
       if (opts.stopAfterFirstConnect) {
@@ -578,8 +652,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       inventory = nextInventory;
       publishInventory();
     },
-    onRunnerAvailabilityChanged: (available) => {
-      workerRunsAvailable = available;
+    onRunnerCapacityChanged: (capacity) => {
+      workerCapacity = capacity;
       publishRunnerInventory();
     },
     onManifestChanged: (manifest) => {

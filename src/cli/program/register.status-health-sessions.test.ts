@@ -14,15 +14,6 @@ const mocks = vi.hoisted(() => ({
   sessionsArchiveCommand: vi.fn(),
   sessionsDeleteCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
-  tasksListCommand: vi.fn(),
-  tasksAuditCommand: vi.fn(),
-  tasksMaintenanceCommand: vi.fn(),
-  tasksShowCommand: vi.fn(),
-  tasksNotifyCommand: vi.fn(),
-  tasksCancelCommand: vi.fn(),
-  flowsListCommand: vi.fn(),
-  flowsShowCommand: vi.fn(),
-  flowsCancelCommand: vi.fn(),
   setVerbose: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -40,15 +31,6 @@ const sessionsCompactCommand = mocks.sessionsCompactCommand;
 const sessionsArchiveCommand = mocks.sessionsArchiveCommand;
 const sessionsDeleteCommand = mocks.sessionsDeleteCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
-const tasksListCommand = mocks.tasksListCommand;
-const tasksAuditCommand = mocks.tasksAuditCommand;
-const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
-const tasksShowCommand = mocks.tasksShowCommand;
-const tasksNotifyCommand = mocks.tasksNotifyCommand;
-const tasksCancelCommand = mocks.tasksCancelCommand;
-const flowsListCommand = mocks.flowsListCommand;
-const flowsShowCommand = mocks.flowsShowCommand;
-const flowsCancelCommand = mocks.flowsCancelCommand;
 const setVerbose = mocks.setVerbose;
 const runtime = mocks.runtime;
 
@@ -106,21 +88,6 @@ vi.mock("../../commands/export-trajectory.js", () => ({
   exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
 
-vi.mock("../../commands/tasks.js", () => ({
-  tasksListCommand: mocks.tasksListCommand,
-  tasksAuditCommand: mocks.tasksAuditCommand,
-  tasksMaintenanceCommand: mocks.tasksMaintenanceCommand,
-  tasksShowCommand: mocks.tasksShowCommand,
-  tasksNotifyCommand: mocks.tasksNotifyCommand,
-  tasksCancelCommand: mocks.tasksCancelCommand,
-}));
-
-vi.mock("../../commands/flows.js", () => ({
-  flowsListCommand: mocks.flowsListCommand,
-  flowsShowCommand: mocks.flowsShowCommand,
-  flowsCancelCommand: mocks.flowsCancelCommand,
-}));
-
 vi.mock("../../globals.js", () => ({
   setVerbose: mocks.setVerbose,
 }));
@@ -130,10 +97,14 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 describe("registerStatusHealthSessionsCommands", () => {
-  async function runCli(args: string[]) {
+  function createProgram() {
     const program = new Command();
     registerStatusHealthSessionsCommands(program);
-    await program.parseAsync(args, { from: "user" });
+    return program;
+  }
+
+  async function runCli(args: string[]) {
+    await createProgram().parseAsync(args, { from: "user" });
   }
 
   beforeEach(() => {
@@ -148,15 +119,6 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsArchiveCommand.mockResolvedValue(undefined);
     sessionsDeleteCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
-    tasksListCommand.mockResolvedValue(undefined);
-    tasksAuditCommand.mockResolvedValue(undefined);
-    tasksMaintenanceCommand.mockResolvedValue(undefined);
-    tasksShowCommand.mockResolvedValue(undefined);
-    tasksNotifyCommand.mockResolvedValue(undefined);
-    tasksCancelCommand.mockResolvedValue(undefined);
-    flowsListCommand.mockResolvedValue(undefined);
-    flowsShowCommand.mockResolvedValue(undefined);
-    flowsCancelCommand.mockResolvedValue(undefined);
   });
 
   it("runs status command with timeout and debug-derived verbose", async () => {
@@ -166,6 +128,8 @@ describe("registerStatusHealthSessionsCommands", () => {
       "--all",
       "--deep",
       "--usage",
+      "--agent",
+      "beta",
       "--debug",
       "--timeout",
       "5000",
@@ -177,6 +141,7 @@ describe("registerStatusHealthSessionsCommands", () => {
       all: true,
       deep: true,
       usage: true,
+      agent: "beta",
       timeoutMs: 5000,
       verbose: true,
     });
@@ -242,6 +207,19 @@ describe("registerStatusHealthSessionsCommands", () => {
       agent: "work",
       allAgents: false,
     });
+  });
+
+  it("documents explicit selection for multi-agent session-store commands", () => {
+    const sessions = createProgram().commands.find((command) => command.name() === "sessions");
+    const list = sessions?.commands.find((command) => command.name() === "list");
+    const cleanup = sessions?.commands.find((command) => command.name() === "cleanup");
+
+    expect(list?.options.find((option) => option.long === "--agent")?.description).toBe(
+      "Agent id to inspect (required for multiple explicit agents)",
+    );
+    expect(cleanup?.options.find((option) => option.long === "--agent")?.description).toBe(
+      "Agent id to maintain (required for multiple explicit agents)",
+    );
   });
 
   it("runs sessions command with --all-agents forwarding", async () => {
@@ -584,103 +562,5 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(exportTrajectoryCommand).not.toHaveBeenCalled();
-  });
-
-  it("runs tasks list from the parent command", async () => {
-    await runCli(["tasks", "--json", "--runtime", "acp", "--status", "running"]);
-
-    expectCommandOptions(tasksListCommand, {
-      json: true,
-      runtime: "acp",
-      status: "running",
-    });
-  });
-
-  it("runs tasks show subcommand with lookup forwarding", async () => {
-    await runCli(["tasks", "show", "run-123", "--json"]);
-
-    expectCommandOptions(tasksShowCommand, {
-      lookup: "run-123",
-      json: true,
-    });
-  });
-
-  it("runs tasks maintenance subcommand with apply forwarding", async () => {
-    await runCli(["tasks", "--json", "maintenance", "--apply"]);
-
-    expectCommandOptions(tasksMaintenanceCommand, {
-      json: true,
-      apply: true,
-    });
-  });
-
-  it("runs tasks audit subcommand with filters", async () => {
-    await runCli([
-      "tasks",
-      "--json",
-      "audit",
-      "--severity",
-      "error",
-      "--code",
-      "stale_running",
-      "--limit",
-      "5",
-    ]);
-
-    expectCommandOptions(tasksAuditCommand, {
-      json: true,
-      severity: "error",
-      code: "stale_running",
-      limit: 5,
-    });
-  });
-
-  it("rejects partially numeric tasks audit limits", async () => {
-    await runCli(["tasks", "--json", "audit", "--limit", "5abc"]);
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "--limit must be a positive integer, for example --limit 25.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(tasksAuditCommand).not.toHaveBeenCalled();
-  });
-
-  it("routes tasks flow commands through the TaskFlow handlers", async () => {
-    await runCli(["tasks", "flow", "list", "--json", "--status", "blocked"]);
-    expectCommandOptions(flowsListCommand, {});
-
-    await runCli(["tasks", "flow", "show", "flow-123", "--json"]);
-    expectCommandOptions(flowsShowCommand, {
-      lookup: "flow-123",
-    });
-
-    await runCli(["tasks", "flow", "cancel", "flow-123"]);
-    expectCommandOptions(flowsCancelCommand, {
-      lookup: "flow-123",
-    });
-  });
-
-  it("runs tasks notify subcommand with lookup and policy forwarding", async () => {
-    await runCli(["tasks", "notify", "run-123", "state_changes"]);
-
-    expectCommandOptions(tasksNotifyCommand, {
-      lookup: "run-123",
-      notify: "state_changes",
-    });
-  });
-
-  it("runs tasks cancel subcommand with lookup forwarding", async () => {
-    await runCli(["tasks", "cancel", "run-123"]);
-
-    expectCommandOptions(tasksCancelCommand, {
-      lookup: "run-123",
-    });
-  });
-
-  it("does not register the legacy top-level flows command", () => {
-    const program = new Command();
-    registerStatusHealthSessionsCommands(program);
-
-    expect(program.commands.find((command) => command.name() === "flows")).toBeUndefined();
   });
 });

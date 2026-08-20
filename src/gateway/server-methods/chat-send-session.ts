@@ -80,7 +80,6 @@ function loadChatSendSessionContext(params: {
   );
   const expectedLeafEntryId =
     p.expectedLeafEntryId === null ? null : normalizeOptionalChatText(p.expectedLeafEntryId);
-  const expectedRunId = normalizeOptionalChatText(p.expectedRunId);
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
@@ -100,7 +99,6 @@ function loadChatSendSessionContext(params: {
       legacyKey,
       sessionRoutingChanged,
       expectedLeafEntryId,
-      expectedRunId,
       requestedAgentId,
     },
   };

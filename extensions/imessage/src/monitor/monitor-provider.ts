@@ -1,6 +1,7 @@
 // Imessage provider module implements model/runtime integration.
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
@@ -55,6 +56,7 @@ import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
+import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
@@ -95,7 +97,6 @@ import {
   isStaleIMessageBacklog,
 } from "./inbound-dedupe.js";
 import {
-  buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
@@ -940,12 +941,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       sendPolicy !== "deny" &&
       (configuredTypingMode === undefined || configuredTypingMode === "instant");
     const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
+    const earlyDirectTypingService =
+      resolveIMessageDirectChatService(imessageCfg.service, decision.chatGuid) ?? "auto";
     const earlyDirectTypingTarget = shouldStartDirectTyping
-      ? buildDirectIMessageReplyTarget({
-          cfg,
-          accountId: decision.route.accountId,
-          sender: decision.sender,
-        })
+      ? `${earlyDirectTypingService}:${decision.sender}`
       : undefined;
     let stopEarlyDirectTyping: (() => void) | undefined;
     if (earlyDirectTypingTarget) {
@@ -1055,6 +1054,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       dmHistory,
+      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       media: {
         facts: mediaAttachments,
       },
@@ -1077,13 +1078,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
+    // The read RPC has no service argument, so preserve the inbound direct
+    // conversation through its exact chat GUID instead of a bare handle.
+    const readTarget =
+      !decision.isGroup && decision.chatGuid ? `chat_guid:${decision.chatGuid}` : typingTarget;
 
-    if (supportsRead && sendReadReceipts && typingTarget) {
+    if (supportsRead && sendReadReceipts && readTarget) {
       // Read receipts are best-effort channel UI. Do not put them on the
       // critical path before model dispatch; slow private-API reads otherwise
       // make accepted iMessage turns feel stuck before the agent starts. Use
       // a short-lived client so a stuck read cannot block monitor-client typing.
-      void markIMessageChatRead(typingTarget, {
+      void markIMessageChatRead(readTarget, {
         cfg,
         accountId: accountInfo.accountId,
         cliPath,

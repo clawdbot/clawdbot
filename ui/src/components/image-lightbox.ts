@@ -11,7 +11,7 @@ export type ImageLightboxItem = {
   release?: () => void;
 };
 
-const SAFE_DATA_IMAGE_BLOB_TYPES = new Set([
+const SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES = new Set([
   "image/avif",
   "image/gif",
   "image/jpeg",
@@ -146,10 +146,10 @@ class OpenClawImageLightbox extends OpenClawLitElement {
 
     .image {
       display: block;
-      max-width: 100%;
-      max-height: 100%;
-      width: auto;
-      height: auto;
+      min-width: 0;
+      min-height: 0;
+      width: 100%;
+      height: 100%;
       border-radius: var(--radius-md);
       background: rgba(255, 255, 255, 0.04);
       object-fit: contain;
@@ -261,15 +261,18 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       this.openOriginalUrl = "";
       return;
     }
-    if (source.slice(0, 5).toLowerCase() !== "data:") {
+    const sourcePrefix = source.slice(0, 5).toLowerCase();
+    const isDataUrl = sourcePrefix === "data:";
+    const isBlobUrl = sourcePrefix === "blob:";
+    if (!isDataUrl && !isBlobUrl) {
       this.openOriginalUrl = source;
       return;
     }
     this.openOriginalUrl = "";
-    const sourceType = dataUrlMimeType(source);
-    // Top-level blob documents inherit the app origin. Only inert raster formats
-    // may be promoted from opaque-origin data URLs into an original-image link.
-    if (!sourceType || !SAFE_DATA_IMAGE_BLOB_TYPES.has(sourceType)) {
+    const sourceType = isDataUrl ? dataUrlMimeType(source) : undefined;
+    // Reject active data formats before fetching. Incoming blob URLs still need
+    // their fetched MIME checked because top-level blobs inherit the app origin.
+    if (isDataUrl && (!sourceType || !SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES.has(sourceType))) {
       return;
     }
     try {
@@ -278,8 +281,12 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       if (
         !this.isConnected ||
         request !== this.originalUrlRequest ||
-        !SAFE_DATA_IMAGE_BLOB_TYPES.has(mimeTypeEssence(blob.type))
+        !SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES.has(mimeTypeEssence(blob.type))
       ) {
+        return;
+      }
+      if (isBlobUrl) {
+        this.openOriginalUrl = source;
         return;
       }
       this.originalBlobUrl = URL.createObjectURL(blob);

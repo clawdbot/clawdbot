@@ -64,7 +64,7 @@ describe("ModelSetupWizardRunner", () => {
         return Promise.resolve({ sessionId: "session-1", done: false, status: "running" });
       }
       if (method === "wizard.next") {
-        return Promise.reject(new Error("wizard unavailable"));
+        return Promise.reject(new Error("wizard unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
       }
       return Promise.resolve({ ok: true });
     });
@@ -79,7 +79,10 @@ describe("ModelSetupWizardRunner", () => {
     });
 
     await runner.start("openai-oauth");
-    expect(runner.state).toEqual({ phase: "error", message: "wizard unavailable" });
+    expect(runner.state).toEqual({
+      phase: "error",
+      message: "wizard unavailable: OPENAI_API_KEY=sk-123...cdef",
+    });
     expect(request).toHaveBeenCalledWith(
       "wizard.cancel",
       { sessionId: expect.any(String) },

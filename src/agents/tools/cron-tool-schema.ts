@@ -35,8 +35,8 @@ const CRON_ACTIONS = [
 ] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream"] as const;
-// Stream schedules, script payloads, and condition triggers all require
-// cron.triggers.enabled; when it is off the scheduler rejects them, so the
+// When cron.triggers.enabled is explicitly false, the scheduler rejects
+// stream schedules, script payloads, and condition triggers, so the
 // model-facing schema must not advertise them.
 const CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
@@ -106,7 +106,7 @@ function createCronScheduleSchema(params: { triggersEnabled: boolean }): TSchema
                 Type.Array(Type.String({ minLength: 1 }), {
                   minItems: 1,
                   description:
-                    "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                    "Supervised source argv (kind=stream; disabled when cron.triggers.enabled=false)",
                 }),
               ),
               cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
@@ -238,7 +238,8 @@ function createCronDeliverySchema(): TSchema {
         accountId: deliveryStringSchema("Delivery account"),
         failureDestination: Type.Optional(
           Type.Union([failureDestinationObject, Type.Null()], {
-            description: "Failure destination; null clears.",
+            description:
+              "Failure-alert route override and alternate for immediate required-delivery failure; null clears.",
           }),
         ),
         completionDestination: Type.Optional(
@@ -252,8 +253,8 @@ function createCronDeliverySchema(): TSchema {
   );
 }
 
-// Omitting `failureAlert` means "leave defaults/unchanged"; `false` explicitly disables alerts.
-// Runtime handles `failureAlert === false` in cron/service/timer.ts.
+// Omitting `failureAlert` means "leave defaults/unchanged"; `false` disables regular alerts.
+// Runtime handles `failureAlert === false` in cron/service/failure-alerts.ts.
 // The schema declares `type: "object"` to stay compatible with providers that
 // enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot).  The
 // description tells the LLM that `false` is also accepted.
@@ -271,7 +272,8 @@ function createCronFailureAlertSchema(): TSchema {
         accountId: Type.Optional(Type.String()),
       },
       additionalProperties: true,
-      description: "Failure alert; false disables.",
+      description:
+        "Failure alert policy/route override. Route-backed jobs default to after=2 and cooldownMs=3600000; false disables execution/delivery alerts but not the auto-disable safety notice.",
     }),
   );
 }

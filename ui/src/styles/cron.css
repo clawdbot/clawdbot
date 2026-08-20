@@ -242,13 +242,13 @@
   top: calc(100% + 8px);
   right: 0;
   width: min(280px, calc(100vw - 48px));
-  border: 1px solid var(--border);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   padding: var(--space-3);
   display: grid;
   gap: var(--space-3);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--overlay-shadow);
 }
 
 .cron-error-banner {
@@ -356,6 +356,14 @@
 .cron-table__paused-note {
   flex: 0 0 auto;
   font-size: var(--control-ui-text-xs);
+}
+
+.cron-table__running {
+  color: var(--accent);
+}
+
+.cron-table__auto-disabled {
+  color: var(--danger);
 }
 
 .cron-table__cell {
@@ -1046,17 +1054,17 @@
 .cron-job-menu::part(menu) {
   min-width: 170px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .cron-filter-dropdown__details::part(menu) {
   width: min(300px, calc(100vw - 48px));
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }

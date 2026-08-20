@@ -72,7 +72,8 @@ const DashboardToolSchema = Type.Object(
     pluginKind: Type.Optional(
       Type.String({
         pattern: BOARD_PLUGIN_KIND_PATTERN,
-        description: "Plugin widget kind, for example workboard:card or workboard:mini",
+        description:
+          "Plugin widget kind, for example session:progress, workboard:card, workboard:mini, or workboard:board",
       }),
     ),
     props: Type.Optional(
@@ -249,6 +250,16 @@ function snapshotResult(snapshot: BoardSnapshot) {
   );
 }
 
+function commandResult(delivered: number) {
+  return delivered === 0
+    ? textResult("Dashboard unavailable. Connect Control UI and retry.", {
+        status: "unavailable",
+        code: "UNAVAILABLE",
+        message: "Connect Control UI and retry.",
+      })
+    : textResult(`Dashboard command sent to ${delivered} client(s)`, { ok: true, delivered });
+}
+
 export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTool {
   const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   const emitCommand = opts.emitCommand ?? emitBoardCommand;
@@ -256,7 +267,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab; set_chat_dock moves or hides the chat dock (left/right/bottom/hidden). Widgets use stable names. Create trusted plugin widgets with widget_put; examples: workboard:card props {cardId}, workboard:mini props {boardId, limit}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab; set_chat_dock moves or hides the chat dock (left/right/bottom/hidden). focus_tab and set_chat_dock require a connected Control UI. Widgets use stable names. Create trusted plugin widgets with widget_put; examples: session:progress props {sessionKey?} renders the session's live progress card (omit sessionKey for the current session), workboard:card props {cardId}, workboard:mini props {boardId, limit}, workboard:board props {boardId}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -279,10 +290,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
             tabId: readTabId(params),
           },
         });
-        return textResult(`Dashboard command sent to ${delivered} client(s)`, {
-          ok: true,
-          delivered,
-        });
+        return commandResult(delivered);
       }
       if (action === "set_chat_dock") {
         const dock = readDock(params, "dock");
@@ -294,10 +302,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
           agentId: opts.agentId,
           command: { kind: "set_chat_dock", dock },
         });
-        return textResult(`Dashboard command sent to ${delivered} client(s)`, {
-          ok: true,
-          delivered,
-        });
+        return commandResult(delivered);
       }
       if (action === "widget_put") {
         const pluginKind = readToolStringParam(params, "pluginKind", { required: true });

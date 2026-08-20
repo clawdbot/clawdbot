@@ -53,8 +53,6 @@ describe("stale-call reaper provider transport", () => {
     const firstRequestStarted = deferred<void>();
     const firstResponseClosed = deferred<void>();
     const secondRequestStarted = deferred<void>();
-    const firstEndCallSettled = deferred<{ success: boolean; error?: string }>();
-    const secondEndCallSettled = deferred<{ success: boolean; error?: string }>();
     let requestCount = 0;
     let firstResponse: ServerResponse | undefined;
 
@@ -103,21 +101,11 @@ describe("stale-call reaper provider transport", () => {
           storePath: "/tmp/openclaw-voice-call-proof.json",
           transcriptWaiters: new Map(),
           maxDurationTimers: new Map(),
+          endCallOperations: new Map(),
         };
-        let settlementCount = 0;
         const manager = {
           getActiveCalls: () => [...context.activeCalls.values()],
-          endCall: vi.fn(async (callId: string) => {
-            const settlement = settlementCount++ === 0 ? firstEndCallSettled : secondEndCallSettled;
-            try {
-              const result = await endCall(context, callId);
-              settlement.resolve(result);
-              return result;
-            } catch (error) {
-              settlement.reject(error);
-              throw error;
-            }
-          }),
+          endCall: vi.fn((callId: string) => endCall(context, callId)),
         };
 
         const stop = startStaleCallReaper({
@@ -128,6 +116,10 @@ describe("stale-call reaper provider transport", () => {
         await vi.advanceTimersByTimeAsync(30_000);
         await waitForProofEvent(firstRequestStarted.promise, "the first provider request");
         expect(requestCount).toBe(1);
+        const firstOperation = manager.endCall.mock.results[0]?.value;
+        expect(firstOperation).toBeDefined();
+        const sharedOperation = endCall(context, call.callId);
+        expect(sharedOperation).toBe(firstOperation);
 
         // The next sweep coincides with the provider's 30s request timeout. It must
         // not start another hangup before the first attempt has settled.
@@ -137,7 +129,7 @@ describe("stale-call reaper provider transport", () => {
         expect(firstResponse).toBeDefined();
 
         const firstResult = await waitForProofEvent(
-          firstEndCallSettled.promise,
+          firstOperation!,
           "the first endCall settlement",
         );
         await waitForProofEvent(firstResponseClosed.promise, "the timed-out socket close");
@@ -145,8 +137,10 @@ describe("stale-call reaper provider transport", () => {
         await Promise.resolve();
         await vi.advanceTimersByTimeAsync(30_000);
         await waitForProofEvent(secondRequestStarted.promise, "the retried provider request");
+        const retryOperation = manager.endCall.mock.results[1]?.value;
+        expect(retryOperation).toBeDefined();
         const secondResult = await waitForProofEvent(
-          secondEndCallSettled.promise,
+          retryOperation!,
           "the retried endCall settlement",
         );
 

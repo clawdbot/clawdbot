@@ -2,13 +2,14 @@
  * Manages subprocess lifecycle, streaming output buffers, stdin writes, and
  * termination for Codex sandbox exec-server process RPCs.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
 import { resolveExecServerPath } from "./path-uri.js";
+import { prepareSandboxChildExec, spawnSandboxChild } from "./sandbox-child.js";
 import type { ManagedProcess, OpenClawExecServer, ProcessChunk } from "./types.js";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -44,9 +45,8 @@ export async function startProcess(
     failure: null,
     tty,
     pipeStdin,
-    abortController: new AbortController(),
+    terminationRequested: false,
     child: null,
-    finalized: false,
     waiters: [],
     emitNotification: (method, notificationParams) => {
       if (socket.readyState === 1) {
@@ -66,8 +66,10 @@ export async function startProcess(
     },
   };
   processes.set(processId, managed);
+  const startPromise = runProcess(execServer, managed, { argv, cwd, env });
+  managed.startPromise = startPromise;
   try {
-    await runProcess(execServer, managed, { argv, cwd, env });
+    await startPromise;
   } catch (error) {
     processes.delete(processId);
     managed.failure = coerceErrorMessage(error);
@@ -76,6 +78,10 @@ export async function startProcess(
     managed.closed = true;
     notifyProcessWaiters(managed);
     throw error;
+  } finally {
+    if (managed.startPromise === startPromise) {
+      managed.startPromise = undefined;
+    }
   }
   return { processId };
 }
@@ -90,43 +96,44 @@ async function runProcess(
     throw new Error("OpenClaw sandbox backend is unavailable.");
   }
   throwIfProcessStartCancelled(managed);
+  const remoteExec = prepareSandboxChildExec(backend, params.env);
   const execSpec = await backend.buildExecSpec({
     command: shellCommandFromArgv(params.argv),
     workdir: params.cwd,
-    env: params.env,
+    env: remoteExec.env,
     // This bridge currently owns only pipe-backed child processes. Asking the
     // backend for a PTY can produce commands such as `docker exec -t`, which
     // require this process itself to own a real TTY.
     usePty: false,
   });
-  managed.finalizeToken = execSpec.finalizeToken;
-  managed.finalizeExec = backend.finalizeExec;
-  let child: ChildProcessWithoutNullStreams;
-  try {
-    if (managed.abortController.signal.aborted) {
-      throw new Error("process start cancelled");
-    }
-    const [command, ...args] = execSpec.argv;
-    if (!command) {
-      throw new Error("OpenClaw sandbox exec spec did not provide a command.");
-    }
-    child = spawn(command, args, {
-      env: execSpec.env,
-      stdio: ["pipe", "pipe", "pipe"],
+  if (managed.terminationRequested) {
+    await backend.finalizeExec?.({
+      status: "failed",
+      exitCode: null,
+      timedOut: false,
+      token: execSpec.finalizeToken,
     });
-  } catch (error) {
-    managed.failure = coerceErrorMessage(error);
-    await finalizeProcess(managed).catch((finalizeError: unknown) => {
-      embeddedAgentLog.warn("codex sandbox exec-server finalize after start failure failed", {
-        processId: managed.processId,
-        error: coerceErrorMessage(finalizeError),
-      });
-    });
-    throw error;
+    throw new Error("process start cancelled");
   }
-  managed.child = child;
-  const abortListener = () => child.kill("SIGTERM");
-  managed.abortController.signal.addEventListener("abort", abortListener, { once: true });
+  const owner = await spawnSandboxChild({
+    argv: execSpec.argv,
+    env: execSpec.env,
+    finalizeExec: backend.finalizeExec,
+    finalizeToken: execSpec.finalizeToken,
+    finalizeStatus: () => (managed.failure ? "failed" : "completed"),
+    onFinalizeError: (error) => {
+      const message = coerceErrorMessage(error);
+      managed.failure ??= message;
+      embeddedAgentLog.warn("codex sandbox exec-server finalize failed", {
+        processId: managed.processId,
+        error: message,
+      });
+    },
+    owners: execServer.children,
+    terminateRemote: remoteExec.terminate,
+  });
+  managed.child = owner;
+  const child = owner.process;
   child.stdout.on("data", (chunk: Buffer) =>
     appendProcessChunk(managed, managed.tty ? "pty" : "stdout", chunk),
   );
@@ -138,7 +145,6 @@ async function runProcess(
     notifyProcessWaiters(managed);
   });
   child.once("close", (code) => {
-    managed.abortController.signal.removeEventListener("abort", abortListener);
     emitProcessClosed(managed, code ?? 1);
   });
   if (!managed.tty && !managed.pipeStdin) {
@@ -147,7 +153,7 @@ async function runProcess(
 }
 
 function throwIfProcessStartCancelled(managed: ManagedProcess): void {
-  if (managed.abortController.signal.aborted) {
+  if (managed.terminationRequested) {
     throw new Error("process start cancelled");
   }
 }
@@ -209,32 +215,10 @@ function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): vo
       seq: closeSeq,
     });
   }
-  void finalizeProcess(managed).catch((error: unknown) => {
-    const message = coerceErrorMessage(error);
-    managed.failure ??= message;
-    embeddedAgentLog.warn("codex sandbox exec-server finalize failed", {
-      processId: managed.processId,
-      error: message,
-    });
-  });
   // Closed processes stay briefly readable so clients that observe close before
   // their final poll can still drain exit/output state.
   managed.evictProcess();
   notifyProcessWaiters(managed);
-}
-
-async function finalizeProcess(managed: ManagedProcess): Promise<void> {
-  if (managed.finalized) {
-    return;
-  }
-  managed.finalized = true;
-  managed.child?.stdin.destroy();
-  await managed.finalizeExec?.({
-    status: managed.failure ? "failed" : "completed",
-    exitCode: managed.exitCode,
-    timedOut: false,
-    token: managed.finalizeToken,
-  });
 }
 
 function limitProcessChunks(chunks: ProcessChunk[], maxBytes: number | undefined): ProcessChunk[] {
@@ -297,18 +281,22 @@ export function writeProcess(
     return { status: "unknownProcess" };
   }
   const chunk = Buffer.from(requireString(record.chunk, "chunk"), "base64");
-  if ((!managed.tty && !managed.pipeStdin) || managed.closed || !managed.child?.stdin.writable) {
+  if (
+    (!managed.tty && !managed.pipeStdin) ||
+    managed.closed ||
+    !managed.child?.process.stdin.writable
+  ) {
     return { status: "stdinClosed" };
   }
-  managed.child.stdin.write(chunk);
+  managed.child.process.stdin.write(chunk);
   return { status: "accepted" };
 }
 
 /** Requests process termination and reports whether it was running at call time. */
-export function terminateProcess(
+export async function terminateProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
-): JsonObject {
+): Promise<JsonObject> {
   const record = requireObject(params, "process/terminate params");
   const processId = requireString(record.processId, "processId");
   const managed = processes.get(processId);
@@ -316,9 +304,11 @@ export function terminateProcess(
     return { running: false };
   }
   const running = !managed.exited;
-  managed.abortController.abort();
-  managed.child?.kill("SIGTERM");
-  if (running && !managed.child) {
+  managed.terminationRequested = true;
+  await managed.startPromise?.catch(() => undefined);
+  if (managed.child) {
+    await managed.child.terminate();
+  } else if (running && !managed.closed) {
     emitProcessClosed(managed, null);
   }
   return { running };
@@ -389,10 +379,13 @@ function readEnv(value: unknown): Record<string, string> {
 
 function readProcessEnv(record: JsonObject): Record<string, string> {
   const policyEnv = buildEnvFromPolicy(record.envPolicy);
-  return {
+  const requestedEnv = {
     ...policyEnv,
     ...readEnv(record.env),
   };
+  // Codex inherits its app-server's full environment by default. Scrub again at
+  // this last boundary so no credential can cross into any sandbox backend.
+  return sanitizeEnvVars(requestedEnv).allowed;
 }
 
 function buildEnvFromPolicy(value: unknown): Record<string, string> {

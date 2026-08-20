@@ -401,6 +401,56 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(advisory).not.toContain("Support legacy cap");
   });
 
+  it("uses the system agent for agent-less legacy-cap diagnostics", async () => {
+    const storePath = await makeTempStorePath();
+    const mainWorkspace = path.join(path.dirname(storePath), "main-workspace");
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "ambient-job",
+        name: "Ambient legacy cap",
+        payload: {
+          kind: "agentTurn",
+          message: "ambient",
+          toolsAllow: ["read"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+    ]);
+    const cfg = {
+      cron: { store: storePath },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { workspace: mainWorkspace },
+          helper: {},
+          third: {},
+        },
+      },
+      mcp: {
+        servers: {
+          notes: {
+            transport: "stdio",
+            command: "notes-mcp",
+            codex: { agents: ["main"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      maybeRepairLegacyCronStore({ cfg, options: {}, prompter: makePrompter(true) }),
+    ).resolves.toBeUndefined();
+
+    const advisory = noteMock.mock.calls.find(
+      ([message, title]) =>
+        title === "Cron" &&
+        typeof message === "string" &&
+        message.includes("inherited default tool cap"),
+    )?.[0];
+    expect(advisory).toContain("Ambient legacy cap");
+  });
+
   it("reports quarantined cron rows even when the active store is already sanitized", async () => {
     const storePath = await makeTempStorePath();
     await writeCurrentCronStore(storePath, []);
@@ -1454,7 +1504,6 @@ describe("maybeRepairLegacyCronStore", () => {
     });
 
     const jobs = await readPersistedJobs(storePath);
-    expect(jobs).toHaveLength(2);
     expect(jobs.map((job) => job.id)).toEqual(["legacy-job", "legacy-only"]);
     expect(requirePersistedJob(jobs, 0).name).toBe("SQLite wins");
     expect(requirePersistedJob(jobs, 1).name).toBe("Legacy only");

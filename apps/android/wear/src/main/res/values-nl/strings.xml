@@ -86,4 +86,30 @@
     <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Open sessies en antwoord via je gekoppelde telefoon"</string>
     <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OPENEN"</string>
     <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"TELEFOONPROXY"</string>
+    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse"</string>
+    <string name="pulse_tasks" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Achtergrondtaken"</string>
+    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Sessieswarm"</string>
+    <string name="pulse_attention" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Let op"</string>
+    <string name="pulse_status" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Status: %1$s"</string>
+    <string name="pulse_ready" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Gereed"</string>
+    <string name="pulse_refreshing" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Vernieuwen"</string>
+    <string name="pulse_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Niet beschikbaar"</string>
+    <string name="pulse_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse laden"</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Begrensde aggregaten lezen van de gekoppelde telefoon."</string>
+    <string name="pulse_queued" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"In wachtrij"</string>
+    <string name="pulse_running" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Actief"</string>
+    <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Voltooid"</string>
+    <string name="pulse_done" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Gereed"</string>
+    <string name="pulse_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mislukt"</string>
+    <string name="pulse_groups" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Groepen"</string>
+    <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Openstaande verzoeken"</string>
+    <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Begrensde actieve en recente momentopname"</string>
+    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Actieve takenlijst heeft de limiet bereikt"</string>
+    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Recente takenlijst heeft de limiet bereikt"</string>
+    <string name="pulse_swarm_active" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Actief"</string>
+    <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Inactief"</string>
+    <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Fase %1$d"</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"In wachtrij %1$d, Actief %2$d, Klaar %3$d, Mislukt %4$d, Verborgen %5$d"</string>
+    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Meer fasen niet weergegeven"</string>
+    <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Onbekend"</string>
 </resources>

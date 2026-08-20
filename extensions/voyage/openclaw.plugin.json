@@ -5,7 +5,7 @@
   },
   "enabledByDefault": true,
   "contracts": {
-    "memoryEmbeddingProviders": ["voyage"]
+    "embeddingProviders": ["voyage"]
   },
   "setup": {
     "providers": [

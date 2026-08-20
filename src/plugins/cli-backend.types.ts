@@ -265,8 +265,18 @@ export type CliBackendLiveSessionRequirement = Readonly<{
   updateCommand: string;
 }>;
 
+/** Complete backend-owned contract for in-place native session compaction. */
+type CliBackendManualCompaction = Readonly<{
+  /** Builds the exact backend command for the resumed native session. */
+  buildPrompt: (customInstructions?: string) => string;
+  /** Prompt transport required by the backend control command. */
+  input: "arg" | "stdin";
+  /** Positively confirms that a successful process exit performed compaction. */
+  validateOutput: (rawOutput: string) => { ok: true } | { ok: false; reason: string };
+}>;
+
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
-export type CliBackendPlugin = {
+type CliBackendPluginBase = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
   id: string;
   /** Canonical model provider whose models this CLI backend can execute. */
@@ -278,11 +288,6 @@ export type CliBackendPlugin = {
    * driven through the generic CLI runner.
    */
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
-  /**
-   * Backend-owned compaction for non-harness CLI sessions.
-   * Set only when the backend bounds its own transcript and persists resumable state.
-   */
-  ownsNativeCompaction?: boolean;
   /**
    * Whether embedded runs opted into `cliBackendDispatch: "subscription-auth"`
    * execute through this backend when the selected credential is
@@ -425,3 +430,19 @@ export type CliBackendPlugin = {
    */
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
 };
+
+type CliBackendNativeCompactionContract =
+  | {
+      /** Backend-owned compaction for a persisted resumable CLI transcript. */
+      ownsNativeCompaction: true;
+      /** Optional control operation for explicit manual compaction. */
+      manualCompaction?: CliBackendManualCompaction;
+    }
+  | {
+      /** Boolean-compatible ownership for existing plugins without manual compaction. */
+      ownsNativeCompaction?: boolean;
+      manualCompaction?: never;
+    };
+
+/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
+export type CliBackendPlugin = CliBackendPluginBase & CliBackendNativeCompactionContract;

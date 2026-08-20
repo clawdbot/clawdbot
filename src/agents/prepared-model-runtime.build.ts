@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
@@ -72,6 +73,9 @@ function runSerializedPreparedModelRuntimeTask<T>(params: {
     if (previous) {
       await previous;
     }
+    // Workspace generations serialize to bound heap growth. Yield before the first and between
+    // later builds so queued Gateway accepts and health probes always get an admission turn.
+    await yieldToEventLoop();
     if (!params.isCurrent()) {
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime catalog generation was superseded for ${params.agentDir}`,
@@ -276,6 +280,7 @@ async function buildSnapshotBatch(
     PreparedModelRuntimeInput,
     PreparedModelRuntimePluginGeneration
   >,
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const freshGroups = new Map<string, PreparedModelRuntimeInput[]>();
@@ -341,6 +346,7 @@ async function buildSnapshotBatch(
       {},
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
+      pluginMetadataSnapshot,
     );
     assertPreparedModelRuntimeInputsCurrent(groupInputs, buildGuards);
     runtimePluginMs += prepared.buildStats.runtimePluginMs;
@@ -541,6 +547,7 @@ export function startSerializedSnapshotBuildBatch(
     PreparedModelRuntimeInput,
     PreparedModelRuntimePluginGeneration
   > = new Map(),
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -568,6 +575,7 @@ export function startSerializedSnapshotBuildBatch(
         buildGuards,
         inboundPluginRegistryInputs,
         reusablePluginGenerations,
+        pluginMetadataSnapshot,
         onBuildStats,
       ),
     };
@@ -606,6 +614,8 @@ export function startSerializedSnapshotBuild(
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   generationGuard: () => boolean = () => true,
   prepareInboundPluginRegistry = false,
+  reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult>;
   completion: Promise<void>;
@@ -619,6 +629,8 @@ export function startSerializedSnapshotBuild(
     new Map([[input, generationGuard]]),
     undefined,
     prepareInboundPluginRegistry ? new Set([input]) : undefined,
+    reusablePluginGeneration ? new Map([[input, reusablePluginGeneration]]) : undefined,
+    pluginMetadataSnapshot,
   );
   return {
     pending: build.pending.then((results) => results[0]!),

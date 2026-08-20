@@ -8,7 +8,11 @@ import {
   movePendingDeliveryQueueEntryNamespace,
   replacePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite-namespace.js";
-import { terminalizePendingDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
+import {
+  loadDeliveryQueueEntries,
+  loadDeliveryQueueEntry,
+  terminalizePendingDeliveryQueueEntry,
+} from "../delivery-queue-sqlite.js";
 import {
   collectPayloadMediaSources,
   resolveOutboundMediaAccessForSend,
@@ -44,9 +48,51 @@ import {
   mapPreparedOutboundAcceptedPayloads,
   projectPreparedOutboundBatchForStorage,
 } from "./prepared-batch.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const LEGACY_PREPARATION_LEASE_MS = 5 * 60_000;
 const LEGACY_PREPARATION_LEASE_RENEW_MS = 30_000;
+
+type LegacyPreparedQueuedDelivery = QueuedDelivery &
+  Parameters<typeof normalizeOutboundReplyFacts>[0];
+
+function hasLegacyReplyFields(entry: LegacyPreparedQueuedDelivery): boolean {
+  return Object.hasOwn(entry, "replyToId") || Object.hasOwn(entry, "replyToMode");
+}
+
+function canonicalizePreparedReplyFields(entry: LegacyPreparedQueuedDelivery): QueuedDelivery {
+  const { replyToId, replyToMode, reply: storedReply, ...canonical } = entry;
+  const reply = normalizeOutboundReplyFacts({ reply: storedReply, replyToId, replyToMode });
+  return { ...canonical, ...(reply ? { reply } : {}) };
+}
+
+function migratePreparedReplyFields(queueName: string, stateDir?: string): void {
+  const entries = loadDeliveryQueueEntries(queueName, stateDir) as LegacyPreparedQueuedDelivery[]; // SAFETY: callers pass prepared namespaces; beta rows add only legacy reply fields.
+  for (const entry of entries) {
+    if (!hasLegacyReplyFields(entry)) {
+      continue;
+    }
+    const migrated = canonicalizePreparedReplyFields(entry);
+    if (
+      replacePendingDeliveryQueueEntry({
+        queueName,
+        expectedEntry: entry,
+        replacementEntry: migrated,
+        stateDir,
+      })
+    ) {
+      continue;
+    }
+    const current = loadDeliveryQueueEntry(
+      queueName,
+      entry.id,
+      stateDir,
+    ) as LegacyPreparedQueuedDelivery | null; // SAFETY: same prepared namespace/id; replacement keeps shape or removes row.
+    if (current && hasLegacyReplyFields(current)) {
+      throw new Error(`Prepared delivery ${entry.id} changed during reply migration`);
+    }
+  }
+}
 
 function withLegacyPreparationLease(
   entry: LegacyQueuedDeliveryPreparation,
@@ -73,6 +119,11 @@ function hasActiveLegacyPreparationLease(
 }
 
 function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClawConfig) {
+  const reply = normalizeOutboundReplyFacts({
+    reply: entry.reply,
+    replyToId: entry.replyToId,
+    replyToMode: entry.replyToMode,
+  });
   return {
     cfg,
     channel: entry.channel,
@@ -83,8 +134,7 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
     payloads: entry.payloads,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
-    replyToId: entry.replyToId,
-    replyToMode: entry.replyToMode,
+    reply,
     formatting: entry.formatting,
     identity: entry.identity,
     bestEffort: entry.bestEffort,
@@ -110,12 +160,13 @@ async function prepareLegacyEntryCheckpoint(params: {
   stateDir?: string;
 }): Promise<"checkpointed" | "skipped"> {
   const preparationParams = buildLegacyPreparationParams(params.entry, params.cfg);
+  const reply = preparationParams.reply;
   const needsUnknownReconciliation =
     params.entry.recoveryState === "send_attempt_started" ||
     params.entry.recoveryState === "unknown_after_send";
   const legacyUnknownSendReconciliation = needsUnknownReconciliation
     ? await reconcileUnknownQueuedDelivery({
-        entry: params.entry,
+        entry: { ...params.entry, reply },
         payloads: params.entry.payloads,
         cfg: params.cfg,
         warn: (message) => params.log.warn(message),
@@ -239,6 +290,8 @@ async function prepareLegacyEntryCheckpoint(params: {
   const {
     payloads: _legacyPayloads,
     replyPayloadSendingHook: _legacyReplyHook,
+    replyToId: _legacyReplyToId,
+    replyToMode: _legacyReplyToMode,
     legacyPreparationState: _legacyPreparationState,
     legacyPreparationOwnerId: _legacyPreparationOwnerId,
     legacyPreparationLeaseExpiresAt: _legacyPreparationLeaseExpiresAt,
@@ -264,6 +317,7 @@ async function prepareLegacyEntryCheckpoint(params: {
     retainOnFailure: true,
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatch),
     renderedBatchPlan: createRenderedMessageBatchPlan(acceptedPayloads),
+    ...(reply ? { reply } : {}),
     ...(!prepareForReplay &&
     (legacyUnknownSendReconciliation?.status === "sent" ||
       legacyUnknownSendReconciliation?.status === "not_sent")
@@ -476,6 +530,10 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   log: RecoveryLogger;
   stateDir?: string;
 }): Promise<{ moved: number; skipped: number }> {
+  // Beta rows can exist in either prepared namespace. Canonicalize them before
+  // any recovery owner sees the row; interrupted migrations then resume normally.
+  migratePreparedReplyFields(OUTBOUND_DELIVERY_QUEUE_NAME, params.stateDir);
+  migratePreparedReplyFields(OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME, params.stateDir);
   let moved = 0;
   let skipped = 0;
   const ownerId = randomUUID();

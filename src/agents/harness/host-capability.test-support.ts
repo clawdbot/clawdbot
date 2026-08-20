@@ -1,3 +1,4 @@
+import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -10,6 +11,7 @@ type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["att
 type AdmittedHostCapabilityTestFixture = Readonly<{
   admittedRunContext: AdmittedRunContext;
   hostCapabilities: ReturnType<typeof createAgentHarnessHostCapabilities>["capabilities"];
+  agentHarnessTaskRuntimeScope?: ReturnType<typeof createAgentHarnessTaskRuntimeScope>;
   closeHost: () => void;
   closeAdmission: () => void;
 }>;
@@ -35,6 +37,13 @@ export async function createAdmittedHostCapabilityTestFixture(
   return {
     admittedRunContext,
     hostCapabilities: host.capabilities,
+    ...(attempt.sessionKey
+      ? {
+          agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
+            requesterSessionKey: attempt.sessionKey,
+          }),
+        }
+      : {}),
     closeHost: host.close,
     closeAdmission: admission.close,
   };

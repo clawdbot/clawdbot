@@ -24,7 +24,10 @@ import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type { InboundImplicitMentionKind } from "../mention-gating.js";
-import type { ChannelIngressCommandAccess } from "../message-access/runtime-types.js";
+import type {
+  ChannelIngressCommandAccess,
+  ResolvedChannelMessageIngress,
+} from "../message-access/runtime-types.js";
 import type {
   CommandFacts,
   ConversationFacts,
@@ -35,6 +38,7 @@ import type {
   SenderFacts,
   SupplementalContextFacts,
 } from "../turn/types.js";
+import { createHostChannelInboundEventContextBuilder } from "./host-context-builder.js";
 import type { InboundEventKind } from "./kind.js";
 import { buildChannelInboundMediaPayload } from "./media.js";
 
@@ -101,6 +105,11 @@ export type BuildChannelInboundEventContextParams = {
   finalize?: FinalizeInboundContextFn;
   finalizeOptions?: FinalizeInboundContextOptions;
   extra?: Record<string, unknown>;
+  /** Exact host-resolved ingress result, or an explicit unsupported adapter marker. */
+  channelIngress?:
+    | ResolvedChannelMessageIngress
+    | readonly ResolvedChannelMessageIngress[]
+    | "unsupported";
 };
 /**
  * @deprecated Prefer `BuildChannelInboundEventContextParams` with
@@ -485,6 +494,31 @@ export function buildChannelInboundEventContext(
   params: BuildChannelInboundEventContextParams &
     Partial<ChannelInboundSupplementalResolutionOptions>,
 ): MaybePromise<BuiltChannelInboundEventContext> {
+  return buildChannelInboundEventContextValue(params);
+}
+
+const buildHostChannelInboundEventContextValue = createHostChannelInboundEventContextBuilder(
+  buildChannelInboundEventContextValue,
+);
+
+/** Core-only ownerless boundary for explicit unsupported or unknown evidence. */
+export function buildHostChannelInboundEventContext(
+  params: BuildChannelInboundEventContextAsyncParams,
+): Promise<BuiltChannelInboundEventContext>;
+export function buildHostChannelInboundEventContext(
+  params: BuildChannelInboundEventContextParams,
+): BuiltChannelInboundEventContext;
+export function buildHostChannelInboundEventContext(
+  params: BuildChannelInboundEventContextParams &
+    Partial<ChannelInboundSupplementalResolutionOptions>,
+): MaybePromise<BuiltChannelInboundEventContext> {
+  return buildHostChannelInboundEventContextValue(params);
+}
+
+function buildChannelInboundEventContextValue(
+  params: BuildChannelInboundEventContextParams &
+    Partial<ChannelInboundSupplementalResolutionOptions>,
+): MaybePromise<BuiltChannelInboundEventContext> {
   const body = params.message.body ?? params.message.rawBody;
   const commandTurn = resolveChannelCommandContext({
     command: params.command,
@@ -544,6 +578,7 @@ export function buildChannelInboundEventContext(
     CommandTurn: commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
+    ConversationAvatar: params.conversation.avatar,
     ChannelContext: params.channelContext,
     OriginatingChannel: params.channel,
     OriginatingTo: params.reply.originatingTo ?? params.reply.to,
@@ -569,7 +604,7 @@ export function buildChannelInboundEventContext(
         suppressSelfQuoteMedia: params.suppressSelfQuoteMedia,
       })
     : finalizeChannelInboundContextValue(finalizeParams);
-  return isPromiseLike(result)
-    ? result.then((finalized) => finalized.context as BuiltChannelInboundEventContext)
-    : (result.context as BuiltChannelInboundEventContext);
+  const unwrap = (finalized: FinalizeChannelInboundContextResult<typeof context>) =>
+    finalized.context as BuiltChannelInboundEventContext;
+  return isPromiseLike(result) ? result.then(unwrap) : unwrap(result);
 }

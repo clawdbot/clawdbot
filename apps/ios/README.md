@@ -297,13 +297,13 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
 - One Chat surface for text, realtime voice, dictation, and voice notes through the operator gateway session.
-- iOS node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
+- iOS node commands in foreground: camera snap/clip, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
 - Share extension deep-link forwarding into the connected gateway session.
 
 ## Computer Use Relationship
 
-The iOS app is not a Codex Computer Use backend. Computer Use and `cua-driver mcp` are macOS desktop-control paths; iOS exposes device capabilities as OpenClaw node commands through the gateway. Agents can drive the iPhone canvas, camera, screen, location, voice, and other node capabilities with `node.invoke`, subject to iOS foreground/background limits.
+The iOS app is not a Codex Computer Use backend. Computer Use and `cua-driver mcp` are macOS desktop-control paths; iOS exposes device capabilities as OpenClaw node commands through the gateway. Agents can drive the iPhone camera, screen recorder, location, voice, and other node capabilities with `node.invoke`, subject to iOS foreground/background limits.
 
 ## Location Automation Use Case (Testing)
 
@@ -339,7 +339,7 @@ Pass criteria:
 ## Known Issues / Limitations / Problems
 
 - Foreground-first: iOS can suspend sockets in background; reconnect recovery is still being tuned.
-- Background command limits are strict: `canvas.*`, `camera.*`, `screen.*`, and `talk.*` are blocked when backgrounded.
+- Background command limits are strict: `camera.*`, `screen.*`, and `talk.*` are blocked when backgrounded.
 - Background location requires `Always` location permission.
 - Pairing/auth errors intentionally pause reconnect loops until a human fixes auth/pairing state.
 - Voice Wake and Talk contend for the same microphone; Talk suppresses wake capture while active.

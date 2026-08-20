@@ -1,12 +1,11 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -80,7 +79,6 @@ import {
   resolveAgentTimeoutMs,
   resolveAgentWorkspaceDir,
   resolveCronStyleNow,
-  tryResolveLegacyCompatibilityAgentId,
   resolveHookExternalContentSource,
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
@@ -151,7 +149,7 @@ export async function prepareCronRunContext(params: {
     normalizedRequested ?? parseAgentSessionKey(input.job.sessionKey ?? input.sessionKey)?.agentId;
   const initialAgentId = resolveCronJobEffectiveAgentId(
     { agentId: requiredAgentId },
-    tryResolveLegacyCompatibilityAgentId(requestedRuntimeCfg),
+    tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
   const modelOwner = await resolveCronModelSelectionOwner({
     cfg: requestedRuntimeCfg,
@@ -602,22 +600,19 @@ export async function prepareCronRunContext(params: {
     });
     const storedAuthProfileId = cronSession.sessionEntry.authProfileOverride?.trim();
     const hasSessionAuthProfileOverride = Boolean(storedAuthProfileId);
-    const authProfileId =
+    const authSelection =
       !hasSessionAuthProfileOverride &&
       !hasConfiguredAuthProfiles(cfgWithAgentDefaults) &&
       !hasAnyAuthProfileStoreSource(agentDir)
         ? undefined
         : await (
             await loadCronAuthProfileRuntime()
-          ).resolveSessionAuthProfileOverride({
+          ).resolveSessionAuthSelection({
             // Auth resolution may mutate session state; use the store/key persistence will write.
             cfg: cfgWithAgentDefaults,
             provider,
-            acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
-              provider,
-              harnessRuntime: effectiveAgentRuntime,
-              config: cfgWithAgentDefaults,
-            }),
+            modelId: model,
+            harnessRuntime: effectiveAgentRuntime,
             agentDir,
             sessionEntry: cronSession.sessionEntry,
             sessionStore: cronSession.store,
@@ -625,6 +620,7 @@ export async function prepareCronRunContext(params: {
             storePath: cronSession.storePath,
             isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
           });
+    const authProfileId = authSelection?.profileId;
     const liveSelection: CronLiveSelection = {
       provider,
       model,
@@ -634,11 +630,7 @@ export async function prepareCronRunContext(params: {
         cfg: cfgWithAgentDefaults,
       }),
       authProfileId,
-      authProfileIdSource: authProfileId
-        ? authProfileId === storedAuthProfileId
-          ? resolveSessionAuthProfileOverrideSource(cronSession.sessionEntry)
-          : "auto"
-        : undefined,
+      authProfileIdSource: authSelection?.source,
     };
     const runtimePluginCandidates =
       selectedPreflightCandidateIndex >= 0
@@ -671,6 +663,7 @@ export async function prepareCronRunContext(params: {
             scheduledToolPolicy: input.job.scheduledToolPolicy,
             owner: input.job.owner,
           }),
+          scheduledToolCallerOrigin: input.job.toolsAllowProvenance?.callerOrigin,
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,

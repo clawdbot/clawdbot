@@ -4,6 +4,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { sandboxExplainCommand } from "../commands/sandbox-explain.js";
 import { sandboxListCommand, sandboxRecreateCommand } from "../commands/sandbox.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatHelpExamples } from "./help-format.js";
 
@@ -50,7 +51,7 @@ function createRunner(
     try {
       await commandFn(opts, defaultRuntime);
     } catch (err) {
-      defaultRuntime.error(String(err));
+      defaultRuntime.error(formatErrorMessage(err));
       defaultRuntime.exit(1);
     }
   };

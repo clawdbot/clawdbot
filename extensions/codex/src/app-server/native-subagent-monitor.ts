@@ -56,18 +56,18 @@ type NativeSubagentMonitorClient = Pick<
   "request" | "addNotificationHandler" | "addCloseHandler"
 >;
 
+type ParentOwner = {
+  turnId?: string;
+  claimDirectChild?: (threadId: string) => (() => void) | undefined;
+  rejectPendingDirectChild?: (threadId: string, reason: string) => void;
+  onDirectChildAccepted?: () => void;
+};
+
 type ParentState = {
   parentThreadId: string;
   // Overlapping runs share this parent; the last owner releases it only after
   // detached children finish recovery and delivery.
-  owners: Map<
-    symbol,
-    {
-      turnId?: string;
-      claimDirectChild?: (threadId: string) => (() => void) | undefined;
-      rejectPendingDirectChild?: (threadId: string, reason: string) => void;
-    }
-  >;
+  owners: Map<symbol, ParentOwner>;
   requesterSessionKey?: string;
   taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   agentId?: string;
@@ -196,6 +196,7 @@ function registerMonitor(params: {
   retainParentThread?: (threadId: string) => (() => void) | undefined;
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
   rejectPendingDirectChild?: (threadId: string, reason: string) => void;
+  onDirectChildAccepted?: () => void;
 }): { bindTurn: (turnId: string) => void; unregister: () => void } {
   let monitor = monitors.get(params.client);
   if (!monitor) {
@@ -261,6 +262,7 @@ function registerMonitor(params: {
     agentId: params.agentId,
     claimDirectChild: params.claimDirectChild,
     rejectPendingDirectChild: params.rejectPendingDirectChild,
+    onDirectChildAccepted: params.onDirectChildAccepted,
   });
 }
 
@@ -363,6 +365,7 @@ class Monitor {
     agentId?: string;
     claimDirectChild?: (threadId: string) => (() => void) | undefined;
     rejectPendingDirectChild?: (threadId: string, reason: string) => void;
+    onDirectChildAccepted?: () => void;
   }): { bindTurn: (turnId: string) => void; unregister: () => void } {
     const parentThreadId = params.parentThreadId.trim();
     if (!parentThreadId) {
@@ -390,6 +393,7 @@ class Monitor {
     state.owners.set(owner, {
       claimDirectChild: params.claimDirectChild,
       rejectPendingDirectChild: params.rejectPendingDirectChild,
+      onDirectChildAccepted: params.onDirectChildAccepted,
     });
     this.prepareParentTaskRuntime(state);
     for (const childState of this.childStates.values()) {
@@ -1387,9 +1391,7 @@ class Monitor {
   private resolveParentOwner(
     state: ParentState,
     turnIdInput: string | undefined,
-  ):
-    | { turnId?: string; claimDirectChild?: (threadId: string) => (() => void) | undefined }
-    | undefined {
+  ): ParentOwner | undefined {
     const turnId = turnIdInput?.trim();
     if (!turnId) {
       return undefined;
@@ -1402,7 +1404,7 @@ class Monitor {
     state: ParentState,
     turnIdInput: string | undefined,
     evidence: DirectSpawnEvidence,
-    owner: { claimDirectChild?: (threadId: string) => (() => void) | undefined } | undefined,
+    owner: ParentOwner | undefined,
   ): ChildState | undefined {
     const childState = this.registerChildThread(state.parentThreadId, evidence.childThreadId, {
       ...(evidence.agentPath === undefined ? {} : { agentPath: evidence.agentPath }),
@@ -1410,6 +1412,8 @@ class Monitor {
     });
     if (!owner) {
       this.bufferPendingDirectSpawnEvidence(turnIdInput, evidence);
+    } else if (childState) {
+      owner.onDirectChildAccepted?.();
     }
     return childState;
   }
@@ -1443,7 +1447,7 @@ class Monitor {
 
   private drainPendingDirectSpawnEvidence(
     state: ParentState,
-    owner: { claimDirectChild?: (threadId: string) => (() => void) | undefined },
+    owner: ParentOwner,
     turnId: string,
   ): void {
     const pending = this.pendingDirectSpawnEvidence.get(turnId);
@@ -1453,10 +1457,13 @@ class Monitor {
     }
     for (const evidence of pending) {
       if (evidence.parentThreadId === state.parentThreadId) {
-        this.registerChildThread(state.parentThreadId, evidence.childThreadId, {
+        const childState = this.registerChildThread(state.parentThreadId, evidence.childThreadId, {
           ...(evidence.agentPath === undefined ? {} : { agentPath: evidence.agentPath }),
           claimDirectChild: owner.claimDirectChild,
         });
+        if (childState) {
+          owner.onDirectChildAccepted?.();
+        }
       }
     }
   }

@@ -686,7 +686,6 @@ describe("Mistral provider", () => {
       messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
     };
     const toolMessage = payload.messages.find((message) => message.role === "tool");
-    expect(toolMessage).toBeDefined();
     const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
     const textBlock = toolContent.find((block) => block.type === "text");
     expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
@@ -733,7 +732,6 @@ describe("Mistral provider", () => {
       messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
     };
     const toolMessage = payload.messages.find((message) => message.role === "tool");
-    expect(toolMessage).toBeDefined();
     const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
     const textBlock = toolContent.find((block) => block.type === "text");
     // Structured blocks should provide the output, not an empty fallback

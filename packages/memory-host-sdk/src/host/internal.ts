@@ -16,6 +16,7 @@ import {
   walkDirectory,
   type WalkDirectoryEntry,
 } from "./fs-utils.js";
+import { hashText } from "./hash.js";
 import {
   buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
@@ -36,7 +37,6 @@ import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryEntryProvenance, MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-import { hashText } from "./hash.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -196,6 +196,10 @@ async function collectMemoryFilesFromDir(
       isAllowedMemoryFilePath(entry.path, multimodal) &&
       (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
   });
+  const operationalFailure = scan.failedDirs.find((failure) => !isFileMissingError(failure.error));
+  if (operationalFailure) {
+    throw operationalFailure.error;
+  }
   files.push(...scan.entries.map((entry) => entry.path));
 }
 
@@ -220,7 +224,11 @@ export async function listMemoryFiles(
         return;
       }
       result.push(absPath);
-    } catch {}
+    } catch (error) {
+      if (!isFileMissingError(error)) {
+        throw error;
+      }
+    }
   };
 
   const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
@@ -234,7 +242,11 @@ export async function listMemoryFiles(
       // Default memory roots stay Markdown-only; multimodal discovery is an extraPaths opt-in.
       await collectMemoryFilesFromDir(memoryDir, result, undefined, shouldSkipWorkspaceMemoryPath);
     }
-  } catch {}
+  } catch (error) {
+    if (!isFileMissingError(error)) {
+      throw error;
+    }
+  }
 
   const normalizedExtraPaths = normalizeExtraMemoryPathEntries(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
@@ -265,7 +277,11 @@ export async function listMemoryFiles(
         ) {
           result.push(inputPath);
         }
-      } catch {}
+      } catch (error) {
+        if (!isFileMissingError(error)) {
+          throw error;
+        }
+      }
     }
   }
   if (result.length <= 1) {

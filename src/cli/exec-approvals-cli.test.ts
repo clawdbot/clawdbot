@@ -141,6 +141,10 @@ function expectGatewayCall(index: number, method: string, params: unknown) {
   expect(call[2]).toEqual(params);
 }
 
+function loggedOutput(): string {
+  return defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+}
+
 function writtenJson(): Record<string, unknown> {
   const value = firstMockArg(vi.mocked(defaultRuntime.writeJson));
   return requireRecord(value, "written json");
@@ -311,10 +315,42 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "get"]);
 
-    const output = defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+    const output = loggedOutput();
     expect(output).toContain("State");
     expect(output).toContain("defaults (no stored overrides)");
     expect(output).not.toContain("Exists");
+  });
+
+  it("sanitizes stored allowlist patterns in human output without changing JSON", async () => {
+    const pattern = "/tmp/safe\u001b[31mred\u001b[0m\u001b]0;pwned\u0007\nnext\trow\rback\bspace🦞";
+    localSnapshot.file = {
+      version: 1,
+      agents: { "*": { allowlist: [{ pattern }] } },
+    };
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const output = loggedOutput();
+    const hasUnsafeControl = Array.from(output).some((char) => {
+      const codePoint = char.codePointAt(0) ?? -1;
+      return (
+        codePoint === 0x07 ||
+        codePoint === 0x08 ||
+        codePoint === 0x1b ||
+        (codePoint >= 0x7f && codePoint <= 0x9f)
+      );
+    });
+    expect(hasUnsafeControl).toBe(false);
+    expect(output).toContain("safered\\nnext\\trow\\rbackspace🦞");
+
+    defaultRuntime.writeJson.mockClear();
+    await runApprovalsCommand(["approvals", "get", "--json"]);
+
+    const file = requireRecord(writtenJson().file, "JSON approvals file");
+    const agents = requireRecord(file.agents, "JSON approvals agents");
+    const wildcard = requireRecord(agents["*"], "JSON wildcard agent");
+    const allowlist = requireArray(wildcard.allowlist, "JSON wildcard allowlist");
+    expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
   });
 
   it("adds effective policy to json output", async () => {
@@ -856,6 +892,37 @@ describe("exec approvals CLI", () => {
     if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
       throw new Error("Expected wildcard exec approval agent entry");
     }
+    expect(loggedOutput()).toContain("Writing local approvals.");
+  });
+
+  it.each([
+    {
+      label: "an already-allowlisted add",
+      args: ["add", "/usr/bin/uptime"],
+      outcome: "Already allowlisted.",
+    },
+    {
+      label: "a remove of an absent pattern",
+      args: ["remove", "/usr/bin/never-added"],
+      outcome: "Pattern not found.",
+    },
+  ])("reports $label without announcing a local write", async ({ args, outcome }) => {
+    localSnapshot.file = {
+      version: 1,
+      agents: { "*": { allowlist: [{ pattern: "/usr/bin/uptime", lastUsedAt: Date.now() }] } },
+    };
+    const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+    updateExecApprovals.mockClear();
+
+    await runApprovalsCommand(["approvals", "allowlist", ...args]);
+
+    const output = loggedOutput();
+    expect(output).toContain(outcome);
+    expect(output).not.toContain("Writing local approvals.");
+    expect(updateExecApprovals).not.toHaveBeenCalled();
+    // Idempotent add/remove leave the requested end state satisfied: no failure exit.
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("removes wildcard allowlist entry and prunes empty agent", async () => {
@@ -881,6 +948,7 @@ describe("exec approvals CLI", () => {
       version: 1,
       agents: {},
     });
+    expect(loggedOutput()).toContain("Writing local approvals.");
     expect(runtimeErrors).toHaveLength(0);
   });
 
@@ -911,18 +979,22 @@ describe("exec approvals CLI", () => {
     const filePath = path.join(dir, "oversized.json");
     fs.writeFileSync(filePath, Buffer.alloc(1024 * 1024 + 1, "x"));
 
-    await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
+    await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow(
+      "File exceeds 1048576 bytes",
+    );
 
-    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the directory read error", async () => {
     const dir = tempDirs.make("openclaw-approvals-file-directory-");
 
-    await expect(runNativeApprovalsFileCommand(dir)).rejects.toThrow("__exit__:1");
+    await expect(runNativeApprovalsFileCommand(dir)).rejects.toThrow(/EISDIR|directory/i);
 
-    expect(runtimeErrors[0]).toMatch(/EISDIR|directory/i);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 
@@ -953,12 +1025,15 @@ describe("exec approvals CLI", () => {
     });
 
     try {
-      await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
+      await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow(
+        "File exceeds 1048576 bytes",
+      );
     } finally {
       openSpy.mockRestore();
     }
 
-    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 });

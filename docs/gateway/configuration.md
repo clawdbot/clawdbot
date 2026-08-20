@@ -678,8 +678,8 @@ Env var equivalent: `OPENCLAW_LOAD_SHELL_ENV=1`. Default `timeoutMs`: `15000`.
 Rules:
 
 - Only uppercase names matched: `[A-Z_][A-Z0-9_]*`
-- Missing/empty vars throw an error at load time
-- Escape with `$${VAR}` for literal output
+- Missing/empty vars stay visibly unresolved, emit a warning, and are unavailable to consumers that require the value
+- Escape with `$${VAR}` to produce a literal `${VAR}` value
 - Works inside `$include` files
 - Inline substitution: `"${BASE}/v1"` → `"https://api.example.com/v1"`
 
