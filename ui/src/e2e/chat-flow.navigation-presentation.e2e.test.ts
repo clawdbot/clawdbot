@@ -424,11 +424,30 @@ suite.define(() => {
       await page
         .getByText("The active pane stays clear while the inactive pane remains readable.")
         .waitFor();
-      await page.getByRole("button", { name: "Open split view" }).click();
-
       const cells = page.locator(".chat-split-view__cell");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       const headers = page.locator(".chat-pane__header");
+      await expect.poll(() => cells.count()).toBe(1);
+      const classicStyles = await cells.first().evaluate((cell) => {
+        const style = getComputedStyle(cell);
+        return {
+          split: cell.closest(".chat-split-view")?.classList.contains("chat-split-view--split"),
+          active: cell.classList.contains("chat-split-view__cell--active"),
+          boxShadow: style.boxShadow,
+          filter: style.filter,
+          opacity: Number.parseFloat(style.opacity),
+        };
+      });
+      expect(classicStyles).toEqual({
+        split: false,
+        active: false,
+        boxShadow: "none",
+        filter: "none",
+        opacity: 1,
+      });
+
+      await page.getByRole("button", { name: "Open split view" }).click();
+
       await expect.poll(() => cells.count()).toBe(2);
       await expect.poll(() => panes.count()).toBe(2);
       await expect.poll(() => headers.count()).toBe(2);
