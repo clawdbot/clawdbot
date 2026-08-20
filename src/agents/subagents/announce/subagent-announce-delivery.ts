@@ -99,6 +99,8 @@ export async function deliverSubagentAnnouncement(params: {
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
+  /** Opt in to parking the direct dispatch while the requester holds its lane. */
+  deferOnRequesterLaneBusy?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -259,6 +261,7 @@ export async function deliverSubagentAnnouncement(params: {
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
         requireVisibleReply: params.requireVisibleReply,
+        deferOnRequesterLaneBusy: params.deferOnRequesterLaneBusy,
         onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,

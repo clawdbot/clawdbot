@@ -35,6 +35,7 @@ export class SubagentLifecycleController {
     string,
     ScheduledRequesterSettleWake
   >();
+  private readonly requesterLaneReleaseWaiters = new Map<string, () => void>();
   private readonly terminalCompletionLocks = new Map<string, Promise<void>>();
   private readonly terminalGenerations = new WeakMap<SubagentRunRecord, number>();
   private readonly cleanupGenerations = new WeakMap<SubagentRunRecord, number>();
@@ -81,6 +82,23 @@ export class SubagentLifecycleController {
     }
     this.scheduledRequesterSettleWakeTimers.clear();
     this.pendingRequesterSettleWakeRearms.clear();
+    for (const unsubscribe of this.requesterLaneReleaseWaiters.values()) {
+      unsubscribe();
+    }
+    this.requesterLaneReleaseWaiters.clear();
+  };
+
+  setRequesterLaneReleaseWaiter = (runId: string, unsubscribe: () => void): void => {
+    // One waiter per run. A re-park must not leave the previous subscription
+    // behind, or a single lane release would drive the same row twice.
+    this.requesterLaneReleaseWaiters.get(runId)?.();
+    this.requesterLaneReleaseWaiters.set(runId, unsubscribe);
+  };
+
+  takeRequesterLaneReleaseWaiter = (runId: string): (() => void) | undefined => {
+    const unsubscribe = this.requesterLaneReleaseWaiters.get(runId);
+    this.requesterLaneReleaseWaiters.delete(runId);
+    return unsubscribe;
   };
 
   addScheduledResumeTimer = (timer: ReturnType<typeof setTimeout>): void =>

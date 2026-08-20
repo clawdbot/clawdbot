@@ -27,6 +27,7 @@ import {
   hasVisibleAgentPayload,
 } from "../../embedded-agent-runner/message-visibility.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
+import { readSessionLaneAvailability } from "../../embedded-agent-runner/session-lane-availability.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
@@ -105,6 +106,14 @@ export async function sendSubagentAnnounceDirectly(params: {
   isSourceSessionEffectsAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   requesterIsSubagent: boolean;
+  /**
+   * Park instead of dispatching when the requester's session lane is occupied.
+   *
+   * Only callers that own a durable, re-drivable announce obligation may opt in:
+   * a deferral is a promise to come back, so a caller with no outbox behind it
+   * would simply lose the announcement.
+   */
+  deferOnRequesterLaneBusy?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -305,6 +314,28 @@ export async function sendSubagentAnnounceDirectly(params: {
         delivered: false,
         path: "none",
       };
+    }
+    // The dispatch below starts a NEW turn in the requester's session, so it
+    // serializes on that session's lane. A requester holding that lane cannot
+    // admit it until its own turn ends, which is unbounded — the old code spent
+    // the whole announce budget discovering that and then reported a delivery
+    // failure for a child that had succeeded. Lane occupancy is observable, so
+    // read it and park instead of paying for the discovery.
+    if (params.deferOnRequesterLaneBusy) {
+      const requesterLane = readSessionLaneAvailability(canonicalRequesterSessionKey);
+      if (requesterLane.busy) {
+        defaultRuntime.log(
+          `Subagent announce deferred (requester lane busy) run=${params.directIdempotencyKey} ` +
+            `lane=${requesterLane.lane} activeCount=${requesterLane.activeCount} ` +
+            `queuedCount=${requesterLane.queuedCount} blockedBy=${requesterLane.blockedBy ?? "lane"}`,
+        );
+        return {
+          delivered: false,
+          path: "none",
+          reason: "requester_lane_busy",
+          disposition: "deferred_requester_busy",
+        };
+      }
     }
     const directAgentThreadId = shouldDeliverAgentFinal
       ? stringifyRouteThreadId(deliveryTarget.threadId)

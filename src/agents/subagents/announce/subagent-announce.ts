@@ -588,6 +588,9 @@ export async function runSubagentAnnounceFlow(params: {
       expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
+      // The cleanup flow that drives this announce owns a durable, re-drivable
+      // row, so a deferral here is a promise the registry can keep.
+      deferOnRequesterLaneBusy: true,
       onDeliveryResult: reportDeliveryResult,
       signal: params.signal,
       resolveGatewayContext: params.resolveGatewayContext,

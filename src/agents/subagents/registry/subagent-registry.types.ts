@@ -71,6 +71,8 @@ type SubagentDeliveryDisposition =
   | "delivered"
   | "session_queued"
   | "intentional_non_delivery"
+  /** Parked before any transport attempt: the requester still held its lane. */
+  | "deferred_requester_busy"
   | "retryable"
   | "ambiguous"
   | "permanent_failure";
