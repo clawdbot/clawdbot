@@ -24,6 +24,10 @@ import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import {
+  createGatewayPluginRuntimeGeneration,
+  type GatewayPluginRuntimeClaim,
+} from "./server-plugin-runtime-generation.js";
 import type { GatewayCloseOptions } from "./server-public.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";
@@ -212,12 +216,19 @@ export async function prepareGatewayLifecycle(params: {
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
   const runtimeState = runtimeStateRef.current;
+  const pluginRuntimeGeneration = createGatewayPluginRuntimeGeneration({
+    getServices: () => runtimeState.pluginServices,
+    setServices: (services) => {
+      runtimeState.pluginServices = services;
+    },
+  });
   const unavailableGatewayMethods = new Set<string>(
     minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
   );
   // Kernel methods are the only writers for readiness and advertised-method state.
   // Residents use this surface so later ownership splits cannot mutate shared state directly.
   const kernel = {
+    pluginRuntimeGeneration,
     setDispatchReady: (ready: boolean) => {
       startupState.dispatchReady = ready;
     },
@@ -253,18 +264,18 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.heartbeatRunner = handles.heartbeatRunner;
       runtimeState.stopOutboundDeliveryRecovery = handles.stopOutboundDeliveryRecovery;
     },
-    setPostAttachHandles: (handles: {
-      stopGatewayUpdateCheck: typeof runtimeState.stopGatewayUpdateCheck;
-      pluginServices: typeof runtimeState.pluginServices;
-    }) => {
+    setPostAttachHandles: (
+      handles: {
+        stopGatewayUpdateCheck: typeof runtimeState.stopGatewayUpdateCheck;
+        pluginServices: typeof runtimeState.pluginServices;
+      },
+      claim: GatewayPluginRuntimeClaim,
+    ) => {
       runtimeState.stopGatewayUpdateCheck = handles.stopGatewayUpdateCheck;
-      runtimeState.pluginServices = handles.pluginServices;
+      pluginRuntimeGeneration.publishServices(claim, handles.pluginServices);
     },
     setTailscaleCleanup: (cleanup: typeof runtimeState.tailscaleCleanup) => {
       runtimeState.tailscaleCleanup = cleanup;
-    },
-    setPluginServices: (pluginServices: typeof runtimeState.pluginServices) => {
-      runtimeState.pluginServices = pluginServices;
     },
     setConfigReloaderHandle: (configReloader: typeof runtimeState.configReloader) => {
       runtimeState.configReloader = configReloader;
