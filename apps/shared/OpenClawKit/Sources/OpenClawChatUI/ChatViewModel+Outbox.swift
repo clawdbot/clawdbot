@@ -64,14 +64,10 @@ extension OpenClawChatViewModel {
 
     static func branchListingIsUnsupported(_ error: Error) -> Bool {
         if error is BranchListingUnadvertisedError { return true }
-        if let gatewayError = error as? GatewayResponseError {
-            // Only the modern unknown-method rejection counts; a genuine scope
-            // denial ("missing scope: ...") must keep queued work parked.
-            return gatewayError.message.lowercased()
-                .contains("unknown method: sessions.branches.list")
-        }
-        let error = error as NSError
-        let message = error.localizedDescription.lowercased()
+        // GatewayResponseError bridges through errorDescription, which always
+        // prefixes the method name; the qualifier words decide. A genuine scope
+        // denial ("missing scope: ...") matches none, keeping queued work parked.
+        let message = (error as NSError).localizedDescription.lowercased()
         return message.contains("sessions.branches.list") &&
             (message.contains("not supported") || message.contains("unsupported") ||
                 message.contains("unimplemented") || message.contains("unknown method"))

@@ -62,6 +62,7 @@ private actor OutboxTransportState {
         case unsupportedTransport
         case legacyAdminScopeRejection
         case unknownMethodRejection
+        case unsupportedTextRejection
     }
 
     var sessionRoutingContract = "per-sender|main|main"
@@ -222,6 +223,12 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
                 method: "sessions.branches.list",
                 code: "INVALID_REQUEST",
                 message: "unknown method: sessions.branches.list",
+                details: nil)
+        case .unsupportedTextRejection:
+            throw GatewayResponseError(
+                method: "sessions.branches.list",
+                code: "UNSUPPORTED",
+                message: "sessions.branches.list is unsupported on this gateway",
                 details: nil)
         }
     }
@@ -841,8 +848,34 @@ struct ChatViewModelOutboxTests {
             code: "INVALID_REQUEST",
             message: "unknown method: sessions.branches.list",
             details: nil)))
+        #expect(OpenClawChatViewModel.branchListingIsUnsupported(GatewayResponseError(
+            method: "sessions.branches.list",
+            code: "UNSUPPORTED",
+            message: "sessions.branches.list is unsupported on this gateway",
+            details: nil)))
         #expect(OpenClawChatViewModel.branchListingIsUnsupported(
             OpenClawChatViewModel.BranchListingUnadvertisedError()))
+    }
+
+    @Test func `explicit unsupported reply on a pre-catalog gateway still releases queued send`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: false)
+        await transport.state.update {
+            $0.advertisedMethods = nil
+            $0.branchListingBehavior = .unsupportedTextRejection
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        let text = "explicit unsupported still flushes"
+
+        await MainActor.run { vm.load() }
+        try await sendWhileOffline(vm, text: text)
+        await transport.goOnline()
+
+        try await waitUntil("pre-catalog gateway dispatches queued send") {
+            await transport.state.sentMessages == [text]
+        }
+        #expect(await transport.state.branchListCalls >= 1)
     }
 
     @Test func `offline queue persists the effective thinking level`() async throws {
