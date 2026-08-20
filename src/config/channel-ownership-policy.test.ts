@@ -2,10 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createConfiguredChannelOwnershipPolicy } from "./channel-ownership-policy.js";
-import {
-  resetGatewayAmbientEnvTriggerPolicyForTest,
-  setGatewayAmbientEnvTriggerPolicy,
-} from "./runtime-snapshot.js";
+import { setGatewayAmbientEnvTriggerPolicy } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const registry = {
@@ -26,7 +23,7 @@ function policyFor(params: { config: OpenClawConfig; sourceConfig?: OpenClawConf
 }
 
 afterEach(() => {
-  resetGatewayAmbientEnvTriggerPolicyForTest();
+  setGatewayAmbientEnvTriggerPolicy("suppress");
 });
 
 const EMPTY_REGISTRY = { diagnostics: [], plugins: [] } as unknown as PluginManifestRegistry;
@@ -59,7 +56,7 @@ describe("createConfiguredChannelOwnershipPolicy", () => {
     expect(ambientPolicyFor().isPluginActive("zz-claimant", "telegram")).toBe(active);
   });
 
-  it("falls back to suppress when no Gateway recorded a policy", () => {
+  it("reads suppress when no Gateway recorded a policy", () => {
     expect(ambientPolicyFor().isPluginActive("zz-claimant", "telegram")).toBe(true);
   });
 

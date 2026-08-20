@@ -38,7 +38,7 @@ export function createPluginRecord(params: {
   activationState?: PluginActivationState;
   syntheticAuthRefs?: string[];
   channelIds?: readonly string[];
-  channelPreferOver?: Readonly<Record<string, readonly string[]>>;
+  cededChannelIds?: readonly string[];
   providerIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
@@ -73,7 +73,7 @@ export function createPluginRecord(params: {
     toolNames: [],
     hookNames: [],
     channelIds: [...(params.channelIds ?? [])],
-    ...(params.channelPreferOver ? { channelPreferOver: params.channelPreferOver } : {}),
+    ...(params.cededChannelIds?.length ? { cededChannelIds: [...params.cededChannelIds] } : {}),
     cliBackendIds: [],
     providerIds: [...(params.providerIds ?? [])],
     embeddingProviderIds: [...(params.contracts?.embeddingProviders ?? [])],

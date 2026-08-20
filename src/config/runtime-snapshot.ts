@@ -218,23 +218,21 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
 /**
  * The ambient-channel policy this process launched with (`--ambient-channels` raises it to
  * `"allow"`), read by channel schema ownership, which is rebuilt per config request far from those
- * options. Deliberately outside `resetConfigRuntimeState`: config reload and managed-secret
- * rollback clear that snapshot without rerunning startup, so clearing this with it would demote an
+ * options. It starts at the same `"suppress"` a Gateway defaults to, so a cold config process with
+ * no startup behind it reads the value it would have recorded.
+ *
+ * Deliberately outside `resetConfigRuntimeState`: config reload and managed-secret rollback clear
+ * that snapshot without rerunning startup, so clearing this with it would demote an
  * `--ambient-channels` run to `"suppress"` for the rest of its life.
  */
-let gatewayAmbientEnvTriggerPolicy: AmbientEnvTriggerPolicy | null = null;
+let gatewayAmbientEnvTriggerPolicy: AmbientEnvTriggerPolicy = "suppress";
 
 export function setGatewayAmbientEnvTriggerPolicy(policy: AmbientEnvTriggerPolicy): void {
   gatewayAmbientEnvTriggerPolicy = policy;
 }
 
-export function getGatewayAmbientEnvTriggerPolicy(): AmbientEnvTriggerPolicy | null {
+export function getGatewayAmbientEnvTriggerPolicy(): AmbientEnvTriggerPolicy {
   return gatewayAmbientEnvTriggerPolicy;
-}
-
-/** Test-only: the process launch fact has no production path that unsets it. */
-export function resetGatewayAmbientEnvTriggerPolicyForTest(): void {
-  gatewayAmbientEnvTriggerPolicy = null;
 }
 
 export function resetConfigRuntimeState(): void {

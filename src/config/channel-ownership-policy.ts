@@ -76,7 +76,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
         sourceConfig,
         params.env,
         undefined,
-        params.ambientEnvTriggers ?? getGatewayAmbientEnvTriggerPolicy() ?? "suppress",
+        params.ambientEnvTriggers ?? getGatewayAmbientEnvTriggerPolicy(),
       ),
     );
     return configuredChannelIds.has(channelId);

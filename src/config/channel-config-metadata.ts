@@ -209,7 +209,7 @@ function isDisplacedChannelOwner(
  * dropping every declaration would leave registry order picking a winner; the declarations are
  * read from the whole claimant set in that case so the answer stays deterministic.
  */
-function collectDisplacedChannelOwners(
+export function collectDisplacedChannelOwners(
   registry: PluginManifestRegistry,
   policy: ChannelOwnershipPolicy,
 ): DisplacedChannelOwners {

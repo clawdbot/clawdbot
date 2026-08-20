@@ -410,6 +410,65 @@ describe("plugin loader preferOver activation", () => {
     ]);
   });
 
+  // An operator's own choice outranks a manifest preference. Schema ownership skips displacing an
+  // explicitly selected claimant, so runtime arbitration has to skip it too: registration order
+  // owns the channel, the duplicate diagnostic stands, and both surfaces name the same owner.
+  it.each([
+    { name: "replacement registers second", replacementFirst: false },
+    { name: "fallback registers second", replacementFirst: true },
+  ])("keeps an explicitly selected owner when the $name", ({ replacementFirst }) => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" } },
+      plugins: {
+        entries: { "zz-fallback": { enabled: true }, "zz-replacement": { enabled: true } },
+        load: {
+          paths: replacementFirst ? [replacementDir, fallbackDir] : [fallbackDir, replacementDir],
+        },
+      },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    // Registration order decides, so the plugin listed first keeps the channel either way.
+    const firstRegistered = replacementFirst ? "zz-replacement" : "zz-fallback";
+    const runtimeOwner = registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId;
+    expect(runtimeOwner).toBe(firstRegistered);
+    // The documented duplicate contract still applies to the claimant that lost the race.
+    expect(registry.diagnostics.map((diag) => diag.message).join("\n")).toContain(
+      "channel already registered",
+    );
+
+    // Both stay loaded: an explicit choice is never silently dropped for a manifest preference.
+    expect(
+      registry.plugins.filter((plugin) => plugin.status === "loaded").map((plugin) => plugin.id),
+    ).toEqual(expect.arrayContaining(["zz-fallback", "zz-replacement"]));
+  });
+
   it("blocks tools from a plugin that loses a duplicate channel registration", () => {
     const bundledRoot = makePluginLoaderTempDir();
     writeChannelToolPlugin({

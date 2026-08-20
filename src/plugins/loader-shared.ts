@@ -3,7 +3,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveChannelPreferOverIds } from "../config/plugin-auto-enable.prefer-over.js";
+import { collectDisplacedChannelOwners } from "../config/channel-config-metadata.js";
+import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
@@ -290,28 +291,41 @@ export function pushPluginValidationError(params: {
 }
 
 /**
- * Every channel this plugin declares a replacement preference for. Only channels that actually
- * declare one are recorded, so the common case carries nothing. Channel registration needs the
- * declaration at load time: without it a contested channel is settled by discovery order.
+ * Which channels each plugin has ceded to a preferred replacement, keyed by plugin id.
  *
- * Resolved through the same function auto-enable and schema ownership use, not the manifest alone.
- * A preference declared in the built-in channel registration or an external plugin catalog is
- * invisible to the manifest lookup, and a runtime that could not see it would arbitrate by
- * discovery order while validation had already selected the preferred plugin's schema.
+ * Channel schema ownership already decides this, per channel, and skips a claimant the operator
+ * selected by hand. Reading its decision is what makes the runtime owner and the validated schema
+ * the same plugin by construction; deriving a second answer at registration time would leave the
+ * two free to disagree, which is the defect this whole path exists to close.
+ *
+ * Built once per load: the policy resolves preferences from the manifest, the built-in channel
+ * registration, and any external catalog, and the map is small — a plugin cedes nothing unless
+ * another claimant declared a preference over it.
  */
-function collectManifestChannelPreferOver(
-  record: PluginManifestRecord,
-  env: NodeJS.ProcessEnv,
-  registry: PluginManifestRegistry,
-): Record<string, readonly string[]> | undefined {
-  const byChannel: Record<string, readonly string[]> = {};
-  for (const channelId of record.channels ?? []) {
-    const preferOver = resolveChannelPreferOverIds({ record, channelId, env, registry });
-    if (preferOver.length > 0) {
-      byChannel[channelId] = [...preferOver];
+export function collectCededChannelIdsByPlugin(params: {
+  registry: PluginManifestRegistry;
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Map<string, string[]> {
+  const displaced = collectDisplacedChannelOwners(
+    params.registry,
+    createConfiguredChannelOwnershipPolicy({
+      config: params.config,
+      sourceConfig: params.sourceConfig,
+      registry: params.registry,
+      env: params.env,
+    }),
+  );
+  const cededByPlugin = new Map<string, string[]>();
+  for (const [channelId, pluginIds] of displaced) {
+    for (const pluginId of pluginIds) {
+      const channels = cededByPlugin.get(pluginId) ?? [];
+      cededByPlugin.set(pluginId, channels);
+      channels.push(channelId);
     }
   }
-  return Object.keys(byChannel).length > 0 ? byChannel : undefined;
+  return cededByPlugin;
 }
 
 /** Builds the common manifest-backed record shape used by runtime and CLI loaders. */
@@ -320,8 +334,7 @@ export function createManifestPluginRecord(params: {
   manifestRecord: PluginManifestRecord;
   enabled: boolean;
   activationState: PluginActivationState;
-  env: NodeJS.ProcessEnv;
-  manifestRegistry: PluginManifestRegistry;
+  cededChannelIds?: readonly string[];
 }): PluginRecord {
   const { candidate, manifestRecord } = params;
   return createPluginRecord({
@@ -347,11 +360,7 @@ export function createManifestPluginRecord(params: {
     activationState: params.activationState,
     syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
     channelIds: manifestRecord.channels,
-    channelPreferOver: collectManifestChannelPreferOver(
-      manifestRecord,
-      params.env,
-      params.manifestRegistry,
-    ),
+    ...(params.cededChannelIds?.length ? { cededChannelIds: [...params.cededChannelIds] } : {}),
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,

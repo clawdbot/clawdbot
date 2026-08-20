@@ -27,6 +27,7 @@ import {
 } from "./loader-records.js";
 import {
   applyPluginManifestRecordDetails,
+  collectCededChannelIdsByPlugin,
   createManifestPluginRecord,
   createPluginLoaderLogger,
   isAuthorizedDreamingSidecarPlugin,
@@ -79,6 +80,12 @@ export async function loadOpenClawPluginCliRegistry(
     onlyPluginIdSet,
     emitWarning: false,
     warningCacheKey: `${context.cacheKey}::cli-metadata`,
+  });
+  const cededChannelIdsByPlugin = collectCededChannelIdsByPlugin({
+    registry: manifestRegistry,
+    config: context.cfg,
+    sourceConfig: context.activationSourceConfig,
+    env: context.env,
   });
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = context.normalized.slots.memory;
@@ -137,8 +144,7 @@ export async function loadOpenClawPluginCliRegistry(
         manifestRecord,
         enabled: false,
         activationState,
-        env: context.env,
-        manifestRegistry,
+        cededChannelIds: cededChannelIdsByPlugin.get(pluginId),
       });
       duplicate.status = "disabled";
       duplicate.error = `overridden by ${existingOrigin} plugin`;
@@ -162,8 +168,7 @@ export async function loadOpenClawPluginCliRegistry(
       manifestRecord,
       enabled: enableState.enabled,
       activationState,
-      env: context.env,
-      manifestRegistry,
+      cededChannelIds: cededChannelIdsByPlugin.get(pluginId),
     });
     applyPluginManifestRecordDetails(record, manifestRecord);
     const pushPluginLoadError = (message: string) =>

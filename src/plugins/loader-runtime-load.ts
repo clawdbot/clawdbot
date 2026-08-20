@@ -25,6 +25,7 @@ import {
 } from "./loader-runtime-candidate.js";
 import {
   activatePluginRegistry,
+  collectCededChannelIdsByPlugin,
   createPluginLoaderLogger,
   maybeThrowOnPluginLoadError,
   resolveAuthorizedDreamingSidecar,
@@ -172,6 +173,12 @@ function loadOpenClawPluginsInternal(
         warningCacheKey: context.cacheKey,
         suppliedManifestRegistry: options.manifestRegistry,
       });
+    const cededChannelIdsByPlugin = collectCededChannelIdsByPlugin({
+      registry: manifestRegistry,
+      config: context.cfg,
+      sourceConfig: context.activationSourceConfig,
+      env: context.env,
+    });
     const selectedMiddlewareOwnerManifests = new Map<
       string,
       (typeof manifestRegistry.plugins)[number]
@@ -228,7 +235,7 @@ function loadOpenClawPluginsInternal(
       loadRuntimePluginCandidate({
         candidate,
         manifestRecord,
-        manifestRegistry,
+        cededChannelIdsByPlugin,
         context,
         options,
         onlyPluginIdSet,

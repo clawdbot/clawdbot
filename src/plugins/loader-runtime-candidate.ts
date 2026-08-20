@@ -47,7 +47,7 @@ import {
   hasExplicitManifestOwnerTrust,
   resolveManifestOwnerBasePolicyBlock,
 } from "./manifest-owner-policy.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import {
@@ -76,7 +76,7 @@ export type PluginLoadLoopState = {
 export function loadRuntimePluginCandidate(params: {
   candidate: PluginCandidate;
   manifestRecord: PluginManifestRecord;
-  manifestRegistry: PluginManifestRegistry;
+  cededChannelIdsByPlugin: ReadonlyMap<string, string[]>;
   context: PluginLoadCacheContext;
   options: PluginLoadOptions;
   onlyPluginIdSet: ReadonlySet<string> | null;
@@ -130,8 +130,7 @@ export function loadRuntimePluginCandidate(params: {
       manifestRecord,
       enabled: false,
       activationState,
-      env: context.env,
-      manifestRegistry: params.manifestRegistry,
+      cededChannelIds: params.cededChannelIdsByPlugin.get(pluginId),
     });
     duplicate.status = "disabled";
     duplicate.error = `overridden by ${existingOrigin} plugin`;
@@ -156,8 +155,7 @@ export function loadRuntimePluginCandidate(params: {
     manifestRecord,
     enabled: enableState.enabled,
     activationState,
-    env: context.env,
-    manifestRegistry: params.manifestRegistry,
+    cededChannelIds: params.cededChannelIdsByPlugin.get(pluginId),
   });
   applyPluginManifestRecordDetails(record, manifestRecord);
   const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
