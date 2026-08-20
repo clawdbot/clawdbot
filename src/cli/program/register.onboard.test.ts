@@ -193,21 +193,24 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
-  it("forwards remote seed flags to setup wizard options", async () => {
-    const remoteToken = ["fixture", "value"].join("-");
+  it.each([
+    { flag: "--remote-token", optionKey: "remoteToken" },
+    { flag: "--remote-password", optionKey: "remotePassword" },
+  ])("forwards $flag to remote setup wizard options", async ({ flag, optionKey }) => {
+    const credential = ["fixture", "value"].join("-");
     await runCli([
       "onboard",
       "--mode",
       "remote",
       "--remote-url",
       "wss://gateway.example.com:18789",
-      "--remote-token",
-      remoteToken,
+      flag,
+      credential,
     ]);
 
     const options = setupWizardOptions();
     expect(options.remoteUrl).toBe("wss://gateway.example.com:18789");
-    expect(options.remoteToken).toBe(remoteToken);
+    expect(options[optionKey]).toBe(credential);
   });
 
   it("forwards --tui to guided onboarding", async () => {

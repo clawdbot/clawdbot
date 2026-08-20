@@ -36,8 +36,19 @@ export async function runNonInteractiveRemoteSetup(params: {
     return;
   }
   const remoteToken = normalizeOptionalString(opts.remoteToken);
-  if (opts.remoteToken !== undefined && !remoteToken) {
-    runtime.error("Invalid --remote-token: value cannot be empty.");
+  const remotePassword = normalizeOptionalString(opts.remotePassword);
+  for (const [flag, input, normalized] of [
+    ["--remote-token", opts.remoteToken, remoteToken],
+    ["--remote-password", opts.remotePassword, remotePassword],
+  ] as const) {
+    if (input !== undefined && !normalized) {
+      runtime.error(`Invalid ${flag}: value cannot be empty.`);
+      runtime.exit(1);
+      return;
+    }
+  }
+  if (remoteToken && remotePassword) {
+    runtime.error("Use either --remote-token or --remote-password, not both.");
     runtime.exit(1);
     return;
   }
@@ -49,6 +60,9 @@ export async function runNonInteractiveRemoteSetup(params: {
   if (remoteToken) {
     delete preservedRemote.password;
   }
+  if (remotePassword) {
+    delete preservedRemote.token;
+  }
 
   let nextConfig: OpenClawConfig = {
     ...baseConfig,
@@ -59,6 +73,7 @@ export async function runNonInteractiveRemoteSetup(params: {
         ...preservedRemote,
         url: remoteUrl,
         ...(remoteToken ? { token: remoteToken } : {}),
+        ...(remotePassword ? { password: remotePassword } : {}),
       },
     },
   };

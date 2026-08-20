@@ -1014,8 +1014,11 @@ describe("runSetupWizard", () => {
     expect(diskConfig.agents?.defaults?.workspace).toBe("/tmp/conflicting-onboarding-workspace");
   });
 
-  it("seeds interactive remote setup from command flags", async () => {
-    const remoteToken = "REDACTED";
+  it.each([
+    { name: "token", optionKey: "remoteToken", remoteKey: "token" },
+    { name: "password", optionKey: "remotePassword", remoteKey: "password" },
+  ])("seeds interactive remote $name auth from command flags", async ({ optionKey, remoteKey }) => {
+    const remoteCredential = "REDACTED";
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -1040,29 +1043,39 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "advanced",
-        mode: "remote",
-        remoteUrl: " wss://flag.example.com:18789 ",
-        remoteToken: ` ${remoteToken} `,
-      },
-      runtime,
-      prompter,
-    );
+    if (remoteKey === "password") {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
+    }
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "advanced",
+          mode: "remote",
+          remoteUrl: " wss://flag.example.com:18789 ",
+          [optionKey]: ` ${remoteCredential} `,
+        },
+        runtime,
+        prompter,
+      );
+    } finally {
+      if (remoteKey === "password") {
+        vi.unstubAllEnvs();
+      }
+    }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://flag.example.com:18789",
-      token: remoteToken,
+      token: remoteKey === "token" ? remoteCredential : undefined,
+      ...(remoteKey === "password" ? { password: remoteCredential } : {}),
     });
     expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         gateway: expect.objectContaining({
           remote: {
             url: "wss://flag.example.com:18789",
-            token: remoteToken,
-            password: undefined,
+            token: remoteKey === "token" ? remoteCredential : undefined,
+            password: remoteKey === "password" ? remoteCredential : undefined,
           },
         }),
       }),
@@ -1072,7 +1085,7 @@ describe("runSetupWizard", () => {
         edgeAuthOriginUrl: "wss://stored.example.com:18789",
       },
     );
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteCredential));
   });
 
   it("uses the configured remote password for the setup reachability probe", async () => {

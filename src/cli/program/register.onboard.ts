@@ -231,6 +231,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--gateway-password <password>", "Gateway password (password auth)")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
+    .option("--remote-password <password>", "Remote Gateway password (optional)")
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
     .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
     .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
@@ -366,6 +367,7 @@ export function registerOnboardCommand(program: Command): void {
           gatewayPassword: opts.gatewayPassword as string | undefined,
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
+          remotePassword: opts.remotePassword as string | undefined,
           tailscale: opts.tailscale as TailscaleMode | undefined,
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
