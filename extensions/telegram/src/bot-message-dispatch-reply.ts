@@ -539,7 +539,7 @@ export function handleReplyError(
       scopeKey: buildTelegramErrorScopeKey({
         accountId: turn.context.route.accountId,
         chatId: turn.context.chatId,
-        threadId: turn.context.threadSpec.id,
+        threadSpec: turn.context.threadSpec,
       }),
       cooldownMs: errorPolicy.cooldownMs,
       errorMessage: String(err),

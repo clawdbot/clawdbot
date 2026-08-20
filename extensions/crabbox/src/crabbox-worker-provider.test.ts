@@ -1,9 +1,15 @@
+import fs from "node:fs";
 import path from "node:path";
-import type { HealthCheck } from "openclaw/plugin-sdk/health";
-import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import { fileURLToPath } from "node:url";
+import {
+  type WorkerProfile,
+  type WorkerProvider,
+  WorkerProviderError,
+} from "openclaw/plugin-sdk/plugin-entry";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
 import {
   findCrabboxBinary,
@@ -12,15 +18,18 @@ import {
 } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./crabbox-worker-provider.js";
 import {
-  CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
-  registerCrabboxWorkerProviderDoctorChecks,
-} from "./doctor.js";
+  CRABBOX_LIFECYCLE_TIMEOUT_MS,
+  CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
+} from "./crabbox-worker-timeouts.js";
 
 const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
 const LEASE_ID = "cbx_6071fc2062a6";
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
 const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
+const WORKER_WALLPAPER_PATH = fileURLToPath(
+  new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
+);
 const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
 const PROFILE = {
   provider: "aws",
@@ -28,6 +37,7 @@ const PROFILE = {
   ttl: "24h",
   idleTimeout: "60m",
 };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type CrabboxWorkerProviderDependencies = NonNullable<
   Parameters<typeof createCrabboxWorkerProvider>[0]
@@ -75,6 +85,7 @@ function providerWithRawRunner(
     pathEnv: "",
     isExecutable: (candidate) => candidate === SIBLING_BINARY,
     sleep: async () => {},
+    wallpaperPath: WORKER_WALLPAPER_PATH,
     ...(warn ? { warn } : {}),
   });
   return {
@@ -125,33 +136,217 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("Crabbox worker provider", () => {
-  it("advertises named machine classes and preserves a configured literal default", () => {
-    const provider = createCrabboxWorkerProvider();
-
+  it("derives ordered machine classes and shapes while preserving configured defaults", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return commandResult({
+        stdout: JSON.stringify([
+          {
+            provider: "aws",
+            classes: [
+              { class: "tiny", type: "c7a.2xlarge", vcpu: 8, memoryGb: 16 },
+              { class: "small", type: "c7a.4xlarge", vcpu: 16, memoryGb: 32 },
+              { class: "standard", type: "c7a.8xlarge", vcpu: 32, memoryGb: 64 },
+              { class: "fast", type: "c7a.16xlarge", vcpu: 64, memoryGb: 128 },
+              { class: "large", type: "c7a.24xlarge", vcpu: 96, memoryGb: 192 },
+              { class: "beast", type: "c7a.48xlarge", vcpu: 192, memoryGb: 384 },
+            ],
+          },
+        ]),
+      });
+    });
     expect(provider.supportedExecutionModes).toEqual(["worker-turn"]);
-    expect(provider.listMachineOptions?.(PROFILE)).toEqual([
+    expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
+      { id: "tiny", label: "Tiny", cpu: 8, memoryGb: 16 },
+      { id: "small", label: "Small", cpu: 16, memoryGb: 32 },
       {
         id: "standard",
         label: "Standard",
-        description: "Cheap smoke checks and small repos",
+        cpu: 32,
+        memoryGb: 64,
         default: true,
       },
-      { id: "fast", label: "Fast", description: "General maintainer testing" },
-      { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
-      { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+      { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
+      { id: "large", label: "Large", cpu: 96, memoryGb: 192 },
+      { id: "beast", label: "Beast", cpu: 192, memoryGb: 384 },
     ]);
-    expect(provider.listMachineOptions?.({ ...PROFILE, class: "c7a.24xlarge" })).toEqual([
-      { id: "standard", label: "Standard", description: "Cheap smoke checks and small repos" },
-      { id: "fast", label: "Fast", description: "General maintainer testing" },
-      { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
-      { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+    expect(await provider.listMachineOptions?.({ ...PROFILE, class: "c7a.24xlarge" })).toEqual([
+      { id: "tiny", label: "Tiny", cpu: 8, memoryGb: 16 },
+      { id: "small", label: "Small", cpu: 16, memoryGb: 32 },
+      { id: "standard", label: "Standard", cpu: 32, memoryGb: 64 },
+      { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
+      { id: "large", label: "Large", cpu: 96, memoryGb: 192 },
+      { id: "beast", label: "Beast", cpu: 192, memoryGb: 384 },
       {
         id: "c7a.24xlarge",
         label: "c7a.24xlarge",
-        description: "Configured instance type",
         default: true,
       },
     ]);
+    await provider.listMachineOptions?.(PROFILE);
+    expect(calls.filter((argv) => argv[1] === "providers")).toHaveLength(1);
+  });
+
+  it("bounds and filters malformed catalogs before gateway normalization", async () => {
+    const invalidClass = "x".repeat(129);
+    const classes = [
+      { class: invalidClass, vcpu: 1, memoryGb: 2 },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        class: `class-${String(index).padStart(2, "0")}`,
+        vcpu: index === 0 ? 0 : index + 1,
+        memoryGb: index === 0 ? 1.5 : (index + 1) * 2,
+      })),
+    ];
+    const provider = providerWithRunner(async () =>
+      commandResult({ stdout: JSON.stringify([{ provider: "aws", classes }]) }),
+    );
+
+    const options = await provider.listMachineOptions?.({ ...PROFILE, class: "class-00" });
+
+    expect(options).toHaveLength(32);
+    expect(options?.[0]).toEqual({ id: "class-00", label: "Class-00", default: true });
+    expect(options?.at(-1)).toEqual({
+      id: "class-31",
+      label: "Class-31",
+      cpu: 32,
+      memoryGb: 64,
+    });
+    expect(options?.some((option) => option.id === invalidClass)).toBe(false);
+  });
+
+  it("keeps machine-shape catalogs separate per resolved binary", async () => {
+    const calls: { binary: string; argv: string[] }[] = [];
+    const provider = providerWithRunner(async (argv) => {
+      const binary = String(argv[0]);
+      calls.push({ binary, argv });
+      const vcpu = binary.endsWith("other-crabbox") ? 8 : 32;
+      return commandResult({
+        stdout: JSON.stringify([
+          {
+            provider: "aws",
+            classes: [{ class: "standard", type: "t", vcpu, memoryGb: vcpu * 2 }],
+          },
+        ]),
+      });
+    });
+
+    const first = await provider.listMachineOptions?.({ ...PROFILE, binary: "/opt/crabbox" });
+    const second = await provider.listMachineOptions?.({
+      ...PROFILE,
+      binary: "/opt/other-crabbox",
+    });
+
+    // A shared slot would hand the second profile the first binary's sizes.
+    expect(first?.[0]).toMatchObject({ id: "standard", cpu: 32, memoryGb: 64 });
+    expect(second?.[0]).toMatchObject({ id: "standard", cpu: 8, memoryGb: 16 });
+    expect(calls.filter((call) => call.argv[1] === "providers")).toHaveLength(2);
+  });
+
+  it("bounds the catalog read well below the lifecycle timeout", async () => {
+    let requestedTimeoutMs: number | undefined;
+    const provider = providerWithRunner(async (argv, options) => {
+      if (argv[1] === "providers") {
+        requestedTimeoutMs = (options as { timeoutMs?: number } | undefined)?.timeoutMs;
+        return commandResult({ code: null, killed: true, termination: "timeout" });
+      }
+      return commandResult({ stdout: "[]" });
+    });
+
+    // A hung binary must degrade to label-only choices instead of holding the
+    // picker response for the full lifecycle budget.
+    expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
+      { id: "standard", label: "Standard", default: true },
+      { id: "fast", label: "Fast" },
+      { id: "large", label: "Large" },
+      { id: "beast", label: "Beast" },
+    ]);
+    expect(requestedTimeoutMs).toBe(CRABBOX_MACHINE_CATALOG_TIMEOUT_MS);
+    expect(requestedTimeoutMs).toBeLessThan(CRABBOX_LIFECYCLE_TIMEOUT_MS);
+  });
+
+  it.each([
+    {
+      name: "cannot start",
+      result: () => Promise.reject(new Error("missing binary")),
+      warns: true,
+    },
+    {
+      name: "exits non-zero",
+      result: () => Promise.resolve(commandResult({ code: 2 })),
+      warns: true,
+    },
+    {
+      name: "times out",
+      result: () =>
+        Promise.resolve(commandResult({ code: null, killed: true, termination: "timeout" })),
+      warns: true,
+    },
+    {
+      name: "returns junk JSON",
+      result: () => Promise.resolve(commandResult({ stdout: "not-json" })),
+      warns: true,
+    },
+    {
+      name: "returns an empty catalog",
+      result: () => Promise.resolve(commandResult({ stdout: "[]" })),
+      warns: false,
+    },
+    {
+      name: "omits classes",
+      result: () =>
+        Promise.resolve(commandResult({ stdout: JSON.stringify([{ provider: "aws" }]) })),
+      warns: false,
+    },
+    {
+      name: "reports another provider",
+      result: () =>
+        Promise.resolve(
+          commandResult({
+            stdout: JSON.stringify([
+              {
+                provider: "gcp",
+                classes: [{ class: "standard", vcpu: 32, memoryGb: 64 }],
+              },
+            ]),
+          }),
+        ),
+      warns: false,
+    },
+  ])("keeps complete label-only options when providers $name", async ({ result, warns }) => {
+    const warn = vi.fn();
+    const provider = providerWithRunner(result, warn);
+
+    expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
+      { id: "standard", label: "Standard", default: true },
+      { id: "fast", label: "Fast" },
+      { id: "large", label: "Large" },
+      { id: "beast", label: "Beast" },
+    ]);
+    await provider.listMachineOptions?.(PROFILE);
+    expect(warn).toHaveBeenCalledTimes(warns ? 1 : 0);
+  });
+
+  it.each([
+    {
+      name: "non-PNG bytes",
+      bytes: Buffer.from("not a PNG"),
+      message: "Crabbox worker wallpaper is not a PNG",
+    },
+    {
+      name: "wrong PNG dimensions",
+      bytes: (() => {
+        const bytes = fs.readFileSync(WORKER_WALLPAPER_PATH);
+        bytes.writeUInt32BE(1023, 16);
+        return bytes;
+      })(),
+      message: "Crabbox worker wallpaper must be 1024x576; got 1023x576",
+    },
+  ])("rejects $name during provider registration", ({ bytes, message }) => {
+    const tempDir = tempDirs.make("openclaw-crabbox-wallpaper-");
+    const wallpaperPath = path.join(tempDir, "wallpaper.png");
+    fs.writeFileSync(wallpaperPath, bytes);
+    expect(() => createCrabboxWorkerProvider({ wallpaperPath })).toThrow(message);
   });
 
   it("returns the environment-bound node after enrollment", async () => {
@@ -190,7 +385,7 @@ describe("Crabbox worker provider", () => {
     });
 
     await expect(
-      provider.provision(PROFILE, OPERATION_ID, {
+      provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID, {
         beginNodeEnrollment: async () => ({
           mode: "resume",
           deviceId: "device-bound",
@@ -200,8 +395,68 @@ describe("Crabbox worker provider", () => {
           waitForDeviceId: async () => "device-bound",
         }),
       }),
-    ).resolves.toMatchObject({ node: { deviceId: "device-bound" } });
-    const setup = calls.find((call) => call.argv[1] === "run")?.options.input ?? "";
+    ).resolves.toMatchObject({
+      node: { deviceId: "device-bound" },
+      desktop: {
+        protocol: "rfb",
+        port: 5900,
+        apps: [{ id: "browser" }, { id: "terminal" }],
+      },
+    });
+    const desktopSetup = calls.find(
+      (call) =>
+        call.argv[1] === "run" && String(call.options.input).includes("openclaw-worker-browser"),
+    )?.options.input;
+    const desktopSetupText = String(desktopSetup);
+    expect(desktopSetupText).toContain("worker_user=$(id -un)");
+    expect(desktopSetupText).toContain('worker_home=$(getent passwd "$worker_uid"');
+    expect(desktopSetupText).toContain(`worker-browser/${LEASE_ID}`);
+    const desktopSetupLines = desktopSetupText.split("\n");
+    for (const expectedLine of [
+      '[ -r /var/lib/crabbox/desktop.env ] || { echo "Crabbox desktop environment is unavailable" >&2; exit 1; }',
+      "grep -Fx 'CRABBOX_DESKTOP_ENV=xfce' /var/lib/crabbox/desktop.env >/dev/null || { echo \"Crabbox desktop environment is not XFCE\" >&2; exit 1; }",
+      "grep -Fx 'DISPLAY=:99' /var/lib/crabbox/desktop.env >/dev/null || { echo \"Crabbox XFCE display is not :99\" >&2; exit 1; }",
+      "export DISPLAY=:99",
+    ]) {
+      expect(desktopSetupLines.filter((line) => line === expectedLine)).toHaveLength(3);
+    }
+    expect(desktopSetupText).not.toContain(". /var/lib/crabbox/desktop.env");
+    expect(desktopSetupText).not.toContain("/var/lib/crabbox/browser.env");
+    expect(desktopSetupLines).not.toContain("export DISPLAY");
+    expect(desktopSetupText).toContain(
+      "nohup /usr/local/bin/crabbox-browser --remote-debugging-address=127.0.0.1",
+    );
+    expect(desktopSetupText).toMatch(/for required_command in [^\n;]*python3[^\n;]*; do/u);
+    expect(desktopSetupText).toContain(
+      "base64.b64decode(sys.stdin.buffer.read().strip(),validate=True)",
+    );
+    const wallpaperPayload =
+      /<<'WORKER_WALLPAPER_B64_EOF'\n(?<payload>[A-Za-z0-9+/=]+)\nWORKER_WALLPAPER_B64_EOF/u.exec(
+        desktopSetupText,
+      )?.groups?.payload;
+    expect(wallpaperPayload).toBeDefined();
+    expect(
+      Buffer.from(wallpaperPayload ?? "", "base64").equals(fs.readFileSync(WORKER_WALLPAPER_PATH)),
+    ).toBe(true);
+    expect(desktopSetupText).toContain("xrandr --listmonitors");
+    expect(desktopSetupText).toContain('printf "/backdrop/screen0/monitor%s/workspace%s');
+    expect(desktopSetupText).toContain(
+      'wallpaper_path="$worker_home/.local/share/backgrounds/openclaw-worker.png"',
+    );
+    expect(desktopSetupText).toContain('for backdrop in "${backdrop_roots[@]}"; do');
+    const lastImageIndex = desktopSetupText.indexOf('-p "$backdrop/last-image"');
+    const stopRendererIndex = desktopSetupText.indexOf("pkill -TERM -x xfdesktop");
+    const startRendererIndex = desktopSetupText.indexOf("nohup xfdesktop");
+    expect(lastImageIndex).toBeGreaterThan(-1);
+    expect(stopRendererIndex).toBeGreaterThan(lastImageIndex);
+    expect(startRendererIndex).toBeGreaterThan(stopRendererIndex);
+    expect(desktopSetupText).not.toContain("def ellipse");
+    expect(desktopSetupText).not.toContain("import struct");
+    expect(desktopSetupText).not.toContain(".svg");
+    expect(desktopSetupText).not.toContain("sshUser");
+    const setup = calls.find(
+      (call) => call.argv[1] === "run" && String(call.options.input).includes("node run"),
+    )?.options.input;
     expect(String(setup)).toContain("node run --ephemeral --display-name 'Bound worker'");
     expect(String(setup)).not.toContain("config set nodeHost.workerRuns.enabled");
     expect(String(setup)).not.toContain("setup-code");
@@ -412,6 +667,39 @@ describe("Crabbox worker provider", () => {
     expect(calls.some((argv) => argv[1] === "stop" && argv.includes(LEASE_ID))).toBe(true);
   });
 
+  it("preserves the allocated lease and both failures when setup cleanup times out", async () => {
+    let releaseCommitted = false;
+    const provider = providerWithRunner(async (argv) => {
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      if (argv[1] === "run") {
+        return commandResult({ code: 7, stderr: "node setup failed" });
+      }
+      if (argv[1] === "stop") {
+        releaseCommitted = true;
+        return commandResult({ code: null, killed: true, termination: "timeout" });
+      }
+      return commandResult();
+    });
+
+    const error = await provider
+      .provision({ ...PROFILE, setup: "install-node" }, OPERATION_ID)
+      .catch((cause: unknown) => cause);
+
+    expect(WorkerProviderError.isCleanupIndeterminate(error)).toBe(true);
+    if (!WorkerProviderError.isCleanupIndeterminate(error)) {
+      throw new Error("expected indeterminate worker cleanup error");
+    }
+    expect(error).toMatchObject({
+      leaseId: LEASE_ID,
+      provisionError: { message: expect.stringContaining("node setup failed") },
+      cleanupError: { message: expect.stringContaining("stop did not exit normally (timeout)") },
+    });
+    expect(error.errors).toEqual([error.provisionError, error.cleanupError]);
+    expect(releaseCommitted).toBe(true);
+  });
+
   it("stops the lease when the profile setup command cannot start", async () => {
     const calls: string[][] = [];
     let warmed = false;
@@ -459,6 +747,7 @@ describe("Crabbox worker provider", () => {
       openclawRoot: OPENCLAW_ROOT,
       pathEnv: "",
       isExecutable: (candidate) => candidate === SIBLING_BINARY,
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
 
     await expect(provider.provision(PROFILE, OPERATION_ID)).rejects.toMatchObject({
@@ -489,6 +778,7 @@ describe("Crabbox worker provider", () => {
       openclawRoot: OPENCLAW_ROOT,
       pathEnv: "",
       isExecutable: (candidate) => candidate === SIBLING_BINARY,
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
 
     await expect(
@@ -622,10 +912,24 @@ describe("Crabbox worker provider", () => {
         .catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toMatchObject({ code: "invalid_profile" });
-      const message = error instanceof Error ? error.message : "";
-      expect(message).toContain(`cleanup is indeterminate during ${failurePoint}`);
-      expect(message).toContain("Crabbox AWS instance profile must be empty for cloud workers");
-      expect(message.length).toBeLessThanOrEqual(512);
+      if (failurePoint === "stop") {
+        expect(WorkerProviderError.isCleanupIndeterminate(error)).toBe(true);
+        if (!WorkerProviderError.isCleanupIndeterminate(error)) {
+          throw new Error("expected indeterminate worker cleanup error");
+        }
+        expect(error).toMatchObject({
+          leaseId: LEASE_ID,
+          provisionError: {
+            message: "Crabbox AWS instance profile must be empty for cloud workers",
+          },
+          cleanupError: { message: expect.stringContaining("stop did not exit normally") },
+        });
+      } else {
+        const message = error instanceof Error ? error.message : "";
+        expect(message).toContain("cleanup is indeterminate during inspect");
+        expect(message).toContain("Crabbox AWS instance profile must be empty for cloud workers");
+        expect(message.length).toBeLessThanOrEqual(512);
+      }
       expect(live).toBe(true);
       expect(calls.map((argv) => argv[1])).toEqual(
         failurePoint === "inspect" ? ["config", "inspect"] : ["config", "inspect", "stop"],
@@ -665,6 +969,7 @@ describe("Crabbox worker provider", () => {
       pathEnv: "",
       isExecutable: (candidate) => candidate === SIBLING_BINARY,
       sleep: async () => {},
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
 
     await expect(provider.provision(PROFILE, OPERATION_ID)).rejects.toMatchObject({
@@ -827,16 +1132,191 @@ describe("Crabbox worker provider", () => {
     );
   });
 
-  it("rejects desktop profiles after node transport convergence", async () => {
-    const provider = providerWithRunner(async () => commandResult());
+  it("rejects desktop profiles outside the supported provider set before allocation", async () => {
+    const runCommand = vi.fn<CrabboxCommandRunner>();
+    const provider = providerWithRunner(runCommand);
 
     await expect(
-      provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID),
+      provider.provision({ ...PROFILE, provider: "azure", desktop: true }, OPERATION_ID),
     ).rejects.toMatchObject({
       code: "invalid_profile",
-      message: "Crabbox desktop profiles are unavailable after node transport convergence",
+      message: "Crabbox desktop profiles support only AWS and coordinator-backed Hetzner",
     });
+    expect(runCommand).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "direct",
+      config: { coordinator: "", brokerMode: "managed" },
+    },
+    {
+      name: "registered",
+      config: {
+        coordinator: "https://coordinator.example.test",
+        brokerMode: "registered",
+      },
+    },
+  ])("rejects a $name Hetzner desktop profile before allocation", async ({ config }) => {
+    const calls: string[][] = [];
+    const provider = providerWithRawRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "config" && argv[2] === "show") {
+        return commandResult({ stdout: JSON.stringify(config) });
+      }
+      return commandResult();
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, provider: "hetzner", desktop: true }, OPERATION_ID),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: "Crabbox Hetzner desktop profiles require a managed coordinator",
+    });
+    expect(calls.map((argv) => argv[1])).toEqual(["config"]);
+  });
+
+  it.each([
+    {
+      name: "direct AWS",
+      providerId: "aws",
+      config: { aws: { instanceProfile: "" }, coordinator: "", brokerMode: "managed" },
+    },
+    {
+      name: "coordinator-backed AWS",
+      providerId: "aws",
+      config: {
+        aws: { instanceProfile: "" },
+        coordinator: "https://coordinator.example.test",
+        brokerMode: "managed",
+      },
+    },
+    {
+      name: "coordinator-backed Hetzner",
+      providerId: "hetzner",
+      config: {
+        coordinator: "https://coordinator.example.test",
+        brokerMode: "managed",
+      },
+    },
+  ])("provisions a node-carried desktop through $name", async ({ config, providerId }) => {
+    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+    const setupOrder: string[] = [];
+    const provider = providerWithRawRunner(async (argv, options) => {
+      calls.push({ argv, options });
+      if (argv[1] === "config" && argv[2] === "show") {
+        return commandResult({ stdout: JSON.stringify(config) });
+      }
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      if (argv[1] === "run" && String(options.input).includes("openclaw-worker-browser")) {
+        setupOrder.push("desktop");
+      }
+      return commandResult();
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, provider: providerId, desktop: true }, OPERATION_ID, {
+        beginNodeEnrollment: async () => {
+          setupOrder.push("enrollment");
+          return {
+            mode: "connect" as const,
+            setupCode: "secret-setup-value",
+            setupId: "setup-id",
+            openclawVersion: "2026.8.1",
+            packageSpecs: ["openclaw@2026.8.1"],
+            displayName: "Cloud worker test",
+            waitForDeviceId: async () => "device-1",
+          };
+        },
+      }),
+    ).resolves.toEqual({
+      leaseId: LEASE_ID,
+      node: { deviceId: "device-1" },
+      sharedHost: false,
+      desktop: {
+        protocol: "rfb",
+        port: 5900,
+        passwordFilePath: "/var/lib/crabbox/vnc.password",
+        apps: [
+          {
+            id: "browser",
+            executablePath: "/usr/local/bin/openclaw-worker-browser",
+            cdpPort: 9222,
+          },
+          {
+            id: "terminal",
+            executablePath: "/usr/local/bin/openclaw-worker-terminal",
+          },
+        ],
+      },
+    });
+    expect(calls.find((call) => call.argv[1] === "warmup")).toEqual(
+      expect.objectContaining({
+        options: expect.objectContaining({ timeoutMs: 50 * 60_000 }),
+      }),
+    );
+    expect(calls.find((call) => call.argv[1] === "warmup")?.argv.slice(-4)).toEqual([
+      "--desktop",
+      "--browser",
+      "--desktop-env",
+      "xfce",
+    ]);
+    expect(
+      provider.resolveProvisionTimeoutMs?.({
+        ...PROFILE,
+        provider: providerId,
+        desktop: true,
+      }),
+    ).toBe(72 * 60_000);
+    expect(setupOrder).toEqual(["desktop", "enrollment"]);
+  });
+
+  it.each(["desktop setup", "enrollment preparation", "enrollment completion"] as const)(
+    "stops the fixed desktop lease after permanent %s failure",
+    async (failurePoint) => {
+      const calls: string[][] = [];
+      const provider = providerWithRunner(async (argv, options) => {
+        calls.push(argv);
+        if (argv[1] === "inspect") {
+          return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+        }
+        if (
+          failurePoint === "desktop setup" &&
+          argv[1] === "run" &&
+          String(options.input).includes("openclaw-worker-browser")
+        ) {
+          return commandResult({ code: 9, stderr: "desktop setup failed" });
+        }
+        return commandResult();
+      });
+
+      await expect(
+        provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID, {
+          beginNodeEnrollment: async () => {
+            if (failurePoint === "enrollment preparation") {
+              throw new Error("enrollment preparation failed");
+            }
+            return {
+              mode: "resume" as const,
+              deviceId: "device-bound",
+              openclawVersion: "2026.8.1",
+              packageSpecs: ["openclaw@2026.8.1"],
+              displayName: "Bound worker",
+              waitForDeviceId: async () => {
+                if (failurePoint === "enrollment completion") {
+                  throw new Error("enrollment completion failed");
+                }
+                return "device-bound";
+              },
+            };
+          },
+        }),
+      ).rejects.toThrow(failurePoint === "desktop setup" ? "setup failed" : failurePoint);
+      expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
+    },
+  );
 
   it("runs one fixed warmup, ignores its output, and inspects only the canonical id", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
@@ -892,6 +1372,9 @@ describe("Crabbox worker provider", () => {
     expect(String(calls[2]?.options.input)).toContain("'OpenClaw 2026.8.1'|'OpenClaw 2026.8.1 '*");
     expect(String(calls[2]?.options.input)).toContain(
       'npx --yes --package "$package_spec" -- openclaw',
+    );
+    expect(String(calls[2]?.options.input)).toContain(
+      "OpenClaw worker bootstrap could not install Gateway version 2026.8.1",
     );
     expect(String(calls[2]?.options.input)).toContain(
       'connect --target-file "$setup_code_file" --ephemeral',
@@ -975,23 +1458,33 @@ describe("Crabbox worker provider", () => {
       throw new Error(`unexpected Crabbox command: ${argv[1]}`);
     };
 
-    await expect(providerWithRunner(runCommand).provision(PROFILE, OPERATION_ID)).rejects.toThrow(
-      "did not exit normally (timeout)",
-    );
+    const desktopProfile = { ...PROFILE, desktop: true };
+    await expect(
+      providerWithRunner(runCommand).provision(desktopProfile, OPERATION_ID),
+    ).rejects.toThrow("did not exit normally (timeout)");
     expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
 
     const restarted = providerWithRunner(runCommand);
-    const lease = await restarted.provision(PROFILE, OPERATION_ID);
-    await restarted.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+    const lease = await restarted.provision(desktopProfile, OPERATION_ID);
+    await restarted.destroy({ leaseId: lease.leaseId, profile: desktopProfile });
 
     expect(creates).toBe(1);
     expect(lease.leaseId).toBe(LEASE_ID);
+    expect(lease.desktop).toMatchObject({
+      protocol: "rfb",
+      port: 5900,
+      apps: [{ id: "browser" }, { id: "terminal" }],
+    });
     expect(live.size).toBe(0);
     expect(calls.filter((argv) => argv[1] === "warmup")).toHaveLength(2);
-    expect(calls.filter((argv) => argv[1] === "inspect")).toEqual([
-      expect.arrayContaining(["--id", LEASE_ID]),
-      expect.arrayContaining(["--id", LEASE_ID]),
-    ]);
+    expect(calls.filter((argv) => argv[1] === "inspect")).toHaveLength(3);
+    expect(calls.filter((argv) => argv[1] === "inspect")).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(["--id", LEASE_ID]),
+        expect.arrayContaining(["--id", LEASE_ID]),
+        expect.arrayContaining(["--id", LEASE_ID]),
+      ]),
+    );
     expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 
@@ -1177,6 +1670,7 @@ describe("Crabbox worker provider", () => {
       sleep: async () => {
         nowMs += 290_001;
       },
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
 
     try {
@@ -1332,6 +1826,7 @@ describe("Crabbox worker provider", () => {
       openclawRoot: OPENCLAW_ROOT,
       pathEnv: "",
       isExecutable: () => false,
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
     const lease = lifecycleLease(LEASE_ID, { ...PROFILE, binary, provider: "coder" });
 
@@ -1712,113 +2207,6 @@ describe("Crabbox binary resolution", () => {
     expect(resolveOpenClawRoot(path.join(OPENCLAW_ROOT, "dist", "extensions", "crabbox"))).toBe(
       OPENCLAW_ROOT,
     );
-  });
-});
-
-function captureCrabboxDoctorCheck(): HealthCheck {
-  let check: HealthCheck | undefined;
-  registerCrabboxWorkerProviderDoctorChecks({
-    openclawRoot: OPENCLAW_ROOT,
-    registerHealthCheck(value) {
-      check = value;
-    },
-  });
-  if (!check) {
-    throw new Error("Crabbox doctor check was not registered");
-  }
-  return check;
-}
-
-describe("Crabbox worker doctor", () => {
-  it("reports a configured non-executable binary with a profile-specific repair", async () => {
-    const probe = vi.spyOn(doctorRuntime, "probeCrabboxVersion");
-    const binary = path.resolve(path.sep, "nonexistent", "crabbox");
-    try {
-      await expect(
-        captureCrabboxDoctorCheck().detect({
-          cfg: {
-            cloudWorkers: {
-              profiles: {
-                aws: { provider: "crabbox", settings: { binary } },
-              },
-            },
-          },
-          env: { PATH: "" },
-        } as never),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
-          severity: "warning",
-          message: expect.stringContaining('profile "aws"'),
-          path: binary,
-          target: "aws",
-          fixHint: expect.stringContaining("cloudWorkers.profiles.aws.settings.binary"),
-        }),
-      ]);
-      expect(probe).not.toHaveBeenCalled();
-    } finally {
-      probe.mockRestore();
-    }
-  });
-
-  it("emits no finding for a supported configured binary", async () => {
-    const probe = vi
-      .spyOn(doctorRuntime, "probeCrabboxVersion")
-      .mockResolvedValue({ status: "supported", version: "0.41.6" });
-    try {
-      await expect(
-        captureCrabboxDoctorCheck().detect({
-          cfg: {
-            cloudWorkers: {
-              profiles: {
-                aws: { provider: "crabbox", settings: { binary: process.execPath } },
-              },
-            },
-          },
-        } as never),
-      ).resolves.toEqual([]);
-      expect(probe).toHaveBeenCalledOnce();
-    } finally {
-      probe.mockRestore();
-    }
-  });
-
-  it("reports an indeterminate version probe without asserting failure", async () => {
-    const probe = vi.spyOn(doctorRuntime, "probeCrabboxVersion").mockResolvedValue({
-      status: "indeterminate",
-      reason: "version command timed out after 2000 ms",
-    });
-    try {
-      await expect(
-        captureCrabboxDoctorCheck().detect({
-          cfg: {
-            cloudWorkers: {
-              profiles: {
-                aws: { provider: "crabbox", settings: { binary: process.execPath } },
-              },
-            },
-          },
-        } as never),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          severity: "info",
-          message: expect.stringContaining("could not determine its version"),
-          fixHint: expect.stringContaining(`${process.execPath} --version`),
-        }),
-      ]);
-    } finally {
-      probe.mockRestore();
-    }
-  });
-
-  it("does not probe when no Crabbox cloud worker profile is configured", async () => {
-    const probe = vi.spyOn(doctorRuntime, "probeCrabboxVersion");
-    try {
-      await expect(captureCrabboxDoctorCheck().detect({ cfg: {} } as never)).resolves.toEqual([]);
-      expect(probe).not.toHaveBeenCalled();
-    } finally {
-      probe.mockRestore();
-    }
   });
 });
 

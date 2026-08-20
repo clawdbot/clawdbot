@@ -29,4 +29,14 @@ describe("gateway client identity", () => {
       sender: { id: "alice", name: "Suggested by Alice" },
     });
   });
+
+  it("keeps a GitHub-backed mutable alias unattributed until immutable sync completes", () => {
+    const client = {
+      authenticatedUserId: "released-login@github",
+      authenticatedGitHubIdentitySync: async () => ({ profileId: "owner", updatedAt: 1 }),
+    } as GatewayClient;
+
+    expect(gatewayClientSenderFields(client)).toEqual({});
+    expect(gatewayClientSessionCreator(client)).toBeUndefined();
+  });
 });

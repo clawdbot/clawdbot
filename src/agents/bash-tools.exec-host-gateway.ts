@@ -127,6 +127,7 @@ type ProcessGatewayAllowlistParams = {
   approvalRunningNoticeMs: number;
   maxOutput: number;
   pendingMaxOutput: number;
+  processContinuationAvailable?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
@@ -1488,6 +1489,7 @@ export async function processGatewayAllowlist(
         sentApproverDms,
         unavailableReason,
         allowedDecisions: approvalAllowedDecisions,
+        processContinuationAvailable: params.processContinuationAvailable,
       }),
     };
   }

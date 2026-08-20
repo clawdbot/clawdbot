@@ -285,9 +285,11 @@ export type EmbeddedRunAttemptResult = {
   lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;
+    toolCallId?: string;
     meta?: string;
     replaySafe?: boolean;
     isError?: boolean;
+    terminate?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -326,6 +328,8 @@ export type EmbeddedRunAttemptResult = {
   cloudCodeAssistFormatError: boolean;
   /** Effective context window reported by the harness during this attempt. */
   contextTokens?: number;
+  /** Whether the harness observed the window or carried prepared resolution forward. */
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   attemptUsage?: NormalizedUsage;
   promptCache?: ContextEnginePromptCacheInfo;
   contextBudgetStatus?: SessionContextBudgetStatus;

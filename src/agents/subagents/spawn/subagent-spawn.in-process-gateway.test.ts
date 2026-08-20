@@ -19,10 +19,7 @@ import type {
   GatewayRequestOptions,
 } from "../../../gateway/server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import {
-  clearFallbackGatewayContext,
-  type dispatchGatewayMethodInProcess,
-} from "../../../gateway/server-plugins.js";
+import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import type { WorkerSessionTurnClaim } from "../../../gateway/worker-environments/placement-record.js";
 import type {
   WorkerTurnExecutionIdentity,
@@ -32,7 +29,10 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   isGatewaySubordinateWorkAdmissionClosed,
   resetGatewayWorkAdmission,
@@ -161,7 +161,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
-    clearFallbackGatewayContext();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     subagentRegistryTesting.setDepsForTest({
@@ -213,7 +212,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   });
 
   afterEach(async () => {
-    clearFallbackGatewayContext();
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
@@ -900,6 +898,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
   it("launches child runs as a Gateway client that does not own a second task row", async () => {
     const gatewayContext = makeGatewayContext();
+    const gatewayContextResolver = () => gatewayContext;
     const agentDispatches: Array<{
       params: Record<string, unknown>;
       options?: NonNullable<Parameters<typeof dispatchGatewayMethodInProcess>[2]>;
@@ -924,16 +923,24 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         isWebchatConnect: () => false,
       },
       () =>
-        spawnSubagentDirect(
+        withGatewayToolCallerIdentity(
           {
-            task: "summarize the repository",
-            context: "isolated",
-            lightContext: true,
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            gatewayContextResolver,
           },
-          {
-            agentSessionKey: "agent:main:main",
-            requesterRunId: "parent-run",
-          },
+          () =>
+            spawnSubagentDirect(
+              {
+                task: "summarize the repository",
+                context: "isolated",
+                lightContext: true,
+              },
+              {
+                agentSessionKey: "agent:main:main",
+                requesterRunId: "parent-run",
+              },
+            ),
         ),
     );
 
@@ -946,6 +953,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         childSessionKey: result.childSessionKey,
       });
     });
+    expect(getGatewayContextResolver(subagentRuns.get(runId)!)?.()).toBe(gatewayContext);
 
     const dispatch = agentDispatches[0];
     expect(dispatch).toBeDefined();

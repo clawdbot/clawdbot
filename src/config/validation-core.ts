@@ -3,10 +3,13 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
+  listAgentEntries,
   listAgentEntriesWithSource,
+  listAgentIds,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
   tryResolveLegacyCompatibilityAgentId,
+  tryResolveSystemAgentTargetAgentId,
 } from "../agents/agent-scope.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -45,6 +48,26 @@ import {
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
+
+export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+  const agentEntries = listAgentEntries(config);
+  // Keep this equivalent to isHeartbeatOwnerUnresolved in heartbeat-runner-config.ts.
+  const unresolved =
+    listAgentIds(config).length > 1 &&
+    !agentEntries.some((entry) => Boolean(entry.heartbeat)) &&
+    !config.agents?.defaults?.heartbeat &&
+    tryResolveLegacyCompatibilityAgentId(config) === undefined &&
+    tryResolveSystemAgentTargetAgentId(config) === undefined;
+  return unresolved
+    ? [
+        {
+          path: "agents.defaults.heartbeat.agentId",
+          message:
+            "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
+        },
+      ]
+    : [];
+}
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
   const providers = config.models?.providers;
@@ -180,7 +203,7 @@ function validateIdentityAvatar(
     }
     const workspaceDir = resolveAgentWorkspaceDir(
       config,
-      entry.id ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveDefaultAgentId(config),
+      entry.id ?? resolveAmbientOwnerAgentId(config),
       env,
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {

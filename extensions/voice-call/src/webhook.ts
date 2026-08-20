@@ -241,9 +241,18 @@ export class VoiceCallWebhookServer {
       this.logger.info(
         `Call finalization requested reason=stream-disconnect-grace-expired callId=${call.callId} providerCallId=${providerCallId}`,
       );
-      void this.manager.endCall(call.callId).catch((err: unknown) => {
-        this.logger.warn(`Failed to auto-end call ${call.callId}: ${String(err)}`);
-      });
+      void this.manager
+        .endCall(call.callId)
+        .then((result) => {
+          if (!result.success) {
+            this.logger.warn(
+              `Failed to auto-end call ${call.callId}: ${result.error ?? "unknown error"}`,
+            );
+          }
+        })
+        .catch((err: unknown) => {
+          this.logger.warn(`Failed to auto-end call ${call.callId}: ${String(err)}`);
+        });
     });
   }
 
@@ -1021,7 +1030,7 @@ export class VoiceCallWebhookServer {
   private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
     this.logger.info(`Auto-responding to inbound call ${callId} chars=${userMessage.length}`);
 
-    // Get call context for conversation history
+    // Get the persisted call context for routing and response delivery.
     const call = this.manager.getCall(callId);
     if (!call) {
       this.logger.warn(`Call ${callId} not found for auto-response`);
@@ -1049,6 +1058,7 @@ export class VoiceCallWebhookServer {
         callId,
         sessionKey: call.sessionKey,
         from: call.from,
+        senderIsOwner: call.direction === "inbound" ? false : undefined,
         agentId: resolveCallAgentId(call, effectiveConfig),
         transcript: call.transcript,
         userMessage,

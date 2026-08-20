@@ -24,7 +24,7 @@ import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
-import type { EmbeddedAgentAttempt } from "./run-embedded-attempt.js";
+import type { runEmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
   loadAgentRunnerMemoryRuntime,
   loadCliCompactionRuntime,
@@ -34,6 +34,8 @@ import {
 import { clearPendingFinalDelivery } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
+
+type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -353,6 +355,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           senderIsOwner: params.opts.senderIsOwner,
           thinkLevel: effectiveTurnThinkLevel,
           extraSystemPrompt: params.opts.extraSystemPrompt,
+          pluginGeneration: params.prepared.commandRuntimeContext?.pluginGeneration,
         });
         throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);

@@ -1171,6 +1171,23 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("preserves the recorded session permission policy when building compaction tools", async () => {
+    await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        workspaceDir: "/tmp/workspace",
+        sessionEntry: {
+          sessionId: "session-1",
+          permissionMode: "full",
+          sessionRoot: "/tmp/workspace",
+        },
+      }),
+    );
+
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+      sessionPermissionPolicy: { mode: "full", root: "/tmp/workspace" },
+    });
+  });
+
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";
     const metadataSnapshot = {
@@ -1589,6 +1606,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: {
         agents: {
           defaults: {
+            compaction: { thinkingLevel: "inherit" as const },
             models: {
               "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
             },
@@ -2677,6 +2695,20 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 });
 
 describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
+  async function acquiredPreparedModelRuntime() {
+    const pendingLease = acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value;
+    if (!pendingLease) {
+      throw new Error("expected prepared model runtime acquisition");
+    }
+    return (await pendingLease).snapshot;
+  }
+
+  function expectedNativeCompactionOptions(
+    nativeCompactionRequest: "after_context_engine" | "required_preflight",
+  ) {
+    return { nativeCompactionRequest, preparedModelRuntime: expect.any(Object) };
+  }
+
   function mockQueuedRouteAwareModel(
     defaultApi: "openai-responses" | "openai-chatgpt-responses" = "openai-responses",
   ) {
@@ -2783,10 +2815,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       }),
     );
 
-    const snapshot = acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value
-      ? (await acquireAgentRunPreparedModelRuntimeMock.mock.results[0].value).snapshot
-      : undefined;
-    expect(snapshot).toBeDefined();
+    const snapshot = await acquiredPreparedModelRuntime();
     expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toMatchObject({
       preparedModelRuntime: snapshot,
       skipAgentDiscovery: true,
@@ -2871,6 +2900,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         }),
       ),
     ).rejects.toThrow("route materialization failed");
+    const snapshot = await acquiredPreparedModelRuntime();
+    expect(
+      (mockCallArg(resolveModelAsyncMock, 1, 4) as { preparedModelRuntime?: unknown })
+        .preparedModelRuntime,
+    ).toBe(snapshot);
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();
   });
@@ -3316,13 +3350,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    const snapshot = await acquiredPreparedModelRuntime();
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
         model: "gpt-5.5",
         agentHarnessId: "codex",
       }),
-      { nativeCompactionRequest: "after_context_engine" },
+      { nativeCompactionRequest: "after_context_engine", preparedModelRuntime: snapshot },
     );
     const compactArg = mockCallArg(contextEngineCompactMock) as {
       runtimeContext?: Record<string, unknown>;
@@ -3371,6 +3406,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.compacted).toBe(true);
     expect(result.result?.summary).toBe("engine-summary");
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    const snapshot = await acquiredPreparedModelRuntime();
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
@@ -3378,7 +3414,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         agentHarnessId: "codex",
         preflightRequired: true,
       }),
-      expect.objectContaining({ nativeCompactionRequest: "required_preflight" }),
+      expect.objectContaining({
+        nativeCompactionRequest: "required_preflight",
+        preparedModelRuntime: snapshot,
+      }),
     );
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
   });
@@ -3579,7 +3618,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         provider: "openai",
         model: "gpt-5.5",
       }),
-      { nativeCompactionRequest: "after_context_engine" },
+      expectedNativeCompactionOptions("after_context_engine"),
     );
     const compactArg = mockCallArg(contextEngineCompactMock) as {
       runtimeContext?: Record<string, unknown>;
@@ -3683,7 +3722,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
             baseUrl: "https://api.openai.com/v1",
           }),
         }),
-        { nativeCompactionRequest: "after_context_engine" },
+        {
+          nativeCompactionRequest: "after_context_engine",
+          preparedModelRuntime: expect.any(Object),
+        },
       );
     } finally {
       closeOpenClawAgentDatabasesForTest();
@@ -3772,7 +3814,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         model: "gpt-5.5",
         agentHarnessId: "codex",
       }),
-      { nativeCompactionRequest: "after_context_engine" },
+      expectedNativeCompactionOptions("after_context_engine"),
     );
     const compactArg = mockCallArg(contextEngineCompactMock) as {
       runtimeContext?: Record<string, unknown>;
@@ -3861,7 +3903,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         }),
         runtimeAuthPlan: undefined,
       }),
-      { nativeCompactionRequest: "after_context_engine" },
+      expectedNativeCompactionOptions("after_context_engine"),
     );
   });
 
@@ -3899,7 +3941,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeAuthPlan: undefined }),
-      { nativeCompactionRequest: "after_context_engine" },
+      expectedNativeCompactionOptions("after_context_engine"),
     );
   });
 
@@ -4141,7 +4183,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         }),
         runtimeAuthPlan: expect.objectContaining({ modelRoute }),
       }),
-      { nativeCompactionRequest: "after_context_engine" },
+      expectedNativeCompactionOptions("after_context_engine"),
     );
     const compactArg = mockCallArg(contextEngineCompactMock) as {
       runtimeContext?: Record<string, unknown>;
@@ -4252,7 +4294,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         model: "gpt-5.4",
         agentHarnessId: "codex",
       }),
-      { nativeCompactionRequest: "after_context_engine" },
+      expectedNativeCompactionOptions("after_context_engine"),
     );
     const details = result.result?.details as
       | { codexNativeCompaction?: Record<string, unknown> }
@@ -4650,7 +4692,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         sessionFile: TEST_SESSION_KEY,
         trigger: "budget",
       }),
-      { nativeCompactionRequest: "after_context_engine" },
+      expectedNativeCompactionOptions("after_context_engine"),
     );
     expect(contextEngineCompactMock.mock.invocationCallOrder[0]).toBeLessThan(
       expectDefined(
@@ -4758,7 +4800,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect.objectContaining({
         trigger: "budget",
       }),
-      { nativeCompactionRequest: "after_context_engine" },
+      expectedNativeCompactionOptions("after_context_engine"),
     );
     const details = result.result?.details as
       | { codexNativeCompaction?: Record<string, unknown> }

@@ -13,6 +13,7 @@ import type { CronJobCreate } from "./types.js";
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-eval-" });
 
 type Evaluator = NonNullable<CronServiceDeps["evaluateCronTrigger"]>;
+type CronEventContext = Parameters<NonNullable<CronServiceDeps["onEvent"]>>[1];
 type IsolatedRunner = CronServiceDeps["runIsolatedAgentJob"];
 type ScriptRunner = NonNullable<CronServiceDeps["runScriptJob"]>;
 
@@ -37,6 +38,7 @@ async function createHarness(params: {
 }) {
   const { storePath } = await makeStorePath();
   const events: CronEvent[] = [];
+  const eventContexts: Array<CronEventContext | undefined> = [];
   const enqueueSystemEvent = vi.fn();
   const runIsolatedAgentJob =
     params.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const }));
@@ -51,10 +53,13 @@ async function createHarness(params: {
     ...(params.evaluateCronTrigger ? { evaluateCronTrigger: params.evaluateCronTrigger } : {}),
     ...(params.runScriptJob ? { runScriptJob: params.runScriptJob } : {}),
     ...(params.sendCronWebhook ? { sendCronWebhook: params.sendCronWebhook } : {}),
-    onEvent: (event) => events.push(structuredClone(event)),
+    onEvent: (event, context) => {
+      events.push(structuredClone(event));
+      eventContexts.push(context ? structuredClone(context) : undefined);
+    },
   });
   await cron.start();
-  return { cron, enqueueSystemEvent, events, runIsolatedAgentJob, storePath };
+  return { cron, enqueueSystemEvent, eventContexts, events, runIsolatedAgentJob, storePath };
 }
 
 async function runWhenDue(cron: CronService, jobId: string) {
@@ -190,6 +195,7 @@ describe("cron trigger evaluation", () => {
       const job = await harness.cron.add(watcher());
       const dueAt = job.state.nextRunAtMs ?? 0;
       harness.events.length = 0;
+      harness.eventContexts.length = 0;
       await runWhenDue(harness.cron, job.id);
 
       const stored = harness.cron.getJob(job.id);
@@ -206,6 +212,14 @@ describe("cron trigger evaluation", () => {
         status: "error",
         error: expect.stringContaining("deadline exceeded"),
       });
+      expect(harness.eventContexts[1]).toEqual({
+        failureNotificationDetail: {
+          kind: "script-failure",
+          source: "trigger",
+          code: "timeout",
+        },
+      });
+      expect(harness.events[1]).not.toHaveProperty("failureNotificationDetail");
       expect(harness.events.map((event) => event.action)).toEqual([
         "started",
         "finished",

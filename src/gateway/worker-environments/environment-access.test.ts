@@ -4,6 +4,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
+import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -451,6 +452,69 @@ describe("worker environment service", () => {
         resolveIdentity: expect.any(Function),
       }),
     );
+  });
+
+  it("routes a node-backed desktop through its durable node carrier without SSH", async () => {
+    const record = support.seedReadyNodeDesktop("worker-node-desktop-access");
+    const order: string[] = [];
+    const observe = vi.fn(async () => ({
+      transport: "rfb" as const,
+      wsPath: "/desktop/observe?token=node-carrier",
+      expiresAtMs: support.testState.nowMs + 60_000,
+      control: true,
+    }));
+    const launchApp = vi.fn(async () => {});
+    const stop = vi.fn(async () => {
+      order.push("node-desktop-stop");
+    });
+    const nodeDesktopCarrier = {
+      bindRuntime: vi.fn(),
+      observe,
+      launchApp,
+      stop,
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerNodeDesktopCarrier;
+    const workerService = support.createService(
+      support.createProvider({
+        destroy: async () => {
+          order.push("provider-destroy");
+        },
+      }),
+      { nodeDesktopCarrier },
+    );
+    expect(workerService.get(record.environmentId)).toMatchObject({
+      desktopAvailable: true,
+      desktopApps: ["browser", "terminal"],
+    });
+
+    await expect(
+      workerService.observeDesktop({ environmentId: record.environmentId, control: true }),
+    ).resolves.toEqual({
+      transport: "rfb",
+      wsPath: "/desktop/observe?token=node-carrier",
+      expiresAtMs: support.testState.nowMs + 60_000,
+      control: true,
+    });
+    expect(observe).toHaveBeenCalledWith({
+      record: expect.objectContaining({
+        environmentId: record.environmentId,
+        nodeDeviceId: record.nodeDeviceId,
+        sshEndpoint: null,
+        desktop: support.DESKTOP,
+      }),
+      control: true,
+    });
+
+    await expect(
+      workerService.launchDesktopApp({ environmentId: record.environmentId, app: "browser" }),
+    ).resolves.toEqual({ app: "browser", status: "ready" });
+    expect(launchApp).toHaveBeenCalledWith({
+      record: expect.objectContaining({ environmentId: record.environmentId }),
+      app: support.DESKTOP.apps![0],
+    });
+
+    await workerService.destroy(record.environmentId);
+    expect(order).toEqual(["node-desktop-stop", "provider-destroy"]);
   });
 
   it("rejects desktop observe for invalid lifecycle gates and a stopped service", async () => {

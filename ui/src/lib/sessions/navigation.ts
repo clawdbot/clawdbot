@@ -239,9 +239,9 @@ type VisibleSessionRowOptions = {
  * message text, which rots and false-positives real chats. Rows without
  * recorded provenance (legacy stores) stay visible.
  *
- * Accepted tradeoff: a profile-less client's unnamed `run` session (e.g. an
- * explicit `--session-key` CLI conversation without an operator profile) is
- * indistinguishable from a probe and hides by default too. It stays fully
+ * Accepted tradeoff: a profile-less client's unnamed `run` session is
+ * indistinguishable from a probe and hides by default too. Operator-named CLI
+ * sessions are stamped at creation and remain visible. Unnamed rows stay fully
  * reachable: the selected session always renders in the sidebar, the Sessions
  * page never applies this filter, and the sort-menu toggle reveals all rows.
  */
@@ -273,6 +273,21 @@ export function sessionMatchesArchivedFilter(
   return (row.archived === true) === (archivedFilter === "archived");
 }
 
+export function sessionMatchesVisibleSessionScope(
+  row: GatewaySessionRow,
+  options: VisibleSessionRowOptions,
+): boolean {
+  return (
+    sessionMatchesArchivedFilter(row, options.archivedFilter) &&
+    row.kind !== "global" &&
+    row.kind !== "unknown" &&
+    (options.showCron === true || !isCronSessionKey(row.key)) &&
+    (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
+    (!options.filterByAgent ||
+      isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
+  );
+}
+
 export function filterVisibleSessionRows(
   rows: readonly GatewaySessionRow[],
   options: VisibleSessionRowOptions,
@@ -286,15 +301,9 @@ export function filterVisibleSessionRows(
       return true;
     }
     return (
-      sessionMatchesArchivedFilter(row, options.archivedFilter) &&
-      row.kind !== "global" &&
-      row.kind !== "unknown" &&
-      (options.showCron === true || !isCronSessionKey(row.key)) &&
-      (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
+      sessionMatchesVisibleSessionScope(row, options) &&
       !isSubagentSessionKey(row.key) &&
-      !row.spawnedBy &&
-      (!options.filterByAgent ||
-        isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
+      !row.spawnedBy
     );
   });
 }

@@ -1,23 +1,17 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
-import {
-  listAssignableSessionOwners,
-  listSessionOwners,
-} from "../../components/session-owner-chip.ts";
+import { listAssignableSessionOwners } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
-import {
-  hasSessionPresenceViewers,
-  projectPresencePayload,
-} from "../../components/viewer-facepile.ts";
-import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasSessionPresenceViewers, projectPresencePayload } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   canArchiveSessionRow,
@@ -49,6 +43,7 @@ import { renderChatSessionSharing } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import type { SidebarLayout } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
@@ -63,7 +58,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       password: gateway.connection.password,
     });
     return {
-      routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
+      routeUrl: buildControlUiResourcePath(
+        "workspaceIcon",
+        this.context.resourceBasePath,
+        sessionKey,
+      ),
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };
@@ -76,6 +75,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     catalog: boolean,
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
+    sidebarLayout?: SidebarLayout,
   ) {
     const board = this.resolveBoardView();
     const canChangeBoardDock = board.hasBoard && board.provider.canMutate;
@@ -197,13 +197,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
-    const sidePanelOpen = this.state?.sidebarLayout.open === true;
-    const toggleSidePanel = () => {
-      const state = this.state;
-      if (state) {
-        this.setChatSidePanelOpen(!sidePanelOpen);
-      }
-    };
+    const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
+    const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sidePanelAction = html`<openclaw-tooltip
       .content=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
     >
@@ -340,19 +335,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const selfId = sharingSnapshot.selfUser?.id;
     const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
-    const showOwnerChip =
-      (result?.creators ?? listSessionOwners(result?.sessions ?? [])).length >= 2 ||
-      (row?.participantCount ?? 0) > 0;
-    const renderedOwnerId = showOwnerChip
-      ? (row?.owner?.actor ?? row?.createdActor)?.id
-      : undefined;
+    const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
+    const renderedOwnerId = showOwnerChip ? row?.owner?.actor.id : undefined;
     const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
     const ownerViewing = presence.users.some(
       (user) => user.id === renderedOwnerId && user.watchedSessions.includes(key),
     );
     const ownerOptions = listAssignableSessionOwners({
-      sessions: result?.sessions ?? (row ? [row] : []),
-      facet: result?.creators,
+      facet: result?.owners,
       agents: this.context.agents.state.agentsList?.agents,
       self: sharingSnapshot.selfUser ?? null,
     });
@@ -409,7 +399,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         face: board.face,
         dock: board.dock,
         canChangeDock: canChangeBoardDock,
+        fullscreenControl: board.hasBoard ? this.boardFullscreen.renderButton() : undefined,
         onSelectMode: (mode) => {
+          if (mode === "chat") {
+            void this.boardFullscreen.exit();
+          }
           if (!canChangeBoardDock) {
             const face = mode === "chat" ? "chat" : "dashboard";
             this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
@@ -476,7 +470,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .layoutActions=${layoutMenuActions}
               .ownerOptions=${ownerOptions}
               .selfOwner=${selfOwner}
-              .currentOwnerId=${(row.owner?.actor ?? row.createdActor)?.id ?? null}
+              .currentOwnerId=${row.owner?.actor.id ?? null}
               .actionDisabledReasons=${actionDisabledReasons}
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}

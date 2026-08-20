@@ -19,6 +19,10 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../src/shared/worker-bundle-hash.js";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
@@ -68,6 +72,12 @@ const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
 // Keep the dependency scan bounded while allowing headroom for generated root chunks.
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 10_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
+// These artifacts bundle their full runtime closure and have a dedicated layout/import guard.
+// Keep the generic parser bound on every other installed dist file.
+const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
+  `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+  `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+]);
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
   // package and falls back when the optional renderer is unavailable.
@@ -748,14 +758,17 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
 
   for (const filePath of distFiles.files) {
     const fileStat = lstatSync(filePath);
-    if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
-      const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
+    const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
+    if (
+      !fileStat.isFile() ||
+      (fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES &&
+        !SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath))
+    ) {
       return [
         `installed package root dist file '${relativePath}' is invalid or exceeds ${MAX_INSTALLED_ROOT_DIST_JS_BYTES} bytes.`,
       ];
     }
     const source = readFileSync(filePath, "utf8");
-    const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
     const parsedSpecifiers = extractJavaScriptImportSpecifiers(source);
     if (!parsedSpecifiers.ok) {
       return [

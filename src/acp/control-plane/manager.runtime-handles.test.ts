@@ -50,6 +50,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    expect(runtimeState.close).not.toHaveBeenCalled();
   });
 
   it("disposes every retained runtime handle", async () => {
@@ -200,6 +201,27 @@ describe("AcpSessionManager runtime handles", () => {
 
   it("re-ensures cached runtime handles when the backend reports the session is dead", async () => {
     const runtimeState = createRuntime();
+    const lifecycle: string[] = [];
+    runtimeState.ensureSession
+      .mockImplementationOnce(async (input) => {
+        lifecycle.push("ensure:old");
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: "runtime-old",
+        };
+      })
+      .mockImplementationOnce(async (input) => {
+        lifecycle.push("ensure:new");
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: "runtime-new",
+        };
+      });
+    runtimeState.close.mockImplementation(async ({ handle }) => {
+      lifecycle.push(`close:${handle.runtimeSessionName}`);
+    });
     runtimeState.getStatus
       .mockResolvedValueOnce({
         summary: "status=alive",
@@ -244,6 +266,12 @@ describe("AcpSessionManager runtime handles", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
     expect(runtimeState.getStatus).toHaveBeenCalledTimes(3);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    expect(runtimeState.close).toHaveBeenCalledOnce();
+    expectRecordFields(mockCallArg(runtimeState.close), {
+      handle: expect.objectContaining({ runtimeSessionName: "runtime-old" }),
+      reason: "runtime-handle-replaced",
+    });
+    expect(lifecycle).toEqual(["ensure:old", "close:runtime-old", "ensure:new"]);
   });
 
   it("re-ensures cached runtime handles when persisted ACP session identity changes", async () => {

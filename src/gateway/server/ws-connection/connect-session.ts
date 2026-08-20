@@ -33,6 +33,7 @@ import {
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
+import { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
 import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
@@ -52,7 +53,6 @@ import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
-import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
@@ -191,10 +191,10 @@ export async function attachAuthenticatedGatewayConnect(
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
-  const authenticatedUserIsTailscaleProvider = Boolean(
-    authResult.tailscaleIdentity &&
-    classifyTailscaleLogin(authResult.tailscaleIdentity.login).kind === "provider",
-  );
+  const tailscaleLogin = authResult.tailscaleIdentity
+    ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
+    : undefined;
+  const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
   // Device pairing owns persistent access. Verified identity grants only shape
   // this connection, after device-less self-declared scopes have been cleared.
   const effectiveScopes = resolveEffectiveConnectionScopes({
@@ -222,8 +222,13 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
 
+  const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    requestHeaders: context.handler.upgradeReq.headers,
+  });
   let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
-  if (authenticatedUserId) {
+  if (authenticatedUserId && !resolveAuthenticatedGitHubIdentity) {
     try {
       const profile = authResult.tailscaleIdentity
         ? ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
@@ -356,20 +361,22 @@ export async function attachAuthenticatedGatewayConnect(
             : {}),
         }
       : undefined;
-  const localUserIngress = prepareGatewayLocalUserIngress({
-    authMethod,
-    authenticatedUserExpected: Boolean(authenticatedUserId),
-    ...(authenticatedUserProfile
-      ? {
-          profile: {
-            profileId: authenticatedUserProfile.profileId,
-            displayName: authenticatedUserProfile.displayName,
-          },
-        }
-      : {}),
-    ...(device?.id ? { pairedDeviceId: device.id } : {}),
-    isLocalClient,
-  });
+  const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
+    prepareGatewayLocalUserIngress({
+      authMethod,
+      authenticatedUserExpected: Boolean(authenticatedUserId),
+      ...(profile
+        ? {
+            profile: {
+              profileId: profile.profileId,
+              displayName: profile.displayName,
+            },
+          }
+        : {}),
+      ...(device?.id ? { pairedDeviceId: device.id } : {}),
+      isLocalClient,
+    });
+  const localUserIngress = prepareLocalUserIngress();
   if (usesLegacyNodeProtocol) {
     logWsControl.warn(
       `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
@@ -399,6 +406,33 @@ export async function attachAuthenticatedGatewayConnect(
       : {}),
   };
   attachGatewayLocalUserIngress(nextClient, localUserIngress);
+  const attachAuthenticatedProfile = (profileId: string, updatedAt: number) => {
+    const display = getUserProfileDisplay(profileId);
+    const profile = {
+      profileId: display.id,
+      displayName: display.displayName,
+      avatarRevision: display.avatarRevision,
+      hasAvatar: display.hasAvatar,
+      updatedAt,
+    };
+    if (nextClient.authenticatedUserProfile) {
+      Object.assign(nextClient.authenticatedUserProfile, profile);
+    } else {
+      nextClient.authenticatedUserProfile = profile;
+    }
+    attachGatewayLocalUserIngress(
+      nextClient,
+      prepareLocalUserIngress(nextClient.authenticatedUserProfile),
+    );
+    buildRequestContext().refreshConnectedUserProfile?.({ ...display, updatedAt });
+  };
+  if (resolveAuthenticatedGitHubIdentity) {
+    nextClient.authenticatedGitHubIdentitySync = async () => {
+      const result = await resolveAuthenticatedGitHubIdentity();
+      attachAuthenticatedProfile(result.profileId, result.updatedAt);
+      return result;
+    };
+  }
   for (const entry of pendingPluginNodeCapabilities) {
     setClientPluginNodeCapability({
       client: nextClient,
@@ -512,13 +546,16 @@ export async function attachAuthenticatedGatewayConnect(
   }
 
   const currentAuthenticatedPresenceUser = () =>
-    buildAuthenticatedPresenceUser({
-      authenticatedUserId,
-      authenticatedUserIsTailscaleProvider,
-      authenticatedUserProfile: nextClient.authenticatedUserProfile,
-    });
+    nextClient.authenticatedGitHubIdentitySync && !nextClient.authenticatedUserProfile
+      ? undefined
+      : buildAuthenticatedPresenceUser({
+          authenticatedUserId,
+          authenticatedUserIsTailscaleProvider,
+          authenticatedUserProfile: nextClient.authenticatedUserProfile,
+        });
 
   if (presenceKey) {
+    const authenticatedPresenceUser = currentAuthenticatedPresenceUser();
     upsertPresence(presenceKey, {
       host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
       ip: isLocalClient ? undefined : reportedClientIp,
@@ -531,7 +568,7 @@ export async function attachAuthenticatedGatewayConnect(
       roles: [role],
       scopes,
       instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
-      ...(authenticatedUserId ? { user: currentAuthenticatedPresenceUser() } : {}),
+      ...(authenticatedPresenceUser ? { user: authenticatedPresenceUser } : {}),
       reason: "connect",
     });
     incrementPresenceVersion();
@@ -612,34 +649,46 @@ export async function attachAuthenticatedGatewayConnect(
 
   await sendGatewayHello(context, state, pluginSurfaceUrls, authenticatedUserProfile?.profileId);
 
+  if (nextClient.authenticatedGitHubIdentitySync) {
+    runDetachedConnectWork(
+      async () => {
+        const result = await nextClient.authenticatedGitHubIdentitySync!();
+        const profile = nextClient.authenticatedUserProfile;
+        const profilePic = authResult.tailscaleIdentity?.profilePic;
+        if (!profile?.hasAvatar && profilePic) {
+          try {
+            const updated = await adoptTailscaleProfileAvatar(result.profileId, profilePic);
+            if (updated.avatarMime) {
+              attachAuthenticatedProfile(updated.id, updated.updatedAt);
+            }
+          } catch (error) {
+            logGateway.warn(
+              `Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`,
+            );
+          }
+        }
+      },
+      (error) => {
+        logGateway.warn(`GitHub identity sync failed conn=${connId}: ${formatForLog(error)}`);
+      },
+    );
+  }
+
   const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
-  const tailscaleProfileId = authenticatedUserProfile?.profileId;
-  if (tailscaleProfileId && !authenticatedUserProfile?.hasAvatar && tailscaleProfilePic) {
+  const tailscaleProfileId = nextClient.authenticatedUserProfile?.profileId;
+  if (
+    !nextClient.authenticatedGitHubIdentitySync &&
+    tailscaleProfileId &&
+    !nextClient.authenticatedUserProfile?.hasAvatar &&
+    tailscaleProfilePic
+  ) {
     runDetachedConnectWork(
       async () => {
         const updated = await adoptTailscaleProfileAvatar(tailscaleProfileId, tailscaleProfilePic);
         if (!updated.avatarMime) {
           return;
         }
-        const display = getUserProfileDisplay(updated.id);
-        authenticatedUserProfile = {
-          profileId: display.id,
-          displayName: display.displayName,
-          avatarRevision: display.avatarRevision,
-          hasAvatar: display.hasAvatar,
-          updatedAt: updated.updatedAt,
-        };
-        nextClient.authenticatedUserProfile = authenticatedUserProfile;
-        if (isClosed() || !presenceKey) {
-          return;
-        }
-        upsertPresence(presenceKey, { user: currentAuthenticatedPresenceUser() });
-        const requestContext = buildRequestContext();
-        broadcastPresenceSnapshot({
-          broadcast: requestContext.broadcast,
-          incrementPresenceVersion: requestContext.incrementPresenceVersion,
-          getHealthVersion: requestContext.getHealthVersion,
-        });
+        attachAuthenticatedProfile(updated.id, updated.updatedAt);
       },
       (error) =>
         logGateway.warn(`Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`),

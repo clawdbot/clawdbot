@@ -45,6 +45,7 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import type {
@@ -54,6 +55,7 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
+import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -141,6 +143,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   send: () => import("./server-methods/send.js").then((module) => module.sendHandlers),
   "sessions-files": () =>
     import("./server-methods/sessions-files.js").then((module) => module.sessionsFilesHandlers),
+  "sessions-github": () =>
+    import("./server-methods/sessions-github.js").then((module) => module.sessionsGitHubHandlers),
   "sessions-diff": () =>
     import("./server-methods/sessions-diff.js").then((module) => module.sessionsDiffHandlers),
   "sessions-abort": () =>
@@ -289,6 +293,29 @@ function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
   return SUSPEND_CONTROL_METHODS.has(method);
 }
 
+async function authorizeAuthenticatedProfileForMethod(params: {
+  client: GatewayRequestOptions["client"];
+  method: string;
+  requestParams: unknown;
+  methodRegistry: GatewayMethodRegistry;
+}): Promise<ErrorShape | null> {
+  const sync = params.client?.authenticatedGitHubIdentitySync;
+  const requiresProfile =
+    params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
+    resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0;
+  if (!sync || !requiresProfile || params.client?.authenticatedUserProfile?.profileId.trim()) {
+    return null;
+  }
+  try {
+    await sync();
+  } catch {
+    return authenticatedProfileUnavailableError();
+  }
+  return params.client?.authenticatedUserProfile?.profileId.trim()
+    ? null
+    : authenticatedProfileUnavailableError();
+}
+
 const coreGatewayHandlerMethodNames = listCoreGatewayHandlerMethodNames();
 const coreGatewayHandlerModules = Object.entries(CORE_GATEWAY_HANDLER_MODULES) as Array<
   [CoreGatewayHandlerFamily, CoreGatewayHandlerModuleLoader]
@@ -368,6 +395,12 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   );
   if (authError) {
     return { error: authError };
+  }
+  // GitHub-backed connections receive hello before remote account resolution. Profile-owned
+  // methods must cross this single router fence before session authorization or handler work.
+  const profileError = await authorizeAuthenticatedProfileForMethod(params);
+  if (profileError) {
+    return { error: profileError };
   }
   const sessionMutation = resolveSessionMutationAuthorization({
     client: params.client ?? null,

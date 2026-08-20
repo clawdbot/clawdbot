@@ -8,6 +8,7 @@ const gatherDaemonStatus = vi.fn(
     service: {
       label: "LaunchAgent",
       loaded: true,
+      loadState: { status: "loaded" },
       loadedText: "loaded",
       notLoadedText: "not loaded",
     },
@@ -57,6 +58,7 @@ describe("runDaemonStatus", () => {
       service: {
         label: "LaunchAgent",
         loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "loaded",
         notLoadedText: "not loaded",
       },
@@ -92,6 +94,7 @@ describe("runDaemonStatus", () => {
         service: {
           label: "LaunchAgent",
           loaded: true,
+          loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
         },
@@ -208,6 +211,7 @@ describe("runDaemonStatus", () => {
       service: {
         label: "LaunchAgent",
         loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "loaded",
         notLoadedText: "not loaded",
       },

@@ -122,6 +122,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     capabilities: {
       chatTypes: ["direct", "group"],
       threads: true,
+      media: true,
       blockStreaming: true,
     },
     reload: { configPrefixes: ["channels.clickclack"] },

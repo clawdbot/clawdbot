@@ -58,7 +58,7 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
     // oxlint-disable-next-line unicorn/prefer-add-event-listener
     this.transport.onerror = (error) => {
       this.emitError(error);
-      if (error instanceof SseError && error.code === 204) {
+      if (error instanceof SseError && error.code !== undefined) {
         void this.close();
       }
     };
@@ -75,6 +75,9 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
   }
 
   async send(message: JSONRPCMessage): Promise<void> {
+    if (this.closed) {
+      throw new Error("MCP SSE transport is closed");
+    }
     await this.transport.send(message);
   }
 
@@ -94,6 +97,7 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
   private readonly url: URL;
   private readonly cleanupFetch: FetchLike;
   private readonly requestInit?: RequestInit;
+  private pendingExpiredNotificationGet = false;
   private terminatedSessionId?: string;
 
   constructor(url: URL, options: OpenClawStreamableHttpOptions = {}) {
@@ -105,7 +109,11 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
       if (this.closed) {
         throw new Error("MCP Streamable HTTP transport is closed");
       }
-      return await this.cleanupFetch(input, init);
+      const response = await this.cleanupFetch(input, init);
+      if (init?.method === "GET" && response.status === 404 && this.sessionId !== undefined) {
+        this.pendingExpiredNotificationGet = true;
+      }
+      return response;
     };
     this.transport = new StreamableHTTPClientTransport(url, {
       ...options,
@@ -136,7 +144,14 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
         return;
       }
       this.emitError(error);
-      if (STREAM_RETRY_EXHAUSTED_RE.test(error.message)) {
+      const sessionExpired =
+        this.pendingExpiredNotificationGet &&
+        error instanceof StreamableHTTPError &&
+        error.code === 404;
+      if (sessionExpired) {
+        this.pendingExpiredNotificationGet = false;
+      }
+      if (sessionExpired || STREAM_RETRY_EXHAUSTED_RE.test(error.message)) {
         void this.close();
       }
     };

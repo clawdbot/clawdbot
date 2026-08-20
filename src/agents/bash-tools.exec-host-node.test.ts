@@ -3858,6 +3858,14 @@ describe("executeNodeHostCommand", () => {
     expect(Object.hasOwn(runParams, "systemRunPlan")).toBe(false);
   });
 
+  it("bypasses host approval floors for an explicit full session", async () => {
+    await executeNodeHostCommand(createNodeHostRequest({ bypassHostApprovalFloors: true }));
+
+    expect(resolveExecHostApprovalContextMock).not.toHaveBeenCalled();
+    expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
+    expect(Object.hasOwn(requireRunParams(requireGatewayCall(0)), "systemRunPlan")).toBe(false);
+  });
+
   it("does not dispatch a direct full/off command after gateway policy revocation", async () => {
     resolveExecHostApprovalContextMock
       .mockReturnValueOnce({

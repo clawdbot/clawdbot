@@ -4,7 +4,6 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForPluginsHubTab, pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -13,9 +12,7 @@ import {
 } from "../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
@@ -52,7 +49,8 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
-import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs, type PluginsHubTab } from "./plugins-hub.ts";
+import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
+import type { PluginsHubTab } from "./plugins-hub.ts";
 import type { ConnectorSuggestion } from "./presentation.ts";
 import { pluginArtPath } from "./presentation.ts";
 import { canonicalPluginsRouteLocation, pluginsHubTabForRoute } from "./route-data.ts";
@@ -64,8 +62,6 @@ import {
   type PluginRowMessage,
   type PluginsTab,
 } from "./view.ts";
-
-const PLUGINS_DOCS_URL = "https://docs.openclaw.ai/plugins/manage-plugins";
 
 export type PluginsRouteData = {
   gateway: ApplicationContext["gateway"];
@@ -448,7 +444,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.iconRequests.set(pluginId, request);
     void fetchPluginIconBlobUrl({
       pluginId,
-      basePath: this.context.basePath,
+      resourceBasePath: this.context.resourceBasePath,
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       auth: {
         hello: this.context.gateway.snapshot.hello,
@@ -979,29 +975,11 @@ class PluginsPage extends OpenClawLightDomElement {
   override render() {
     const blockedReason = this.mutationBlockedReason();
     return html`
-      <section class="content-header content-header--page plugins-content-header">
-        <div>
-          <h1 class="page-title">${titleForRoute("plugins")}</h1>
-          <div class="page-subtitle">
-            ${subtitleForRoute("plugins")}
-            ${renderDocsLink(PLUGINS_DOCS_URL, t("common.learnMore"))}
-          </div>
-        </div>
-      </section>
+      ${renderPluginsHubHeader({
+        active: this.activeTab,
+        onSelect: (tab) => this.selectHubTab(tab),
+      })}
       ${renderSettingsWorkspace(html`
-        <div class="plugins-hub-tabs-row">
-          ${renderHubTabs({
-            id: "plugins",
-            active: this.activeTab,
-            tabs: pluginsHubTabs(
-              this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
-            ),
-            ariaLabel: t("pluginsPage.hubTablistLabel"),
-            panelId: PLUGINS_HUB_PANEL_ID,
-            className: "plugins-tabs",
-            onSelect: (tab) => this.selectHubTab(tab),
-          })}
-        </div>
         ${renderPlugins({
           connected: this.gateway.connected,
           loading: this.loading,

@@ -21,7 +21,6 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -53,7 +52,6 @@ import {
   subscribeChatPaneSnapshotInvalidation,
   subscribeChatPaneStartup,
 } from "./chat-pane-startup-subscriptions.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -265,7 +263,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       state.handleChatDraftChange(draft);
       state.requestUpdate?.();
     });
-    this.sendPendingSkillWorkshopRevision(this.sessionKey);
   }
 
   protected readonly handlePaneFocus = () => {
@@ -281,38 +278,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     // A null mount binds only when its first annotation ownership begins.
     this.stagedAttachmentGatewayOwner ??= this.context.gateway.snapshot.client;
     focusBrowserAnnotationComposerAfterUpdate(this);
-  }
-
-  protected sendPendingSkillWorkshopRevision(expectedSessionKey: string) {
-    const state = this.state;
-    if (
-      !this.active ||
-      !this.presented ||
-      !state ||
-      !state.connected ||
-      state.sessionKey !== expectedSessionKey
-    ) {
-      return;
-    }
-    const revision = this.context.skillWorkshopRevision.consume(
-      expectedSessionKey,
-      this.context.gateway.snapshot.hello,
-    );
-    if (!revision) {
-      return;
-    }
-    void state
-      .handleSendChat(revision.instructions, {
-        restoreDraft: true,
-        skillWorkshopRevision: {
-          proposalId: revision.proposalId,
-          agentId: revision.proposalAgentId,
-        },
-      })
-      .catch((error: unknown) => {
-        setChatError(state, formatUiError(error));
-        state.requestUpdate?.();
-      });
   }
 
   protected readonly handleDocumentKeydown = (event: KeyboardEvent) => {
@@ -415,7 +380,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   };
 
   override connectedCallback() {
-    this.boardProviderLifecycleConnected = this.presented;
+    this.boardProviderLifecycleConnected = true;
     this.resumeStagedAttachments();
     super.connectedCallback();
     if (!this.presented) {

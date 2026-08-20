@@ -8,6 +8,7 @@ export type SessionCreatedActor = {
 };
 
 export type SessionParticipantSource = "profile" | "channel" | "agent";
+export const MAX_SESSION_PARTICIPANTS = 32;
 
 export type SessionParticipant = SessionCreatedActor & {
   /** Identity namespace recorded at the participant producer; absent means unknown legacy data. */
@@ -43,6 +44,22 @@ export type SessionCreatedVia =
   | "run" // create-on-run materialization (agent-session-persist)
   | "plugin" // trusted plugin runtime creation
   | "internal"; // internal/hidden sessions (internal-session-effects, voice bare rows)
+
+export function resolveProfileParticipantIdFromSessionCreation(
+  creation:
+    | {
+        via: SessionCreatedVia;
+        actor?: SessionCreatedActor;
+      }
+    | undefined,
+): string | undefined {
+  const profileId = creation?.actor?.id?.trim();
+  return creation?.actor?.type === "human" &&
+    (creation.via === "operator" || creation.via === "run") &&
+    profileId
+    ? profileId
+    : undefined;
+}
 
 // Return shape mirrors the SessionEntry creation fields as a leaf contract;
 // types.ts imports from here, never the reverse (madge cycle guard).

@@ -116,6 +116,7 @@ export function buildEmbeddedRunBaseParams(params: {
     clientCaps: params.run.clientCaps,
     toolBindings: params.run.toolBindings,
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
+    skillWorkshopProposalRevision: params.run.skillWorkshopProposalRevision,
     provider: params.provider,
     model: params.model,
     modelSelectionLocked: params.run.modelSelectionLocked,

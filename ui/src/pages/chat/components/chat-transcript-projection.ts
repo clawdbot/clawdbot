@@ -208,7 +208,7 @@ export function projectChatTranscript(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
+    runId: props.runId ?? null,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -238,8 +238,12 @@ export function projectChatTranscript(
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
-  const toggleToolCardExpanded = (toolCardId: string) => {
-    setExpansionState(expandedToolCards, toolCardId, !expandedToolCards.get(toolCardId));
+  const toggleToolCardExpanded = (toolCardId: string, expanded?: boolean) => {
+    setExpansionState(
+      expandedToolCards,
+      toolCardId,
+      !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
+    );
     requestUpdate();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
@@ -341,7 +345,7 @@ export function projectChatTranscript(
     runActive: props.runActive,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
-    basePath: props.basePath,
+    resourceBasePath: props.resourceBasePath,
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
@@ -351,6 +355,7 @@ export function projectChatTranscript(
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+    fetchLinkFavicon: props.fetchLinkFavicon,
     showAssistantAvatar: false,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
@@ -644,12 +649,13 @@ export function projectChatTranscript(
     props.userName,
     props.userAvatar,
     props.typingActors,
-    props.basePath,
+    props.resourceBasePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
     props.assistantAttachmentAuthToken,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
+    Boolean(props.fetchLinkFavicon),
     threadContextWindow,
     Boolean(props.onSetReply),
     props.replyMessageAccess?.revision ?? 0,

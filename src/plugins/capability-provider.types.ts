@@ -52,7 +52,8 @@ export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 export type WorkerMachineOption = Readonly<{
   id: string;
   label: string;
-  description?: string;
+  cpu?: number;
+  memoryGb?: number;
   default?: boolean;
 }>;
 
@@ -101,7 +102,7 @@ export type WorkerDesktopEndpoint = {
   protocol: "rfb";
   /** Loopback port on the worker (e.g. 5900). */
   port: number;
-  /** Absolute on-box path to the per-lease password file; read over SSH, never persisted as plaintext. */
+  /** Absolute on-box path to the per-lease password file; read by the owning transport, never persisted as plaintext. */
   passwordFilePath?: string;
   /** Closed application metadata advertised by the provider for this desktop. */
   apps?: WorkerDesktopApp[];
@@ -149,6 +150,29 @@ export type WorkerLeaseStatus =
   | { status: "destroyed" }
   | { status: "unknown" };
 
+/** Provision failed after allocation and the provider could not prove cleanup completed. */
+class WorkerProvisionCleanupError extends AggregateError {
+  readonly code = "cleanup_indeterminate";
+  readonly leaseId: string;
+
+  constructor(
+    leaseId: string,
+    readonly provisionError: unknown,
+    readonly cleanupError: unknown,
+  ) {
+    super(
+      [provisionError, cleanupError],
+      "Worker provision failed after allocation and cleanup is indeterminate",
+      { cause: provisionError },
+    );
+    this.name = "WorkerProvisionCleanupError";
+    this.leaseId = leaseId.trim();
+    if (!this.leaseId) {
+      throw new TypeError("Worker provision cleanup lease id must be non-empty");
+    }
+  }
+}
+
 /** Permanent provider rejection recorded as a terminal worker failure. */
 export class WorkerProviderError extends Error {
   readonly code = "invalid_profile";
@@ -157,13 +181,25 @@ export class WorkerProviderError extends Error {
     super(message);
     this.name = "WorkerProviderError";
   }
+
+  static cleanupIndeterminate(
+    leaseId: string,
+    provisionError: unknown,
+    cleanupError: unknown,
+  ): WorkerProvisionCleanupError {
+    return new WorkerProvisionCleanupError(leaseId, provisionError, cleanupError);
+  }
+
+  static isCleanupIndeterminate(error: unknown): error is WorkerProvisionCleanupError {
+    return error instanceof WorkerProvisionCleanupError;
+  }
 }
 
 /** Cloud-worker lifecycle capability registered by a plugin. */
 export type WorkerProvider = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
-  listMachineOptions?: (profile: WorkerProfile) => readonly WorkerMachineOption[];
+  listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
   /** Omission advertises no placement support; placement providers declare one transport mode. */
   supportedExecutionModes?: readonly [WorkerExecutionMode];
   /**

@@ -88,6 +88,7 @@ export function resolveAllowedModelRefCore(
     cfg: params.cfg,
     raw: params.raw,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
     aliasIndex,
     manifestPlugins: params.manifestPlugins,
     getStatus: (ref) =>

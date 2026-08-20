@@ -28,11 +28,13 @@ type GatewayRequestContextClient = GatewayClient & {
 
 type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
+  configRevisionProjector: GatewayRequestContext["configRevisionProjector"];
   runtimeState: Pick<
     GatewayServerLiveState,
     "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  getGatewayMethodRegistry: NonNullable<GatewayRequestContext["getGatewayMethodRegistry"]>;
   gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
@@ -82,6 +84,7 @@ type GatewayRequestContextParams = {
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
   workerPlacementDiskSpaceReader?: GatewayRequestContext["workerPlacementDiskSpaceReader"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
+  githubPublicationService?: GatewayRequestContext["githubPublicationService"];
   validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
@@ -166,6 +169,7 @@ export function createGatewayRequestContext(
   const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
   const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
+    configRevisionProjector: params.configRevisionProjector,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
     // every handler closure that already holds this request context.
     get cron() {
@@ -175,6 +179,7 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    getGatewayMethodRegistry: params.getGatewayMethodRegistry,
     gatewayTlsFingerprint: params.gatewayTlsFingerprint,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
@@ -381,6 +386,9 @@ export function createGatewayRequestContext(
     validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
     ...(params.workerPlacementDispatchService
       ? { workerPlacementDispatchService: params.workerPlacementDispatchService }
+      : {}),
+    ...(params.githubPublicationService
+      ? { githubPublicationService: params.githubPublicationService }
       : {}),
     terminalSessions: params.terminalSessions,
     agentRunSeq: params.agentRunSeq,

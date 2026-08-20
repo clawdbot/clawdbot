@@ -1,11 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
-import type { SessionCreatedActor } from "./session-owner-chip.ts";
-import "./session-owner-chip.ts";
+import { listAssignableSessionOwners, type SessionCreatedActor } from "./session-owner-chip.ts";
 
 type OwnerChipElement = HTMLElement & {
-  createdActor: SessionCreatedActor | null;
+  owner: SessionCreatedActor | null;
   participants: readonly SessionCreatedActor[];
   participantCount: number;
   attribution: "created" | "owned" | "archived";
@@ -20,7 +19,7 @@ afterEach(() => {
 async function mount(params: { participants?: SessionCreatedActor[]; participantCount?: number }) {
   // SAFETY: the imported module registers this custom element with these reactive properties.
   const chip = document.createElement("openclaw-session-owner-chip") as OwnerChipElement;
-  chip.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+  chip.owner = { type: "human", id: "profile-ada", label: "Ada" };
   chip.attribution = "owned";
   chip.size = "row";
   chip.participants = params.participants ?? [];
@@ -66,4 +65,32 @@ it("renders the total participant count in the back slot for three identities", 
   expect(chip.querySelector(".session-owner-stack")?.getAttribute("aria-label")).toBe(
     "Owned by Ada · +2 more",
   );
+});
+
+it("treats a present owner facet as authoritative before adding self and configured agents", () => {
+  const facet = [
+    { type: "human" as const, id: "profile:channel:opaque", label: "Opaque Person" },
+    { type: "agent" as const, id: "facet-agent", label: "Facet Agent" },
+  ];
+
+  expect(
+    listAssignableSessionOwners({
+      facet,
+      agents: [{ id: "configured-agent", name: "Configured Agent" }],
+      self: { id: "profile-self", name: "Self" },
+    }),
+  ).toEqual([
+    { type: "agent", id: "configured-agent", label: "Configured Agent" },
+    { type: "agent", id: "facet-agent", label: "Facet Agent" },
+    { type: "human", id: "profile:channel:opaque", label: "Opaque Person" },
+    { type: "human", id: "profile-self", label: "Self" },
+  ]);
+});
+
+it("does not reconstruct assignment candidates when the owner facet is absent", () => {
+  expect(
+    listAssignableSessionOwners({
+      facet: undefined,
+    }),
+  ).toEqual([]);
 });

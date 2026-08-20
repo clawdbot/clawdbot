@@ -51,7 +51,7 @@ function pairedNode(deviceId: string): PairedDevice {
   };
 }
 
-function connectedNode(deviceId: string, capacity: "available" | "full") {
+function connectedNode(deviceId: string, available: number) {
   return {
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
@@ -60,7 +60,7 @@ function connectedNode(deviceId: string, capacity: "available" | "full") {
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity },
+    workerHost: { enabled: true, capacity: { total: 2, available } },
     commands: ["system.run"],
   } satisfies NodeWorkerSupervisorNodeProof;
 }
@@ -123,6 +123,7 @@ describe("sessions.dispatch device targets", () => {
         },
       }),
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -173,7 +174,7 @@ describe("sessions.dispatch device targets", () => {
   it.each([
     {
       name: "full",
-      nodes: [connectedNode("device-1", "full")],
+      nodes: [connectedNode("device-1", 0)],
       expectedMessage: "at capacity (all worker slots in use)",
       rejectedMessage: "reconnect",
     },

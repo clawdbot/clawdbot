@@ -226,6 +226,7 @@ function buildSessionLevelOptions(
 }
 
 const SESSION_RUN_STATUS_LABELS = {
+  queued: "sessionsView.statusQueued",
   running: "sessionsView.statusRunning",
   done: "sessionsView.statusDone",
   failed: "sessionsView.statusFailed",
@@ -240,14 +241,24 @@ function formatSessionRunStatus(status: SessionRunStatus): string {
 function renderSessionStatusBadge(row: GatewaySessionRow) {
   const active = isSessionRunActive(row);
   const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
-  const label = active
-    ? t("sessionsView.statusLive")
-    : idle
-      ? t("sessionsView.statusIdle")
-      : row.status
-        ? formatSessionRunStatus(row.status)
-        : t("sessionsView.statusUnknown");
-  const kind = active || row.status === "done" ? "ok" : idle || !row.status ? "muted" : "danger";
+  const label =
+    row.status === "queued"
+      ? t("sessionsView.statusQueued")
+      : active
+        ? t("sessionsView.statusLive")
+        : idle
+          ? t("sessionsView.statusIdle")
+          : row.status
+            ? formatSessionRunStatus(row.status)
+            : t("sessionsView.statusUnknown");
+  const kind =
+    row.status === "queued"
+      ? "warn"
+      : active || row.status === "done"
+        ? "ok"
+        : idle || !row.status
+          ? "muted"
+          : "danger";
   const title = `${t("sessionsView.status")}: ${label}`;
   return html`
     <openclaw-tooltip .content=${title}>

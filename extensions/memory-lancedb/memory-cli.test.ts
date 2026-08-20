@@ -29,7 +29,11 @@ function createHarness(params?: { embedError?: unknown; closeError?: Error }) {
     { search } as unknown as MemoryDB,
     embeddings,
     (rawAgentId) => (typeof rawAgentId === "string" ? rawAgentId : "main"),
-    undefined,
+    () => ({
+      embedding: { provider: "openai", model: "text-embedding-3-small" },
+      captureMaxChars: 500,
+      recallMaxChars: 1000,
+    }),
   );
   const registrar = registerCli.mock.calls[0]?.[0] as
     | ((params: { program: Command }) => void)
@@ -74,7 +78,10 @@ describe("memory-lancedb CLI embedding lifecycle", () => {
       log.mockRestore();
     }
 
-    expect(harness.embed).toHaveBeenCalledWith("private", "private account memory");
+    expect(harness.embed).toHaveBeenCalledWith("private", "private account memory", {
+      provider: "openai",
+      model: "text-embedding-3-small",
+    });
     expect(harness.search).toHaveBeenCalledWith("private", [0.1, 0.2], 5, 0.3);
     expect(harness.close).toHaveBeenCalledTimes(1);
   });

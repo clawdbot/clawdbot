@@ -764,6 +764,38 @@ describe("ensureSkillsWatcher", () => {
     },
   );
 
+  it.each(["add", "change", "unlink"] as const)(
+    "refreshes the owning snapshot when an execution-directory skill emits %s",
+    async (event) => {
+      vi.useFakeTimers();
+      const workspaceDir = "/tmp/agent-workspace";
+      const executionSkillsDir = "/tmp/execution-workspace/skills";
+      const seen: SkillsChangeEvent[] = [];
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+      refreshModule.ensureSkillsWatcher({ workspaceDir, executionSkillsDir });
+      const versionBefore = getSkillsSnapshotVersion(workspaceDir);
+      const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map(([target]) =>
+        target.replaceAll("\\", "/"),
+      );
+      const executionWatcherIndex = callPaths.indexOf(executionSkillsDir);
+      const changedPath = `${executionSkillsDir}/demo/SKILL.md`;
+
+      expect(executionWatcherIndex).toBeGreaterThanOrEqual(0);
+      createdWatchers[executionWatcherIndex]?.emit("all", event, changedPath);
+      await vi.advanceTimersByTimeAsync(250);
+
+      const versionAfter = getSkillsSnapshotVersion(workspaceDir);
+      expect(shouldRefreshSnapshotForVersion(versionBefore, versionAfter)).toBe(true);
+      expect(seen).toContainEqual({
+        workspaceDir,
+        reason: "watch",
+        changedPath,
+      });
+    },
+  );
+
   it("refreshes skills snapshots when watched skill roots change", () => {
     const seen: SkillsChangeEvent[] = [];
     refreshModule.registerSkillsChangeListener((change) => {

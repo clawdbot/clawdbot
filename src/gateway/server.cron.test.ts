@@ -34,10 +34,8 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
   })),
 );
 
-const sendFailureNotificationAnnounceMock = vi.hoisted(() =>
-  vi.fn<typeof import("../cron/delivery.js").sendFailureNotificationAnnounce>(
-    async () => undefined,
-  ),
+const sendCronAnnouncePayloadStrictMock = vi.hoisted(() =>
+  vi.fn<typeof import("../cron/delivery.js").sendCronAnnouncePayloadStrict>(async () => undefined),
 );
 const closeTrackedBrowserTabsForSessionsMock = vi.hoisted(() => vi.fn(async () => 0));
 
@@ -56,7 +54,7 @@ vi.mock("../cron/delivery.js", async () => {
   const actual = await vi.importActual<typeof import("../cron/delivery.js")>("../cron/delivery.js");
   return {
     ...actual,
-    sendFailureNotificationAnnounce: sendFailureNotificationAnnounceMock,
+    sendCronAnnouncePayloadStrict: sendCronAnnouncePayloadStrictMock,
   };
 });
 
@@ -335,6 +333,7 @@ async function addWebhookCronJob(params: {
   sessionTarget?: "main" | "isolated";
   payloadText?: string;
   delivery: Record<string, unknown>;
+  failureAlert?: Record<string, unknown>;
 }) {
   const response = await rpcReq(params.ws, "cron.add", {
     name: params.name,
@@ -349,6 +348,7 @@ async function addWebhookCronJob(params: {
         : { text: params.payloadText ?? "send webhook" }),
     },
     delivery: params.delivery,
+    ...(params.failureAlert ? { failureAlert: params.failureAlert } : {}),
   });
   return expectCronJobIdFromResponse(response);
 }
@@ -392,22 +392,23 @@ function expectFailureAnnounceCall(params: {
   message: string;
   includeRunStarted?: boolean;
 }) {
-  expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
-  const call = sendFailureNotificationAnnounceMock.mock.calls.at(0);
+  expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledTimes(1);
+  const call = sendCronAnnouncePayloadStrictMock.mock.calls.at(0);
   if (!call) {
     throw new Error("expected failure announcement call");
   }
-  const args = call;
-  expect(typeof args[2]).toBe("string");
-  expect(args[3]).toBe(params.jobId);
-  expect(args[4]).toEqual({
+  const [request] = call;
+  expect(typeof request.agentId).toBe("string");
+  expect(request.jobId).toBe(params.jobId);
+  expect(request.target).toEqual({
     channel: params.channel,
     to: params.to,
     accountId: undefined,
+    threadId: undefined,
     sessionKey: params.sessionKey,
     ...(params.inheritSessionThread === false ? { inheritSessionThread: false } : {}),
   });
-  const payload = expectDefined(args[5], "failure reply payload");
+  const payload = expectDefined(request.payload, "failure reply payload");
   if (params.includeRunStarted) {
     const lines = expectDefined(payload.text, "failure reply text").split("\n");
     expect(lines).toEqual([
@@ -466,7 +467,7 @@ describe("gateway server cron", () => {
   beforeEach(() => {
     // Keep polling helpers deterministic even if other tests left fake timers enabled.
     vi.useRealTimers();
-    sendFailureNotificationAnnounceMock.mockClear();
+    sendCronAnnouncePayloadStrictMock.mockClear();
     closeTrackedBrowserTabsForSessionsMock.mockClear();
   });
 
@@ -1913,6 +1914,7 @@ describe("gateway server cron", () => {
     await writeCronConfig({
       cron: {
         webhookToken: "cron-webhook-token",
+        failureAlert: { after: 1 },
       },
     });
 
@@ -2033,7 +2035,7 @@ describe("gateway server cron", () => {
       expect(failureDestCall.url).toBe("https://example.invalid/failure-destination");
       const failureDestBody = failureDestCall.body;
       expect(failureDestBody.message).toBe(
-        'Automation "failure destination webhook" failed: unknown error',
+        'Automation "failure destination webhook" failed 1 times\nLast error: unknown reason',
       );
 
       fetchWithSsrFGuardMock.mockClear();
@@ -2203,6 +2205,7 @@ describe("gateway server cron", () => {
           mode: "announce",
           channel: "last",
         },
+        failureAlert: { after: 1 },
       });
 
       const updateRes = await rpcReq(ws, "cron.update", {
@@ -2225,7 +2228,7 @@ describe("gateway server cron", () => {
         channel: "last",
         sessionKey: "agent:main:telegram:direct:123:thread:99",
         message:
-          '⚠️ Automation "primary delivery fallback" failed\n' +
+          'Automation "primary delivery fallback" failed 1 times\n' +
           "Check automation history for details.",
         includeRunStarted: true,
       });
@@ -2255,7 +2258,7 @@ describe("gateway server cron", () => {
     await connectOk(ws);
 
     try {
-      sendFailureNotificationAnnounceMock.mockClear();
+      sendCronAnnouncePayloadStrictMock.mockClear();
       fetchWithSsrFGuardMock.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
 
@@ -2270,6 +2273,7 @@ describe("gateway server cron", () => {
             to: "#alerts",
           },
         },
+        failureAlert: { after: 1 },
       });
 
       const finished = waitForCronEvent(
@@ -2285,7 +2289,9 @@ describe("gateway server cron", () => {
         to: "#alerts",
         sessionKey: undefined,
         inheritSessionThread: false,
-        message: '⚠️ Automation "channel fd no mode" failed\nCheck automation history for details.',
+        message:
+          'Automation "channel fd no mode" failed 1 times\n' +
+          "Check automation history for details.",
         includeRunStarted: true,
       });
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -2316,6 +2322,7 @@ describe("gateway server cron", () => {
           mode: "announce",
           channel: "last",
         },
+        failureAlert: { after: 1 },
       });
       const jobId = expectCronJobIdFromResponse(addRes);
 
@@ -2339,7 +2346,7 @@ describe("gateway server cron", () => {
         channel: "last",
         sessionKey: "agent:avery:feishu:direct:ou_founder",
         message:
-          '⚠️ Automation "session target failure fallback" failed\n' +
+          'Automation "session target failure fallback" failed 1 times\n' +
           "Check automation history for details.",
         includeRunStarted: true,
       });

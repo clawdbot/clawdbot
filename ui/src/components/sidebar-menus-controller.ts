@@ -36,6 +36,7 @@ import type {
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
+import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -91,14 +92,19 @@ interface SidebarMenusControllerHost
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      "approvalBadgeSnapshot" | "presenceInstanceId" | "presencePayload" | "sessionsLoading"
+      | "approvalBadgeSnapshot"
+      | "presenceInstanceId"
+      | "presencePayload"
+      | "sessionResultsByAgent"
+      | "sessionsLoading"
+      | "sessionsResult"
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
-  readonly sessionCreatorFilterActive: boolean;
-  sessionCreatorFilterId: string | null;
+  readonly sessionOwnerFilterActive: boolean;
+  sessionOwnerFilterId: string | null;
   sessionInvolvingMeFilterActive: boolean;
-  readonly sessionCreatorOptions: readonly SessionOwnerOption[];
+  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
   readSessionMutationAccess(request: {
     method: string;
@@ -319,6 +325,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     y: number,
     trigger: HTMLElement | null = null,
   ) {
+    trigger?.dispatchEvent(
+      new CustomEvent(SESSION_MENU_OPEN_EVENT, { bubbles: true, composed: true }),
+    );
     if (!this.host.selectedSessionKeys.has(session.key)) {
       this.host.clearSessionSelection();
     }

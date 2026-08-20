@@ -1286,7 +1286,7 @@ describe("models.authStatus", () => {
       expect(warmed.providers[0]?.usage?.windows[0]?.usedPercent).toBe(10);
     });
 
-    setPreparedAuthStore({
+    const rotatedStore: AuthProfileStore = {
       version: 1,
       profiles: {
         "openai:default": {
@@ -1297,10 +1297,16 @@ describe("models.authStatus", () => {
           expires: 1_000_000,
         },
       },
-    });
+    };
+    // Prepared catalog refresh can replace its owner before the ambient snapshot revision advances.
+    preparedAuthStore = rotatedStore;
     const rotated = await readAuthStatus();
+    expect(mocks.buildAuthHealthSummary.mock.calls.at(-1)?.[0].store).toBe(rotatedStore);
     expect(rotated.providers[0]?.usage).toBeUndefined();
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ authStore: rotatedStore }),
+    );
   });
 
   it("does not reuse usage after a direct provider key rotates", async () => {

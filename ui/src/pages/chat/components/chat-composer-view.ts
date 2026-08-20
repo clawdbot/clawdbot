@@ -266,7 +266,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     </div>
                   `
                 : nothing}
-              ${renderSessionProgressCard(props.progressCard, "composer")}
+              ${renderSessionProgressCard(
+                props.progressCard,
+                "composer",
+                props.onDismissProgressCard,
+              )}
               ${renderFallbackIndicator(props.fallbackStatus)}
               ${renderCompactionIndicator(props.compactionStatus)}
               ${renderChatGoal(state, activeSession?.goal, {

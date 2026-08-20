@@ -37,7 +37,7 @@ import type {
 import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,
-} from "../../../src/gateway/control-ui-contract.js";
+} from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
@@ -537,7 +537,7 @@ export class GatewayBrowserClient {
     );
     const migrateRecoveryScope =
       serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
-        ? (await import("../lib/sessions/cloud-recovery-migration.runtime.ts")).default
+        ? (await import("../lib/sessions/session-placement-recovery-migration.runtime.ts")).default
         : undefined;
     if (plan.generation !== this.recovery.generation || !this.client.connected) {
       return;

@@ -314,6 +314,7 @@ async function runCronRunAndCaptureExit(params: {
   runId?: string;
   runStatus?: "ok" | "error" | "skipped";
   runStatuses?: Array<"ok" | "error" | "skipped" | undefined>;
+  completionStatus?: "succeeded" | "failed" | "unknown";
   args?: string[];
 }) {
   resetGatewayMock();
@@ -336,7 +337,17 @@ async function runCronRunAndCaptureExit(params: {
         const runStatus = params.runStatuses?.[runPollCount] ?? params.runStatus;
         runPollCount += 1;
         return {
-          entries: runStatus ? [{ status: runStatus }] : [],
+          entries: runStatus
+            ? [
+                {
+                  status: runStatus,
+                  completionStatus: params.completionStatus,
+                  ...(params.completionStatus === undefined && runStatus === "ok"
+                    ? { deliveryStatus: "not-requested" }
+                    : {}),
+                },
+              ]
+            : [],
         };
       }
       return { ok: true, params: callParams };
@@ -377,6 +388,18 @@ describe("cron cli", () => {
       expect(command.opts()).toMatchObject({ port: "65267", token: "parent-token" });
     },
   );
+
+  it("uses legacy stored delivery for --wait completion", async () => {
+    const { calls, exitSpy } = await runCronRunAndCaptureExit({
+      enqueued: true,
+      runId: "manual:legacy:123:0",
+      runStatus: "ok",
+      args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
+    });
+
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(calls.some((call) => call[0] === "cron.get")).toBe(false);
+  });
 
   it.each(CRON_GATEWAY_COMMANDS)(
     "accepts leaf Gateway options for cron $name",
@@ -454,16 +477,17 @@ describe("cron cli", () => {
   });
 
   it.each([
-    { status: "ok" as const, expectedExitCode: 0 },
-    { status: "error" as const, expectedExitCode: 1 },
-    { status: "skipped" as const, expectedExitCode: 1 },
+    { status: "ok" as const, completionStatus: "succeeded" as const, expectedExitCode: 0 },
+    { status: "ok" as const, completionStatus: "failed" as const, expectedExitCode: 1 },
+    { status: "ok" as const, completionStatus: "unknown" as const, expectedExitCode: 1 },
   ])(
-    "waits for queued cron run completion with status $status",
-    async ({ status, expectedExitCode }) => {
+    "waits for execution $status with completion $completionStatus",
+    async ({ status, completionStatus, expectedExitCode }) => {
       const { calls, exitSpy } = await runCronRunAndCaptureExit({
         enqueued: true,
         runId: "manual:job-1:123:0",
         runStatus: status,
+        completionStatus,
         args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
       });
 
@@ -476,6 +500,8 @@ describe("cron cli", () => {
       });
       expect(stdoutText()).toContain('"completed": true');
       expect(stdoutText()).toContain(`"status": "${status}"`);
+      expect(stdoutText()).toContain(`"completionStatus": "${completionStatus}"`);
+      expect(calls.some((call) => call[0] === "cron.get")).toBe(false);
     },
   );
 

@@ -772,8 +772,8 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
-  it("reconciles hidden invalidations as one visible Lit update", async () => {
-    let visibilityState: DocumentVisibilityState = "visible";
+  it("renders once while initially hidden, then reconciles hidden invalidations", async () => {
+    let visibilityState: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
     const { pane, requestUpdate, state } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
@@ -781,16 +781,17 @@ describe("chat pane connection lifecycle", () => {
     });
     const lifecycle = pane as TestChatPane & {
       performUpdate: () => void;
+      hasUpdated: boolean;
       render: () => unknown;
       requestUpdate: () => void;
     };
     lifecycle.render = () => null;
     ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await vi.waitFor(() => expect(lifecycle.hasUpdated).toBe(true), { interval: 1, timeout: 50 });
     await lifecycle.updateComplete;
     const performUpdate = vi.spyOn(lifecycle, "performUpdate");
     const cancelAnimationFrame = vi.spyOn(globalThis, "cancelAnimationFrame");
 
-    visibilityState = "hidden";
     state.chatStreamRenderFrame = 7;
     document.dispatchEvent(new Event("visibilitychange"));
     expect(cancelAnimationFrame).toHaveBeenCalledWith(7);

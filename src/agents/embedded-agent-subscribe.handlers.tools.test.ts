@@ -2142,6 +2142,29 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
   });
 
+  it("records intentional termination with its exact tool call id", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "terminal_action",
+      toolCallId: "tool-terminal-current",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Done." }],
+        details: { status: "done" },
+        terminate: true,
+      },
+    });
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "terminal_action",
+        toolCallId: "tool-terminal-current",
+        terminate: true,
+      }),
+    ]);
+  });
+
   it("retains every failed call after later successes change the last-error slot", async () => {
     const { ctx } = createTestContext();
 
@@ -3607,6 +3630,67 @@ describe("messaging tool media URL tracking", () => {
         sourceReplyFinal: true,
       },
     ]);
+  });
+
+  it("commits trusted core current-channel widgets as message-tool-only source replies", async () => {
+    const { ctx } = createTestContext();
+    const onDeliveredMessageToolOnlySourceReply = vi.fn();
+    Object.assign(ctx.params, {
+      sourceReplyDeliveryMode: "message_tool_only",
+      coreBuiltinToolNames: new Set(["show_widget"]),
+      onDeliveredMessageToolOnlySourceReply,
+    });
+
+    await executeTool(ctx, {
+      toolName: "show_widget",
+      toolCallId: "tool-current-channel-widget",
+      args: { title: "Status", widget_code: "<p>ready</p>" },
+      isError: false,
+      result: {
+        details: {
+          kind: "widget",
+          presentation: {
+            target: "current_channel",
+            receipt: {
+              primaryPlatformMessageId: "discord-message-1",
+              platformMessageIds: ["discord-message-1"],
+              parts: [],
+              sentAt: 1,
+            },
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+    expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledOnce();
+  });
+
+  it("does not commit inline Canvas widgets as message-tool-only source replies", async () => {
+    const { ctx } = createTestContext();
+    const onDeliveredMessageToolOnlySourceReply = vi.fn();
+    Object.assign(ctx.params, {
+      sourceReplyDeliveryMode: "message_tool_only",
+      coreBuiltinToolNames: new Set(["show_widget"]),
+      onDeliveredMessageToolOnlySourceReply,
+    });
+
+    await executeTool(ctx, {
+      toolName: "show_widget",
+      toolCallId: "tool-inline-widget",
+      args: { title: "Status", widget_code: "<p>ready</p>" },
+      isError: false,
+      result: {
+        details: {
+          kind: "canvas",
+          presentation: { target: "assistant_message", title: "Status", sandbox: "scripts" },
+          view: { id: "cv_1", url: "/__openclaw__/canvas/documents/cv_1/index.html" },
+        },
+      },
+    });
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
+    expect(onDeliveredMessageToolOnlySourceReply).not.toHaveBeenCalled();
   });
 
   it("commits projected payload-only delivery after middleware replaces details", async () => {

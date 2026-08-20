@@ -5885,9 +5885,10 @@ class ChatController internal constructor(
         }
       }
       "plan" -> {
-        // Released Gateways through v2026.7.x only emit stream:"plan" and lack progressCard.get.
-        // Remove this fallback with the Gateway's legacy dual-emit once the minimum supported
-        // Gateway ships the store (tracked follow-up).
+        // Released Gateways through v2026.8.x only emit stream:"plan" and lack progressCard.get.
+        // SUNSET 2026-10-18: this fallback is a fixed cutover window, not a permanent contract.
+        // On that date delete it together with the Gateway's legacy stream:"plan" dual-emit and
+        // the Apple twin in ChatViewModel+TransportEvents.swift. Tracked: #125639.
         if (gatewayAdvertisesProgressCard() != false) return
         val planData = data ?: return
         if (planData["phase"].asStringOrNull() != "update") return
@@ -6657,6 +6658,7 @@ class ChatController internal constructor(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) },
       hasActiveRunMetadata = "hasActiveRun" in obj || "activeRunIds" in obj,
+      hasActiveRunIdsMetadata = "activeRunIds" in obj,
       parentSessionKey = obj["parentSessionKey"].asStringOrNull()?.trim(),
       spawnedBy = obj["spawnedBy"].asStringOrNull()?.trim(),
       hasActiveSubagentRun = obj["hasActiveSubagentRun"].asBooleanOrNull(),
@@ -6876,6 +6878,7 @@ class ChatController internal constructor(
     upsertSessionEntry(
       info,
       preserveExistingContextUsageWithoutTotal = true,
+      replaceActiveRunIds = true,
       publishRunState = publishRunState,
     )
   }
@@ -6883,6 +6886,7 @@ class ChatController internal constructor(
   private fun upsertSessionEntry(
     entry: ChatSessionEntry,
     preserveExistingContextUsageWithoutTotal: Boolean = false,
+    replaceActiveRunIds: Boolean = false,
     clearedFields: Set<String> = emptySet(),
     publishRunState: Boolean = true,
   ) {
@@ -6897,6 +6901,7 @@ class ChatController internal constructor(
               existing = it[index],
               next = entry,
               preserveExistingContextUsageWithoutTotal = preserveExistingContextUsageWithoutTotal,
+              replaceActiveRunIds = replaceActiveRunIds,
             )
           if (clearedFields.isNotEmpty()) {
             applied =
@@ -7531,10 +7536,12 @@ internal fun mergeChatSessionEntry(
   existing: ChatSessionEntry,
   next: ChatSessionEntry,
   preserveExistingContextUsageWithoutTotal: Boolean = false,
+  replaceActiveRunIds: Boolean = false,
 ): ChatSessionEntry {
   val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
   val hasActiveRun = if (next.hasActiveRunMetadata) next.hasActiveRun else existing.hasActiveRun
-  val activeRunIds = if (next.hasActiveRunMetadata) next.activeRunIds else existing.activeRunIds
+  val activeRunIds =
+    if (replaceActiveRunIds || next.hasActiveRunIdsMetadata) next.activeRunIds else existing.activeRunIds
   val observerDigest =
     reconcileSessionObserverDigest(
       existing = existing.observerDigest,
@@ -7599,6 +7606,12 @@ internal fun mergeChatSessionEntry(
     hasActiveRun = hasActiveRun,
     activeRunIds = activeRunIds,
     hasActiveRunMetadata = existing.hasActiveRunMetadata || next.hasActiveRunMetadata,
+    hasActiveRunIdsMetadata =
+      if (replaceActiveRunIds) {
+        next.hasActiveRunIdsMetadata
+      } else {
+        existing.hasActiveRunIdsMetadata || next.hasActiveRunIdsMetadata
+      },
     parentSessionKey = next.parentSessionKey ?: existing.parentSessionKey,
     spawnedBy = next.spawnedBy ?: existing.spawnedBy,
     hasActiveSubagentRun = next.hasActiveSubagentRun ?: existing.hasActiveSubagentRun,

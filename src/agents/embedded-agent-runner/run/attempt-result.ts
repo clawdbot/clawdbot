@@ -110,17 +110,8 @@ function normalizeEmbeddedAttemptToolMetas(
 ): EmbeddedRunAttemptResult["toolMetas"] {
   return entries
     .filter(
-      (
-        entry,
-      ): entry is {
-        toolName: string;
-        meta?: string;
-        replaySafe?: boolean;
-        isError?: boolean;
-        asyncStarted?: boolean;
-        asyncTaskRunId?: string;
-        asyncTaskId?: string;
-      } => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
+      (entry): entry is EmbeddedAttemptSubscription["toolMetas"][number] & { toolName: string } =>
+        typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
     )
     .map((entry) => {
       const normalized: EmbeddedRunAttemptResult["toolMetas"][number] = {
@@ -128,8 +119,14 @@ function normalizeEmbeddedAttemptToolMetas(
         meta: entry.meta,
         replaySafe: entry.replaySafe === true,
       };
+      if (entry.toolCallId) {
+        normalized.toolCallId = entry.toolCallId;
+      }
       if (typeof entry.isError === "boolean") {
         normalized.isError = entry.isError;
+      }
+      if (entry.terminate === true) {
+        normalized.terminate = true;
       }
       if (entry.asyncStarted === true) {
         normalized.asyncStarted = true;

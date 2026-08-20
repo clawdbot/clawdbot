@@ -178,7 +178,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const setActivityStatus = vi.fn();
     const loadHistory = vi.fn<() => Promise<TuiHistoryLoadResult>>(async () => ({
       loaded: true,
-      inFlightRunId: null,
+      runOutcome: { state: "completed" },
     }));
     const localRunIds = new Set<string>();
     const localBtwRunIds = new Set<string>();
@@ -275,7 +275,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   it("preserves an in-flight run when gap-recovery history reports it is still active", async () => {
     const { state, loadHistory, reconcileHistoryAfterGap, setActivityStatus } =
       createHandlersHarness({ state: { activeChatRunId: "run-gap" } });
-    loadHistory.mockResolvedValue({ loaded: true, inFlightRunId: "run-gap" });
+    loadHistory.mockResolvedValue({
+      loaded: true,
+      runOutcome: { state: "active", runId: "run-gap" },
+    });
 
     reconcileHistoryAfterGap();
 
@@ -324,13 +327,14 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).not.toHaveBeenCalled();
   });
 
-  it("retires a reconnect run immediately when history proves it is absent", () => {
+  it("renders one reconnect interruption and ignores repeated or late terminal output", () => {
     const { state, reconnectStreamingWatchdog, handleChatEvent, chatLog, setActivityStatus } =
       createHandlersHarness({
         state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
       });
 
-    reconnectStreamingWatchdog(null);
+    reconnectStreamingWatchdog({ state: "interrupted" });
+    reconnectStreamingWatchdog({ state: "interrupted" });
     handleChatEvent({
       runId: "run-stale",
       message: { role: "assistant", content: "late stale output" },
@@ -338,7 +342,44 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(state.activeChatRunId).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted");
     expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
+  it("renders a reconnect failure through the terminal error presenter", () => {
+    const { state, reconnectStreamingWatchdog, chatLog, setActivityStatus } = createHandlersHarness(
+      {
+        state: { activeChatRunId: "run-failed", activityStatus: "streaming" },
+      },
+    );
+
+    reconnectStreamingWatchdog({ state: "failed", errorMessage: "provider failed" });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("error");
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run error: provider failed");
+  });
+
+  it.each([
+    { name: "completed", outcome: { state: "completed" } as const },
+    { name: "active", outcome: { state: "active", runId: "run-current" } as const },
+  ])("reconciles a $name reconnect outcome without an interruption", ({ outcome }) => {
+    const { state, reconnectStreamingWatchdog, handleChatEvent, chatLog, setActivityStatus } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-current", activityStatus: "streaming" },
+      });
+    handleChatEvent({ runId: "run-current", message: { content: "partial" } });
+    chatLog.addSystem.mockClear();
+    setActivityStatus.mockClear();
+
+    reconnectStreamingWatchdog(outcome);
+
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith("run aborted");
+    expect(state.activeChatRunId).toBe(outcome.state === "active" ? "run-current" : null);
+    expect(setActivityStatus).toHaveBeenLastCalledWith(
+      outcome.state === "active" ? "streaming" : "idle",
+    );
   });
 
   it("processes tool events when runId matches activeChatRunId (even if sessionId differs)", () => {
@@ -2291,7 +2332,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     loadHistory.mockImplementation(async () => {
       expect(state.activeChatRunId).toBeNull();
       expect(state.activityStatus).toBe("idle");
-      return { loaded: true, inFlightRunId: null };
+      return { loaded: true, runOutcome: { state: "completed" } };
     });
 
     handleChatEvent({
@@ -3172,7 +3213,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(loadHistory).toHaveBeenCalledTimes(1);
       expect(state.sessionInfo.updatedAt).toBe(249);
 
-      resolveFirstHistory?.({ loaded: true, inFlightRunId: null });
+      resolveFirstHistory?.({
+        loaded: true,
+        runOutcome: { state: "completed" },
+      });
       await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
     });
 
@@ -3265,7 +3309,16 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       });
       loadHistory.mockReturnValueOnce(result);
       return (loaded: boolean, inFlightRunId: string | null = null) =>
-        resolveHistory(loaded ? { loaded: true, inFlightRunId } : { loaded: false });
+        resolveHistory(
+          loaded
+            ? {
+                loaded: true,
+                runOutcome: inFlightRunId
+                  ? { state: "active", runId: inFlightRunId }
+                  : { state: "completed" },
+              }
+            : { loaded: false },
+        );
     };
 
     it("waits for terminal persistence before rebuilding an active external run", async () => {
@@ -3440,7 +3493,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       loadHistory.mockImplementationOnce(async () => {
         state.activeChatRunId = "run-reset";
         state.activityStatus = "streaming";
-        return { loaded: true as const, inFlightRunId: "run-reset" };
+        return {
+          loaded: true as const,
+          runOutcome: { state: "active" as const, runId: "run-reset" },
+        };
       });
 
       handleSessionsChangedEvent({
@@ -3723,7 +3779,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     handlers.dispose?.();
   });
 
-  it("resets to idle when reconnect drops an active run that is no longer tracked", () => {
+  it("keeps an untracked reconnect run visible until history resolves it", () => {
     const { state, setActivityStatus, handlers } = createHarness({
       streamingWatchdogMs: 5_000,
     });
@@ -3732,9 +3788,9 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     handlers.reconnectStreamingWatchdog();
 
-    expect(state.activeChatRunId).toBeNull();
-    expect(state.activityStatus).toBe("idle");
-    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBe("run-stale");
+    expect(state.activityStatus).toBe("streaming");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
 
     handlers.dispose?.();
   });

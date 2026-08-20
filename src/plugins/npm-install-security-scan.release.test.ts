@@ -27,8 +27,8 @@ const execFileAsync = promisify(execFile);
 const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
-  ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
-  ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/doctor.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],

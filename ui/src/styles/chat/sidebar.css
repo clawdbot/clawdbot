@@ -127,6 +127,7 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region--bottom .sidebar-column__divider {
+  --resize-handle-line-block: 100%;
   width: 100%;
 }
 
@@ -251,10 +252,11 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-column__divider {
+  --resize-handle-line-inline: 100%;
   z-index: 2;
 }
 
-.sidebar-region--narrow {
+.sidebar-region--narrow:not(.sidebar-region--expanded) {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(200px, 1fr) minmax(160px, 1fr);
@@ -272,6 +274,7 @@ openclaw-chat-sidebar-region,
 .side-panel {
   position: relative;
   flex: 0 0 auto;
+  border-inline-start: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
   background: var(--bg);
 }
 
@@ -280,13 +283,11 @@ openclaw-chat-sidebar-region,
   background: var(--bg-accent);
 }
 
-:root[data-theme-mode="dark"] .sidebar-column__divider {
-  --rail-divider-color: var(--border-strong);
-}
-
 .side-panel--bottom {
   width: 100%;
   min-width: 0;
+  border-block-start: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
+  border-inline-start: 0;
 }
 
 .side-panel__header {
@@ -1670,10 +1671,10 @@ openclaw-session-discussion {
 .sidebar-file-view__editor-menu::part(menu) {
   min-width: 132px;
   padding: 5px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .sidebar-file-view__editor-item {

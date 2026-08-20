@@ -189,6 +189,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
       }>)
     | undefined;
+  const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
     params: dynamicToolParams,
     resolvedWorkspace,
@@ -212,6 +213,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState.yieldDetected = true;
       toolState.yieldAcknowledgment = acknowledgment;
     },
+    claimYieldCompletion: () => runtimeYieldCompletionClaim.current?.() ?? false,
     onCodexAppServerEvent: (event: Parameters<typeof emitCodexAppServerEvent>[1]) => {
       void emitCodexAppServerEvent(params, event);
     },
@@ -557,6 +559,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       suppressedDynamicToolOutcomeOrdinals,
       onCodexToolOutcome,
       allocateCodexToolOutcomeOrdinal,
+      runtimeYieldCompletionClaim,
     };
   } catch (error) {
     // Materialized runtimes are attempt-owned only after this function returns.

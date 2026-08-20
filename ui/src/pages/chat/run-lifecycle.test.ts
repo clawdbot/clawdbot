@@ -9,6 +9,7 @@ import {
   CHAT_RUN_STATUS_TOAST_DURATION_MS,
   handleAbortChat,
   hasAbortableSessionRun,
+  hasDirectSessionRun,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
@@ -80,6 +81,7 @@ describe("handleAbortChat", () => {
       ]),
     });
 
+    expect(hasDirectSessionRun(host)).toBe(false);
     expect(hasAbortableSessionRun(host)).toBe(true);
     await handleAbortChat(host);
 

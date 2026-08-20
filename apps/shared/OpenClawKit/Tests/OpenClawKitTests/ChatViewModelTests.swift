@@ -101,6 +101,13 @@ private func progressCard(
         steps: steps)
 }
 
+private func legacyPlanStep(_ step: String, status: String) -> AnyCodable {
+    AnyCodable([
+        "step": AnyCodable(step),
+        "status": AnyCodable(status),
+    ])
+}
+
 private func usageEvent(runId: String, outputTokens: Int, seq: Int) -> OpenClawAgentEventPayload {
     OpenClawAgentEventPayload(
         runId: runId,
@@ -142,7 +149,7 @@ private func lifecycleSessionEntry(
     updatedAt: Double,
     status: String,
     hasActiveRun: Bool,
-    activeRunIds: [String],
+    activeRunIds: [String]?,
     startedAt: Double? = nil,
     endedAt: Double? = nil,
     runtimeMs: Double? = nil,
@@ -344,6 +351,7 @@ private func makeViewModel(
     commandResponses: [[OpenClawChatCommandChoice]] = [],
     requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
     fetchProgressCardHook: (@Sendable (String) async throws -> ProgressCard?)? = nil,
+    progressCardStoreAvailable: Bool? = nil,
     historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
     setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
@@ -395,6 +403,7 @@ private func makeViewModel(
         commandResponses: commandResponses,
         requestHistoryHook: requestHistoryHook,
         fetchProgressCardHook: fetchProgressCardHook,
+        progressCardStoreAvailable: progressCardStoreAvailable,
         historyResponseHook: historyResponseHook,
         setActiveSessionHook: setActiveSessionHook,
         createSessionHook: createSessionHook,
@@ -542,6 +551,28 @@ private func emitAgentLifecycleEnd(
                 data: ["phase": AnyCodable("end")])))
 }
 
+private func legacyPlanEvent(
+    runId: String = "sess-main",
+    steps: [AnyCodable],
+    explanation: String? = nil,
+    seq: Int = 1,
+    timestamp: Int? = 1000) -> OpenClawChatTransportEvent
+{
+    var data: [String: AnyCodable] = [
+        "phase": AnyCodable("update"),
+        "steps": AnyCodable(steps),
+    ]
+    if let explanation {
+        data["explanation"] = AnyCodable(explanation)
+    }
+    return .agent(OpenClawAgentEventPayload(
+        runId: runId,
+        seq: seq,
+        stream: "plan",
+        ts: timestamp,
+        data: data))
+}
+
 private func emitExternalFinal(
     transport: TestChatTransport,
     runId: String = "other-run",
@@ -616,10 +647,23 @@ private actor AsyncStringRecorder {
 
 private actor SessionSubscribeGate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var blockedObservers: [CheckedContinuation<Void, Never>] = []
 
     func wait() async {
         await withCheckedContinuation { continuation in
             self.waiters.append(continuation)
+            let observers = self.blockedObservers
+            self.blockedObservers = []
+            for observer in observers {
+                observer.resume()
+            }
+        }
+    }
+
+    func waitUntilBlocked() async {
+        guard self.waiters.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            self.blockedObservers.append(continuation)
         }
     }
 
@@ -655,6 +699,7 @@ private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
     var modelsCallCount: Int = 0
+    var modelAgentIDs: [String?] = []
     var commandsCallCount: Int = 0
     var healthCallCount: Int = 0
     var activeSessionKeys: [String] = []
@@ -692,6 +737,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let commandResponses: [[OpenClawChatCommandChoice]]
     private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
     private let fetchProgressCardHook: (@Sendable (String) async throws -> ProgressCard?)?
+    private let progressCardStoreAvailable: Bool?
     private let historyResponseHook:
         (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)?
     private let setActiveSessionHook: (@Sendable (String) async throws -> Void)?
@@ -732,6 +778,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         commandResponses: [[OpenClawChatCommandChoice]] = [],
         requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
         fetchProgressCardHook: (@Sendable (String) async throws -> ProgressCard?)? = nil,
+        progressCardStoreAvailable: Bool? = nil,
         historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
         setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
@@ -766,6 +813,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.commandResponses = commandResponses
         self.requestHistoryHook = requestHistoryHook
         self.fetchProgressCardHook = fetchProgressCardHook
+        self.progressCardStoreAvailable = progressCardStoreAvailable
         self.historyResponseHook = historyResponseHook
         self.setActiveSessionHook = setActiveSessionHook
         self.createSessionHook = createSessionHook
@@ -844,6 +892,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func fetchProgressCard(sessionKey: String) async throws -> ProgressCard? {
         try await self.fetchProgressCardHook?(sessionKey)
+    }
+
+    func gatewayAdvertisesProgressCardStore() async -> Bool? {
+        self.progressCardStoreAvailable
     }
 
     func sendMessage(
@@ -949,8 +1001,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         }
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
-        let idx = await state.nextModelsCallIndex()
+    func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice] {
+        let idx = await state.recordModelsCall(agentID: agentID)
         if idx < self.modelResponses.count {
             return self.modelResponses[idx]
         }
@@ -1150,6 +1202,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.commandSessionKeys
     }
 
+    func modelAgentIDs() async -> [String?] {
+        await self.state.modelAgentIDs
+    }
+
     func lastSentSessionKey() async -> String? {
         let keys = await state.sentSessionKeys
         return keys.last
@@ -1253,7 +1309,8 @@ extension TestChatTransportState {
         return self.nextSessionsCallIndex()
     }
 
-    fileprivate func nextModelsCallIndex() -> Int {
+    fileprivate func recordModelsCall(agentID: String?) -> Int {
+        self.modelAgentIDs.append(agentID)
         defer { self.modelsCallCount += 1 }
         return self.modelsCallCount
     }
@@ -1458,6 +1515,142 @@ private actor SwarmCapabilityScript {
 
 @Suite(.serialized)
 struct ChatViewModelTests {
+    @Test func `legacy plan renders only when progress card store is unavailable`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: false)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("progress card capability resolves unavailable") {
+            await MainActor.run { vm.progressCardStoreAvailable == false }
+        }
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [
+                    legacyPlanStep("  Inspect state  ", status: "in_progress"),
+                    AnyCodable("Write fix"),
+                    legacyPlanStep("Verify", status: "completed"),
+                    legacyPlanStep("Duplicate active", status: "in_progress"),
+                    legacyPlanStep("   ", status: "pending"),
+                    legacyPlanStep("Invalid status", status: "blocked"),
+                    AnyCodable(42),
+                ],
+                explanation: "  Working through the change  ",
+                timestamp: 4321))
+        }
+
+        let card = try #require(await MainActor.run { vm.progressCard })
+        #expect(card.sessionkey == "main")
+        #expect(card.updatedat == 4321)
+        #expect(card.markdown == "Working through the change")
+        #expect(card.steps?.map(\.step) == ["Inspect state", "Write fix", "Verify"])
+        #expect(card.steps?.map(\.status.rawValue) == ["in_progress", "pending", "completed"])
+    }
+
+    @Test func `route replacement invalidates a stale known-absent capability`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: false)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("progress card capability resolves unavailable") {
+            await MainActor.run { vm.progressCardStoreAvailable == false }
+        }
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [legacyPlanStep("Old gateway step", status: "in_progress")]))
+        }
+        #expect(await MainActor.run { vm.progressCard } != nil)
+
+        // A replacement route may be a different Gateway; the stale known-absent
+        // value must not authorize the legacy path against a dual-emitting one.
+        await MainActor.run { vm.handleTransportEvent(.routeChanged) }
+        #expect(await MainActor.run { vm.progressCardStoreAvailable } == nil)
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [legacyPlanStep("New gateway step", status: "in_progress")]))
+        }
+        #expect(await MainActor.run { vm.progressCard } == nil)
+    }
+
+    @Test func `legacy plan is ignored when progress card store is available`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: true)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("progress card capability resolves available") {
+            await MainActor.run { vm.progressCardStoreAvailable == true }
+        }
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [legacyPlanStep("Ignored", status: "in_progress")]))
+        }
+
+        #expect(await MainActor.run { vm.progressCard == nil })
+    }
+
+    @Test func `legacy plan is ignored while progress card capability is unknown`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: nil)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [legacyPlanStep("Ignored", status: "in_progress")]))
+        }
+
+        #expect(await MainActor.run { vm.progressCard == nil })
+        #expect(await MainActor.run { vm.progressCardStoreAvailable == nil })
+    }
+
+    @Test func `empty legacy plan clears progress card`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            fetchProgressCardHook: { _ in progressCard(revision: 9, markdown: "Existing") },
+            progressCardStoreAvailable: false)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("initial progress card and legacy capability apply") {
+            await MainActor.run {
+                vm.progressCard?.revision == 9 && vm.progressCardStoreAvailable == false
+            }
+        }
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(steps: []))
+        }
+
+        #expect(await MainActor.run { vm.progressCard == nil })
+    }
+
+    @Test func `successive legacy plan snapshots use distinct revisions`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: false)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("progress card capability resolves unavailable") {
+            await MainActor.run { vm.progressCardStoreAvailable == false }
+        }
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [AnyCodable("First")],
+                seq: 1))
+        }
+        let firstRevision = try #require(await MainActor.run { vm.progressCard?.revision })
+        #expect(await MainActor.run { vm.progressCard?.steps?.first?.status.rawValue } == "pending")
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [AnyCodable("Second")],
+                seq: 2))
+        }
+
+        #expect(await MainActor.run { vm.progressCard?.steps?.first?.step } == "Second")
+        #expect(await MainActor.run { vm.progressCard?.revision } == firstRevision + 1)
+    }
+
     @Test func `progress card change fetches durable card beyond run completion`() async throws {
         let fetchCalls = AsyncCounter()
         let card = progressCard(
@@ -2386,6 +2579,130 @@ struct ChatViewModelTests {
 
         #expect(viewModel.activeSessionRunIDs.isEmpty)
         #expect(!viewModel.hasAdvertisedLiveRun)
+    }
+
+    @Test @MainActor func `snapshot row omission clears stale exact run projection`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+        #expect(viewModel.activeSessionRunIDs == ["run-stale"])
+
+        var unavailable = sessionEntry(key: "main", updatedAt: 2)
+        unavailable.hasActiveRun = true
+        unavailable.activeRunIds = nil
+        viewModel.sessions = [unavailable]
+
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
+    }
+
+    @Test @MainActor func `history snapshot omission clears stale exact run ids`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+        let request = viewModel.beginHistoryRequest()
+
+        #expect(viewModel.applyHistoryPayload(
+            historyPayload(hasActiveRun: true, activeRunIds: nil),
+            for: request,
+            preservingOptimisticLocalMessages: true))
+
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
+    }
+
+    @Test @MainActor func `event tombstone clears stale exact run projection`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "run-progress",
+            updatedAt: 2,
+            hasActiveRun: true,
+            activeRunIds: nil,
+            activeRunIdsPresent: true)))
+
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
+    }
+
+    @Test @MainActor func `lifecycle tombstone clears instead of inferring an exact run id`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.status = "running"
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "run-progress",
+            phase: "start",
+            runId: "run-hidden",
+            session: lifecycleSessionEntry(
+                key: "main",
+                updatedAt: 2,
+                status: "running",
+                hasActiveRun: true,
+                activeRunIds: nil))))
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == ["run-stale"])
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "run-progress",
+            phase: "start",
+            runId: "run-hidden",
+            session: lifecycleSessionEntry(
+                key: "main",
+                updatedAt: 3,
+                status: "running",
+                hasActiveRun: true,
+                activeRunIds: nil),
+            hasActiveRun: true,
+            activeRunIds: nil,
+            activeRunIdsPresent: true)))
+
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
+    }
+
+    @Test @MainActor func `session message tombstone clears stale exact run ids`() throws {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["run-stale"]
+        viewModel.sessions = [running]
+        let omitted = try JSONDecoder().decode(
+            OpenClawSessionMessageEventPayload.self,
+            from: Data(#"{"sessionKey":"main","hasActiveRun":true,"messageId":"message-1","message":{"role":"assistant","content":[{"type":"text","text":"working"}],"timestamp":2}}"#.utf8))
+        viewModel.handleTransportEvent(.sessionMessage(omitted))
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == ["run-stale"])
+
+        let payload = try JSONDecoder().decode(
+            OpenClawSessionMessageEventPayload.self,
+            from: Data(#"{"sessionKey":"main","hasActiveRun":true,"activeRunIds":null,"messageId":"message-2","message":{"role":"assistant","content":[{"type":"text","text":"still working"}],"timestamp":3}}"#.utf8))
+
+        viewModel.handleTransportEvent(.sessionMessage(payload))
+
+        #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.activeSessionRunIDs.isEmpty)
     }
 
     @Test @MainActor func `remote lifecycle merges terminal recap metadata`() {
@@ -7119,6 +7436,25 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.defaultModelLabel } == "Default: openai/gpt-4.1-mini")
     }
 
+    @Test func `model catalog requests follow the selected session agent`() async throws {
+        let (workerTransport, workerViewModel) = await makeViewModel(
+            sessionKey: "agent:worker:main",
+            historyResponses: [historyPayload(sessionKey: "agent:worker:main")],
+            sessionsResponses: [sessionsResponse(
+                sessionEntry(key: "agent:worker:main", updatedAt: 1))],
+            modelResponses: [[]])
+        try await loadAndWaitBootstrap(vm: workerViewModel)
+
+        let (defaultTransport, defaultViewModel) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(key: "main", updatedAt: 1))],
+            modelResponses: [[]])
+        try await loadAndWaitBootstrap(vm: defaultViewModel)
+
+        #expect(await workerTransport.modelAgentIDs() == ["worker"])
+        #expect(await defaultTransport.modelAgentIDs() == [nil])
+    }
+
     @Test func `selecting default model patches nil and updates selection`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
@@ -8479,9 +8815,8 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         vm.selectModel("openai/gpt-5.4")
-        try await waitUntil("model patch is in flight") {
-            await transport.patchedModels() == ["openai/gpt-5.4"]
-        }
+        await modelPatchGate.waitUntilBlocked()
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4"])
 
         vm.input = "hello before switch"
         vm.send()
@@ -9604,12 +9939,15 @@ struct ChatViewModelTests {
             initialThinkingLevel: "medium")
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        await MainActor.run { vm.selectModel("openai/reasoning-model") }
-        try await waitUntil("reasoning model patch started") {
-            let pickerShown = await MainActor.run { vm.showsThinkingPicker }
-            let patchedModels = await transport.patchedModels()
-            return pickerShown && patchedModels == ["openai/reasoning-model"]
+        try await waitUntil("model picker bootstrap completed") {
+            await MainActor.run { !vm.isLoading }
         }
+        #expect(await MainActor.run { vm.modelSelectionID == "openai/plain-model" })
+        #expect(await MainActor.run { !vm.showsThinkingPicker })
+        await MainActor.run { vm.selectModel("openai/reasoning-model") }
+        await modelPatchGate.waitUntilBlocked()
+        #expect(await MainActor.run { vm.showsThinkingPicker })
+        #expect(await transport.patchedModels() == ["openai/reasoning-model"])
 
         await sendUserMessage(vm, text: "send after rollback")
         try await waitUntil("send waits for model patch") {
@@ -9669,13 +10007,12 @@ struct ChatViewModelTests {
         }
 
         await MainActor.run { vm.selectModel("openai/plain-model") }
-        try await waitUntil("local non-reasoning selection gated") {
-            await MainActor.run {
-                vm.modelSelectionID == "openai/plain-model" &&
-                    !vm.showsThinkingPicker &&
-                    vm.sessions.first?.model == "reasoning-model"
-            }
-        }
+        await modelPatchGate.waitUntilBlocked()
+        #expect(await MainActor.run {
+            vm.modelSelectionID == "openai/plain-model" &&
+                !vm.showsThinkingPicker &&
+                vm.sessions.first?.model == "reasoning-model"
+        })
         await modelPatchGate.release()
     }
 
@@ -9709,11 +10046,9 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.showsThinkingPicker })
 
         await MainActor.run { vm.selectModel("openai/model-y") }
-        try await waitUntil("model Y patch started") {
-            await transport.patchedModels() == ["openai/model-y"]
-        }
+        await modelPatchGate.waitUntilBlocked()
+        #expect(await transport.patchedModels() == ["openai/model-y"])
         await MainActor.run { vm.selectModel("openai/model-x") }
-        try await Task.sleep(for: .milliseconds(50))
         #expect(await transport.patchedModels() == ["openai/model-y"])
         await modelPatchGate.release()
         try await waitUntil("model X re-selection patched") {
