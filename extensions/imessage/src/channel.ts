@@ -346,7 +346,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveOutboundSessionRoute: (params) => resolveIMessageOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeIMessageExplicitTargetId,
-          hint: "<handle|chat_id:ID>",
+          hint: "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
           resolveTarget: async ({ input }) => {
             const to = normalizeIMessageMessagingTarget(input);
             if (!to) {
