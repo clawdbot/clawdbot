@@ -286,6 +286,7 @@ async function ensureSandboxBrowserContainer(
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
+    backendId: "docker",
   });
   const expectedHash = computeSandboxBrowserConfigHash({
     docker: browserDockerCfg,
@@ -403,6 +404,7 @@ async function ensureSandboxBrowserContainer(
       workspaceAccess: params.cfg.workspaceAccess,
       readOnlyWorkspaceSkillMounts,
       includeReadOnlyWorkspaceSkillMounts: false,
+      backendId: "docker",
     });
     if (browserDockerCfg.binds?.length) {
       // Skip user binds that conflict with protected skill mount container paths so

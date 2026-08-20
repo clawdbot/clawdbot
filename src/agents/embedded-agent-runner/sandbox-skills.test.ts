@@ -63,6 +63,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({
         sandbox: {
+          backendId: "docker",
           enabled: true,
           containerWorkdir: "/workspace",
           skillsEligibility,
@@ -75,7 +76,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     ).toEqual({
       skillsEligibility,
       skillsSnapshot: undefined,
-      skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
+      skillsPromptWorkspaceDir: "/workspace/.openclaw-skills",
       skillsWorkspaceDir: "/state/sandbox-skills",
       workspaceOnly: true,
     });
@@ -108,11 +109,11 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           },
         ],
         skillsWorkspaceDir: "/state/sandbox-skills",
-        skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
+        skillsPromptWorkspaceDir: "/workspace/.openclaw-skills",
       }),
     ).toEqual([
       {
-        readPath: "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        readPath: "/workspace/.openclaw-skills/skills/demo/SKILL.md",
         skillFile: "/agent-workspace/skills/demo/SKILL.md",
         skillName: "demo",
         skillSource: "workspace",
@@ -163,6 +164,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         workspaceOnly,
       } = resolveSandboxSkillRuntimeInputs({
         sandbox: {
+          backendId: "docker",
           enabled: true,
           containerWorkdir: "/workspace",
           skillsEligibility,
@@ -191,7 +193,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       });
 
       if (skillsSnapshot === snapshot) {
-        expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+        expect(prompt).toContain("/workspace/.openclaw-skills/skills/demo/SKILL.md");
       } else {
         expect(prompt).toBe("");
         expect(skillEntries).toEqual([]);

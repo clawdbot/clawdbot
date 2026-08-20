@@ -502,6 +502,7 @@ async function createSandboxContainer(params: {
     workspaceAccess: params.workspaceAccess,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
     includeReadOnlyWorkspaceSkillMounts: false,
+    backendId: engine.id,
   });
   // Protected skill overlays are authoritative. Remove exact destination
   // collisions before Docker or Podman sees duplicate mount arguments.
@@ -614,6 +615,7 @@ async function ensureSandboxContainerLifecycle(
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
+    backendId: engine.id,
   });
   const genericConfigHash = computeSandboxConfigHash({
     docker: params.cfg.docker,

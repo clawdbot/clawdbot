@@ -364,12 +364,12 @@ describe("resolveExecWorkdir", () => {
         await expect(
           resolveExecWorkdir({
             host: "sandbox",
-            workdir: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill",
+            workdir: "/workspace/.openclaw-skills/skills/test-repro-skill",
             sandbox: {
               ...sandboxConfig(workspaceDir),
               readOnlyWorkspaceSkillMounts: [
                 {
-                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  containerPath: "/workspace/.openclaw-skills/skills",
                   hostPath: skillsMountDir,
                 },
               ],
@@ -378,7 +378,7 @@ describe("resolveExecWorkdir", () => {
         ).resolves.toEqual({
           kind: "sandbox",
           hostCwd: skillDir,
-          containerCwd: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill",
+          containerCwd: "/workspace/.openclaw-skills/skills/test-repro-skill",
           scriptPreflightCwd: skillDir,
         });
       });
@@ -394,12 +394,12 @@ describe("resolveExecWorkdir", () => {
         await expect(
           resolveExecWorkdir({
             host: "sandbox",
-            workdir: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill/tools",
+            workdir: "/workspace/.openclaw-skills/skills/test-repro-skill/tools",
             sandbox: {
               ...sandboxConfig(workspaceDir),
               readOnlyWorkspaceSkillMounts: [
                 {
-                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  containerPath: "/workspace/.openclaw-skills/skills",
                   hostPath: skillsMountDir,
                 },
               ],
@@ -408,7 +408,7 @@ describe("resolveExecWorkdir", () => {
         ).resolves.toEqual({
           kind: "sandbox",
           hostCwd: toolsDir,
-          containerCwd: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill/tools",
+          containerCwd: "/workspace/.openclaw-skills/skills/test-repro-skill/tools",
           scriptPreflightCwd: toolsDir,
         });
       });
@@ -428,7 +428,7 @@ describe("resolveExecWorkdir", () => {
           await expect(
             resolveExecWorkdir({
               host: "sandbox",
-              workdir: "/workspace/.openclaw/sandbox-skills/skills/demo",
+              workdir: "/workspace/.openclaw-skills/skills/demo",
               sandbox: {
                 ...sandboxConfig(workspaceDir),
                 readOnlyWorkspaceSkillMounts: [
@@ -437,7 +437,7 @@ describe("resolveExecWorkdir", () => {
                     hostPath: broadMountDir,
                   },
                   {
-                    containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                    containerPath: "/workspace/.openclaw-skills/skills",
                     hostPath: skillsMountDir,
                   },
                 ],
@@ -446,7 +446,7 @@ describe("resolveExecWorkdir", () => {
           ).resolves.toEqual({
             kind: "sandbox",
             hostCwd: skillDir,
-            containerCwd: "/workspace/.openclaw/sandbox-skills/skills/demo",
+            containerCwd: "/workspace/.openclaw-skills/skills/demo",
             scriptPreflightCwd: skillDir,
           });
         });
@@ -460,12 +460,12 @@ describe("resolveExecWorkdir", () => {
         await expect(
           resolveExecWorkdir({
             host: "sandbox",
-            workdir: "/workspace/.openclaw/sandbox-skills/skills/",
+            workdir: "/workspace/.openclaw-skills/skills/",
             sandbox: {
               ...sandboxConfig(workspaceDir),
               readOnlyWorkspaceSkillMounts: [
                 {
-                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  containerPath: "/workspace/.openclaw-skills/skills",
                   hostPath: skillsMountDir,
                 },
               ],
@@ -474,7 +474,7 @@ describe("resolveExecWorkdir", () => {
         ).resolves.toEqual({
           kind: "sandbox",
           hostCwd: skillsMountDir,
-          containerCwd: "/workspace/.openclaw/sandbox-skills/skills",
+          containerCwd: "/workspace/.openclaw-skills/skills",
           scriptPreflightCwd: skillsMountDir,
         });
       });
@@ -489,12 +489,12 @@ describe("resolveExecWorkdir", () => {
         await expect(
           resolveExecWorkdir({
             host: "sandbox",
-            workdir: "/workspace/.openclaw/sandbox-skills/skills/missing-skill",
+            workdir: "/workspace/.openclaw-skills/skills/missing-skill",
             sandbox: {
               ...sandboxConfig(workspaceDir),
               readOnlyWorkspaceSkillMounts: [
                 {
-                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  containerPath: "/workspace/.openclaw-skills/skills",
                   hostPath: skillsMountDir,
                 },
               ],
@@ -502,7 +502,7 @@ describe("resolveExecWorkdir", () => {
           }),
         ).resolves.toEqual({
           kind: "unavailable",
-          requestedCwd: "/workspace/.openclaw/sandbox-skills/skills/missing-skill",
+          requestedCwd: "/workspace/.openclaw-skills/skills/missing-skill",
         });
       });
     });
@@ -525,7 +525,7 @@ describe("resolveExecWorkdir", () => {
               ...sandboxConfig(workspaceDir),
               readOnlyWorkspaceSkillMounts: [
                 {
-                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  containerPath: "/workspace/.openclaw-skills/skills",
                   hostPath: skillsMountDir,
                 },
               ],
@@ -547,7 +547,7 @@ describe("resolveExecWorkdir", () => {
               ...sandboxConfig(workspaceDir),
               readOnlyWorkspaceSkillMounts: [
                 {
-                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  containerPath: "/workspace/.openclaw-skills/skills",
                   hostPath: skillsMountDir,
                 },
               ],
@@ -572,12 +572,12 @@ describe("resolveExecWorkdir", () => {
         await expect(
           resolveExecWorkdir({
             host: "sandbox",
-            workdir: "/workspace/.openclaw/sandbox-skills/skills/test-skill",
+            workdir: "/workspace/.openclaw-skills/skills/test-skill",
             sandbox: sandboxConfig(workspaceDir),
           }),
         ).resolves.toEqual({
           kind: "unavailable",
-          requestedCwd: "/workspace/.openclaw/sandbox-skills/skills/test-skill",
+          requestedCwd: "/workspace/.openclaw-skills/skills/test-skill",
         });
       });
     });
@@ -591,12 +591,12 @@ describe("resolveExecWorkdir", () => {
         await expect(
           resolveExecWorkdir({
             host: "sandbox",
-            workdir: "/workspace/.openclaw/sandbox-skills/skills-shadow/demo",
+            workdir: "/workspace/.openclaw-skills/skills-shadow/demo",
             sandbox: {
               ...sandboxConfig(workspaceDir),
               readOnlyWorkspaceSkillMounts: [
                 {
-                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  containerPath: "/workspace/.openclaw-skills/skills",
                   hostPath: skillsMountDir,
                 },
               ],
@@ -604,7 +604,7 @@ describe("resolveExecWorkdir", () => {
           }),
         ).resolves.toEqual({
           kind: "unavailable",
-          requestedCwd: "/workspace/.openclaw/sandbox-skills/skills-shadow/demo",
+          requestedCwd: "/workspace/.openclaw-skills/skills-shadow/demo",
         });
       });
     });
@@ -622,12 +622,12 @@ describe("resolveExecWorkdir", () => {
           await expect(
             resolveExecWorkdir({
               host: "sandbox",
-              workdir: "/workspace/.openclaw/sandbox-skills/skills/test-skill/escape",
+              workdir: "/workspace/.openclaw-skills/skills/test-skill/escape",
               sandbox: {
                 ...sandboxConfig(workspaceDir),
                 readOnlyWorkspaceSkillMounts: [
                   {
-                    containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                    containerPath: "/workspace/.openclaw-skills/skills",
                     hostPath: skillsMountDir,
                   },
                 ],
@@ -635,7 +635,7 @@ describe("resolveExecWorkdir", () => {
             }),
           ).resolves.toEqual({
             kind: "unavailable",
-            requestedCwd: "/workspace/.openclaw/sandbox-skills/skills/test-skill/escape",
+            requestedCwd: "/workspace/.openclaw-skills/skills/test-skill/escape",
           });
         });
       });

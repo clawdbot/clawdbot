@@ -48,6 +48,8 @@ export type SandboxFsBridgeContext = {
   workspaceAccess: "none" | "ro" | "rw";
   containerName: string;
   containerWorkdir: string;
+  /** Backend whose container layout the bridge maps. Remote backends keep the nested skills layout. */
+  backendId?: SandboxBackendId;
   docker: {
     binds?: string[];
   };

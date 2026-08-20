@@ -10,7 +10,7 @@ import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT, SANDBOX_MATERIALIZED_SKILLS_DIRNAME } from "./constants.js";
 import {
   getSandboxHostPathPolicyKey,
   isSandboxHostPathAbsolute,
@@ -62,6 +62,7 @@ type ValidateBindMountsOptions = {
   allowedSourceRoots?: string[];
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
+  workdir?: string;
 };
 
 type ValidateNetworkModeOptions = {
@@ -249,14 +250,17 @@ function getOutsideAllowedRootsReason(
   };
 }
 
-function getReservedTargetReason(bind: string): BlockedBindReason | null {
+function getReservedTargetReason(
+  bind: string,
+  reservedPaths: readonly string[],
+): BlockedBindReason | null {
   const targetRaw = parseBindTargetPath(bind);
   if (!targetRaw || !targetRaw.startsWith("/")) {
     return null;
   }
   const target = normalizeHostPath(targetRaw);
-  for (const reserved of RESERVED_CONTAINER_TARGET_PATHS) {
-    if (isPathInsidePolicyPath(reserved, target)) {
+  for (const reserved of reservedPaths) {
+    if (isPathInsidePolicyPath(reserved, target) || isPathInsidePolicyPath(target, reserved)) {
       return {
         kind: "reserved_target",
         targetPath: target,
@@ -330,6 +334,13 @@ function validateBindMounts(
 
   const allowedRoots = normalizeAllowedRoots(options?.allowedSourceRoots);
   const blockedHostPaths = getBlockedHostPaths();
+  const workdir = options?.workdir?.trim();
+  const reservedTargetPaths = workdir
+    ? [
+        ...RESERVED_CONTAINER_TARGET_PATHS,
+        path.posix.join(workdir, SANDBOX_MATERIALIZED_SKILLS_DIRNAME),
+      ]
+    : RESERVED_CONTAINER_TARGET_PATHS;
 
   for (const rawBind of binds) {
     const bind = rawBind.trim();
@@ -344,7 +355,7 @@ function validateBindMounts(
     }
 
     if (!options?.allowReservedContainerTargets) {
-      const reservedTarget = getReservedTargetReason(bind);
+      const reservedTarget = getReservedTargetReason(bind, reservedTargetPaths);
       if (reservedTarget) {
         throw formatBindBlockedError({ bind, reason: reservedTarget });
       }
@@ -420,6 +431,7 @@ function validateApparmorProfile(profile: string | undefined): void {
 export function validateSandboxSecurity(
   cfg: {
     binds?: string[];
+    workdir?: string;
     network?: string;
     seccompProfile?: string;
     apparmorProfile?: string;

@@ -21,22 +21,9 @@ function createUnsafeMountedBridge(params: {
   const agentHostRoot = path.resolve(params.agentHostRoot);
   const skillsHostRoot = params.skillsHostRoot ? path.resolve(params.skillsHostRoot) : undefined;
   const workspaceContainerRoot = params.workspaceContainerRoot ?? "/workspace";
-  const skillsContainerRoot = path.posix.join(
-    workspaceContainerRoot,
-    ".openclaw",
-    "sandbox-skills",
-    "skills",
-  );
-  const skillsRelativeRoot = ".openclaw/sandbox-skills/skills";
+  const skillsContainerRoot = path.posix.join(workspaceContainerRoot, ".openclaw-skills", "skills");
 
   const resolvePath = (filePath: string, cwd?: string): SandboxResolvedPath => {
-    const normalizedRelativePath = path.posix.normalize(filePath.replace(/\\/g, "/"));
-    const skillsRelativePath =
-      normalizedRelativePath === skillsRelativeRoot
-        ? ""
-        : normalizedRelativePath.startsWith(`${skillsRelativeRoot}/`)
-          ? normalizedRelativePath.slice(skillsRelativeRoot.length + 1)
-          : undefined;
     // Intentionally unsafe: simulate a sandbox FS bridge that maps /agent/* into a host path
     // outside the workspace root (e.g. an operator-configured bind mount).
     const hostPath =
@@ -48,11 +35,9 @@ function createUnsafeMountedBridge(params: {
         : skillsHostRoot &&
             (filePath === skillsContainerRoot || filePath.startsWith(`${skillsContainerRoot}/`))
           ? path.join(skillsHostRoot, filePath.slice(skillsContainerRoot.length + 1))
-          : skillsHostRoot && skillsRelativePath !== undefined
-            ? path.join(skillsHostRoot, skillsRelativePath)
-            : path.isAbsolute(filePath)
-              ? filePath
-              : path.resolve(cwd ?? root, filePath);
+          : path.isAbsolute(filePath)
+            ? filePath
+            : path.resolve(cwd ?? root, filePath);
 
     const relFromRoot = path.relative(root, hostPath);
     const relativePath =
