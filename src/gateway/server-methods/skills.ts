@@ -440,7 +440,14 @@ export const skillsHandlers: GatewayRequestHandlers = {
           );
           return SKILL_PROPOSAL_RESPONSE_HANDLED;
         }
-        return proposal;
+        return {
+          ...proposal,
+          ...(proposal.supportFiles
+            ? {
+                supportFiles: proposal.supportFiles.map(({ path, content }) => ({ path, content })),
+              }
+            : {}),
+        };
       },
     });
   },
