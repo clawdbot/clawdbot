@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import * as manifestRegistryApi from "../plugins/manifest-registry.js";
+import * as pluginMetadataSnapshotApi from "../plugins/plugin-metadata-snapshot.js";
 import * as channelContractApi from "./channel-contract-api.js";
 import {
   renderSecretRefCredentialMatrixJson,
@@ -48,6 +50,24 @@ describe("secret target registry docs", () => {
     const ids = new Set(getSecretTargetRegistry({ sourceTree: true }).map((entry) => entry.id));
     expect(ids).toContain("channels.googlechat.serviceAccount");
     expect(ids).toContain("channels.googlechat.accounts.*.serviceAccount");
+  });
+
+  it("loads docs metadata only from the bundled plugin tree", () => {
+    const bundledSpy = vi.spyOn(manifestRegistryApi, "loadBundledPluginManifestRegistry");
+    const snapshotSpy = vi
+      .spyOn(pluginMetadataSnapshotApi, "resolvePluginMetadataSnapshot")
+      .mockImplementation(() => {
+        throw new Error("normal plugin discovery must not run for docs");
+      });
+
+    try {
+      expect(() => getSecretTargetRegistry({ sourceTree: true })).not.toThrow();
+      expect(bundledSpy).toHaveBeenCalledOnce();
+      expect(snapshotSpy).not.toHaveBeenCalled();
+    } finally {
+      bundledSpy.mockRestore();
+      snapshotSpy.mockRestore();
+    }
   });
 
   it("fails docs registry loading when a source channel contract throws", () => {

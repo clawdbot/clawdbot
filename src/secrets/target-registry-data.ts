@@ -1,6 +1,9 @@
 /** Builds the static and plugin-derived registry of secret migration targets. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import {
+  loadBundledPluginManifestRegistry,
+  type PluginManifestRecord,
+} from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import { listOfficialExternalChannelSecretTargetRegistryEntries } from "./official-external-channel-secret-contract.js";
@@ -524,16 +527,18 @@ export function getSecretTargetRegistry(params?: {
   failOnChannelContractError?: boolean;
 }): SecretTargetRegistryEntry[] {
   if (params?.sourceTree) {
-    // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
-    return loadSecretTargetRegistryFromPluginMetadata({
-      env: {
-        ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
+    // Docs generation must not consult operator-installed, configured, or workspace plugins.
+    const env = {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
+    };
+    return buildSecretTargetRegistryFromPlugins(
+      loadBundledPluginManifestRegistry({ env }).plugins,
+      {
+        sourceTree: true,
+        failOnChannelContractError: params.failOnChannelContractError,
       },
-      preferPersisted: false,
-      sourceTree: true,
-      failOnChannelContractError: params.failOnChannelContractError,
-    });
+    );
   }
   if (params?.config) {
     // Config-scoped plugin roots and policy are not process-stable. Compile these registries per
