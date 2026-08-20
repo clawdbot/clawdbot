@@ -1,6 +1,15 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import {
+  listRuntimePluginIdsFromRegistry,
+  registryMatchesManifestPluginIds,
+} from "../plugins/active-runtime-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryWorkspaceDir,
+  getActivePluginRuntimeSubagentMode,
+} from "../plugins/runtime.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
@@ -45,14 +54,33 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
     if (existing) {
       return existing;
     }
-    const registry = loadAgentRuntimePluginRegistryHandle({
-      config: input.config,
-      env: input.env ?? process.env,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-      metadataSnapshot,
-      preferBuiltPluginArtifacts: true,
-    });
+    const activeRegistry = getActivePluginRegistry();
+    const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
+    // Inbound dispatch belongs to the exact active Gateway generation; its independent
+    // model-selected registry remains the only mutable prepared-context owner.
+    const reusableGatewayRegistry =
+      input.allowGatewaySubagentBinding === true &&
+      input.env === undefined &&
+      getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
+      activeRegistry &&
+      (activeWorkspaceDir === undefined || activeWorkspaceDir === metadataSnapshot.workspaceDir) &&
+      registryMatchesManifestPluginIds(
+        activeRegistry,
+        metadataSnapshot.manifestRegistry.plugins,
+        listRuntimePluginIdsFromRegistry(activeRegistry),
+      )
+        ? activeRegistry
+        : undefined;
+    const registry =
+      reusableGatewayRegistry ??
+      loadAgentRuntimePluginRegistryHandle({
+        config: input.config,
+        env: input.env ?? process.env,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        metadataSnapshot,
+        preferBuiltPluginArtifacts: true,
+      });
     registries.set(key, registry);
     return registry;
   };
@@ -79,7 +107,11 @@ export function prepareWorkspacePluginRegistries(
   const runtimePluginRegistry =
     input.runtimePluginSelections || !inboundPluginRegistry
       ? loadAgentRuntimePluginRegistryHandle({
-          ...(input.loadRuntimePlugins ? { basePluginIds: [] } : {}),
+          ...(input.loadRuntimePlugins
+            ? { basePluginIds: [] }
+            : inboundPluginRegistry
+              ? { basePluginIds: listRuntimePluginIdsFromRegistry(inboundPluginRegistry) }
+              : {}),
           config: input.config,
           env: input.env ?? process.env,
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
