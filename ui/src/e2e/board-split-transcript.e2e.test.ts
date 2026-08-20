@@ -26,6 +26,12 @@ let browser: Browser;
 let controlUi: ControlUiE2eServer;
 const contexts = new Set<BrowserContext>();
 
+type TranscriptGeometry = {
+  width: number;
+  rowGap: number;
+  assistantUserGap: number;
+};
+
 function boardSnapshot(chatDock: "right" | "hidden", revision = 1) {
   return {
     sessionKey,
@@ -56,6 +62,43 @@ async function visibleTranscriptState(page: Page) {
     ).length;
     return { present: true, intersectingRows };
   });
+}
+
+async function firstSidebarResizeFrame(page: Page, resize: () => Promise<void>) {
+  const firstFrame = page.evaluate(
+    () =>
+      new Promise<TranscriptGeometry>((resolve, reject) => {
+        const panel = document.querySelector<HTMLElement>(".side-panel");
+        if (!panel) {
+          throw new Error("Board chat side panel is missing");
+        }
+        const observer = new MutationObserver(() => {
+          observer.disconnect();
+          requestAnimationFrame(() => {
+            const [assistantRow, userRow] =
+              panel.querySelectorAll<HTMLElement>(".chat-virtual-row");
+            const assistant = assistantRow?.querySelector<HTMLElement>(
+              ".chat-group.assistant .chat-text",
+            );
+            const user = userRow?.querySelector<HTMLElement>(".chat-group.user .chat-bubble");
+            if (!assistantRow || !userRow || !assistant || !user) {
+              reject(new Error("Adjacent assistant and user transcript rows are missing"));
+              return;
+            }
+            resolve({
+              width: panel.getBoundingClientRect().width,
+              rowGap:
+                userRow.getBoundingClientRect().top - assistantRow.getBoundingClientRect().bottom,
+              assistantUserGap:
+                user.getBoundingClientRect().top - assistant.getBoundingClientRect().bottom,
+            });
+          });
+        });
+        observer.observe(panel, { attributes: true, attributeFilter: ["style"] });
+      }),
+  );
+  await resize();
+  return await firstFrame;
 }
 
 async function showDashboard(page: Page) {
@@ -159,6 +202,69 @@ describeControlUiE2e("Board split transcript restore", () => {
       .getByText("Message number 39:")
       .first()
       .waitFor({ state: "visible", timeout: 2_000 });
+  }, 120_000);
+
+  it("keeps adjacent Board chat rows separated throughout a real side-panel resize", async () => {
+    const context = await browser.newContext({ viewport: { width: 1720, height: 1250 } });
+    contexts.add(context);
+    try {
+      const page = await context.newPage();
+      const now = Date.now();
+      await installMockGateway(page, {
+        sessionKey,
+        featureMethods: ["board.get", "chat.history", "chat.metadata", "chat.startup"],
+        methodResponses: { "board.get": boardSnapshot("right") },
+        historyMessages: [
+          {
+            role: "assistant",
+            content:
+              "Created **Project Board** with a full-screen four-column dashboard:\n\n- Working\n- Idle\n- Review\n- Complete\n\nThe board can refresh active work and show a concise operator summary.\n\nSource: [project-board.html](project-board.html)\n\n" +
+              "Keep the work board visible while tracking active sessions, reviews, approvals, and completed tasks. ".repeat(
+                8,
+              ),
+            timestamp: now - 1,
+          },
+          {
+            role: "user",
+            content: "Please use the existing work board feature.",
+            timestamp: now,
+          },
+        ],
+      });
+
+      await showDashboard(page);
+      const sidePanel = page.locator(".side-panel");
+      await page.getByText("Source: project-board.html", { exact: false }).waitFor();
+      await page.getByText("Please use the existing work board feature.").waitFor();
+      const initialWidth = await sidePanel.evaluate(
+        (element) => element.getBoundingClientRect().width,
+      );
+
+      const divider = page.getByRole("separator", { name: "Resize side panel" });
+      const dividerBounds = await divider.boundingBox();
+      expect(dividerBounds).not.toBeNull();
+      const startX = dividerBounds!.x + dividerBounds!.width / 2;
+      const pointerY = dividerBounds!.y + Math.min(80, dividerBounds!.height / 2);
+      await page.mouse.move(startX, pointerY);
+      await page.mouse.down();
+      const frame = await firstSidebarResizeFrame(page, () =>
+        page.mouse.move(startX + 64, pointerY),
+      );
+      await page.mouse.up();
+
+      expect(frame.width).toBeLessThan(initialWidth);
+      expect(
+        frame.rowGap,
+        `first frame width=${frame.width}px; assistant-to-user gap=${frame.assistantUserGap}px`,
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        frame.assistantUserGap,
+        `assistant text overlaps the user bubble at width=${frame.width}px`,
+      ).toBeGreaterThanOrEqual(0);
+    } finally {
+      contexts.delete(context);
+      await context.close();
+    }
   }, 120_000);
 
   it("closes and reopens the whole multi-tab dashboard side panel", async () => {

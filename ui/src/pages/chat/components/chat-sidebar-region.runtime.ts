@@ -15,6 +15,7 @@ import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import {
+  SIDEBAR_GEOMETRY_COMMIT_EVENT,
   SIDEBAR_MIN_HEIGHT_PX,
   SIDEBAR_MIN_WIDTH_PX,
   sidebarDock,
@@ -371,7 +372,13 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   protected override updated() {
     const root = this.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
     if (root) {
+      const previousWidth = root.querySelector<HTMLElement>(".side-panel")?.style.width;
       renderTemplate(this.renderPanel(), root);
+      const panel = root.querySelector<HTMLElement>(".side-panel");
+      // Wrapped row heights must update with their new width before the same paint.
+      if (panel && previousWidth !== undefined && panel.style.width !== previousWidth) {
+        panel.dispatchEvent(new Event(SIDEBAR_GEOMETRY_COMMIT_EVENT, { bubbles: true }));
+      }
     }
   }
 
