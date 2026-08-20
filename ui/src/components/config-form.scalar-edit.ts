@@ -39,7 +39,7 @@ export function syncScalarEditIdentity(
   const previous = scalarEditState.get(element);
   const preserveEdit =
     previous?.edit !== undefined &&
-    element.matches(":focus") &&
+    element.ownerDocument.activeElement === element &&
     Object.is(previous.rowIdentity, rowIdentity) &&
     previous.pathKey === pathKey &&
     previous.presentationIdentity === presentationIdentity;
