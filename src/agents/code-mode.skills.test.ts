@@ -175,4 +175,42 @@ describe("Code Mode skills and read tools", () => {
     expect(details.status).toBe("completed");
     expect(details.value).toEqual({ kind: "text", content: "ordinary file content" });
   });
+
+  it("returns optional read misses through the wrapped Code Mode boundary", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const read = createOpenClawReadTool(
+      createReadTool("/workspace", {
+        operations: {
+          access: async () => {
+            throw Object.assign(new Error("missing"), { code: "ENOENT" });
+          },
+          readFile: async () => Buffer.from("unreachable"),
+        },
+      }) as unknown as Parameters<typeof createOpenClawReadTool>[0],
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, read],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `return await read({ path: "missing.txt", optional: true });`,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: {
+        kind: "not_found",
+        status: "not_found",
+        path: "missing.txt",
+        optional: true,
+      },
+    });
+  });
 });

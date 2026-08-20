@@ -1,6 +1,7 @@
 /** Tests Code Mode guest execution. */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareSource, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import {
@@ -282,6 +283,93 @@ describe("Code Mode guest execution", () => {
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
     expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
     expect(ticket.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      surface: "catalog.search",
+      code: 'return await catalog.search("fake_create_ticket");',
+      searchCount: 1,
+    },
+    { surface: "catalog.all", code: "return catalog.all();", searchCount: 0 },
+  ])("serializes $surface handles as safe public metadata", async ({ code, searchCount }) => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+    ticket.outputSchema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: false });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: [
+        {
+          callableName: "fake_create_ticket",
+          toolName: "fake_create_ticket",
+          label: "fake_create_ticket",
+          description: "Create a fake ticket",
+          source: "openclaw",
+          input: "{ value?: string }",
+          output: "{ ok: boolean }",
+        },
+      ],
+      telemetry: { searchCount, describeCount: 0, callCount: 0 },
+    });
+    const serialized = JSON.stringify(details.value);
+    expect(serialized).not.toContain("null");
+    expect(serialized).not.toContain("openclaw:");
+    expect(serialized).not.toContain("fake-code-mode");
+    expect(testing.activeRuns.size).toBe(0);
+    expect(testing.resumingRunIds.size).toBe(0);
+  });
+
+  it("does not invoke arbitrary toJSON methods while serializing final values", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const noop = pluginTool("fake_noop", "Noop");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, noop],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const result = { invoked: false, value: null };
+        result.value = {
+          toJSON() {
+            result.invoked = true;
+            void fake_noop({ value: "detached" });
+            return "changed";
+          },
+        };
+        return result;
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: { invoked: false },
+      telemetry: { searchCount: 0, describeCount: 0, callCount: 0 },
+    });
+    expect(noop.execute).not.toHaveBeenCalled();
+    expect(testing.activeRuns.size).toBe(0);
+    expect(testing.resumingRunIds.size).toBe(0);
   });
 
   it("exposes catalog tools as bare globals and removes the legacy guest surface", async () => {

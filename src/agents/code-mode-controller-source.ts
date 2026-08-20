@@ -217,26 +217,40 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   });
 
   const callableHandles = new Map();
+  const callableMetadata = new WeakMap();
   function callableHandle(binding) {
     const callableName = typeof binding?.callableName === "string" ? binding.callableName : "";
     if (!callableName) return null;
     const existing = callableHandles.get(callableName);
     if (existing) return existing;
     const handle = (input) => request("callValue", [callableName, input]);
+    const metadata = Object.freeze({
+      callableName,
+      toolName: typeof binding.name === "string" ? binding.name : callableName,
+      label: typeof binding.label === "string" ? binding.label : undefined,
+      description: typeof binding.description === "string" ? binding.description : "",
+      source: binding.source,
+      input: binding.input,
+      output: binding.output,
+    });
+    for (const [key, value] of Object.entries(metadata)) {
+      Object.defineProperty(handle, key, { value, enumerable: true });
+    }
     Object.defineProperties(handle, {
       name: { value: callableName },
-      callableName: { value: callableName, enumerable: true },
-      toolName: { value: typeof binding.name === "string" ? binding.name : callableName, enumerable: true },
-      label: { value: typeof binding.label === "string" ? binding.label : undefined, enumerable: true },
-      description: { value: typeof binding.description === "string" ? binding.description : "", enumerable: true },
-      source: { value: binding.source, enumerable: true },
-      input: { value: binding.input, enumerable: true },
-      output: { value: binding.output, enumerable: true },
       describe: { value: () => request("describe", [callableName]), enumerable: true },
+      toJSON: { value: () => metadata },
     });
     const frozen = Object.freeze(handle);
     callableHandles.set(callableName, frozen);
+    callableMetadata.set(frozen, metadata);
     return frozen;
+  }
+  function serializeCatalogHandles(value) {
+    const metadata = callableMetadata.get(value);
+    if (metadata) return metadata;
+    if (!Array.isArray(value)) return value;
+    return value.map((entry) => callableMetadata.get(entry) ?? entry);
   }
   const catalog = Object.freeze({
     search: async (query, options) => {
@@ -290,6 +304,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
+    __openclawSerializeCatalogHandles: { value: serializeCatalogHandles },
     __openclawTakeOutput: { value: () => output.splice(0) },
   });
 })();

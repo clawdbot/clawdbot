@@ -162,6 +162,9 @@ const shipments = await shipmentTool({});
 return shipments.filter((shipment) => !shipment.paid && shipment.tons > 10);
 ```
 
+Declared output fields may feed later calls in that same `exec`; do not spend a
+second `exec` merely inspecting them.
+
 When a quick-index line ends in `-> ?`, the output shape is unknown. The first
 `exec` must return the final async tool call unchanged. Do not feed the unknown
 value into guessed field-dependent logic in the same program. Observe the raw
@@ -427,8 +430,10 @@ Rules:
   string enum (`"javascript" | "typescript"`), not a `oneOf`/`anyOf` union,
   since some providers reject those shapes.
 - If `language` is `"typescript"`, OpenClaw transpiles before evaluation.
-- Set `restartSafe: true` only for read-only work where every catalog call is
-  explicitly replay-safe. OpenClaw rejects unmarked catalog tools and namespace
+- Do not set `restartSafe` on a new `exec`. Set it to `true` only when OpenClaw
+  explicitly requests replay after a gateway restart, and never for `write`,
+  `edit`, `exec`, or any mutation. Every catalog call must be explicitly
+  replay-safe. OpenClaw rejects unmarked catalog tools and namespace
   surfaces that are not proven replay-safe, and restart-safe runs do not
   auto-drain pending calls. A generic exec surface is not replay-safe merely
   because one command appears read-only; use audited read, grep, or find tools.
@@ -567,7 +572,6 @@ call's raw value without wrapping it in the requested answer shape.
 type ToolCatalogMetadata = {
   callableName: string;
   toolName: string;
-  name: string;
   label?: string;
   description: string;
   source: "openclaw" | "client";
@@ -578,8 +582,14 @@ type ToolCatalogMetadata = {
 type ToolCatalogHandle = ((input?: unknown) => Promise<unknown>) &
   ToolCatalogMetadata & {
     describe(): Promise<ToolCatalogDescription>;
+    toJSON(): ToolCatalogMetadata;
   };
 ```
+
+Returning `await catalog.search(...)` or `catalog.all()` serializes each
+callable handle to this bounded metadata. Serialization does not call
+`describe()` or start another bridge request; inside the same program, the
+handle remains callable.
 
 `input` is a bounded TypeScript-style signature for the common case. Use
 the handle's `describe()` when the exact full schema is still needed. Client
@@ -596,7 +606,8 @@ available only through `MCP`.
 Full schema is loaded only on demand:
 
 ```typescript
-type ToolCatalogDescription = ToolCatalogMetadata & {
+type ToolCatalogDescription = Omit<ToolCatalogMetadata, "toolName"> & {
+  name: string;
   parameters: unknown;
   outputSchema?: unknown;
 };
@@ -633,6 +644,9 @@ is needed:
 
 ```typescript
 const content = await read({ path: "README.md" });
+
+const [tool] = await catalog.search("...");
+const result = await tool({ query: "OpenClaw" });
 
 const [search] = await catalog.search("search the web", { limit: 1 });
 const schema = await search.describe();

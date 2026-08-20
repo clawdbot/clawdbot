@@ -259,6 +259,12 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).toContain("Enabled tools are async global functions");
     expect(execTool.description).toContain("Await dependent calls in order");
     expect(execTool.description).toContain("independent calls may run with Promise.all");
+    expect(execTool.description).toContain(
+      "Declared output fields may feed later calls in the same program",
+    );
+    expect(execTool.description).toContain(
+      'const [tool] = await catalog.search("..."); return await tool({...});',
+    );
     expect(execTool.description).toContain("normal tool policy and approvals");
     expect(execTool.description).toContain("`catalog.search(query)`");
     expect(execTool.description).toContain("results are callable");
@@ -288,6 +294,12 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(parameters.properties?.code?.description).toContain(
       "independent calls may use Promise.all",
     );
+    expect(parameters.properties?.code?.description).toContain(
+      "Declared output fields may feed later calls in the same program",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      'const [tool] = await catalog.search("..."); return await tool({...});',
+    );
     expect(parameters.properties?.code?.description).toContain("`catalog.search(query)`");
     expect(parameters.properties?.code?.description).toContain(
       "cannot feed guessed dependent logic in the same program",
@@ -296,10 +308,13 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(parameters.properties?.code?.description).not.toContain("ALL_TOOLS");
     expect(parameters.properties?.code?.description).not.toContain("tools.call");
     expect(parameters.properties?.code?.description).toContain("`require`, or `import`");
+    expect(parameters.properties?.restartSafe?.description).toContain("Do not set on a new exec");
     expect(parameters.properties?.restartSafe?.description).toContain(
-      "Leave unset for ordinary calls",
+      "only when OpenClaw explicitly requests replay after a gateway restart",
     );
-    expect(parameters.properties?.restartSafe?.description).toContain("not proven replay-safe");
+    expect(parameters.properties?.restartSafe?.description).toContain(
+      "never for write, edit, exec, or any mutation",
+    );
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );

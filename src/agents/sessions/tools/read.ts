@@ -50,6 +50,11 @@ const readSchema = Type.Object({
   cursor: Type.Optional(
     Type.Integer({ minimum: 0, description: "Character position within the start line; 0-based." }),
   ),
+  optional: Type.Optional(
+    Type.Literal(true, {
+      description: "Missing paths return structured not_found instead of failing.",
+    }),
+  ),
 });
 
 const ReadTruncationOutputSchema = Type.Object(
@@ -561,7 +566,8 @@ export function createReadToolDefinition(
         offset,
         limit,
         cursor,
-      }: { path: string; offset?: number; limit?: number; cursor?: number },
+        optional,
+      }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -591,11 +597,37 @@ export function createReadToolDefinition(
 
         void (async () => {
           try {
-            const { absolutePath, note } = await resolveReadToolPath(ops, path, cwd);
-            if (aborted) {
+            let absolutePath: string;
+            let note: string | undefined;
+            let buffer: Buffer;
+            try {
+              ({ absolutePath, note } = await resolveReadToolPath(ops, path, cwd));
+              if (aborted) {
+                return;
+              }
+              buffer = await ops.readFile(absolutePath);
+            } catch (error) {
+              if (aborted) {
+                return;
+              }
+              if (
+                optional !== true ||
+                (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"))
+              ) {
+                throw error;
+              }
+              signal?.removeEventListener("abort", onAbort);
+              resolve({
+                content: [{ type: "text", text: `Optional file not found: ${path}.` }],
+                details: {
+                  kind: "not_found",
+                  status: "not_found",
+                  path,
+                  optional: true,
+                },
+              });
               return;
             }
-            const buffer = await ops.readFile(absolutePath);
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
             let truncated: Parameters<typeof createReadDetails>[1];

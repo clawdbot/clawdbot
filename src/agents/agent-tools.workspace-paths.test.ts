@@ -959,6 +959,7 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-missing-daily-memory",
       {
         path: "memory/2026-05-15.md",
+        optional: true,
       },
       undefined,
     );
@@ -966,7 +967,7 @@ describe("FS tools with workspaceOnly=false", () => {
       content: [
         {
           type: "text",
-          text: "No daily memory file exists yet at memory/2026-05-15.md.",
+          text: "Optional file not found: memory/2026-05-15.md.",
         },
       ],
       details: {
