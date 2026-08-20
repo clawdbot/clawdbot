@@ -286,7 +286,10 @@ export async function recoverStore(params: {
       return result;
     }
     let entry = loadedEntry;
-    if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
+    const hasRecoveryStateToObserve =
+      entry?.abortedLastRun === true ||
+      Boolean(entry?.mainRestartRecovery && entry.restartRecoveryRuns?.length);
+    if (!entry || entry.status !== "running" || !hasRecoveryStateToObserve) {
       continue;
     }
     if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {

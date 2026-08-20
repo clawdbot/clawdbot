@@ -1,9 +1,15 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
 } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import { recoverStore } from "./main-session-restart-recovery-store.js";
 
 // Regression coverage for #118873: a terminal-only mainRestartRecovery
 // aggregate (every recorded run has a terminal fact; no reservation,
@@ -11,6 +17,17 @@ import { transitionMainSessionRecovery } from "./main-session-recovery-state.js"
 // instead of blocking the session forever with "changed while starting work".
 
 const sessionKey = "agent:main:main";
+const unusedGatewayRuntime: GatewayRecoveryRuntime = {
+  dispatchAgent: async () => {
+    throw new Error("terminal residue must not dispatch");
+  },
+  waitForAgent: async () => {
+    throw new Error("terminal residue must not wait");
+  },
+  sendRecoveryNotice: async () => {
+    throw new Error("terminal residue must not send a notice");
+  },
+};
 
 function recoveryState(
   overrides: Partial<MainRestartRecoveryState> = {},
@@ -106,19 +123,28 @@ describe("main session recovery terminal-only residue", () => {
     expect(entry.restartRecoveryDeliveryRunId).toBe("pending-delivery");
   });
 
-  it("retires terminal-only residue durably at the observe scan", () => {
-    const entry = settledEntry();
+  it("retires terminal-only residue through the persisted startup scan", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-terminal-residue-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    try {
+      await replaceSessionEntry({ sessionKey, storePath }, settledEntry());
 
-    const result = transitionMainSessionRecovery(entry, {
-      kind: "observe",
-      cycleId: "unused-cycle",
-      lifecycleGeneration: "generation-1",
-      sessionKey,
-    });
+      await expect(
+        recoverStore({
+          activeSessionIds: [],
+          activeSessionKeys: [],
+          gatewayRuntime: unusedGatewayRuntime,
+          resumedSessionKeys: new Set(),
+          storePath,
+        }),
+      ).resolves.toEqual({ recovered: 0, failed: 0, skipped: 1 });
 
-    expect(result).toMatchObject({ kind: "observed", view: { status: "inactive" } });
-    expect(entry.mainRestartRecovery).toBeUndefined();
-    expect(entry.restartRecoveryRuns).toBeUndefined();
+      const entry = loadSessionEntry({ readConsistency: "latest", sessionKey, storePath });
+      expect(entry?.mainRestartRecovery).toBeUndefined();
+      expect(entry?.restartRecoveryRuns).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("does not block standalone inspect admission on terminal-only residue", () => {
