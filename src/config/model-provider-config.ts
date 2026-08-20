@@ -77,9 +77,7 @@ export function resolveModelProviderRouteOverridePresence(params: {
     normalizeModelId: canonicalize,
   }).get(modelId);
   return configuredModel &&
-    (hasNonEmptyRecord(configuredModel.headers) ||
-      hasNonEmptyRecord(configuredModel.params) ||
-      hasNonEmptyRecord(configuredModel.compat))
+    (hasNonEmptyRecord(configuredModel.headers) || hasNonEmptyRecord(configuredModel.params))
     ? "present"
     : "none";
 }

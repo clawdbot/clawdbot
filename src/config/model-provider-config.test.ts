@@ -50,7 +50,7 @@ describe("resolveMergedModelProviderModels", () => {
 });
 
 describe("resolveModelProviderRouteOverridePresence", () => {
-  it("treats authored model compatibility as request behavior", () => {
+  it("does not treat model capability metadata as a route override", () => {
     const config = {
       models: {
         providers: {
@@ -70,7 +70,7 @@ describe("resolveModelProviderRouteOverridePresence", () => {
         modelId: "gpt-5.5",
         config,
       }),
-    ).toBe("present");
+    ).toBe("none");
     expect(
       resolveModelProviderRouteOverridePresence({
         provider: "openai",
