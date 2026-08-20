@@ -3,7 +3,6 @@ import {
   type AssistantMessage,
   type Context,
   type Model,
-  type StreamOptions,
 } from "@openclaw/llm-core";
 import { WebSocketError } from "openai/resources/responses/internal-base.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +14,10 @@ import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "./openai-responses-contracts.js";
+import {
+  withProviderAcceptanceObserver,
+  type ProviderAcceptance,
+} from "./transport-stream-shared.js";
 
 type StreamMessage =
   | { type: "open" }
@@ -269,7 +272,7 @@ async function run(
     headers?: Record<string, string>;
     observations?: ResponsesPromptObservation[];
     onCompactionRejected?: () => void;
-    onProviderAccepted?: NonNullable<StreamOptions["onProviderAccepted"]>;
+    acceptanceObserver?: (acceptance: ProviderAcceptance) => void | Promise<void>;
   } = {},
 ): Promise<AssistantMessage> {
   const options = {
@@ -280,8 +283,10 @@ async function run(
     timeoutMs: overrides.timeoutMs,
     headers: overrides.headers,
     onCompactionRejected: overrides.onCompactionRejected,
-    onProviderAccepted: overrides.onProviderAccepted,
   };
+  if (overrides.acceptanceObserver) {
+    withProviderAcceptanceObserver(options, overrides.acceptanceObserver);
+  }
   if (overrides.observations) {
     responsesPromptObserver.set(options, (observation) =>
       overrides.observations?.push(observation),
@@ -346,29 +351,29 @@ describe("native OpenAI Responses WebSocket client integration", () => {
 
   it("reports WebSocket acceptance without fabricated HTTP metadata", async () => {
     transportState.responseBatches.push([message(completedEvent("resp_accepted", "ok"))]);
-    const onProviderAccepted = vi.fn();
+    const acceptanceObserver = vi.fn();
 
     const result = await run(
       { messages: [userMessage("hello", 1)], tools: [] },
-      { onProviderAccepted },
+      { acceptanceObserver },
     );
 
     expect(result.stopReason).toBe("stop");
-    expect(onProviderAccepted).toHaveBeenCalledWith({ kind: "provider_stream_opened" }, model);
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
   });
 
-  it("closes the WebSocket when provider acceptance fails", async () => {
+  it("closes the WebSocket when acceptance observation fails", async () => {
     transportState.responseBatches.push([message(completedEvent("resp_rejected", "ignored"))]);
-    const hookError = new Error("acceptance callback failed");
+    const hookError = new Error("acceptance observer failed");
 
     const result = await run(
       { messages: [userMessage("hello", 1)], tools: [] },
-      { onProviderAccepted: () => Promise.reject(hookError) },
+      { acceptanceObserver: () => Promise.reject(hookError) },
     );
 
     expect(result).toMatchObject({
       stopReason: "error",
-      errorMessage: "acceptance callback failed",
+      errorMessage: "acceptance observer failed",
     });
     expect(transportState.websocketCloseCount).toBe(1);
   });

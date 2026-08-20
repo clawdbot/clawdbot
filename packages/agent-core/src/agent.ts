@@ -118,8 +118,6 @@ export interface AgentOptions {
   getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
   /** Inspect the provider payload before it is sent. */
   onPayload?: SimpleStreamOptions["onPayload"];
-  /** Observe when the provider accepts the request. */
-  onProviderAccepted?: SimpleStreamOptions["onProviderAccepted"];
   /** Inspect the provider response after it returns. */
   onResponse?: SimpleStreamOptions["onResponse"];
   /** Hook that may short-circuit or alter a tool call before execution. */
@@ -231,7 +229,6 @@ export class Agent {
   public streamFn: StreamFn;
   public getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
   public onPayload?: SimpleStreamOptions["onPayload"];
-  public onProviderAccepted?: SimpleStreamOptions["onProviderAccepted"];
   public onResponse?: SimpleStreamOptions["onResponse"];
   public beforeToolCall?: (
     context: BeforeToolCallContext,
@@ -273,7 +270,6 @@ export class Agent {
     this.streamFn = resolveAgentCoreStreamFn(options.runtime, options.streamFn);
     this.getApiKey = options.getApiKey;
     this.onPayload = options.onPayload;
-    this.onProviderAccepted = options.onProviderAccepted;
     this.onResponse = options.onResponse;
     this.beforeToolCall = options.beforeToolCall;
     this.resolveDeferredTool = options.resolveDeferredTool;
@@ -525,7 +521,6 @@ export class Agent {
       ),
       sessionId: this.sessionId,
       onPayload: this.onPayload,
-      onProviderAccepted: this.onProviderAccepted,
       onResponse: this.onResponse,
       transport: this.transport,
       thinkingBudgets: this.thinkingBudgets,

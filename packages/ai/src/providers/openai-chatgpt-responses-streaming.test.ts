@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -180,25 +181,28 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     }
 
     const order: string[] = [];
-    const onProviderAccepted = vi.fn(async () => {
+    const acceptanceObserver = vi.fn(async () => {
       order.push("accepted");
     });
     const fetchMock = vi.fn();
     vi.stubGlobal("WebSocket", AcceptedWebSocket);
     vi.stubGlobal("fetch", fetchMock);
+    const options = withProviderAcceptanceObserver(
+      {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+        }),
+      },
+      acceptanceObserver,
+    );
 
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      onProviderAccepted,
-    });
+    const stream = streamOpenAICodexResponses(model, context, options);
     for await (const event of stream) {
       order.push(event.type);
     }
 
     expect(order).toEqual(["accepted", "start", "done"]);
-    expect(onProviderAccepted).toHaveBeenCalledWith({ kind: "provider_stream_opened" }, model);
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 // Coverage for model-call diagnostic events around attempt stream functions.
+import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -219,15 +220,12 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
   });
 
   it("records provider acceptance when an SDK hides HTTP metadata", async () => {
-    const originalOnProviderAccepted = vi.fn(async () => undefined);
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       ((
-        model: Parameters<StreamFn>[0],
+        _model: Parameters<StreamFn>[0],
         _context: Parameters<StreamFn>[1],
         options: Parameters<StreamFn>[2],
-      ) => {
-        return options?.onProviderAccepted?.({ kind: "provider_stream_opened" }, model);
-      }) as unknown as StreamFn,
+      ) => notifyProviderStreamOpened({ options, cancelStream: vi.fn() })) as unknown as StreamFn,
       {
         runId: "run-timeline-accepted",
         provider: "google",
@@ -239,17 +237,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     );
 
     const events = await collectProviderTimelineEvents(async () => {
-      await wrapped(
-        { id: "gemini-2.5-pro" } as never,
-        {} as never,
-        { onProviderAccepted: originalOnProviderAccepted } as never,
-      );
+      await wrapped({ id: "gemini-2.5-pro" } as never, {} as never, {});
     });
-
-    expect(originalOnProviderAccepted).toHaveBeenCalledWith(
-      { kind: "provider_stream_opened" },
-      { id: "gemini-2.5-pro" },
-    );
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       type: "provider.request",

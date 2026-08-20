@@ -1460,7 +1460,7 @@ async function* startWebSocketOutputOnFirstEvent(
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   onFirstProviderEvent: () => void,
-  onProviderAccepted: () => Promise<void>,
+  reportStreamOpened: () => Promise<void>,
   onStart: () => void,
 ): AsyncGenerator<ResponseStreamEvent> {
   let started = false;
@@ -1469,7 +1469,7 @@ async function* startWebSocketOutputOnFirstEvent(
       started = true;
       onFirstProviderEvent();
       onStart();
-      await onProviderAccepted();
+      await reportStreamOpened();
       stream.push({ type: "start", partial: output });
     }
     yield event;
@@ -1524,7 +1524,6 @@ async function processWebSocketStream(
         () =>
           notifyProviderStreamOpened({
             options,
-            model,
             cancelStream: () => {
               keepConnection = false;
               closeWebSocketSilently(socket);

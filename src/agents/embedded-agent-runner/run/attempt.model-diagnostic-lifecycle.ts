@@ -1,4 +1,4 @@
-import type { ProviderAcceptance } from "@openclaw/llm-core";
+import { withProviderAcceptanceObserver, type ProviderAcceptance } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
@@ -373,7 +373,6 @@ function withDiagnosticRequestContext(
 ): ModelCallStreamOptions {
   const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
-  const originalOnProviderAccepted = options?.onProviderAccepted;
   const originalOnResponse = options?.onResponse;
   const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
     if (!originalOnPayload) {
@@ -389,16 +388,6 @@ function withDiagnosticRequestContext(
     }
     observer.assignRequestPayloadBytes(result ?? payload);
     return result;
-  };
-  const onProviderAccepted: NonNullable<ModelCallStreamOptions>["onProviderAccepted"] = (
-    acceptance,
-    model,
-  ) => {
-    observer.state.providerAcceptanceKind = acceptance.kind;
-    if (acceptance.kind === "http_response") {
-      observer.state.responseStatus = acceptance.status;
-    }
-    return originalOnProviderAccepted?.(acceptance, model);
   };
   const onResponse: NonNullable<ModelCallStreamOptions>["onResponse"] = (response, model) => {
     // Retrying providers can expose several responses; the terminal request status
@@ -417,14 +406,19 @@ function withDiagnosticRequestContext(
   if (traceparent) {
     headers[TRACEPARENT_HEADER_NAME] = traceparent;
   }
-  return {
+  const requestOptions = {
     ...options,
     requestId: callId,
     ...((options?.headers || traceparent) && { headers }),
     onPayload,
-    onProviderAccepted,
     onResponse,
   };
+  return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
+    observer.state.providerAcceptanceKind = acceptance.kind;
+    if (acceptance.kind === "http_response") {
+      observer.state.responseStatus = acceptance.status;
+    }
+  });
 }
 
 export function createModelLifecycle(params: {

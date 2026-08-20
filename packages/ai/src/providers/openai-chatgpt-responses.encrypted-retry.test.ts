@@ -7,6 +7,7 @@ import {
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
 import { OPENAI_RESPONSES_REASONING_REPLAY_META_KEY } from "../transports/openai-responses-contracts.js";
+import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { AssistantMessage, Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -544,7 +545,7 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     expect(onCompactionRejected).toHaveBeenCalledOnce();
   });
 
-  it("WebSocket commits stripped compaction before a provider acceptance callback fails", async () => {
+  it("WebSocket commits stripped compaction before acceptance observation fails", async () => {
     const context = createReplayContext("compaction");
     const onCompactionRejected = vi.fn();
     const observations: ResponsesPromptObservation[] = [];
@@ -552,27 +553,26 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       { events: [invalidEncryptedEvent()] },
       { events: [completionEvent("resp_ws_hook_failure")] },
     ]);
-    const onProviderAccepted = vi.fn(async () => {
-      if (scripted.requests.length >= 2) {
-        throw new Error("acceptance callback failed");
-      }
-    });
-    const options = createObservedOptions(
+    const baseOptions = createObservedOptions(
       {
         apiKey: createJwt(),
         transport: "websocket" as const,
         onCompactionRejected,
-        onProviderAccepted,
         ...REPLAY_IDENTITY,
       },
       observations,
     );
+    const options = withProviderAcceptanceObserver(baseOptions, async () => {
+      if (scripted.requests.length >= 2) {
+        throw new Error("acceptance observer failed");
+      }
+    });
 
     const result = await streamOpenAICodexResponses(model, context, options).result();
 
     expect(result).toMatchObject({
       stopReason: "error",
-      errorMessage: "acceptance callback failed",
+      errorMessage: "acceptance observer failed",
       providerReplay: { type: "openai-responses-compaction-suppression" },
     });
     expect(scripted.requests).toHaveLength(2);

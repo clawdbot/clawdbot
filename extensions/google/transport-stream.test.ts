@@ -6,6 +6,7 @@ import { gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { Model, ProviderContext } from "openclaw/plugin-sdk/llm";
+import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
 
@@ -632,22 +633,18 @@ describe("google transport stream", () => {
 
   it("reports the real HTTP response before consuming Gemini SSE output", async () => {
     mockGoogleTextResponse();
-    const onProviderAccepted = vi.fn();
+    const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
 
-    const result = await runGeminiStreamResult({
-      options: { onProviderAccepted, onResponse },
-    });
+    const result = await runGeminiStreamResult({ options });
 
     expect(result.stopReason).toBe("stop");
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "http_response",
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      },
-      expect.objectContaining({ provider: "google" }),
-    );
+    expect(acceptanceObserver).toHaveBeenCalledWith({
+      kind: "http_response",
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
     expect(onResponse).toHaveBeenCalledWith(
       { status: 200, headers: { "content-type": "text/event-stream" } },
       expect.objectContaining({ provider: "google" }),
@@ -664,15 +661,14 @@ describe("google transport stream", () => {
         },
       }),
     );
-    const onProviderAccepted = vi.fn();
+    const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
 
-    const result = await runGeminiStreamResult({
-      options: { onProviderAccepted, onResponse },
-    });
+    const result = await runGeminiStreamResult({ options });
 
     expect(result.stopReason).toBe("error");
-    expect(onProviderAccepted).not.toHaveBeenCalled();
+    expect(acceptanceObserver).not.toHaveBeenCalled();
     expect(onResponse).toHaveBeenCalledWith(
       {
         status: 429,
@@ -1471,7 +1467,7 @@ describe("google transport stream", () => {
     },
   );
 
-  it("does not retry when a slow provider acceptance callback rejects", async () => {
+  it("does not retry when a slow provider acceptance observer rejects", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     let cancelCalled = false;
     guardedFetchMock.mockResolvedValueOnce(
@@ -1483,28 +1479,26 @@ describe("google transport stream", () => {
       }),
     );
 
+    const options = withProviderAcceptanceObserver({ reasoning: "high" }, async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 25);
+      });
+      throw new Error("acceptance observer failed");
+    });
     const result = await runGeminiStreamResult({
       model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
-      options: {
-        reasoning: "high",
-        onProviderAccepted: async () => {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 25);
-          });
-          throw new Error("acceptance callback failed");
-        },
-      },
+      options,
     });
 
     expect(result).toMatchObject({
       stopReason: "error",
-      errorMessage: "acceptance callback failed",
+      errorMessage: "acceptance observer failed",
     });
     expect(guardedFetchMock).toHaveBeenCalledOnce();
     expect(cancelCalled).toBe(true);
   });
 
-  it.each(["onProviderAccepted", "onResponse"] as const)(
+  it.each(["observer", "onResponse"] as const)(
     "aborts a pending %s callback without retrying",
     async (hookName) => {
       vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
@@ -1525,13 +1519,17 @@ describe("google transport stream", () => {
         return new Promise<void>(() => {});
       });
 
+      const baseOptions = {
+        reasoning: "high",
+        signal: controller.signal,
+      };
+      const options =
+        hookName === "observer"
+          ? withProviderAcceptanceObserver(baseOptions, hook)
+          : { ...baseOptions, onResponse: hook };
       const resultPromise = runGeminiStreamResult({
         model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
-        options: {
-          reasoning: "high",
-          signal: controller.signal,
-          [hookName]: hook,
-        },
+        options,
       });
       await hookStarted;
       controller.abort(
@@ -1551,20 +1549,18 @@ describe("google transport stream", () => {
     },
   );
 
-  it("does not count provider acceptance callback time against the retry deadline", async () => {
+  it("does not count provider acceptance observation against the retry deadline", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     mockGoogleTextResponse("accepted");
 
+    const options = withProviderAcceptanceObserver({ reasoning: "high" }, async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 25);
+      });
+    });
     const result = await runGeminiStreamResult({
       model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
-      options: {
-        reasoning: "high",
-        onProviderAccepted: async () => {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 25);
-          });
-        },
-      },
+      options,
     });
 
     expect(result.content).toEqual([{ type: "text", text: "accepted" }]);

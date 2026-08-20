@@ -3,6 +3,7 @@ import {
   ConversationRole,
   StopReason as BedrockStopReason,
 } from "@aws-sdk/client-bedrock-runtime";
+import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimpleBedrock } from "./stream.runtime.js";
 
@@ -151,10 +152,11 @@ describe("Bedrock stream client lifecycle", () => {
       stream: successfulStream(),
     } as never);
     const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
-    const onProviderAccepted = vi.fn();
+    const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
 
-    const resultPromise = streamBedrockForTest({ onProviderAccepted, onResponse }).result();
+    const resultPromise = streamBedrockForTest(options).result();
     await streamBlocked;
     expect(destroy).not.toHaveBeenCalled();
 
@@ -162,14 +164,11 @@ describe("Bedrock stream client lifecycle", () => {
     const result = await resultPromise;
 
     expect(result.stopReason).toBe("stop");
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "http_response",
-        status: 200,
-        headers: { "x-amzn-requestid": "bedrock-request-1" },
-      },
-      expect.objectContaining({ provider: "amazon-bedrock" }),
-    );
+    expect(acceptanceObserver).toHaveBeenCalledWith({
+      kind: "http_response",
+      status: 200,
+      headers: { "x-amzn-requestid": "bedrock-request-1" },
+    });
     expect(onResponse).toHaveBeenCalledWith(
       { status: 200, headers: { "x-amzn-requestid": "bedrock-request-1" } },
       expect.objectContaining({ provider: "amazon-bedrock" }),
@@ -191,15 +190,14 @@ describe("Bedrock stream client lifecycle", () => {
       stream: responseIterator,
     } as never);
     const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
-    const hookError = new Error("acceptance callback failed");
+    const hookError = new Error("acceptance observer failed");
+    const options = withProviderAcceptanceObserver({}, () => Promise.reject(hookError));
 
-    const result = await streamBedrockForTest({
-      onProviderAccepted: () => Promise.reject(hookError),
-    }).result();
+    const result = await streamBedrockForTest(options).result();
 
     expect(result).toMatchObject({
       stopReason: "error",
-      errorMessage: "acceptance callback failed",
+      errorMessage: "acceptance observer failed",
     });
     expect(close).toHaveBeenCalledOnce();
     expectDestroyedClient(send, destroy);

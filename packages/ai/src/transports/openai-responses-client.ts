@@ -511,7 +511,6 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                       providerAccepted = true;
                       await notifyProviderStreamOpened({
                         options,
-                        model,
                         cancelStream: () => websocket.finish({ keep: false }),
                       });
                     }

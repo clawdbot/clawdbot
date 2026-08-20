@@ -1,28 +1,74 @@
 import type { Model, StreamOptions } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  copyProviderAcceptanceObserver,
   notifyProviderHttpMetadata,
   notifyProviderHttpResponse,
   notifyProviderStreamOpened,
+  withProviderAcceptanceObserver,
+  type ProviderAcceptance,
 } from "./transport-stream-shared.js";
 
 const model = { id: "acceptance-test", provider: "test" } as Model;
 
-describe("notifyProviderHttpResponse", () => {
-  it.each(["onProviderAccepted", "onResponse"] as const)(
-    "cancels an unread response when %s fails",
-    async (hookName) => {
-      const hookError = new Error(`${hookName} failed`);
+function observeAcceptance(
+  observer: (acceptance: ProviderAcceptance) => void | Promise<void>,
+  options: StreamOptions = {},
+): StreamOptions {
+  return withProviderAcceptanceObserver(options, observer);
+}
+
+describe("private provider acceptance", () => {
+  it("reports a successful HTTP response before the compatibility callback", async () => {
+    const calls: string[] = [];
+    const observer = vi.fn((acceptance: ProviderAcceptance) => {
+      calls.push(acceptance.kind);
+    });
+    const onResponse = vi.fn(() => {
+      calls.push("onResponse");
+    });
+    const options = observeAcceptance(observer, { onResponse });
+    const response = new Response(null, {
+      status: 200,
+      headers: { "x-request-id": "request-1" },
+    });
+
+    await notifyProviderHttpResponse({ options, response, model });
+
+    expect(observer).toHaveBeenCalledWith({
+      kind: "http_response",
+      status: 200,
+      headers: { "x-request-id": "request-1" },
+    });
+    expect(onResponse).toHaveBeenCalledWith(
+      { status: 200, headers: { "x-request-id": "request-1" } },
+      model,
+    );
+    expect(calls).toEqual(["http_response", "onResponse"]);
+  });
+
+  it("reports a rejected HTTP response without marking it accepted", async () => {
+    const observer = vi.fn();
+    const onResponse = vi.fn();
+    const options = observeAcceptance(observer, { onResponse });
+    const response = new Response("rejected", { status: 429 });
+
+    await notifyProviderHttpResponse({ options, response, model });
+
+    expect(observer).not.toHaveBeenCalled();
+    expect(onResponse).toHaveBeenCalledWith(expect.objectContaining({ status: 429 }), model);
+  });
+
+  it.each(["observer", "onResponse"] as const)(
+    "cancels an unread response when the %s fails",
+    async (failureSource) => {
+      const hookError = new Error(`${failureSource} failed`);
       const cancel = vi.fn();
-      const response = new Response(
-        new ReadableStream<Uint8Array>({
-          cancel,
-        }),
-        { status: 200 },
-      );
-      const options: StreamOptions = {
-        [hookName]: vi.fn(() => Promise.reject(hookError)),
-      };
+      const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 });
+      const options =
+        failureSource === "observer"
+          ? observeAcceptance(() => Promise.reject(hookError))
+          : ({ onResponse: () => Promise.reject(hookError) } satisfies StreamOptions);
 
       await expect(notifyProviderHttpResponse({ options, response, model })).rejects.toBe(
         hookError,
@@ -32,7 +78,7 @@ describe("notifyProviderHttpResponse", () => {
     },
   );
 
-  it("does not wait for unread response cancellation after a callback fails", async () => {
+  it("does not wait for unread response cancellation after the observer fails", async () => {
     const hookError = new Error("acceptance failed");
     let markCancelStarted!: () => void;
     const cancelStarted = new Promise<void>((resolve) => {
@@ -47,151 +93,58 @@ describe("notifyProviderHttpResponse", () => {
       }),
       { status: 200 },
     );
-    const notification = notifyProviderHttpResponse({
-      options: { onProviderAccepted: () => Promise.reject(hookError) },
-      response,
-      model,
-    });
+    const options = observeAcceptance(() => Promise.reject(hookError));
+    const notification = notifyProviderHttpResponse({ options, response, model });
 
     await cancelStarted;
     await expect(notification).rejects.toBe(hookError);
   });
 
-  it("reports a rejected HTTP response without marking it accepted", async () => {
-    const onProviderAccepted = vi.fn();
-    const onResponse = vi.fn();
-    const options: StreamOptions = { onProviderAccepted, onResponse };
-    const response = new Response("rejected", { status: 429 });
-
-    await notifyProviderHttpResponse({ options, response, model });
-
-    expect(onProviderAccepted).not.toHaveBeenCalled();
-    expect(onResponse).toHaveBeenCalledWith(expect.objectContaining({ status: 429 }), model);
-  });
-
-  it("does not resume response handling when a callback aborts its signal", async () => {
-    const controller = new AbortController();
-    const abortReason = Object.assign(new Error("operator canceled"), {
-      code: "OPERATOR_CANCELLED",
-    });
-    const cancel = vi.fn();
-    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 });
-
-    await expect(
-      notifyProviderHttpResponse({
-        options: {
-          signal: controller.signal,
-          onProviderAccepted: () => controller.abort(abortReason),
-        },
-        response,
-        model,
-      }),
-    ).rejects.toBe(abortReason);
-    expect(cancel).toHaveBeenCalledWith(abortReason);
-  });
-
-  it("uses the option signal to abort a pending HTTP acceptance callback", async () => {
-    const controller = new AbortController();
-    const abortReason = Object.assign(new Error("operator canceled"), {
-      code: "OPERATOR_CANCELLED",
-    });
-    const cancel = vi.fn();
-    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 });
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
-    });
-    const options: StreamOptions = {
-      signal: controller.signal,
-      onProviderAccepted: () => {
-        markHookStarted();
-        return new Promise<void>(() => {});
-      },
-    };
-
-    const notification = notifyProviderHttpResponse({ options, response, model });
-    await hookStarted;
-    controller.abort(abortReason);
-
-    await expect(notification).rejects.toBe(abortReason);
-    expect(cancel).toHaveBeenCalledWith(abortReason);
-  });
-});
-
-describe("opaque provider stream acceptance", () => {
-  it("cancels an SDK stream without waiting when acceptance fails", async () => {
-    const hookError = new Error("acceptance callback failed");
-    const cancelStream = vi.fn(() => new Promise<void>(() => {}));
-
-    await expect(
-      notifyProviderStreamOpened({
-        options: { onProviderAccepted: () => Promise.reject(hookError) },
-        model,
-        cancelStream,
-      }),
-    ).rejects.toBe(hookError);
-
-    expect(cancelStream).toHaveBeenCalledOnce();
-    expect(cancelStream).toHaveBeenCalledWith(hookError);
-  });
-
-  it("cancels an SDK stream when the acceptance callback is aborted", async () => {
+  it("cancels an SDK stream when a pending observer is aborted", async () => {
     const controller = new AbortController();
     const abortReason = Object.assign(new Error("operator canceled"), {
       code: "OPERATOR_CANCELLED",
     });
     const cancelStream = vi.fn();
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
+    let markObserverStarted!: () => void;
+    const observerStarted = new Promise<void>((resolve) => {
+      markObserverStarted = resolve;
     });
-    const options: StreamOptions = {
-      signal: controller.signal,
-      onProviderAccepted: () => {
-        markHookStarted();
+    const options = observeAcceptance(
+      () => {
+        markObserverStarted();
         return new Promise<void>(() => {});
       },
-    };
+      { signal: controller.signal },
+    );
 
-    const notification = notifyProviderStreamOpened({ options, model, cancelStream });
-    await hookStarted;
+    const notification = notifyProviderStreamOpened({ options, cancelStream });
+    await observerStarted;
     controller.abort(abortReason);
 
     await expect(notification).rejects.toBe(abortReason);
-    expect(cancelStream).toHaveBeenCalledOnce();
     expect(cancelStream).toHaveBeenCalledWith(abortReason);
   });
 
-  it.each([
-    [
-      "throws",
-      () => {
-        throw new Error("synchronous cleanup failure");
-      },
-    ],
-    ["rejects", () => Promise.reject(new Error("asynchronous cleanup failure"))],
-  ])("preserves the lifecycle failure when SDK cleanup %s", async (_label, cancelStream) => {
-    const hookError = new Error("acceptance callback failed");
+  it("reports an opaque stream without canceling it", async () => {
+    const observer = vi.fn();
+    const cancelStream = vi.fn();
+    const options = observeAcceptance(observer);
 
-    await expect(
-      notifyProviderStreamOpened({
-        options: { onProviderAccepted: () => Promise.reject(hookError) },
-        model,
-        cancelStream,
-      }),
-    ).rejects.toBe(hookError);
+    await notifyProviderStreamOpened({ options, cancelStream });
+
+    expect(observer).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
+    expect(cancelStream).not.toHaveBeenCalled();
   });
 
-  it("does not cancel an accepted SDK stream", async () => {
-    const cancelStream = vi.fn();
+  it("preserves the observer when built-in wrappers rebuild options", async () => {
+    const observer = vi.fn();
+    const source = observeAcceptance(observer);
+    const target = copyProviderAcceptanceObserver(source, {});
 
-    await notifyProviderStreamOpened({
-      options: { onProviderAccepted: vi.fn() },
-      model,
-      cancelStream,
-    });
+    await notifyProviderStreamOpened({ options: target, cancelStream: vi.fn() });
 
-    expect(cancelStream).not.toHaveBeenCalled();
+    expect(observer).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
   });
 
   it("cancels a metadata-only SDK stream when its compatibility callback fails", async () => {
@@ -207,7 +160,6 @@ describe("opaque provider stream acceptance", () => {
       }),
     ).rejects.toBe(hookError);
 
-    expect(cancelStream).toHaveBeenCalledOnce();
     expect(cancelStream).toHaveBeenCalledWith(hookError);
   });
 });

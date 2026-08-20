@@ -422,7 +422,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   stream: AssistantMessageEventStream;
   model: Model<T>;
   output: AssistantMessage;
-  options?: Pick<StreamOptions, "signal" | "onPayload" | "onProviderAccepted">;
+  options?: Pick<StreamOptions, "signal" | "onPayload">;
   createClient: () => GoogleGenerateContentClient;
   buildParams: () => GenerateContentParameters;
   nextToolCallId: (name: string | undefined) => string;
@@ -440,7 +440,6 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
     const googleIterator = googleStream[Symbol.asyncIterator]();
     await notifyProviderStreamOpened({
       options,
-      model,
       cancelStream: async () => {
         await googleIterator.return?.();
       },

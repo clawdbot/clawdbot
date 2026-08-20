@@ -1,6 +1,7 @@
 import { toolCallFromJSON, type ToolCall } from "@mistralai/mistralai/models/components";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
@@ -269,26 +270,21 @@ describe("Mistral provider", () => {
         }),
     );
     configureAiTransportHost({ buildModelFetch: () => hostFetch });
-    const onProviderAccepted = vi.fn();
+    const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
 
-    const result = await runSimpleMistralFixture(context, {
-      onProviderAccepted,
-      onResponse,
-    });
+    const result = await runSimpleMistralFixture(context, options);
 
     expect(result.stopReason).toBe("stop");
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "http_response",
-        status: 200,
-        headers: expect.objectContaining({
-          "content-type": "text/event-stream",
-          "x-mistral-request-id": "req-1",
-        }),
-      },
-      expect.objectContaining({ provider: "mistral" }),
-    );
+    expect(acceptanceObserver).toHaveBeenCalledWith({
+      kind: "http_response",
+      status: 200,
+      headers: expect.objectContaining({
+        "content-type": "text/event-stream",
+        "x-mistral-request-id": "req-1",
+      }),
+    });
     expect(onResponse).toHaveBeenCalledWith(
       {
         status: 200,
@@ -299,7 +295,7 @@ describe("Mistral provider", () => {
     expect(hostFetch).toHaveBeenCalledOnce();
   });
 
-  it("cancels an unread Mistral stream when provider acceptance fails", async () => {
+  it("cancels an unread Mistral stream when acceptance observation fails", async () => {
     mistralMockState.requestThroughHttpClient = true;
     const cancel = vi.fn(async () => undefined);
     mistralMockState.streamResult = {
@@ -317,15 +313,14 @@ describe("Mistral provider", () => {
     configureAiTransportHost({
       buildModelFetch: () => async () => new Response("stream", { status: 200 }),
     });
-    const hookError = new Error("acceptance callback failed");
+    const hookError = new Error("acceptance observer failed");
+    const options = withProviderAcceptanceObserver({}, () => Promise.reject(hookError));
 
-    const result = await runSimpleMistralFixture(context, {
-      onProviderAccepted: () => Promise.reject(hookError),
-    });
+    const result = await runSimpleMistralFixture(context, options);
 
     expect(result).toMatchObject({
       stopReason: "error",
-      errorMessage: "acceptance callback failed",
+      errorMessage: "acceptance observer failed",
     });
     expect(cancel).toHaveBeenCalledWith(hookError);
   });
@@ -340,16 +335,14 @@ describe("Mistral provider", () => {
         }),
     );
     configureAiTransportHost({ buildModelFetch: () => hostFetch });
-    const onProviderAccepted = vi.fn();
+    const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
 
-    const result = await runSimpleMistralFixture(context, {
-      onProviderAccepted,
-      onResponse,
-    });
+    const result = await runSimpleMistralFixture(context, options);
 
     expect(result.stopReason).toBe("error");
-    expect(onProviderAccepted).not.toHaveBeenCalled();
+    expect(acceptanceObserver).not.toHaveBeenCalled();
     expect(onResponse).toHaveBeenCalledWith(
       {
         status: 429,
@@ -361,12 +354,13 @@ describe("Mistral provider", () => {
   });
 
   it("does not report acceptance when SDK stream setup fails", async () => {
-    const onProviderAccepted = vi.fn();
+    const acceptanceObserver = vi.fn();
+    const options = withProviderAcceptanceObserver({}, acceptanceObserver);
 
-    const result = await runSimpleMistralFixture(context, { onProviderAccepted });
+    const result = await runSimpleMistralFixture(context, options);
 
     expect(result.stopReason).toBe("error");
-    expect(onProviderAccepted).not.toHaveBeenCalled();
+    expect(acceptanceObserver).not.toHaveBeenCalled();
   });
 
   it("forwards simple stop sequences to Mistral stop", async () => {

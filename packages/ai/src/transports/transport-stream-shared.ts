@@ -159,12 +159,65 @@ export function transportAbortError(signal?: AbortSignal): Error {
     : new Error("Request was aborted");
 }
 
-type ProviderAcceptanceOptions = Pick<
-  StreamOptions,
-  "onProviderAccepted" | "onResponse" | "signal"
->;
+export type ProviderAcceptance =
+  | {
+      kind: "http_response";
+      status: number;
+      headers: Record<string, string>;
+    }
+  | { kind: "provider_stream_opened" };
 
+type ProviderAcceptanceObserver = (acceptance: ProviderAcceptance) => void | Promise<void>;
+type ProviderAcceptanceOptions = Pick<StreamOptions, "onResponse" | "signal">;
 type ProviderStreamCancel = (reason: Error) => void | Promise<void>;
+
+const providerAcceptanceObserver: unique symbol = Symbol("openclaw.providerAcceptanceObserver");
+
+function readProviderAcceptanceObserver(options: unknown): ProviderAcceptanceObserver | undefined {
+  if (options === null || typeof options !== "object") {
+    return undefined;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(options, providerAcceptanceObserver);
+  return descriptor && "value" in descriptor && typeof descriptor.value === "function"
+    ? (descriptor.value as ProviderAcceptanceObserver)
+    : undefined;
+}
+
+function writeProviderAcceptanceObserver<T extends object>(
+  options: T,
+  observer: ProviderAcceptanceObserver,
+): T {
+  // Keep this enumerable so normal option spreads preserve the private per-call observer.
+  Object.defineProperty(options, providerAcceptanceObserver, {
+    configurable: true,
+    enumerable: true,
+    value: observer,
+  });
+  return options;
+}
+
+/** Attach an OpenClaw-internal provider acceptance observer to one model call. */
+export function withProviderAcceptanceObserver<T extends object>(
+  options: T,
+  observer: ProviderAcceptanceObserver,
+): T {
+  const existing = readProviderAcceptanceObserver(options);
+  return writeProviderAcceptanceObserver(
+    options,
+    existing
+      ? async (acceptance) => {
+          await observer(acceptance);
+          await existing(acceptance);
+        }
+      : observer,
+  );
+}
+
+/** Preserve the private provider acceptance observer when a built-in wrapper rebuilds options. */
+export function copyProviderAcceptanceObserver<T extends object>(source: unknown, target: T): T {
+  const observer = readProviderAcceptanceObserver(source);
+  return observer ? writeProviderAcceptanceObserver(target, observer) : target;
+}
 
 async function awaitProviderLifecycleCallback(
   callback: (() => void | Promise<void>) | undefined,
@@ -230,7 +283,8 @@ export async function notifyProviderHttpMetadata(params: {
   cancelStream: ProviderStreamCancel;
   signal?: AbortSignal;
 }): Promise<void> {
-  if (!params.options?.onProviderAccepted && !params.options?.onResponse) {
+  const observer = readProviderAcceptanceObserver(params.options);
+  if (!observer && !params.options?.onResponse) {
     return;
   }
   const { status, headers } = params.response;
@@ -240,12 +294,8 @@ export async function notifyProviderHttpMetadata(params: {
     cancelStream: params.cancelStream,
     run: async () => {
       await awaitProviderLifecycleCallback(
-        accepted && params.options?.onProviderAccepted
-          ? () =>
-              params.options?.onProviderAccepted?.(
-                { kind: "http_response", status, headers },
-                params.model,
-              )
+        accepted && observer
+          ? () => observer({ kind: "http_response", status, headers })
           : undefined,
         signal,
       );
@@ -286,19 +336,19 @@ export async function notifyProviderHttpResponse(params: {
 
 /** Report an accepted SDK stream when the SDK does not expose HTTP metadata. */
 export async function notifyProviderStreamOpened(params: {
-  options?: Pick<StreamOptions, "onProviderAccepted" | "signal">;
-  model: Model;
+  options?: Pick<StreamOptions, "signal">;
   cancelStream: ProviderStreamCancel;
   signal?: AbortSignal;
 }): Promise<void> {
+  const observer = readProviderAcceptanceObserver(params.options);
+  if (!observer) {
+    return;
+  }
   await awaitProviderLifecycleWithCleanup({
     cancelStream: params.cancelStream,
     run: () =>
       awaitProviderLifecycleCallback(
-        params.options?.onProviderAccepted
-          ? () =>
-              params.options?.onProviderAccepted?.({ kind: "provider_stream_opened" }, params.model)
-          : undefined,
+        () => observer({ kind: "provider_stream_opened" }),
         params.signal ?? params.options?.signal,
       ),
   });

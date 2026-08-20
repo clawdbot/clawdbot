@@ -231,13 +231,10 @@ export function createOpenAIResponseHook(
 }
 
 export function createOpenAIProviderAcceptanceHook(
-  options: Pick<BaseOpenAIStreamOptions, "onProviderAccepted" | "onResponse"> | undefined,
+  options: Pick<BaseOpenAIStreamOptions, "onResponse" | "signal"> | undefined,
   response: Response,
   model: Model,
-): (() => void | Promise<void>) | undefined {
-  if (!options?.onProviderAccepted) {
-    return createOpenAIResponseHook(options?.onResponse, response, model);
-  }
+): () => Promise<void> {
   return () => notifyProviderHttpResponse({ options, response, model });
 }
 

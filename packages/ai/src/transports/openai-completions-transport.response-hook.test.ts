@@ -3,6 +3,10 @@ import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import type { AssistantMessageEventStreamLike, Context, Model, StreamOptions } from "../types.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
+import {
+  withProviderAcceptanceObserver,
+  type ProviderAcceptance,
+} from "./transport-stream-shared.js";
 
 const model = {
   id: "gpt-5.5",
@@ -116,21 +120,19 @@ describe.each([
     const hookCompleted = new Promise<void>((resolve) => {
       continueHook = resolve;
     });
-    const onProviderAccepted = vi.fn<NonNullable<StreamOptions["onProviderAccepted"]>>(
-      (acceptance) => {
-        order.push(`accepted:${acceptance.kind}`);
-      },
-    );
+    const acceptanceObserver = vi.fn((acceptance: ProviderAcceptance) => {
+      order.push(`accepted:${acceptance.kind}`);
+    });
     const onResponse = vi.fn<NonNullable<StreamOptions["onResponse"]>>(async () => {
       order.push("hook:start");
       await hookCompleted;
       order.push("hook:end");
     });
-    const stream = createStream(model, context, {
-      apiKey: "fixture-token",
-      onProviderAccepted,
-      onResponse,
-    });
+    const options = withProviderAcceptanceObserver(
+      { apiKey: "fixture-token", onResponse },
+      acceptanceObserver,
+    );
+    const stream = createStream(model, context, options);
     const consume = (async () => {
       for await (const event of stream) {
         order.push(event.type);
@@ -139,18 +141,15 @@ describe.each([
 
     await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
     expect(order).toEqual(["accepted:http_response", "hook:start"]);
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "http_response",
-        status: 202,
-        headers: {
-          "content-type": "text/event-stream",
-          "x-ratelimit-remaining-requests": "42",
-          "x-request-id": "req_observable",
-        },
+    expect(acceptanceObserver).toHaveBeenCalledWith({
+      kind: "http_response",
+      status: 202,
+      headers: {
+        "content-type": "text/event-stream",
+        "x-ratelimit-remaining-requests": "42",
+        "x-request-id": "req_observable",
       },
-      model,
-    );
+    });
     expect(onResponse).toHaveBeenCalledWith(
       {
         status: 202,
@@ -203,16 +202,16 @@ describe.each([
     },
   );
 
-  it("preserves an acceptance hook failure and closes the unread request", async () => {
+  it("preserves an acceptance observer failure and closes the unread request", async () => {
     const lifecycle = installResponse();
-    const hookError = new Error("provider acceptance hook failed");
-    const onProviderAccepted = vi.fn(() => Promise.reject(hookError));
+    const hookError = new Error("provider acceptance observer failed");
+    const acceptanceObserver = vi.fn(() => Promise.reject(hookError));
     const onResponse = vi.fn();
-    const stream = createStream(model, context, {
-      apiKey: "fixture-token",
-      onProviderAccepted,
-      onResponse,
-    });
+    const options = withProviderAcceptanceObserver(
+      { apiKey: "fixture-token", onResponse },
+      acceptanceObserver,
+    );
+    const stream = createStream(model, context, options);
     const eventTypes: string[] = [];
 
     for await (const event of stream) {
@@ -221,9 +220,9 @@ describe.each([
 
     expect(await stream.result()).toMatchObject({
       stopReason: "error",
-      errorMessage: "provider acceptance hook failed",
+      errorMessage: "provider acceptance observer failed",
     });
-    expect(onProviderAccepted).toHaveBeenCalledOnce();
+    expect(acceptanceObserver).toHaveBeenCalledOnce();
     expect(onResponse).not.toHaveBeenCalled();
     expect(eventTypes).toEqual(["error"]);
     expect(lifecycle.requestAborted).toHaveBeenCalledOnce();

@@ -55,7 +55,6 @@ import {
   type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
-import { notifyProviderHttpMetadata } from "openclaw/plugin-sdk/provider-lifecycle";
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
@@ -74,6 +73,7 @@ import {
 import {
   describeToolResultMediaPlaceholder,
   finalizeTerminalToolCallArguments,
+  notifyProviderHttpMetadata,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
