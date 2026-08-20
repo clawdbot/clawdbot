@@ -100,6 +100,80 @@ describe("optional custom element requests", () => {
     expect(requests.visibleState).toBeUndefined();
   });
 
+  it("resumes an active request after a foreground request replaces its visible slot", async () => {
+    let rejectActive: ((error: Error) => void) | undefined;
+    let resolveForeground: (() => void) | undefined;
+    const { requests } = createRequestHarness();
+    const activeElement = {
+      tagName: uniqueTag(),
+      label: "active panel",
+      loadModule: vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectActive = reject;
+          }),
+      ),
+    };
+    const foregroundElement = {
+      tagName: uniqueTag(),
+      label: "command palette",
+      loadModule: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveForeground = () => {
+              customElements.define(foregroundElement.tagName, class extends HTMLElement {});
+              resolve();
+            };
+          }),
+      ),
+    };
+
+    requests.requestWhileActive(activeElement, true);
+    await vi.waitFor(() => expect(activeElement.loadModule).toHaveBeenCalledOnce());
+    requests.request(foregroundElement);
+    await vi.waitFor(() => expect(foregroundElement.loadModule).toHaveBeenCalledOnce());
+    resolveForeground?.();
+    await vi.waitFor(() => expect(requests.visibleState?.element).toBe(activeElement));
+
+    const error = new Error("active chunk unavailable");
+    rejectActive?.(error);
+    await vi.waitFor(() =>
+      expect(requests.visibleState).toMatchObject({
+        element: activeElement,
+        error,
+        status: "error",
+      }),
+    );
+  });
+
+  it("keeps an active request dismissed until its lifecycle restarts", async () => {
+    const error = new Error("active chunk unavailable");
+    const { requests } = createRequestHarness();
+    const tagName = uniqueTag();
+    const element = {
+      tagName,
+      label: "active panel",
+      loadModule: vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(error)
+        .mockImplementationOnce(async () => {
+          customElements.define(tagName, class extends HTMLElement {});
+        }),
+    };
+
+    requests.requestWhileActive(element, true);
+    await vi.waitFor(() => expect(requests.visibleState?.status).toBe("error"));
+    requests.close();
+    requests.requestWhileActive(element, true);
+
+    expect(requests.visibleState).toBeUndefined();
+    expect(element.loadModule).toHaveBeenCalledOnce();
+
+    requests.requestWhileActive(element, false);
+    requests.requestWhileActive(element, true);
+    await vi.waitFor(() => expect(element.loadModule).toHaveBeenCalledTimes(2));
+  });
+
   it("delegates stale recovery before falling back to the same in-place load", async () => {
     const staleError = new Error("Failed to fetch dynamically imported module: panel-abc.js");
     const { requests, retryStale } = createRequestHarness();

@@ -67,6 +67,7 @@ import {
   DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   LazyCustomElementRequestController,
+  type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { hasStoredLazyShellAction } from "./lazy-shell-action.ts";
@@ -141,6 +142,11 @@ class OpenClawShell
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
+  readonly onboardingMemoryImportElement = {
+    tagName: "openclaw-onboarding-memory-import",
+    label: t("onboarding.memoryImport.title"),
+    loadModule: () => import("../components/onboarding-memory-import.ts"),
+  } satisfies OptionalCustomElement;
   readonly lazyCustomElements = new LazyCustomElementRequestController(
     this,
     () => this.shellChrome.cancelPendingLazyAction(),
@@ -721,9 +727,6 @@ class OpenClawShell
   }
 
   override render() {
-    if (this.onboardingMode && this.routeState.routeId !== "custodian") {
-      void import("../components/onboarding-memory-import.ts");
-    }
     return renderApplicationShell(this);
   }
 }
