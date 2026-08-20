@@ -13,7 +13,8 @@ import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import type { BuildChatItemsProps } from "./chat-thread-build.types.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import {
   getOrCreateSessionCacheValue,
@@ -24,11 +25,11 @@ import {
 export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
-  coalesceAgentRunGroups,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
+export { coalesceAgentRunGroups } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;

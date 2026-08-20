@@ -1,6 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
@@ -29,6 +28,7 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
+import type { BuildChatItemsProps } from "./chat-thread-build.types.ts";
 import {
   coalesceToolActivityMessages,
   groupMessages,
@@ -66,31 +66,12 @@ import {
   removeLiveToolBlocksFromHistory,
 } from "./tool-stream-identity.ts";
 
-export type BuildChatItemsProps = {
-  paneId: string;
-  sessionKey: string;
-  runId?: string | null;
-  /** Invalidates cached display copy when the active UI language changes. */
-  locale?: string;
-  messages: unknown[];
-  toolMessages: unknown[];
-  guardianNotices?: ChatGuardianNotice[];
-  streamSegments: ChatStreamSegment[];
-  stream: string | null;
-  streamStartedAt: number | null;
-  queue?: ChatQueueItem[];
-  showToolCalls: boolean;
-  persistCommentary?: boolean;
-  /** True while the agent is visibly working (isChatRunWorking). */
-  runWorking?: boolean;
-  /** True while the current session has an abortable live run. */
-  runActive?: boolean;
-  questionPrompts?: readonly QuestionPrompt[];
-  /** True while chat history is loading (initial load or background reload). */
-  loading?: boolean;
-  searchOpen?: boolean;
-  searchQuery?: string;
-};
+export type { BuildChatItemsProps } from "./chat-thread-build.types.ts";
+
+function optionalRunId(value: unknown): { runId: string } | undefined {
+  const runId = normalizeOptionalString(value);
+  return runId ? { runId } : undefined;
+}
 
 function guardianNoticeItem(notice: ChatGuardianNotice): Extract<ChatItem, { kind: "notice" }> {
   const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
@@ -571,9 +552,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           text: visibleText,
           startedAt: segment.ts,
           isStreaming: false,
-          ...(normalizeOptionalString(segment.runId)
-            ? { runId: normalizeOptionalString(segment.runId) }
-            : {}),
+          ...optionalRunId(segment.runId),
         };
         timestampedProjectionItems.push(streamItem);
         applyRunBounds(
@@ -642,9 +621,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       text,
       startedAt: segment.ts,
       isStreaming: false,
-      ...(normalizeOptionalString(segment.runId)
-        ? { runId: normalizeOptionalString(segment.runId) }
-        : {}),
+      ...optionalRunId(segment.runId),
     };
     timestampedProjectionItems.push(commentaryItem);
     applyRunBounds(
@@ -726,9 +703,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,
-        ...(normalizeOptionalString(props.runId)
-          ? { runId: normalizeOptionalString(props.runId) }
-          : {}),
+        ...optionalRunId(props.runId),
       };
       const liveTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
       const liveTurnBounds = liveTurnRunId ? findRunTurnBounds(items, liveTurnRunId) : null;
@@ -744,9 +719,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     items.push({
       kind: "reading-indicator",
       ...resolveProgress(),
-      ...(normalizeOptionalString(props.runId)
-        ? { runId: normalizeOptionalString(props.runId) }
-        : {}),
+      ...optionalRunId(props.runId),
     });
   }
   // Future queued turns are a causal ceiling for every current-run projection.
