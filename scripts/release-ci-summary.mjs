@@ -15,6 +15,8 @@ import { execGhRead, plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v3";
 const SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
+const TRUSTED_RELEASE_PUBLISH_TAG_PATTERN =
+  /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const RELEASE_EVIDENCE_SCRIPT = "scripts/release-ci-summary.mjs";
 const RELEASE_EVIDENCE_FILE = fileURLToPath(import.meta.url);
 const RELEASE_EVIDENCE_REPO_ROOT = resolve(dirname(RELEASE_EVIDENCE_FILE), "..");
@@ -1136,8 +1138,26 @@ function loadValidatedParentEvidence({ client, manifestPath, repository, runId }
   };
 }
 
-function trustedWorkflowFullRef(workflowRef) {
-  return `refs/heads/${workflowRef}`;
+function resolveTrustedWorkflowIdentity(workflowRef, workflowFullRef, workflowSha) {
+  const fullRef = workflowFullRef ?? `refs/heads/${workflowRef}`;
+  const protectedTag = TRUSTED_RELEASE_PUBLISH_TAG_PATTERN.exec(fullRef);
+  if (protectedTag) {
+    if (workflowRef !== fullRef.slice("refs/tags/".length)) {
+      throw new Error("trusted workflow tag name does not match its full ref");
+    }
+    const sha = normalizeSha(workflowSha, "trusted workflow SHA");
+    if (sha.slice(0, 12) !== protectedTag[1]) {
+      throw new Error("trusted workflow tag does not match its workflow SHA");
+    }
+    return { fullRef, ref: workflowRef, sha, type: "tag" };
+  }
+  if (fullRef !== `refs/heads/${workflowRef}`) {
+    throw new Error("trusted workflow full ref does not match its ref");
+  }
+  if (workflowRef.startsWith("release-publish/")) {
+    throw new Error("trusted release-publish workflow ref must be a protected tag");
+  }
+  return { fullRef, ref: workflowRef, sha: undefined, type: "branch" };
 }
 
 function normalizeWorkflowPathRef(ref) {
@@ -1147,11 +1167,31 @@ function normalizeWorkflowPathRef(ref) {
   return `refs/heads/${ref}`;
 }
 
-export function validateTrustedProducerIdentity(evidence, client, verifier, trustedWorkflowRef) {
+export function validateTrustedProducerIdentity(
+  evidence,
+  client,
+  verifier,
+  trustedWorkflowRef,
+  trustedWorkflowFullRef,
+  trustedWorkflowSha,
+) {
   const { manifest, parentRun } = evidence;
+  const trustedIdentity = resolveTrustedWorkflowIdentity(
+    trustedWorkflowRef,
+    trustedWorkflowFullRef,
+    trustedWorkflowSha,
+  );
   // Keep this predicate local: verifier source identity covers this file only.
   const shaPinned = SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef ?? "");
-  if (manifest.workflowRef !== trustedWorkflowRef && !shaPinned) {
+  const protectedTagRoute = trustedIdentity.type === "tag";
+  if (protectedTagRoute) {
+    if (!shaPinned) {
+      throw new Error("protected-tag release evidence must use a canonical release-ci branch");
+    }
+    if (manifest.workflowSha !== trustedIdentity.sha) {
+      throw new Error("protected-tag release evidence workflow SHA does not match trusted tooling");
+    }
+  } else if (manifest.workflowRef !== trustedWorkflowRef && !shaPinned) {
     throw new Error(
       `release evidence producer must run from trusted workflow ref: ${trustedWorkflowRef}`,
     );
@@ -1167,7 +1207,7 @@ export function validateTrustedProducerIdentity(evidence, client, verifier, trus
       throw new Error("SHA-pinned release evidence target ref must equal its target SHA");
     }
   }
-  const expectedFullRef = trustedWorkflowFullRef(manifest.workflowRef);
+  const expectedFullRef = `refs/heads/${manifest.workflowRef}`;
   const runPath = String(parentRun.path ?? "");
   const [runWorkflowPath, runWorkflowFullRef] = runPath.split("@", 2);
   if (runWorkflowPath !== ".github/workflows/full-release-validation.yml") {
@@ -1182,19 +1222,25 @@ export function validateTrustedProducerIdentity(evidence, client, verifier, trus
     if (manifest.workflowRefType !== "branch" || manifest.workflowFullRef !== expectedFullRef) {
       throw new Error("release evidence producer workflow full ref is not trusted");
     }
-    workflowRefProof = shaPinned ? "manifest-v3-sha-pinned-main-ancestry" : "manifest-v3-branch";
+    workflowRefProof = protectedTagRoute
+      ? "manifest-v3-protected-tag-exact-sha"
+      : shaPinned
+        ? "manifest-v3-sha-pinned-main-ancestry"
+        : "manifest-v3-branch";
   }
 
-  const comparison = client.compareCommitLineage(manifest.workflowSha, verifier.sourceSha);
-  if (
-    !["ahead", "identical"].includes(String(comparison.status)) ||
-    comparison.merge_base_commit?.sha !== manifest.workflowSha
-  ) {
-    throw new Error("release evidence producer is not on the trusted main verifier lineage");
+  if (!protectedTagRoute) {
+    const comparison = client.compareCommitLineage(manifest.workflowSha, verifier.sourceSha);
+    if (
+      !["ahead", "identical"].includes(String(comparison.status)) ||
+      comparison.merge_base_commit?.sha !== manifest.workflowSha
+    ) {
+      throw new Error("release evidence producer is not on the trusted main verifier lineage");
+    }
   }
 
   return {
-    producerOnTrustedMainLineage: true,
+    producerOnTrustedMainLineage: !protectedTagRoute,
     workflowFullRef: expectedFullRef,
     workflowQualifiedPath: `${runWorkflowPath}@${expectedFullRef}`,
     workflowRefProof,
@@ -1339,7 +1385,9 @@ function validateStrictChildRun({ child, client, parentEvidence, parentJobs, rep
  *   manifestPath?: string,
  *   repository?: string,
  *   runId: string,
+ *   trustedWorkflowFullRef?: string,
  *   trustedWorkflowRef?: string,
+ *   trustedWorkflowSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
  *   verifierSourceSha: string,
  * }} options
@@ -1349,7 +1397,9 @@ export function validateReleaseRunEvidence(
     manifestPath,
     repository = DEFAULT_REPO,
     runId,
+    trustedWorkflowFullRef,
     trustedWorkflowRef = "main",
+    trustedWorkflowSha,
     verifierSourceContent,
     verifierSourceSha,
   },
@@ -1360,6 +1410,11 @@ export function validateReleaseRunEvidence(
   const normalizedTrustedWorkflowRef = normalizeWorkflowRef(
     trustedWorkflowRef,
     "trusted workflow ref",
+  );
+  const trustedIdentity = resolveTrustedWorkflowIdentity(
+    normalizedTrustedWorkflowRef,
+    trustedWorkflowFullRef,
+    trustedWorkflowSha,
   );
   const evidenceClient = client ?? createReleaseEvidenceClient(normalizedRepository);
   const verifier = resolveVerifierIdentity(verifierSourceSha, verifierSourceContent);
@@ -1377,6 +1432,8 @@ export function validateReleaseRunEvidence(
         evidenceClient,
         verifier,
         normalizedTrustedWorkflowRef,
+        trustedIdentity.fullRef,
+        trustedIdentity.sha,
       ),
     ],
   ]);
@@ -1415,6 +1472,8 @@ export function validateReleaseRunEvidence(
           evidenceClient,
           verifier,
           normalizedTrustedWorkflowRef,
+          trustedIdentity.fullRef,
+          trustedIdentity.sha,
         ),
       );
     }
@@ -1480,8 +1539,8 @@ export function validateReleaseRunEvidence(
     root,
     runReleaseSoak: rootEvidence.manifest.runReleaseSoak === "true",
     schema: RELEASE_EVIDENCE_SCHEMA,
-    producerOnTrustedMainLineage: true,
-    trustedWorkflowFullRef: trustedWorkflowFullRef(normalizedTrustedWorkflowRef),
+    producerOnTrustedMainLineage: trustedIdentity.type === "branch",
+    trustedWorkflowFullRef: trustedIdentity.fullRef,
     trustedWorkflowRef: normalizedTrustedWorkflowRef,
     valid: true,
     validationInputs: rootEvidence.manifest.validationInputs ?? null,
@@ -1496,7 +1555,9 @@ function parseReleaseCiSummaryArgs(argv) {
     manifestPath: undefined,
     repository: DEFAULT_REPO,
     runId: undefined,
+    trustedWorkflowFullRef: undefined,
     trustedWorkflowRef: "main",
+    trustedWorkflowSha: undefined,
     validate: false,
     verifierSourceFile: undefined,
     verifierSourceSha: undefined,
@@ -1513,6 +1574,10 @@ function parseReleaseCiSummaryArgs(argv) {
       options.manifestPath = argv[++index];
     } else if (argument === "--trusted-workflow-ref") {
       options.trustedWorkflowRef = argv[++index];
+    } else if (argument === "--trusted-workflow-full-ref") {
+      options.trustedWorkflowFullRef = argv[++index];
+    } else if (argument === "--trusted-workflow-sha") {
+      options.trustedWorkflowSha = argv[++index];
     } else if (argument === "--verifier-source-sha") {
       options.verifierSourceSha = argv[++index];
     } else if (argument === "--verifier-source-file") {
@@ -1553,7 +1618,7 @@ function printUsage() {
     [
       "usage: release-ci-summary.mjs <full-release-run-id>",
       "       release-ci-summary.mjs <full-release-run-id> --watch [--interval seconds]",
-      "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] --json",
+      "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main --trusted-workflow-full-ref refs/heads/main] [--trusted-workflow-sha sha] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] --json",
     ].join("\n"),
   );
 }
@@ -1652,7 +1717,9 @@ async function main() {
         manifestPath: options.manifestPath,
         repository,
         runId,
+        trustedWorkflowFullRef: options.trustedWorkflowFullRef,
         trustedWorkflowRef: options.trustedWorkflowRef,
+        trustedWorkflowSha: options.trustedWorkflowSha,
         verifierSourceContent: options.verifierSourceFile
           ? readFileSync(options.verifierSourceFile)
           : undefined,

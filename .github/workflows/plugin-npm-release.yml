@@ -1168,17 +1168,28 @@ jobs:
                 echo "npm token bootstrap release-publish tag does not match the workflow SHA." >&2
                 exit 1
               }
+              workflow_tag="${WORKFLOW_REF#refs/tags/}"
+              remote_workflow_sha="$(
+                gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${workflow_tag}" \
+                  --jq '.object | select(.type == "commit") | .sha | select(test("^[a-f0-9]{40}$"))'
+              )"
+              [[ "$remote_workflow_sha" == "$WORKFLOW_SHA" ]] || {
+                echo "npm token bootstrap release-publish tag does not resolve to the workflow SHA." >&2
+                exit 1
+              }
               sha_pinned_release_publish=true
             fi
             [[ "$WORKFLOW_REF" == "refs/heads/main" || "$sha_pinned_release_publish" == "true" ]] || {
               echo "npm token bootstrap requires trusted main tooling or a protected SHA-pinned release-publish tag." >&2
               exit 1
             }
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-            git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
-              echo "npm token bootstrap workflow revision is not reachable from current main." >&2
-              exit 1
-            }
+            if [[ "$WORKFLOW_REF" == "refs/heads/main" ]]; then
+              timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+              git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
+                echo "npm token bootstrap workflow revision is not reachable from current main." >&2
+                exit 1
+              }
+            fi
           fi
           artifact_id="$(jq -er '.id' "$artifact_metadata")"
           artifact_digest="$(jq -er '.digest' "$artifact_metadata")"

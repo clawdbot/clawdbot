@@ -14,6 +14,7 @@ import {
   resolveRemoteTargetRefSha,
   shouldDeleteTemporaryWorkflowRef,
   verifyTargetRef,
+  verifyTrustedWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mts";
 
 const SCRIPT_PATH = resolve("scripts/full-release-validation-at-sha.mjs");
@@ -70,8 +71,10 @@ function createDispatchFixture(options: { workflowSource?: string } = {}) {
     join(checkout, "scripts", "release-ci-summary.mjs"),
     `const expected = [
   "--validate-run", "123",
-  "--trusted-workflow-ref", "main",
-  "--json",
+	  "--trusted-workflow-ref", process.env.MOCK_TRUSTED_WORKFLOW_REF,
+  "--trusted-workflow-full-ref", process.env.MOCK_TRUSTED_WORKFLOW_FULL_REF,
+  "--trusted-workflow-sha", process.env.MOCK_WORKFLOW_SHA,
+	  "--json",
   "--verifier-source-sha", process.env.MOCK_WORKFLOW_SHA,
   "--verifier-source-file", process.argv[1],
 ];
@@ -93,8 +96,11 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
   runGit(checkout, ["add", ".github/workflows/full-release-validation.yml", "package.json"]);
   runGit(checkout, ["commit", "-m", "test: trusted workflow contract"]);
   const workflowSha = runGit(checkout, ["rev-parse", "HEAD"]);
+  const trustedWorkflowTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
   runGit(checkout, ["remote", "add", "origin", origin]);
   runGit(checkout, ["push", "-u", "origin", "main"]);
+  runGit(checkout, ["tag", trustedWorkflowTag, workflowSha]);
+  runGit(checkout, ["push", "origin", `refs/tags/${trustedWorkflowTag}`]);
   runGit(checkout, ["checkout", "-b", releaseRef]);
   writeFileSync(join(checkout, "target.txt"), "release target\n");
   runGit(checkout, ["add", "target.txt"]);
@@ -139,8 +145,13 @@ if (args[0] === "workflow" && args[1] === "run") {
   );
   chmodSync(ghPath, 0o755);
 
-  const run = (extraArgs: string[] = []) =>
-    spawnSync(
+  const run = (extraArgs: string[] = []) => {
+    const trustedRefIndex = extraArgs.indexOf("--trusted-workflow-ref");
+    const trustedWorkflowRef =
+      trustedRefIndex >= 0 ? (extraArgs[trustedRefIndex + 1] ?? "") : "main";
+    const trustedWorkflowFullRef =
+      trustedWorkflowRef === "main" ? "refs/heads/main" : `refs/tags/${trustedWorkflowRef}`;
+    return spawnSync(
       process.execPath,
       [SCRIPT_PATH, "--sha", targetSha, "--target-ref", releaseRef, ...extraArgs],
       {
@@ -151,11 +162,14 @@ if (args[0] === "workflow" && args[1] === "run") {
           MOCK_GH_CALLS: ghCallsPath,
           MOCK_GIT_CALLS: gitCallsPath,
           MOCK_REAL_PATH: process.env.PATH,
+          MOCK_TRUSTED_WORKFLOW_FULL_REF: trustedWorkflowFullRef,
+          MOCK_TRUSTED_WORKFLOW_REF: trustedWorkflowRef,
           MOCK_WORKFLOW_SHA: workflowSha,
           PATH: `${binDir}:${process.env.PATH}`,
         },
       },
     );
+  };
   const readCalls = (path: string): string[][] =>
     readFileSync(path, "utf8")
       .trim()
@@ -174,6 +188,7 @@ if (args[0] === "workflow" && args[1] === "run") {
     releaseRef,
     run,
     targetSha,
+    trustedWorkflowTag,
     workflowSha,
   };
 }
@@ -186,6 +201,8 @@ describe("full-release-validation-at-sha", () => {
         "abc123",
         "--workflow-sha",
         "a".repeat(40),
+        "--trusted-workflow-ref",
+        `release-publish/${"a".repeat(12)}-123`,
         "--target-ref",
         "release/2026.7.1",
         "--keep-branch",
@@ -206,6 +223,7 @@ describe("full-release-validation-at-sha", () => {
       },
       sha: "abc123",
       targetRef: "release/2026.7.1",
+      trustedWorkflowRef: `release-publish/${"a".repeat(12)}-123`,
       workflowSha: "a".repeat(40),
     });
   });
@@ -219,6 +237,16 @@ describe("full-release-validation-at-sha", () => {
       release_profile: "full",
     });
     expect(() => parseArgs(["--", "-f"])).toThrow("-f requires a value");
+  });
+
+  it("requires an exact Tooling SHA for protected workflow tags", () => {
+    const trustedTag = `release-publish/${"a".repeat(12)}-123`;
+    expect(() => parseArgs(["--trusted-workflow-ref", trustedTag])).toThrow(
+      "explicit full Tooling SHA",
+    );
+    expect(() =>
+      parseArgs(["--workflow-sha", "a".repeat(40), "--trusted-workflow-ref", "release/2026.8.1"]),
+    ).toThrow("protected release-publish");
   });
 
   it("infers the release profile from the target package version", () => {
@@ -405,6 +433,10 @@ describe("full-release-validation-at-sha", () => {
       "123",
       "--trusted-workflow-ref",
       "main",
+      "--trusted-workflow-full-ref",
+      "refs/heads/main",
+      "--trusted-workflow-sha",
+      workflowSha,
       "--json",
       "--verifier-source-sha",
       workflowSha,
@@ -414,6 +446,71 @@ describe("full-release-validation-at-sha", () => {
     expect(() => releaseEvidenceVerificationArgs("", workflowSha, verifier)).toThrow(
       "positive decimal",
     );
+    const trustedTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
+    expect(releaseEvidenceVerificationArgs("123", workflowSha, verifier, trustedTag)).toEqual([
+      "--validate-run",
+      "123",
+      "--trusted-workflow-ref",
+      trustedTag,
+      "--trusted-workflow-full-ref",
+      `refs/tags/${trustedTag}`,
+      "--trusted-workflow-sha",
+      workflowSha,
+      "--json",
+      "--verifier-source-sha",
+      workflowSha,
+      "--verifier-source-file",
+      verifier,
+    ]);
+    expect(() =>
+      releaseEvidenceVerificationArgs("123", workflowSha, verifier, "release/2026.8.1"),
+    ).toThrow("protected release-publish tag");
+  });
+
+  it("accepts only exact protected workflow tags outside main ancestry", () => {
+    const workflowSha = "a".repeat(40);
+    const trustedTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
+
+    expect(() =>
+      verifyTrustedWorkflowRef(
+        workflowSha,
+        "main",
+        () => "",
+        () => true,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      verifyTrustedWorkflowRef(
+        workflowSha,
+        "main",
+        () => "",
+        () => false,
+      ),
+    ).toThrow("not reachable from current origin/main");
+    expect(() =>
+      verifyTrustedWorkflowRef(
+        workflowSha,
+        trustedTag,
+        () => workflowSha,
+        () => false,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      verifyTrustedWorkflowRef(
+        workflowSha,
+        `release-publish/${"b".repeat(12)}-123`,
+        () => workflowSha,
+      ),
+    ).toThrow("does not match Tooling SHA");
+    expect(() => verifyTrustedWorkflowRef(workflowSha, trustedTag, () => "")).toThrow(
+      "does not exist on origin",
+    );
+    expect(() => verifyTrustedWorkflowRef(workflowSha, trustedTag, () => "c".repeat(40))).toThrow(
+      `expected ${workflowSha}`,
+    );
+    expect(() =>
+      verifyTrustedWorkflowRef(workflowSha, "release/2026.8.1", () => workflowSha),
+    ).toThrow("protected release-publish");
   });
 
   it("bounds polling for the exact workflow run", () => {
@@ -591,6 +688,28 @@ describe("full-release-validation-at-sha", () => {
       expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
         "refs/heads/main\nrefs/heads/release/2026.8.1",
       );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("dispatches non-main tooling only when its exact protected tag is supplied", () => {
+    const fixture = createDispatchFixture();
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.workflowSha,
+        "--trusted-workflow-ref",
+        fixture.trustedWorkflowTag,
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(`Trusted workflow ref: ${fixture.trustedWorkflowTag}`);
+      expect(fixture.readCalls(fixture.gitCallsPath)).toContainEqual([
+        "ls-remote",
+        "--tags",
+        "origin",
+        `refs/tags/${fixture.trustedWorkflowTag}`,
+      ]);
     } finally {
       fixture.cleanup();
     }

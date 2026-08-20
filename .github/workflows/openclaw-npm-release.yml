@@ -800,6 +800,7 @@ jobs:
 
       - name: Require trusted workflow ref for publish
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_CANDIDATE_BRANCH: ${{ inputs.release_candidate_branch }}
@@ -839,9 +840,13 @@ jobs:
               echo "SHA-pinned release-publish tag does not match the OpenClaw npm workflow SHA." >&2
               exit 1
             }
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-            git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main || {
-              echo "SHA-pinned OpenClaw npm workflow revision is not reachable from current main." >&2
+            workflow_tag="${WORKFLOW_REF#refs/tags/}"
+            remote_workflow_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${workflow_tag}" \
+                --jq '.object | select(.type == "commit") | .sha | select(test("^[a-f0-9]{40}$"))'
+            )"
+            [[ "${remote_workflow_sha}" == "${WORKFLOW_SHA}" ]] || {
+              echo "SHA-pinned release-publish tag does not resolve to the OpenClaw npm workflow SHA." >&2
               exit 1
             }
             sha_pinned_release_publish=true
@@ -1024,8 +1029,19 @@ jobs:
           if [[ "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$preflight_head_branch" == "$EXPECTED_EXTENDED_STABLE_BRANCH" ]]; then
             extended_stable_preflight=true
           fi
-          if [[ "$preflight_head_branch" != "main" && "refs/heads/${preflight_head_branch}" != "$WORKFLOW_REF" && "$extended_stable_preflight" != "true" ]]; then
-            echo "OpenClaw npm preflight run must come from main or the active protected release branch." >&2
+          active_branch_preflight=false
+          if [[ "$preflight_head_branch" != release-publish/* && "refs/heads/${preflight_head_branch}" == "$WORKFLOW_REF" ]]; then
+            active_branch_preflight=true
+          fi
+          protected_release_publish_preflight=false
+          if [[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
+            workflow_tag="${WORKFLOW_REF#refs/tags/}"
+            if [[ "$preflight_head_branch" == "$workflow_tag" && "$preflight_head_sha" == "$WORKFLOW_SHA" ]]; then
+              protected_release_publish_preflight=true
+            fi
+          fi
+          if [[ "$preflight_head_branch" != "main" && "$active_branch_preflight" != "true" && "$extended_stable_preflight" != "true" && "$protected_release_publish_preflight" != "true" ]]; then
+            echo "OpenClaw npm preflight run must come from main, the active protected release branch, or the exact protected release-publish tag." >&2
             exit 1
           fi
           if ! git -C trusted-workflow cat-file -e "${preflight_head_sha}^{commit}" 2>/dev/null; then
@@ -1062,14 +1078,40 @@ jobs:
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
           EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
           STRICT_VALIDATOR_FILE: ${{ github.workspace }}/trusted-workflow/scripts/release-ci-summary.mjs
+          TRUSTED_WORKFLOW_FULL_REF: ${{ github.ref }}
+          TRUSTED_WORKFLOW_REF: ${{ github.ref_name }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           EXPECTED_SHA="$(git rev-parse HEAD)"
           MANIFEST_FILE="full-release-validation/full-release-validation-manifest.json"
           export EXPECTED_SHA MANIFEST_FILE
-          timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" | \
+          trusted_workflow_commit_ref="refs/remotes/origin/main"
+          if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
+            trusted_workflow_commit_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin \
+              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_workflow_commit_ref}"
+            if [[ "$(git rev-parse "${trusted_workflow_commit_ref}^{commit}")" != "${WORKFLOW_SHA}" ]]; then
+              echo "Trusted release-publish tag moved after workflow dispatch." >&2
+              exit 1
+            fi
+          else
+            timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin \
+              +refs/heads/main:refs/remotes/origin/main
+          fi
+          TRUSTED_MAIN_REF="${trusted_workflow_commit_ref}" \
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" | \
+            TRUSTED_MAIN_REF="${trusted_workflow_commit_ref}" \
             node trusted-workflow/scripts/validate-full-release-validation-evidence.mjs
+          node "$STRICT_VALIDATOR_FILE" \
+            --validate-run "$FULL_RELEASE_VALIDATION_RUN_ID" \
+            --trusted-workflow-ref "$TRUSTED_WORKFLOW_REF" \
+            --trusted-workflow-full-ref "$TRUSTED_WORKFLOW_FULL_REF" \
+            --trusted-workflow-sha "$TRUSTED_WORKFLOW_SHA" \
+            --json \
+            --verifier-source-sha "$WORKFLOW_SHA" \
+            --verifier-source-file "$STRICT_VALIDATOR_FILE" >/dev/null
 
       - name: Verify plugin npm release run metadata
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
