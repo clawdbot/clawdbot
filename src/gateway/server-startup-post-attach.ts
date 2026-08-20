@@ -675,26 +675,24 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });
+  const shouldStartChannels = params.shouldStartChannels?.() !== false;
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
-    if (skipChannels) {
-      await measureStartup(params.startupTrace, "sidecars.channel-skip", () =>
-        params.logChannels.info(
-          "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
-        ),
-      );
-    } else if (params.shouldStartChannels?.() !== false) {
-      try {
-        await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
-          params.startChannels(),
-        );
-      } catch (err) {
-        params.logChannels.error(`channel startup failed: ${String(err)}`);
-      }
-    }
+    const channelStart = skipChannels
+      ? measureStartup(params.startupTrace, "sidecars.channel-skip", () =>
+          params.logChannels.info(
+            "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+          ),
+        )
+      : shouldStartChannels
+        ? measureStartup(params.startupTrace, "sidecars.channel-start", params.startChannels).catch(
+            (err: unknown) => params.logChannels.error(`channel startup failed: ${String(err)}`),
+          )
+        : Promise.resolve();
+    // Account tasks can depend on this generation gate, so release it after
+    // their handoff is prepared but before waiting for that handoff to settle.
+    const accountStartGateRelease = shouldStartChannels ? params.onChannelsStarted?.() : undefined;
+    await Promise.all([accountStartGateRelease, channelStart]);
   });
-  if (params.shouldStartChannels?.() !== false) {
-    await params.onChannelsStarted?.();
-  }
 
   const shouldStartPluginServices = params.shouldStartPluginServices?.() !== false;
   let pluginServicesOwner: PluginServicesHandle | null = null;

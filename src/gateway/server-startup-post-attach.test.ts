@@ -1842,6 +1842,45 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
+  it("releases startup account starts before awaiting channel handoff", async () => {
+    const events: string[] = [];
+    let releaseAccountStarts!: () => void;
+    const accountStartsReady = new Promise<void>((resolve) => {
+      releaseAccountStarts = resolve;
+    });
+    const startChannels = vi.fn(async () => {
+      events.push("channels-start");
+      await accountStartsReady;
+      events.push("channels-end");
+    });
+    const onChannelsStarted = vi.fn(() => {
+      events.push("channels-released");
+      releaseAccountStarts();
+    });
+
+    const sidecars = startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels,
+      onChannelsStarted,
+      log: { warn: vi.fn() },
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(onChannelsStarted).toHaveBeenCalledOnce();
+    });
+    expect(events.slice(0, 2)).toEqual(["channels-start", "channels-released"]);
+    await sidecars;
+
+    expect(events).toEqual(["channels-start", "channels-released", "channels-end"]);
+    expect(startChannels).toHaveBeenCalledOnce();
+    expect(onChannelsStarted).toHaveBeenCalledOnce();
+  });
+
   it("starts and reports plugin services after channel startup completes", async () => {
     await withEnvAsync(
       { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
@@ -1898,8 +1937,8 @@ describe("startGatewayPostAttachRuntime", () => {
         });
         expect(events).toEqual([
           "channels-start",
-          "channels-end",
           "channels-started",
+          "channels-end",
           "plugin-services",
         ]);
         expect(onPluginServices).toHaveBeenCalledTimes(1);
@@ -2112,6 +2151,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const trace = createStartupTraceRecorder();
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const prewarmPrimaryModel = vi.fn(async () => {});
+    const onChannelsStarted = vi.fn();
 
     await withEnvAsync(
       { OPENCLAW_SKIP_CHANNELS: "1", OPENCLAW_SKIP_PROVIDERS: undefined },
@@ -2134,6 +2174,7 @@ describe("startGatewayPostAttachRuntime", () => {
           logChannels,
           startupTrace: trace.startupTrace,
           prewarmPrimaryModel,
+          onChannelsStarted,
         });
       },
     );
@@ -2149,6 +2190,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(logChannels.info).toHaveBeenCalledWith(
       "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
     );
+    expect(onChannelsStarted).toHaveBeenCalledOnce();
   });
 
   it("records prepared runtime build grouping in the startup trace", async () => {
