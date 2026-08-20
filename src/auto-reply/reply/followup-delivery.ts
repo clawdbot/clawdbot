@@ -64,6 +64,19 @@ type FollowupDeliveryDecision =
       resolved: { provider: string; model: string };
     };
 
+function isTerminalDeliveryPayload(
+  payload: ReplyPayload,
+  sourceReplyDeliveryMode: "allow" | "message_tool_only",
+): boolean {
+  return (
+    payload.isReasoning !== true &&
+    payload.isCommentary !== true &&
+    !isReplyPayloadStatusNotice(payload) &&
+    (sourceReplyDeliveryMode !== "message_tool_only" ||
+      getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true)
+  );
+}
+
 /** Resolves one final queued delivery action without performing transport I/O. */
 export function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
@@ -236,13 +249,8 @@ export function resolveFollowupDeliveryDecision(params: {
         },
         cfg: turn.config,
       });
-  const hasTerminalPayload = payloads.some(
-    (payload) =>
-      payload.isReasoning !== true &&
-      payload.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(payload) &&
-      (sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
-        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
+  const hasTerminalPayload = payloads.some((payload) =>
+    isTerminalDeliveryPayload(payload, sourcePolicy.sourceReplyDeliveryMode),
   );
   if (!hasTerminalPayload && fallbackPayload) {
     payloads = [
@@ -285,7 +293,11 @@ export function resolveFollowupDeliveryDecision(params: {
       ? { kind: "deliver", payloads: explicitlyDeliverable, resolved: runtimeResolved }
       : { kind: "suppress", reason: "message-tool-only" };
   }
-  if (payloads.length > 0) {
+  if (
+    payloads.some((payload) =>
+      isTerminalDeliveryPayload(payload, sourcePolicy.sourceReplyDeliveryMode),
+    )
+  ) {
     const warning = prepareAgentUsageBudgetWarningBestEffort({
       cfg: turn.config,
       agentId: turn.queued.run.agentId,

@@ -350,6 +350,7 @@ export async function prepareReplyAgentPayloads(state: {
     payloadArray.length === 0 &&
     fallbackNoticePayloads.length === 0 &&
     !shouldDeliverTerminalFailure &&
+    !successfulTerminalDelivery &&
     (!emptyInteractiveReplyPayload || hasSpecificFallbackFailure)
   ) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
@@ -429,7 +430,7 @@ export async function prepareReplyAgentPayloads(state: {
   const canDeliverStandaloneFallbackNotice =
     hasDeliveredBlockStream || successfulSideEffectDelivery;
   if (
-    replyPayloads.length === 0 ||
+    (replyPayloads.length === 0 && !successfulTerminalDelivery) ||
     (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice)
   ) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
@@ -558,6 +559,7 @@ export async function prepareReplyAgentPayloads(state: {
     kind: "continue" as const,
     activeSessionEntry,
     completedSourceReplyDelivery,
+    completedTerminalSourceReplyDelivery: successfulTerminalDelivery,
     didLogHeartbeatStrip,
     guardedReplyPayloads,
     responseUsageLine,
