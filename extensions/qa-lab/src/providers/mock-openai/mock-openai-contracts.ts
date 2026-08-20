@@ -166,6 +166,7 @@ export type MockOpenAiRequestSnapshot = {
   compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   outcome: MockOpenAiRequestOutcome;
   errorCode?: string;
+  failureStatus?: number;
   rawByteLength: number;
   plannedToolCallId?: string;
   plannedToolItemId?: string;
@@ -370,6 +371,7 @@ export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
   compactionOverflowInjected: boolean;
   compactionRetryActive: boolean;
+  memoryFlushPrimary503Served: boolean;
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;

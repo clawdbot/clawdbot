@@ -2535,6 +2535,7 @@ export async function startQaMockOpenAiServer(params?: {
       anthropicThinkingErrorScenarioKeys: new Set<string>(),
       compactionOverflowInjected: false,
       compactionRetryActive: false,
+      memoryFlushPrimary503Served: false,
       subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
       subagentFanoutPhase: 0,
       subagentHandoffSpawned: false,
@@ -2606,6 +2607,7 @@ export async function startQaMockOpenAiServer(params?: {
       MockOpenAiRequestSnapshotInput,
       | "outcome"
       | "errorCode"
+      | "failureStatus"
       | "plannedToolCallId"
       | "plannedToolItemId"
       | "plannedToolName"
@@ -2703,11 +2705,29 @@ export async function startQaMockOpenAiServer(params?: {
       model === QA_MEMORY_FLUSH_PRIMARY_MODEL &&
       isMemoryFlushCumulativeFallbackRequest({ allInputText, prompt }) &&
       isAcceptedMemoryFlushAppendResult(requestSnapshotBase.toolOutput);
+    const memoryFlushPrimaryFailure = shouldFailAcceptedMemoryFlushAppend
+      ? scenarioState.memoryFlushPrimary503Served
+        ? {
+            status: 400,
+            type: "server_error",
+            message: "Injected terminal server error",
+          }
+        : {
+            status: 503,
+            type: "server_error",
+            message: "Service Unavailable",
+          }
+      : undefined;
+    if (shouldFailAcceptedMemoryFlushAppend) {
+      // Codex retries 5xx responses internally. The first response records the requested
+      // 503, then a non-retryable response exposes the server error to OpenClaw's fallback.
+      scenarioState.memoryFlushPrimary503Served = true;
+    }
     const shouldFailAfterTool =
-      shouldFailAcceptedMemoryFlushAppend ||
-      (QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input));
+      QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input);
     const failure =
       injectedFailure ??
+      memoryFlushPrimaryFailure ??
       (shouldFailAfterTool
         ? {
             status: 503,
@@ -2722,6 +2742,7 @@ export async function startQaMockOpenAiServer(params?: {
       ...(events.some((event) => event.type === "response.failed")
         ? { errorCode: "response_failed_no_details" }
         : {}),
+      ...(failure ? { failureStatus: failure.status } : {}),
       plannedToolCallId: plannedToolIdentity.callId,
       ...(request.route === "responses" && plannedToolIdentity.itemId
         ? { plannedToolItemId: plannedToolIdentity.itemId }

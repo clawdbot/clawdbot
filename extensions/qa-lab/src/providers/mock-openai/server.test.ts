@@ -503,7 +503,7 @@ describe("qa mock openai server", () => {
     });
   });
 
-  it("drives one accepted memory-flush append through a 503 into a rejected fallback append", async () => {
+  it("drives one accepted memory-flush append through a 503 and terminal server error into a rejected fallback append", async () => {
     const server = await startMockServer();
     const dailyPath = "memory/2026-08-20.md";
     const prompt = [
@@ -524,7 +524,7 @@ describe("qa mock openai server", () => {
       content: "P".repeat(500),
     });
 
-    const primaryFailure = await postNonStreamingResponses(server, {
+    const primaryContinuation = {
       model: "gpt-5.6-luna",
       tools: [WRITE_TOOL],
       input: [
@@ -532,8 +532,11 @@ describe("qa mock openai server", () => {
         primaryCall,
         makeToolOutputWithCallId(primaryCallId, `Appended content to ${dailyPath}.`),
       ],
-    });
+    };
+    const primaryFailure = await postNonStreamingResponses(server, primaryContinuation);
     expect(primaryFailure.status).toBe(503);
+    const primaryRetryFailure = await postNonStreamingResponses(server, primaryContinuation);
+    expect(primaryRetryFailure.status).toBe(400);
 
     const fallbackPlanPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna-alt",
@@ -564,7 +567,7 @@ describe("qa mock openai server", () => {
       await getJson(server, "/debug/requests"),
       "memory-flush requests",
     ).map((request) => requireRecord(request, "memory-flush request"));
-    expect(requests).toHaveLength(4);
+    expect(requests).toHaveLength(5);
     expect(requests[0]).toMatchObject({
       model: "gpt-5.6-luna",
       outcome: "success",
@@ -574,21 +577,28 @@ describe("qa mock openai server", () => {
     expect(requests[1]).toMatchObject({
       model: "gpt-5.6-luna",
       outcome: "error",
+      failureStatus: 503,
       toolOutputCallId: primaryCallId,
     });
     expect(requests[2]).toMatchObject({
+      model: "gpt-5.6-luna",
+      outcome: "error",
+      failureStatus: 400,
+      toolOutputCallId: primaryCallId,
+    });
+    expect(requests[3]).toMatchObject({
       model: "gpt-5.6-luna-alt",
       outcome: "success",
       plannedToolName: "write",
       plannedToolArgs: { path: dailyPath, content: "F".repeat(301) },
     });
-    expect(requests[3]).toMatchObject({
+    expect(requests[4]).toMatchObject({
       model: "gpt-5.6-luna-alt",
       outcome: "success",
       toolOutputCallId: fallbackCallId,
       toolOutput: rejection,
     });
-    expect(requests[3]).not.toHaveProperty("toolOutputStructuredError");
+    expect(requests[4]).not.toHaveProperty("toolOutputStructuredError");
   });
 
   it("keeps cursor reads correct when retained debug requests rotate", async () => {

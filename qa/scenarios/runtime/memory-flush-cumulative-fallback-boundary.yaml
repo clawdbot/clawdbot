@@ -14,7 +14,7 @@ scenario:
   objective: Prove one host-owned daily-memory append budget remains cumulative across a Codex provider failure and model fallback.
   successCriteria:
     - A real ephemeral Gateway and Codex app-server harness execute one forced pre-admission memory flush.
-    - The primary model appends 500 characters through the real daily-memory write tool before its linked continuation receives HTTP 503.
+    - The primary model appends 500 characters through the real daily-memory write tool before its linked continuation receives HTTP 503 and a terminal native retry response.
     - The fallback model's 301-character append is rejected at 801/800 without changing the accepted file.
     - The emitted evidence identifies the harness transition, decisions, byte length, and hash without payloads or sensitive identifiers.
   gatewayConfigPatch:
@@ -151,7 +151,7 @@ flow:
             message: expected distinct primary and fallback model ids
         - set: requestFacts
           value:
-            expr: "scenarioRequests.map((request) => ({ cursor: request.cursor, model: request.model, outcome: request.outcome, plannedTool: request.plannedToolName ?? null, plannedChars: typeof request.plannedToolArgs?.content === 'string' ? request.plannedToolArgs.content.length : 0, hasToolOutput: String(request.toolOutput ?? '').length > 0, structuredError: request.toolOutputStructuredError === true }))"
+            expr: "scenarioRequests.map((request) => ({ cursor: request.cursor, model: request.model, outcome: request.outcome, failureStatus: request.failureStatus ?? null, plannedTool: request.plannedToolName ?? null, plannedChars: typeof request.plannedToolArgs?.content === 'string' ? request.plannedToolArgs.content.length : 0, hasToolOutput: String(request.toolOutput ?? '').length > 0, structuredError: request.toolOutputStructuredError === true }))"
         - set: writePlans
           value:
             expr: "scenarioRequests.filter((request) => request.plannedToolName === 'write' && !request.toolOutput)"
@@ -197,8 +197,14 @@ flow:
         - set: primaryPostToolFailures
           value:
             expr: "scenarioRequests.filter((request) => request.model === expectedModels[0] && request.outcome === 'error' && request.toolOutputCallId === primaryPlan.plannedToolCallId && String(request.toolOutput ?? '').trim() === primaryAppendResult && request.plannedToolName === undefined)"
+        - set: primaryPostTool503s
+          value:
+            expr: "primaryPostToolFailures.filter((request) => request.failureStatus === 503)"
+        - set: primaryPostToolTerminalFailures
+          value:
+            expr: "primaryPostToolFailures.filter((request) => request.failureStatus === 400)"
         - assert:
-            expr: "primaryPostToolFailures.length >= 1 && primaryPostToolFailures.every((request) => request.toolOutputStructuredError !== true)"
+            expr: "primaryPostTool503s.length === 1 && primaryPostToolTerminalFailures.length === 1 && primaryPostToolFailures.every((request) => request.toolOutputStructuredError !== true)"
             message:
               expr: "`missing linked primary post-tool HTTP failure; facts=${JSON.stringify(requestFacts)}`"
         - set: fallbackContinuations
@@ -209,7 +215,7 @@ flow:
             message:
               expr: "`missing linked fallback rejection continuation; facts=${JSON.stringify(requestFacts)}`"
         - assert:
-            expr: "primaryPlan.cursor < primaryPostToolFailures[0].cursor && primaryPostToolFailures.at(-1).cursor < fallbackPlan.cursor && fallbackPlan.cursor < fallbackContinuations[0].cursor"
+            expr: "primaryPlan.cursor < primaryPostTool503s[0].cursor && primaryPostTool503s[0].cursor < primaryPostToolTerminalFailures[0].cursor && primaryPostToolTerminalFailures[0].cursor < fallbackPlan.cursor && fallbackPlan.cursor < fallbackContinuations[0].cursor"
             message: provider evidence did not show the ordered primary-to-fallback transition
         - set: dailyAbsolutePath
           value:
@@ -235,13 +241,13 @@ flow:
           value:
             expr: "store[sessionKey]"
         - assert:
-            expr: "sessionEntry?.memoryFlush?.kind === 'succeeded' && sessionEntry?.status === 'done' && sessionEntry?.abortedLastRun !== true"
+            expr: "sessionEntry?.memoryFlush?.kind === 'failed' && sessionEntry?.memoryFlush?.failureCount === 1 && sessionEntry?.status === 'done' && sessionEntry?.abortedLastRun !== true"
             message:
-              expr: "`memory flush or parent session was unhealthy: flush=${String(sessionEntry?.memoryFlush?.kind ?? 'missing')} status=${String(sessionEntry?.status ?? 'missing')} aborted=${String(sessionEntry?.abortedLastRun === true)}`"
+              expr: "`memory flush rejection or parent session state was unexpected: flush=${String(sessionEntry?.memoryFlush?.kind ?? 'missing')} failures=${String(sessionEntry?.memoryFlush?.failureCount ?? 'missing')} status=${String(sessionEntry?.status ?? 'missing')} aborted=${String(sessionEntry?.abortedLastRun === true)}`"
         - assert:
             expr: "typeof proofReply.text === 'string' && proofReply.text.length > 0"
             message: parent channel turn did not receive a visible reply
         - set: trace
           value:
-            expr: "({ version: 1, verdict: 'PASS', scenario: 'memory-flush-cumulative-fallback-boundary', logicalFlushes: 1, gateway: 'ephemeral-child', provider: env.providerMode, harnessPaths: { primary: 'codex-app-server', fallback: 'codex-app-server', enforcement: 'openclaw-host-daily-memory-write' }, transition: { fromModel: expectedModels[0], toModel: expectedModels[1], reason: 'post-tool-http-503', primaryHttp503Requests: primaryPostToolFailures.length }, accepted: { appendChars: config.primaryAppendChars, cumulativeChars: config.primaryAppendChars, maxChars: config.maxAppendChars, decision: 'accepted' }, rejected: { appendChars: config.fallbackAppendChars, projectedChars: config.primaryAppendChars + config.fallbackAppendChars, maxChars: config.maxAppendChars, decision: 'rejected', fileChanged: false }, file: { path: dailyPath, lengthBytes: finalBytes.length, sha256: finalSha256 }, flushStatus: sessionEntry.memoryFlush.kind, payloadContents: 'redacted' })"
+            expr: "({ version: 1, verdict: 'PASS', scenario: 'memory-flush-cumulative-fallback-boundary', logicalFlushes: 1, gateway: 'ephemeral-child', provider: env.providerMode, harnessPaths: { primary: 'codex-app-server', fallback: 'codex-app-server', enforcement: 'openclaw-host-daily-memory-write' }, transition: { fromModel: expectedModels[0], toModel: expectedModels[1], reason: 'post-tool-http-503-then-terminal-server-error', primaryHttp503Requests: primaryPostTool503s.length, terminalHttpStatus: primaryPostToolTerminalFailures[0].failureStatus }, accepted: { appendChars: config.primaryAppendChars, cumulativeChars: config.primaryAppendChars, maxChars: config.maxAppendChars, decision: 'accepted' }, rejected: { appendChars: config.fallbackAppendChars, projectedChars: config.primaryAppendChars + config.fallbackAppendChars, maxChars: config.maxAppendChars, decision: 'rejected', fileChanged: false }, file: { path: dailyPath, lengthBytes: finalBytes.length, sha256: finalSha256 }, flushStatus: sessionEntry.memoryFlush.kind, payloadContents: 'redacted' })"
       detailsExpr: "JSON.stringify(trace, null, 2)"
