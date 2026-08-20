@@ -1,56 +1,20 @@
 // Memory Core plugin module implements tools.shared behavior.
-import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  resolveMemorySearchConfig,
-  resolveSessionAgentIds,
-  type AnyAgentTool,
-  type OpenClawConfig,
+import type {
+  AnyAgentTool,
+  OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Type } from "typebox";
+import {
+  resolveMemoryToolContext,
+  type MemoryToolContract,
+  type MemoryToolOptions,
+} from "./memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 type MemorySearchManagerResult = Awaited<
   ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
 >;
-type MemoryToolOptions = {
-  config?: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | undefined;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  oneShotCliRun?: boolean;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-};
-
 export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
-
-export const MemorySearchSchema = Type.Object({
-  query: Type.String(),
-  maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
-  minScore: optionalFiniteNumberSchema(),
-  corpus: Type.Optional(stringEnum(["memory", "wiki", "all", "sessions"])),
-});
-
-export const MemoryGetSchema = Type.Object({
-  path: Type.String(),
-  from: Type.Optional(Type.Integer()),
-  lines: Type.Optional(Type.Integer()),
-  corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),
-});
-
-function resolveMemoryToolContext(options: MemoryToolOptions) {
-  const cfg = options.getConfig ? options.getConfig() : options.config;
-  if (!cfg) {
-    return null;
-  }
-  const { sessionAgentId: agentId } = resolveSessionAgentIds({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-    agentId: options.agentId,
-  });
-  return resolveMemorySearchConfig(cfg, agentId) ? { cfg, agentId } : null;
-}
 
 export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
@@ -88,10 +52,7 @@ export async function getMemoryManagerContextWithPurpose(params: {
 
 export function createMemoryTool(params: {
   options: MemoryToolOptions;
-  label: string;
-  name: string;
-  description: string;
-  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  contract: MemoryToolContract;
   execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);
@@ -99,10 +60,10 @@ export function createMemoryTool(params: {
     return null;
   }
   return {
-    label: params.label,
-    name: params.name,
-    description: params.description,
-    parameters: params.parameters,
+    label: params.contract.label,
+    name: params.contract.name,
+    description: params.contract.describe(ctx.sources),
+    parameters: params.contract.parameters,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const latestCtx = params.options.getConfig ? resolveMemoryToolContext(params.options) : ctx;
       // A live getter makes missing or disabled current config a revocation.

@@ -7,6 +7,7 @@ import {
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import {
   gatewayServerExcludedTestFiles,
+  gatewayServerIsolatedTestFiles,
   isGatewayServerBackedHttpTestFile,
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
@@ -264,6 +265,8 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-gateway-core-1", 99],
   ["agentic-gateway-core-2", 99],
   ["agentic-gateway-core-3", 99],
+  // One small file that pays a full cold module graph because it runs isolated.
+  ["agentic-gateway-server-isolated", 30],
   ["agentic-gateway-methods", 157],
   ["agentic-plugin-sdk", 45],
   ["auto-reply-core-top-level", 27],
@@ -1637,7 +1640,10 @@ function createCoreRuntimeMediaUiSplitShards(): NodeTestSplitShard[] {
 
 function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  const excludedGatewayFiles = new Set(gatewayServerExcludedTestFiles);
+  const excludedGatewayFiles = new Set([
+    ...gatewayServerExcludedTestFiles,
+    ...gatewayServerIsolatedTestFiles,
+  ]);
   const gatewayFiles = listTestFiles("src/gateway").filter(
     (file) =>
       isStripeEligibleTestFile(file, unitFastFiles) &&
@@ -1747,6 +1753,11 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[]>([
     "agentic",
     [
       ...createGatewayServerSplitShards(),
+      {
+        shardName: "agentic-gateway-server-isolated",
+        configs: ["test/vitest/vitest.gateway-server-isolated.config.ts"],
+        requiresDist: false,
+      },
       // Split per config: the combined pair owned a ~206s hosted wall that no
       // bin packing could shorten, while the halves fit normal lanes.
       {

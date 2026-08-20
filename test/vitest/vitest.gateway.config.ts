@@ -7,6 +7,7 @@ const gatewayProjectConfigs = [
   "test/vitest/vitest.gateway-client.config.ts",
   "test/vitest/vitest.gateway-methods.config.ts",
   "test/vitest/vitest.gateway-server.config.ts",
+  "test/vitest/vitest.gateway-server-isolated.config.ts",
 ] as const;
 
 export function createGatewayVitestConfig(env?: Record<string, string | undefined>) {

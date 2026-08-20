@@ -550,7 +550,8 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 6px;
+  margin: 0;
+  padding: 10px 12px;
   font-size: var(--control-ui-text-sm);
   line-height: 1.6;
 }
@@ -649,7 +650,7 @@
 .chat-tool-card--flush > .chat-tool-card__actions {
   position: absolute;
   top: 8px;
-  right: 6px;
+  inset-inline-end: 6px;
   z-index: 1;
   opacity: 0;
   transition: opacity 120ms ease;
@@ -659,10 +660,44 @@
   opacity: 1;
 }
 
+.chat-tool-card__modes {
+  --track-width: 0;
+}
+
+.chat-tool-card__modes::part(nav) {
+  padding: 4px 8px 0;
+}
+
+.chat-tool-card__modes::part(tabs) {
+  gap: 2px;
+}
+
+.chat-tool-card__modes::part(body) {
+  padding: 0;
+}
+
+.chat-tool-card__modes wa-tab::part(base) {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.chat-tool-card__modes wa-tab[active]::part(base) {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+.chat-tool-card__modes wa-tab-panel {
+  padding: 0;
+}
+
 /* Reserve the floating action box (button + its 6px inset) plus the block's own
    12px padding so command text never runs underneath it. */
 .chat-tool-card--flush:has(> .chat-tool-card__actions) .chat-tool-term__cmd {
-  padding-right: calc(var(--chat-tool-action-size, 40px) + 18px);
+  padding-inline-end: calc(var(--chat-tool-action-size, 40px) + 18px);
 }
 
 .chat-tool-card--flush:hover > .chat-tool-card__actions,
@@ -681,7 +716,7 @@
   align-items: center;
   gap: 6px;
   justify-content: flex-end;
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 
 .chat-tool-card__action-btn {
@@ -736,7 +771,7 @@
   border: 0;
   background: transparent;
   font: 11px/1.4 var(--mono);
-  text-align: left;
+  text-align: start;
   cursor: var(--cursor-action);
 }
 

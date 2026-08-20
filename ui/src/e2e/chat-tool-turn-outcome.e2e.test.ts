@@ -61,6 +61,172 @@ async function expandCompletedWorkGroups(page: import("playwright").Page) {
 }
 
 suite.define(() => {
+  it.each([
+    { name: "dark-desktop", colorScheme: "dark" as const, height: 900, width: 1200 },
+    { name: "light-desktop", colorScheme: "light" as const, height: 900, width: 1200 },
+    { name: "dark-mobile", colorScheme: "dark" as const, height: 844, width: 390 },
+  ])(
+    "keeps narrated tool details in one contained hierarchy ($name)",
+    async ({ colorScheme, height, name, width }) => {
+      const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await fs.mkdir(artifactDir, { recursive: true });
+      }
+      const context = await suite.browser.newContext({
+        colorScheme,
+        locale: "en-US",
+        viewport: { height, width },
+        ...(artifactDir ? { recordVideo: { dir: artifactDir, size: { height, width } } } : {}),
+      });
+      const page = await context.newPage();
+      const baseTime = Date.UTC(2026, 7, 19, 16, 0);
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "layout-exec",
+                name: "exec",
+                arguments: {
+                  command: "pnpm test ui/src/pages/chat/components/chat-tool-cards.test.ts",
+                  workdir: "/workspace/openclaw",
+                  timeout: 120000,
+                },
+              },
+              {
+                type: "toolCall",
+                id: "layout-terminal-read",
+                name: "terminal",
+                arguments: { action: "read", sessionId: "layout-session", offset: 0 },
+              },
+              {
+                type: "toolCall",
+                id: "layout-edit",
+                name: "edit",
+                arguments: {
+                  path: "/workspace/openclaw/ui/src/styles/chat/tool-cards.css",
+                  oldText: ".chat-tool-kv {\n  margin-top: 6px;\n}",
+                  newText: ".chat-tool-kv {\n  padding: 10px 12px;\n}",
+                },
+              },
+            ],
+            timestamp: baseTime,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "layout-exec",
+            toolName: "exec",
+            content: [{ type: "text", text: "PASS chat-tool-cards.test.ts\n18 tests passed" }],
+            timestamp: baseTime + 1_000,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "layout-terminal-read",
+            toolName: "terminal",
+            content: [
+              {
+                type: "text",
+                text: '{"sessionId":"layout-session","text":"Watching for changes...\\nready"}',
+              },
+            ],
+            timestamp: baseTime + 2_000,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "layout-edit",
+            toolName: "edit",
+            content: [{ type: "text", text: "Updated ui/src/styles/chat/tool-cards.css" }],
+            timestamp: baseTime + 3_000,
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Tool detail layout updated." }],
+            timestamp: baseTime + 4_000,
+          },
+        ],
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const activitySummary = page.locator(".chat-activity-group__summary").first();
+      await activitySummary.waitFor();
+      await activitySummary.click();
+      const toolRows = page.locator(".chat-activity-group__body .chat-tool-msg-summary");
+      await expect.poll(() => toolRows.count()).toBe(3);
+      for (let index = 0; index < (await toolRows.count()); index += 1) {
+        const row = toolRows.nth(index);
+        const fileToggle = row.locator(".chat-tool-row__toggle");
+        const toggle = (await fileToggle.count()) > 0 ? fileToggle : row;
+        if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+          await (toggle === row ? row.click() : row.click({ position: { x: 4, y: 4 } }));
+          await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+        }
+      }
+
+      expect(await page.locator(".chat-tool-msg-body .chat-tool-msg-summary").count()).toBe(0);
+      const bodyGeometry = await page.locator(".chat-tool-msg-body").evaluateAll((bodies) =>
+        bodies.map((body) => {
+          const bodyRect = body.getBoundingClientRect();
+          const children = Array.from(
+            body.querySelectorAll<HTMLElement>(
+              ".chat-tool-kv, .chat-tool-card__block, .chat-tool-card__outcome",
+            ),
+          ).filter((child) => child.getClientRects().length > 0);
+          return {
+            childrenContained: children.every((child) => {
+              const rect = child.getBoundingClientRect();
+              return rect.left >= bodyRect.left && rect.right <= bodyRect.right;
+            }),
+            escapedChildren: children.flatMap((child) => {
+              const rect = child.getBoundingClientRect();
+              return rect.left >= bodyRect.left && rect.right <= bodyRect.right
+                ? []
+                : [{ className: child.className, left: rect.left, right: rect.right }];
+            }),
+            footersLast: Array.from(body.querySelectorAll(".chat-tool-card__outcome")).every(
+              (footer) => footer === footer.parentElement?.lastElementChild,
+            ),
+          };
+        }),
+      );
+      expect(bodyGeometry.length).toBeGreaterThanOrEqual(3);
+      expect(
+        bodyGeometry.filter(
+          ({ childrenContained, footersLast }) => !childrenContained || !footersLast,
+        ),
+      ).toEqual([]);
+
+      const modeGroup = page.locator("wa-tab-group.chat-tool-card__modes");
+      await modeGroup.getByRole("tablist", { name: "Tool detail view" }).waitFor();
+      const tabs = modeGroup.getByRole("tab");
+      await expect.poll(() => tabs.count()).toBe(2);
+      const diffTab = modeGroup.getByRole("tab", { name: "Diff" });
+      const rawTab = modeGroup.getByRole("tab", { name: "Raw" });
+      const diffPanel = modeGroup.getByRole("tabpanel", { name: "Diff" });
+      const rawPanel = modeGroup.getByRole("tabpanel", { name: "Raw" });
+      expect(await diffTab.getAttribute("aria-selected")).toBe("true");
+      expect(await rawPanel.isHidden()).toBe(true);
+      await rawTab.click();
+      expect(await rawTab.getAttribute("aria-selected")).toBe("true");
+      expect(await diffPanel.isHidden()).toBe(true);
+      await rawTab.press("Home");
+      expect(await diffTab.getAttribute("aria-selected")).toBe("true");
+      expect(await rawPanel.isHidden()).toBe(true);
+
+      if (artifactDir) {
+        await page.locator(".chat-main").screenshot({
+          path: path.join(artifactDir, `tool-detail-layout-${name}.png`),
+        });
+        const video = page.video();
+        await context.close();
+        await video?.saveAs(path.join(artifactDir, `tool-detail-layout-${name}.webm`));
+      } else {
+        await context.close();
+      }
+    },
+  );
+
   it("keeps the final activity row anchored while its disclosure opens", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 600, width: 900 } });
     const page = await context.newPage();
@@ -302,8 +468,7 @@ suite.define(() => {
     expect(await page.locator(".chat-diff__row--add .chat-diff__text").allTextContents()).toEqual(
       expect.arrayContaining(["const after = true;", "export const created = true;"]),
     );
-    const rawDetails = page.getByRole("button", { name: "Raw details" });
-    await rawDetails.click();
+    await page.getByRole("tab", { name: "Raw" }).click();
     await page.getByText("Applied patch", { exact: true }).waitFor();
     await captureToolActivityProof(page, "parallel-multifile-expanded");
     await context.close();
