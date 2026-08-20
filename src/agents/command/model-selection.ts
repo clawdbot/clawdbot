@@ -6,7 +6,7 @@ import {
   type ThinkLevel,
 } from "../../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
@@ -55,6 +55,7 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
+import { updateSessionThinkingLevelSelection } from "../session-thinking-level-selection.js";
 import {
   hasResolvedThinkingCatalogEntry,
   normalizeThinkingCatalogProviders,
@@ -609,6 +610,12 @@ export async function resolveEmbeddedModelSelection(params: {
       lastInteractionAt: now,
       thinkingLevel: params.thinkOverride,
     };
+    updateSessionThinkingLevelSelection(next, {
+      provider,
+      model,
+      agentRuntime: thinkingRuntime,
+      level: params.thinkOverride,
+    });
     sessionEntry =
       (await persistAgentSession({
         sessionStore: params.sessionStore,
