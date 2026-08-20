@@ -1,9 +1,10 @@
 // Node pairing rate-limit tests protect repeated pairing attempts, pending
 // request cleanup, and protocol error details for node clients.
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -18,6 +19,8 @@ import {
 } from "../infra/device-pairing-node.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import type { NodeRegistry } from "./node-registry.js";
+import * as gatewayWsRuntime from "./server-ws-runtime.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -100,6 +103,56 @@ async function approveNodeIdentity(params: { identityPath: string; caps: string[
 }
 
 describe("node pairing rate limit", () => {
+  test("admits an authenticated paired node while gateway startup is pending", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const identityDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-startup-"));
+    const identityPath = path.join(identityDir, "identity.sqlite");
+    const attachGatewayWsHandlers = gatewayWsRuntime.attachGatewayWsHandlers;
+    let nodeRegistry: NodeRegistry | undefined;
+    const startupAdmission = vi
+      .spyOn(gatewayWsRuntime, "attachGatewayWsHandlers")
+      .mockImplementation((params) => {
+        nodeRegistry = params.context.nodeRegistry;
+        return attachGatewayWsHandlers({ ...params, isStartupPending: () => true });
+      });
+
+    try {
+      await withGatewayServer(async ({ port }) => {
+        const identity = await approveNodeIdentity({ identityPath, caps: [] });
+        const ws = await openWs(port);
+        try {
+          const response = await connectReq(ws, {
+            token: "secret",
+            role: "node",
+            scopes: [],
+            client: NODE_CLIENT,
+            caps: [],
+            commands: [],
+            deviceIdentityPath: identityPath,
+          });
+
+          expect(response.ok).toBe(true);
+          expect(response.payload).toMatchObject({ type: "hello-ok" });
+          expect(nodeRegistry?.get(identity.deviceId)).toMatchObject({
+            nodeId: identity.deviceId,
+          });
+        } finally {
+          ws.close();
+          await new Promise<void>((resolve) => {
+            if (ws.readyState === WebSocket.CLOSED) {
+              resolve();
+              return;
+            }
+            ws.once("close", () => resolve());
+          });
+        }
+      });
+    } finally {
+      startupAdmission.mockRestore();
+      await rm(identityDir, { recursive: true, force: true });
+    }
+  });
+
   test("limits concurrent first-time node pairing requests before the pairing lock", async () => {
     testState.gatewayAuth = {
       mode: "token",

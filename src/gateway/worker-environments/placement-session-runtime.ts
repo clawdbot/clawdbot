@@ -48,6 +48,7 @@ export function projectWorkerPlacementAgentRuntime(
   runtime: GatewayAgentRuntime,
 ): GatewayAgentRuntime & {
   cloudPlacementSupported: boolean;
+  cloudPlacementExecutionMode?: WorkerPlacementExecutionMode;
   devicePlacementSupported: boolean;
 } {
   const { source, ...identity } = runtime;
@@ -55,6 +56,7 @@ export function projectWorkerPlacementAgentRuntime(
   return {
     ...identity,
     cloudPlacementSupported: executionMode !== undefined,
+    ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
     devicePlacementSupported: executionMode === "worker-turn",
     source,
   };

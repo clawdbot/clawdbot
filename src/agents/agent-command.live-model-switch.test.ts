@@ -2512,12 +2512,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return entry?.thinkingLevel === "medium";
     })?.[0] as { entry?: Record<string, unknown> } | undefined;
     expect(touchWrite?.entry?.lastInteractionAt).toBeDefined();
-    expectRecordFields(touchWrite?.entry?.thinkingLevelSelection, {
-      provider: "anthropic",
-      model: "claude",
-      agentRuntime: "openclaw",
-      level: "medium",
-    });
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
   });
 

@@ -14,14 +14,12 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemorySearchConfig,
   type MemoryCorpusSearchResult,
-  type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   attemptMemoryCorpus,
   composeMemoryCorpusMetadata,
@@ -35,7 +33,11 @@ import {
   buildPausedMemoryIndexUnavailableResult,
   executeMemorySearchToolQuery,
 } from "./memory-search-tool-query.js";
-import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import {
+  MEMORY_GET_TOOL_CONTRACT,
+  MEMORY_SEARCH_TOOL_CONTRACT,
+  type MemoryToolOptions,
+} from "./memory-tool-contract.js";
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   resolveMemorySearchAbortError,
@@ -52,8 +54,6 @@ import {
   createMemoryTool,
   getMemoryManagerContextWithPurpose,
   loadMemoryToolRuntime,
-  MemoryGetSchema,
-  MemorySearchSchema,
 } from "./tools.shared.js";
 
 type MemorySearchToolResult =
@@ -269,24 +269,10 @@ function queueShortTermRecallTracking(params: {
   });
 }
 
-export function createMemorySearchTool(options: {
-  config?: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | undefined;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  oneShotCliRun?: boolean;
-  conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
-  activeProjectKeys?: readonly string[];
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-}) {
+export function createMemorySearchTool(options: MemoryToolOptions) {
   return createMemoryTool({
     options,
-    label: "Memory Search",
-    name: "memory_search",
-    description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). Corpus warnings mean the returned results are partial and must be surfaced to the user. If response has disabled=true or stale=true, tell the user and include the warning/action guidance.",
-    parameters: MemorySearchSchema,
+    contract: MEMORY_SEARCH_TOOL_CONTRACT,
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params, callerSignal) => {
@@ -542,21 +528,10 @@ export function createMemorySearchTool(options: {
   });
 }
 
-export function createMemoryGetTool(options: {
-  config?: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | undefined;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-}) {
+export function createMemoryGetTool(options: MemoryToolOptions) {
   return createMemoryTool({
     options,
-    label: "Memory Get",
-    name: "memory_get",
-    description:
-      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements. A response with status=not_found means every requested available corpus missed; corpus warnings mean coverage is partial and must be surfaced to the user.",
-    parameters: MemoryGetSchema,
+    contract: MEMORY_GET_TOOL_CONTRACT,
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params, callerSignal) => {

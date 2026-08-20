@@ -10,7 +10,6 @@ import {
   resolveCompatibleAgentRuntimeForProvider,
   resolveSessionRuntimeOverrideForProvider,
 } from "../agents/session-runtime-compat.js";
-import { updateSessionThinkingLevelSelection } from "../agents/session-thinking-level-selection.js";
 import {
   persistStickyModelSelectionBestEffort,
   type StickyModelSelectionDispatchOutcome,
@@ -270,13 +269,6 @@ export async function applySessionModelSelection(
       };
     }
   }
-  updateSessionThinkingLevelSelection(nextEntry, {
-    provider: request.provider,
-    model: request.model,
-    agentRuntime: thinkingRuntime,
-    level: nextEntry.thinkingLevel,
-  });
-
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;

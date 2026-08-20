@@ -2902,21 +2902,24 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it.each(["src/tui/tui-pty-harness.e2e.test.ts", "src/tui/tui-pty-local.e2e.test.ts"])(
-    "routes TUI PTY integration target %s to the PTY lane",
-    (target) => {
-      const plans = buildVitestRunPlans([target], process.cwd());
+  it.each([
+    "src/tui/tui-auth-child-pty.e2e.test.ts",
+    "src/tui/tui-pty-harness.e2e.test.ts",
+    "src/tui/tui-session-identity-pty.e2e.test.ts",
+    "src/tui/tui-reset-transition-pty.e2e.test.ts",
+    "src/tui/tui-pty-local.e2e.test.ts",
+  ])("routes TUI PTY integration target %s to the PTY lane", (target) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
 
-      expect(plans).toEqual([
-        {
-          config: "test/vitest/vitest.tui-pty.config.ts",
-          forwardedArgs: [],
-          includePatterns: [target],
-          watchMode: false,
-        },
-      ]);
-    },
-  );
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.tui-pty.config.ts",
+        forwardedArgs: [],
+        includePatterns: [target],
+        watchMode: false,
+      },
+    ]);
+  });
 });
 
 describe("scripts/test-projects full-suite sharding", () => {

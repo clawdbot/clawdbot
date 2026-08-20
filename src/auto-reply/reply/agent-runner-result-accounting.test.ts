@@ -158,7 +158,6 @@ function createParams(
     pendingToolTasks: new Set(),
     progress: {
       drain: vi.fn(async () => {}),
-      visibleToolErrorObserved: () => false,
     },
   } as FollowupExecutionResult;
   return { turn, defaults, execution };

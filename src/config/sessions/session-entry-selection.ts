@@ -62,8 +62,6 @@ export function inheritSessionSelection(
     return {};
   }
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(parentEntry);
-  const internalParentEntry: InternalSessionEntry = parentEntry;
-  const thinkingLevelSelection = internalParentEntry.thinkingLevelSelection;
   return {
     ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
     ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
@@ -77,7 +75,6 @@ export function inheritSessionSelection(
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
       : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
-    ...(thinkingLevelSelection ? { thinkingLevelSelection: { ...thinkingLevelSelection } } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.toolOverrides ? { toolOverrides: parentEntry.toolOverrides } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),

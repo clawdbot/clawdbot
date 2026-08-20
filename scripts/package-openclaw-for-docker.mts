@@ -11,6 +11,7 @@ import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build
 import { toErrorObject } from "./lib/error-format.mts";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
@@ -473,16 +474,6 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
   });
 }
 
-const PACKAGE_ARTIFACT_BUILD_STEPS = [
-  {
-    label: "Building OpenClaw package artifacts",
-    command: "pnpm",
-    // Let the frozen source own its build entrypoint while the packaging env
-    // keeps canonical declaration emission enabled.
-    args: ["run", "build"],
-  },
-];
-
 export async function buildPackageArtifacts(
   sourceDir: string,
   packageOptions: PackageOptions = {},
@@ -496,18 +487,18 @@ export async function buildPackageArtifacts(
   for (const envName of PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES) {
     delete buildEnv[envName];
   }
-  for (const step of PACKAGE_ARTIFACT_BUILD_STEPS) {
-    console.error(`==> ${step.label}`);
-    await runImpl(step.command, step.args, sourceDir, {
-      env: {
-        ...buildEnv,
-      },
-      timeoutMs: resolveTimeoutMs(
-        "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
-        DEFAULT_PACKAGE_BUILD_TIMEOUT_MS,
-      ),
-    });
-  }
+  const timeoutMs = resolveTimeoutMs(
+    "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
+    DEFAULT_PACKAGE_BUILD_TIMEOUT_MS,
+  );
+  const distDir = path.join(sourceDir, "dist");
+  assertRealOutputRoot(distDir);
+  console.error("==> Cleaning OpenClaw package artifacts");
+  await fs.rm(distDir, { force: true, recursive: true });
+
+  // Frozen sources own their build entrypoint and may predate clean:dist.
+  console.error("==> Building OpenClaw package artifacts");
+  await runImpl("pnpm", ["run", "build"], sourceDir, { env: buildEnv, timeoutMs });
 }
 
 async function runCapture(command: string, args: string[], cwd: string, options: RunOptions = {}) {

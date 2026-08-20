@@ -65,7 +65,7 @@ import {
   pluginSdkLightTestFiles,
   resolvePluginSdkLightIncludePattern,
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
-import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
+import { fullSuiteVitestShards, tuiPtyTestFiles } from "../test/vitest/vitest.test-shards.mjs";
 import {
   isToolingIsolatedTestFile,
   toolingIsolatedTestFiles,
@@ -3264,7 +3264,7 @@ function classifyTarget(arg: string, cwd: string) {
   if (isPathAtOrUnder(relative, "ui")) {
     return "ui";
   }
-  if (relative.startsWith("src/tui/tui-pty-")) {
+  if (relative.startsWith("src/tui/tui-pty-") || tuiPtyTestFiles.includes(relative)) {
     return "tuiPty";
   }
   if (relative.endsWith(".e2e.test.ts")) {

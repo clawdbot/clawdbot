@@ -14,14 +14,6 @@ export function isAgentSessionModelPatchOrigin(): boolean {
   return agentSessionModelPatch.getStore() === true;
 }
 
-export function updateAgentModelFallbackThinking(
-  fallback: NonNullable<SessionEntry["modelFallback"]>,
-  entry: Pick<SessionEntry, "thinkingLevel" | "thinkingLevelSelection">,
-): void {
-  fallback.prevThinkingLevel = entry.thinkingLevel;
-  fallback.prevThinkingLevelSelection = entry.thinkingLevelSelection;
-}
-
 export function snapshotAgentModelFallback(
   cfg: OpenClawConfig,
   entry: SessionEntry,

@@ -28,7 +28,6 @@ import {
 import { resolveThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { sessionThinkingLevelSelectionMatches } from "../agents/session-thinking-level-selection.js";
 import {
   concretizeAgentRuntime,
   resolveEffectiveAgentRuntime,
@@ -37,9 +36,7 @@ import {
   normalizeThinkLevel,
   resolveSupportedThinkingLevel,
   resolveThinkingProfile,
-  type ThinkLevel,
 } from "../auto-reply/thinking.js";
-import { THINKING_LEVEL_RANKS } from "../auto-reply/thinking.shared.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -73,17 +70,6 @@ function listGatewayThinkingLevelOptions(params: {
     agentRuntime: params.agentRuntime,
     providerPolicySource: params.providerPolicySource,
   }).levels.map(({ id, label }) => ({ id, label }));
-}
-
-function includeRecordedThinkingLevel(
-  levels: ReturnType<typeof listGatewayThinkingLevelOptions>,
-  level: ThinkLevel,
-) {
-  return levels.some((entry) => entry.id === level)
-    ? levels
-    : [...levels, { id: level, label: level }].toSorted(
-        (left, right) => THINKING_LEVEL_RANKS[left.id] - THINKING_LEVEL_RANKS[right.id],
-      );
 }
 
 function resolveGatewaySessionThinkingLevel(params: {
@@ -290,38 +276,23 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     providerPolicySource: params.providerPolicySource,
   });
   const storedThinkingLevel = normalizeThinkLevel(params.entry?.thinkingLevel);
-  const recordedSelectionMatches =
-    storedThinkingLevel !== undefined &&
-    sessionThinkingLevelSelectionMatches({
-      entry: params.entry,
-      provider: params.provider,
-      model: params.model,
-      agentRuntime: thinkingRuntime,
-      level: storedThinkingLevel,
-    });
-  const thinkingLevel = recordedSelectionMatches
-    ? storedThinkingLevel
-    : storedThinkingLevel
-      ? resolveGatewaySessionThinkingLevel({
-          provider: params.provider,
-          model: params.model,
-          level: storedThinkingLevel,
-          modelCatalog: params.modelCatalog,
-          agentRuntime: thinkingRuntime,
-          providerPolicySource: params.providerPolicySource,
-        })
-      : undefined;
-  const thinkingLevels =
-    recordedSelectionMatches && storedThinkingLevel
-      ? includeRecordedThinkingLevel(metadata.thinkingLevels, storedThinkingLevel)
-      : metadata.thinkingLevels;
+  const thinkingLevel = storedThinkingLevel
+    ? resolveGatewaySessionThinkingLevel({
+        provider: params.provider,
+        model: params.model,
+        level: storedThinkingLevel,
+        modelCatalog: params.modelCatalog,
+        agentRuntime: thinkingRuntime,
+        providerPolicySource: params.providerPolicySource,
+      })
+    : undefined;
   return {
     agentRuntime,
     thinkingLevel,
     effectiveThinkingLevel: thinkingLevel ?? metadata.thinkingDefault,
     // Preserve the established serialized projection order for byte-stable responses.
-    thinkingLevels,
-    thinkingOptions: thinkingLevels.map((level) => level.label),
+    thinkingLevels: metadata.thinkingLevels,
+    thinkingOptions: metadata.thinkingLevels.map((level) => level.label),
     thinkingDefault: metadata.thinkingDefault,
   };
 }

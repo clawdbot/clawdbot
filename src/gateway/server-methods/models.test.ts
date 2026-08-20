@@ -697,6 +697,7 @@ describe("models.list", () => {
                 agentRuntime: {
                   id: "openclaw",
                   cloudPlacementSupported: true,
+                  cloudPlacementExecutionMode: "worker-turn",
                   devicePlacementSupported: true,
                   source: "implicit",
                 },
@@ -757,6 +758,7 @@ describe("models.list", () => {
                 agentRuntime: {
                   id: "openclaw",
                   cloudPlacementSupported: true,
+                  cloudPlacementExecutionMode: "worker-turn",
                   devicePlacementSupported: true,
                   source: "implicit",
                 },
@@ -808,6 +810,7 @@ describe("models.list", () => {
               agentRuntime: {
                 id: "openclaw",
                 cloudPlacementSupported: true,
+                cloudPlacementExecutionMode: "worker-turn",
                 devicePlacementSupported: true,
                 source: "implicit",
               },

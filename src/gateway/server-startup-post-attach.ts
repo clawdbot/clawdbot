@@ -35,6 +35,7 @@ import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
+import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import type { GatewayResidentRegistry } from "./server-resident-registry.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
@@ -579,6 +580,7 @@ export async function startGatewaySidecars(params: {
   onPostReadySidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
   shouldCreatePostReadySidecars?: () => boolean;
   shouldStartPluginServices?: () => boolean;
+  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
   broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
   log: { warn: (msg: string) => void };
   logHooks: {
@@ -694,7 +696,10 @@ export async function startGatewaySidecars(params: {
     await Promise.all([accountStartGateRelease, channelStart]);
   });
 
-  const shouldStartPluginServices = params.shouldStartPluginServices?.() !== false;
+  await params.pluginRuntimeClaim?.waitForUnblocked();
+  const shouldStartPluginServices =
+    params.pluginRuntimeClaim?.isCurrent() !== false &&
+    params.shouldStartPluginServices?.() !== false;
   let pluginServicesOwner: PluginServicesHandle | null = null;
   let pluginServicesStopRequested = false;
   let resolvePluginServicesOwner: ((handle: PluginServicesHandle | null) => void) | undefined;
@@ -702,11 +707,37 @@ export async function startGatewaySidecars(params: {
     const ownedPluginServices = createDeferredCore<PluginServicesHandle | null>();
     let stopPromise: Promise<void> | undefined;
     pluginServicesOwner = {
-      stop: () => {
+      stop: (options) => {
         pluginServicesStopRequested = true;
-        return (stopPromise ??= ownedPluginServices.promise.then(async (handle) => {
-          await handle?.stop();
-        }));
+        stopPromise ??= ownedPluginServices.promise.then(async (handle) => {
+          await handle?.stop(options);
+        });
+        if (!options?.strict) {
+          return stopPromise;
+        }
+        return new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(
+            () => {
+              reject(
+                new AggregateError(
+                  [new Error("Gateway plugin service startup did not settle before replacement")],
+                  "Gateway plugin service replacement cleanup failed",
+                ),
+              );
+            },
+            Math.max(0, options.deadlineAtMs - Date.now()),
+          );
+          void stopPromise?.then(
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            (error: unknown) => {
+              clearTimeout(timer);
+              reject(error instanceof Error ? error : new Error(String(error)));
+            },
+          );
+        });
       },
     };
     resolvePluginServicesOwner = ownedPluginServices.resolve;
@@ -1126,12 +1157,17 @@ export async function startGatewayPostAttachRuntime(
     loadStartupPlugins?: () => Awaitable<{
       pluginRegistry: PluginRegistry;
       gatewayMethods: string[];
+      retireGatewayRuntimeBindings?: () => void;
     }>;
     onStartupPluginsLoading?: () => void;
     onStartupPluginsLoaded?: (result: {
       pluginRegistry: PluginRegistry;
       gatewayMethods: string[];
+      retireGatewayRuntimeBindings?: () => void;
     }) => Awaitable<void>;
+    pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
+    getCurrentPluginRegistry?: () => PluginRegistry;
+    getCurrentPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
@@ -1195,6 +1231,7 @@ export async function startGatewayPostAttachRuntime(
   let startupPluginsLoadPromise: Promise<{
     pluginRegistry: PluginRegistry;
     gatewayMethods: string[];
+    retireGatewayRuntimeBindings?: () => void;
   }> | null = null;
   const loadStartupPluginsIfNeeded = async () => {
     if (params.minimalTestGateway || !params.loadStartupPlugins) {
@@ -1208,6 +1245,13 @@ export async function startGatewayPostAttachRuntime(
       const loaded = await measureStartup(params.startupTrace, "plugins.runtime-post-bind", () =>
         params.loadStartupPlugins!(),
       );
+      await params.pluginRuntimeClaim?.waitForUnblocked();
+      if (params.pluginRuntimeClaim?.isCurrent() === false) {
+        loaded.retireGatewayRuntimeBindings?.();
+        pluginRegistry = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
+        startupPluginsLoaded = true;
+        return { pluginRegistry, gatewayMethods: [] };
+      }
       pluginRegistry = loaded.pluginRegistry;
       startupPluginsLoaded = true;
       params.startupTrace?.detail("plugins.runtime-post-bind", [
@@ -1293,6 +1337,9 @@ export async function startGatewayPostAttachRuntime(
   let pluginServicesReported = false;
   let reportedPluginServices: PluginServicesHandle | null = null;
   const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
+    if (params.pluginRuntimeClaim?.isCurrent() === false) {
+      return;
+    }
     pluginServicesReported = true;
     reportedPluginServices = pluginServices;
     params.onPluginServices?.(pluginServices);
@@ -1348,12 +1395,16 @@ export async function startGatewayPostAttachRuntime(
           const loaderStatsBefore = getPluginModuleLoaderStats();
           const result = await (async () => {
             try {
+              const startupRuntimeCurrent = params.pluginRuntimeClaim?.isCurrent() !== false;
+              const pluginMetadataSnapshot = startupRuntimeCurrent
+                ? params.pluginMetadataSnapshot
+                : params.getCurrentPluginMetadataSnapshot?.();
               return await measureStartup(params.startupTrace, "sidecars.total", () =>
                 runtimeDeps.startGatewaySidecars({
-                  cfg: params.gatewayPluginConfigAtStart,
-                  ...(params.pluginMetadataSnapshot
-                    ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-                    : {}),
+                  cfg: startupRuntimeCurrent
+                    ? params.gatewayPluginConfigAtStart
+                    : params.getConfig(),
+                  ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
                   pluginRegistry,
                   defaultWorkspaceDir: params.defaultWorkspaceDir,
                   deps: params.deps,
@@ -1370,7 +1421,12 @@ export async function startGatewayPostAttachRuntime(
                     params.onPostReadySidecars?.(sidecars);
                   },
                   shouldCreatePostReadySidecars: () => params.isClosing?.() !== true,
-                  shouldStartPluginServices: () => params.isClosing?.() !== true,
+                  shouldStartPluginServices: () =>
+                    params.isClosing?.() !== true &&
+                    params.pluginRuntimeClaim?.isCurrent() !== false,
+                  ...(params.pluginRuntimeClaim
+                    ? { pluginRuntimeClaim: params.pluginRuntimeClaim }
+                    : {}),
                   broadcastPluginEvent: params.broadcastPluginEvent,
                   startupOutcomes,
                   waitForPostReadyWork: params.waitForPostReadyWork,

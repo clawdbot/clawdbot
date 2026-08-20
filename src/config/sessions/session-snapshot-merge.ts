@@ -14,7 +14,6 @@ export const SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS = [
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
-  "thinkingLevelSelection",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;
 
 const MODEL_ROUTE_OVERRIDE_FIELDS = [
@@ -37,13 +36,9 @@ const MODEL_OVERRIDE_DEPENDENT_FIELDS = new Set<keyof SessionEntry>([
   ...MODEL_OVERRIDE_RUNTIME_FIELDS,
   "liveModelSwitchPending",
   "thinkingLevel",
-  "thinkingLevelSelection",
 ]);
 
-const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = [
-  "thinkingLevel",
-  "thinkingLevelSelection",
-] as const satisfies ReadonlyArray<keyof SessionEntry>;
+const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["thinkingLevel"] as const;
 
 const MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS = [
   "abortedLastRun",

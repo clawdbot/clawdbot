@@ -215,7 +215,7 @@ export function renderAgentOverview(params: {
               ?disabled=${identityBusy || !identityDirty || identityInvalid}
               @click=${() => params.onIdentitySave()}
             >
-              ${identityBusy ? t("common.saving") : t("common.save")}
+              ${params.identitySaving ? t("common.saving") : t("common.save")}
             </button>
           </div>
           <div class="settings-row__desc agent-identity-editor__hint">

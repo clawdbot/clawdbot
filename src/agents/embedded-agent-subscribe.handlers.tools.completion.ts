@@ -246,7 +246,6 @@ export async function handleToolExecutionEnd(
       : {}),
   });
   ctx.state.lastToolError = terminal.lastToolError;
-  ctx.state.lastToolRecovery = terminal.lastToolRecovery;
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;

@@ -962,6 +962,40 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     );
 
     beforeToolCallHook.mockClear();
+    const blankCodeAliasResult = await def.execute(
+      "call-code-mode-exec-blank-code",
+      { code: "", command: "return 3;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(blankCodeAliasResult.details).toMatchObject({
+      status: "blocked",
+      reason: "blocked before code-mode execution",
+    });
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "return 3;", command: "return 3;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-blank-code",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-blank-code",
+      },
+    );
+
+    beforeToolCallHook.mockClear();
     const typescriptResult = await def.execute(
       "call-code-mode-exec-typescript",
       {
@@ -1276,6 +1310,49 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     });
   });
 
+  it("fails closed when a hook blanks one code-mode exec alias", async () => {
+    // A blank alias from the caller is treated as absent, but a hook that
+    // deliberately blanks `code` is a policy decision: mirror it so neither
+    // alias survives, rather than silently running the original command.
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({ params: { code: "" } }),
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = markCodeModeControlTool(
+      asAgentTool({
+        name: CODE_MODE_EXEC_TOOL_NAME,
+        execute,
+        description: "exec",
+        parameters: {},
+      }),
+    );
+    const [def] = toToolDefinitions([tool], {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-main",
+      runId: "run-main",
+    });
+    if (!def) {
+      throw new Error("missing custom tool definition");
+    }
+    const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+    await def.execute(
+      "call-code-mode-exec-blank-rewrite",
+      { code: "", command: "return 1;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-code-mode-exec-blank-rewrite",
+      { code: "", command: "" },
+      undefined,
+      undefined,
+    );
+  });
+
   it("renormalizes trusted policy rewrites before code-mode exec hooks observe params", async () => {
     resetGlobalHookRunner();
     const normalHook = vi.fn(async () => undefined);
@@ -1307,6 +1384,9 @@ describe("before_tool_call hook deduplication (#15502)", () => {
                   language: "typescript",
                 },
               };
+            }
+            if (eventValue.toolCallId === "call-code-mode-trusted-blank") {
+              return { params: { code: "", command: "return 4;" } };
             }
             return undefined;
           },
@@ -1356,6 +1436,13 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       await def.execute(
         "call-code-mode-trusted-language",
         { code: "return 3;", command: "return 3;", language: "javascript" },
+        undefined,
+        undefined,
+        extensionContext,
+      );
+      await def.execute(
+        "call-code-mode-trusted-blank",
+        { code: "return 4;", command: "return 4;" },
         undefined,
         undefined,
         extensionContext,
@@ -1471,6 +1558,23 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         undefined,
         undefined,
       );
+      expect(normalHook).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ params: { code: "", command: "" } }),
+        expect.anything(),
+      );
+      expect(trustedObserver).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ params: { code: "", command: "" } }),
+        expect.anything(),
+      );
+      expect(execute).toHaveBeenNthCalledWith(
+        3,
+        "call-code-mode-trusted-blank",
+        { code: "", command: "" },
+        undefined,
+        undefined,
+      );
       expect(
         consumeAdjustedParamsForToolCall("call-code-mode-trusted-command", "run-main"),
       ).toEqual({ command: "return 2;", code: "return 2;" });
@@ -1480,6 +1584,10 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         code: "const value: number = 3;",
         command: "const value: number = 3;",
         language: "typescript",
+      });
+      expect(consumeAdjustedParamsForToolCall("call-code-mode-trusted-blank", "run-main")).toEqual({
+        code: "",
+        command: "",
       });
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());

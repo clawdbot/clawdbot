@@ -496,6 +496,20 @@ this mode. Import that file explicitly as described below. Set
 `appServer.homeScope: "user"` only when the app-server should instead own and
 use the operator's native Codex account.
 
+No credential file is written in this mode, in either home. A subscription
+profile is handed over as an `account/login/start` request of type
+`chatgptAuthTokens`, which Codex installs as in-memory external auth rather
+than persisting; the ephemeral credential store covers the API-key login,
+which would otherwise write `CODEX_HOME/auth.json`.
+
+Token refresh is inverted so the long-lived secret never leaves OpenClaw. Codex
+holds only a short-lived access token, and on an unauthorized response it sends
+an `account/chatgptAuthTokens/refresh` request back to OpenClaw over the same
+connection. OpenClaw refreshes against its own auth profile store and returns a
+fresh access token, so the refresh token stays in SQLite. A refresh that does
+not answer within the app-server's timeout fails that turn rather than falling
+back to another credential.
+
 When OpenClaw sees a ChatGPT subscription-style Codex auth profile (OAuth or
 token credential type), it removes `CODEX_API_KEY` and `OPENAI_API_KEY` from
 the spawned Codex child process. That keeps Gateway-level API keys available
