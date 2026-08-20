@@ -487,6 +487,7 @@ export function createAgentEventHandler({
     const sessionKey =
       chatLink?.sessionKey ??
       eventSessionKey ??
+      getAgentRunContext(evt.runId)?.sessionKey ??
       resolveSessionKeyForRun(evt.runId, sessionAgentId ? { agentId: sessionAgentId } : undefined);
     return { chatLink, sessionAgentId, eventSessionKey, sessionKey };
   };
