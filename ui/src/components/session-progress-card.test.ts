@@ -30,6 +30,7 @@ describe("renderSessionProgressCard", () => {
     expect(
       [...(card?.querySelectorAll(".session-progress-card__step") ?? [])].map((step) => ({
         label: step.getAttribute("aria-label"),
+        marker: step.querySelector(".session-progress-card__step-marker")?.innerHTML,
         status: [...step.classList].find((name) =>
           name.startsWith("session-progress-card__step--"),
         ),
@@ -37,16 +38,49 @@ describe("renderSessionProgressCard", () => {
     ).toEqual([
       {
         label: "Inspect the route, completed",
+        marker: expect.stringContaining("<path"),
         status: "session-progress-card__step--completed",
       },
       {
         label: "Wire the checklist, in progress",
+        marker: expect.stringContaining("<circle"),
         status: "session-progress-card__step--in_progress",
       },
       {
         label: "Run focused tests, pending",
+        marker: expect.stringContaining("<circle"),
         status: "session-progress-card__step--pending",
       },
     ]);
+    expect(
+      card?.querySelector(
+        ".session-progress-card__step--completed .session-progress-card__step-marker path",
+      ),
+    ).not.toBeNull();
+    expect(
+      card?.querySelector(
+        ".session-progress-card__step--in_progress .session-progress-card__step-marker circle",
+      ),
+    ).not.toBeNull();
+    expect(
+      card?.querySelector(
+        ".session-progress-card__step--pending .session-progress-card__step-marker circle",
+      ),
+    ).not.toBeNull();
+  });
+
+  it("keeps a disclosure affordance beside a completed dismissible composer card", () => {
+    const container = document.createElement("div");
+    const completed = {
+      ...progressCard,
+      steps: progressCard.steps?.map((step) => ({ ...step, status: "completed" as const })),
+    };
+    render(
+      renderSessionProgressCard(completed, "composer", () => undefined),
+      container,
+    );
+
+    expect(container.querySelector(".session-progress-card__dismiss")).not.toBeNull();
+    expect(container.querySelector(".session-progress-card__chevron svg")).not.toBeNull();
   });
 });

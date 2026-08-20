@@ -49,12 +49,17 @@ function renderSteps(card: ProgressCard) {
   return html`<ol class="session-progress-card__steps">
     ${steps.map((step) => {
       const statusLabel = t(STATUS_LABEL_KEYS[step.status]);
-      const marker = step.status === "completed" ? "✓" : step.status === "in_progress" ? "▸" : "▢";
+      const marker = step.status === "completed" ? icons.check : icons.circle;
       return html`<li
         class="session-progress-card__step session-progress-card__step--${step.status}"
         aria-label=${t("sessionProgressCard.stepLabel", { status: statusLabel, step: step.step })}
       >
-        <span class="session-progress-card__step-marker" aria-hidden="true">${marker}</span>
+        <span
+          class="session-progress-card__step-marker"
+          data-status=${step.status}
+          aria-hidden="true"
+          >${marker}</span
+        >
         <span class="session-progress-card__step-text">${step.step}</span>
       </li>`;
     })}
@@ -102,12 +107,18 @@ export function renderSessionProgressCard(
     : nothing;
   if (placement === "composer") {
     const current = currentProgressStep(card.steps ?? []);
+    const currentMarker = current?.status === "completed" ? icons.check : icons.circle;
     return html`<details
       class="session-progress-card session-progress-card--composer"
       data-progress-card-placement="composer"
     >
       <summary class="session-progress-card__summary" aria-label=${countLabel}>
-        <span class="session-progress-card__current-marker" aria-hidden="true">▸</span>
+        <span
+          class="session-progress-card__current-marker"
+          data-status=${current?.status ?? "pending"}
+          aria-hidden="true"
+          >${currentMarker}</span
+        >
         <span class="session-progress-card__current"
           >${current?.step ?? t("sessionProgressCard.noteLabel")}</span
         >
@@ -117,6 +128,7 @@ export function renderSessionProgressCard(
             >`
           : nothing}
         ${dismiss}
+        <span class="session-progress-card__chevron" aria-hidden="true">${icons.chevronDown}</span>
       </summary>
       ${renderBody(card)}
     </details>`;

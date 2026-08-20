@@ -23,6 +23,7 @@ import {
 import { AppSidebarBase } from "./app-sidebar-base.ts";
 import {
   adoptedCatalogSessionKeys,
+  findCatalogSessionHovercardRow,
   visibleSessionCatalogProjection,
 } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -65,6 +66,7 @@ import {
   resolveSidebarSessionSortMode,
   storeSidebarSessionSortMode,
   type SidebarRecentSession,
+  type SidebarSessionHovercardRow,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
@@ -580,6 +582,18 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       sessionKey,
       navigationState,
       sessionResultsByAgent: this.sessionData.sessionResultsByAgent,
+    });
+  }
+
+  findSidebarHovercardRowByKey(sessionKey: string): SidebarSessionHovercardRow | undefined {
+    const child = this.activeLineageRow(sessionKey);
+    const liveRow =
+      this.findSidebarSessionByKey(sessionKey) ??
+      (child ? this.getSessionNavigationState().toSidebarSession(child, true) : undefined);
+    return findCatalogSessionHovercardRow({
+      catalogs: this.visibleSessionCatalogs(),
+      sessionKey,
+      liveRow,
     });
   }
 

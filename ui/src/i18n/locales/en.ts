@@ -168,8 +168,10 @@ export const en: TranslationMap = {
   },
   sessionHovercard: {
     ariaLabel: "Session information",
-    created: "created {time}",
-    updated: "updated {time}",
+    moreParticipants: "+{count}",
+    moreParticipantsLabel: "{count} more participants",
+    projectLabel: "Project",
+    branchLabel: "Branch",
     noPrYet: "No PR yet",
     more: "+{count} more",
     changedFile: "{count} file",

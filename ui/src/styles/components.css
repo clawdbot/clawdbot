@@ -830,13 +830,13 @@ openclaw-session-progress-hovercard-provider {
 .session-progress-hovercard {
   position: fixed;
   z-index: 1990;
-  width: min(380px, calc(100vw - 24px));
+  width: min(296px, calc(100vw - 24px));
   max-height: min(520px, calc(100vh - 24px));
-  padding: 14px 16px;
+  padding: 0;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--card);
+  background: var(--session-hovercard-surface);
   box-shadow: var(--shadow-lg);
   color: var(--text);
   pointer-events: none;

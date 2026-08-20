@@ -68,23 +68,43 @@ type SessionWorktreeDisplayRow = {
   execNode?: string;
 };
 
+export type SessionWorkContext = {
+  project: string;
+  branch?: string;
+};
+
 /** Basename shown for a repository path on every Control UI surface. */
 export function repoName(repoRoot: string): string {
   return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
 }
 
+export function resolveSessionWorkContext(
+  row: SessionWorktreeDisplayRow,
+): SessionWorkContext | undefined {
+  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
+  if (!repoRoot) {
+    return undefined;
+  }
+  const branch = normalizeOptionalString(row.worktree?.branch);
+  return {
+    project: repoName(repoRoot),
+    branch: branch?.startsWith(WORKTREE_BRANCH_PREFIX)
+      ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
+      : branch,
+  };
+}
+
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
-  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
-  const branch = normalizeOptionalString(row.worktree?.branch);
+  const context = resolveSessionWorkContext(row);
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
-  const repo = repoRoot ? repoName(repoRoot) : undefined;
-  const shortBranch = branch?.startsWith(WORKTREE_BRANCH_PREFIX)
-    ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
-    : branch;
-  const checkout = repo ? (shortBranch ? `${repo} ⎇ ${shortBranch}` : repo) : undefined;
+  const checkout = context
+    ? context.branch
+      ? `${context.project} ⎇ ${context.branch}`
+      : context.project
+    : undefined;
   if (checkout && node) {
     // Checkout first: it names the work; the node is routing detail.
     return `${checkout} · ${node}`;

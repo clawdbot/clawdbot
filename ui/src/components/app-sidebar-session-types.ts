@@ -12,6 +12,7 @@ import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import type { SessionWorkContext } from "../lib/session-display.ts";
 import {
   normalizeCatalogProjectGrouping,
   type CatalogProjectGrouping,
@@ -75,6 +76,7 @@ export type SidebarRecentSession = {
   userLabel?: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
+  workContext?: SessionWorkContext;
   href: string;
   active: boolean;
   visuallyActive: boolean;
@@ -118,6 +120,7 @@ export type SidebarRecentSession = {
   spawnedBy?: string;
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;
+  createdAt?: number;
   startedAt?: number;
   updatedAt?: number | null;
   endedAt?: number;
@@ -131,6 +134,19 @@ export type SidebarRecentSession = {
   runningChildCount: number;
   failedChildCount: number;
 };
+
+export type SidebarSessionHovercardRow = Pick<
+  SidebarRecentSession,
+  | "createdActor"
+  | "createdAt"
+  | "channelAvatarUrl"
+  | "label"
+  | "lastMessagePreview"
+  | "participantCount"
+  | "participants"
+  | "updatedAt"
+  | "workContext"
+>;
 
 export const enum RowVisibilityReason {
   Any = 0,

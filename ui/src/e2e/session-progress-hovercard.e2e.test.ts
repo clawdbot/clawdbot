@@ -68,6 +68,54 @@ async function emitPullRequestSnapshot(
             title: "Restore the session hovercard",
             url: "https://github.com/openclaw/openclaw/pull/417",
           },
+          {
+            additions: 72,
+            branch: "steipete/session-hovercard-unify",
+            changedFiles: 4,
+            checks: { state: "pending", passed: 8, failed: 0, skipped: 0, running: 5 },
+            deletions: 12,
+            number: 418,
+            owner: "openclaw",
+            repo: "openclaw",
+            state: "draft",
+            title: "Follow-up polish",
+            url: "https://github.com/openclaw/openclaw/pull/418",
+          },
+          {
+            additions: 14,
+            branch: "steipete/session-hovercard-unify",
+            changedFiles: 2,
+            checks: { state: "failing", passed: 10, failed: 2, skipped: 0, running: 0 },
+            deletions: 21,
+            number: 419,
+            owner: "openclaw",
+            repo: "openclaw",
+            state: "closed",
+            title: "Accessibility follow-up",
+            url: "https://github.com/openclaw/openclaw/pull/419",
+          },
+          {
+            additions: 83,
+            branch: "steipete/session-hovercard-unify",
+            changedFiles: 6,
+            checks: { state: "passing", passed: 18, failed: 0, skipped: 1, running: 0 },
+            deletions: 29,
+            number: 420,
+            owner: "openclaw",
+            repo: "openclaw",
+            state: "merged",
+            title: "Merged hovercard follow-up",
+            url: "https://github.com/openclaw/openclaw/pull/420",
+          },
+          {
+            branch: "steipete/session-hovercard-unify",
+            number: 421,
+            owner: "openclaw",
+            repo: "openclaw",
+            state: "open",
+            title: "Hidden by summary",
+            url: "https://github.com/openclaw/openclaw/pull/421",
+          },
         ],
         rateLimited: false,
         status: "ready",
@@ -189,12 +237,21 @@ suite.define(() => {
             status: 200,
           });
         });
+        await page.addInitScript(() => {
+          localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
+        });
         const gateway = await installMockGateway(page, {
           featureMethods: [
             "chat.metadata",
             "chat.startup",
             "progressCard.get",
             SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+          ],
+          presenceUsers: [
+            { self: true, id: "profile-self", name: "You" },
+            { id: "profile-mira", name: "Mira" },
+            { id: "profile-riley", name: "Riley" },
+            { id: "profile-ada", name: "Ada King" },
           ],
           historyMessages: [
             {
@@ -238,13 +295,26 @@ suite.define(() => {
               },
               {
                 createdActor: { type: "human", id: "profile-ada", label: "Ada King" },
+                createdAt: now - 89 * 24 * 60 * 60_000,
                 key: sessionKey,
                 kind: "direct",
                 label: "Other session",
                 displayName: "Other session",
                 channelAvatarUrl,
-                startedAt: now - 2 * 60 * 60_000,
-                updatedAt: now - 15 * 60_000,
+                participants: [
+                  { type: "human", id: "profile-ada", label: "Ada King" },
+                  { type: "human", id: "profile-self", label: "You" },
+                  { type: "human", id: "profile-mira", label: "Mira" },
+                  { type: "human", id: "profile-riley", label: "Riley" },
+                ],
+                participantCount: 6,
+                startedAt: now - 89 * 24 * 60 * 60_000,
+                updatedAt: now - 21 * 24 * 60 * 60_000,
+                worktree: {
+                  id: "wt-hovercard-proof",
+                  branch: "feature/session-hovercards",
+                  repoRoot: "/work/openclaw",
+                },
               },
             ]),
           },
@@ -267,9 +337,29 @@ suite.define(() => {
           .poll(() => card.locator(".session-hovercard__title").textContent())
           .toBe("Other session");
         await expect
-          .poll(() => card.locator(".session-hovercard__meta").textContent())
+          .poll(() => card.locator(".session-progress-card__heading").textContent())
+          .toContain("1/3");
+        await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(4);
+        await captureProof(page, "sidebar-row-hovercard-maximum.png");
+        await expect
+          .poll(() => card.locator(".session-hovercard__identity-row").textContent())
           .toContain("Ada King");
-        const avatar = card.locator("openclaw-channel-avatar.session-hovercard__avatar");
+        expect(await card.locator(".session-hovercard__identity-row").textContent()).toContain(
+          "Mira",
+        );
+        expect(await card.locator(".session-hovercard__identity-row").textContent()).not.toContain(
+          "You",
+        );
+        expect(await card.locator(".session-hovercard__context-text").allTextContents()).toEqual([
+          "openclaw",
+          "feature/session-hovercards",
+        ]);
+        await expect
+          .poll(() => card.locator(".session-hovercard__created-age").textContent())
+          .toBe("3mo");
+        const avatar = card.locator(
+          "openclaw-channel-avatar.session-hovercard__creator-avatar",
+        );
         await avatar.waitFor({ state: "visible" });
         await expect.poll(() => avatar.locator("img.channel-avatar").count()).toBe(1);
         expect(
@@ -279,12 +369,14 @@ suite.define(() => {
             naturalWidth: image.naturalWidth,
           })),
         ).toEqual({ complete: true, naturalHeight: 64, naturalWidth: 64 });
-        expect(await card.locator("span.session-hovercard__avatar").count()).toBe(0);
-        const pullRequest = card.locator(".session-hovercard__pr-chip");
+        expect(await card.locator("openclaw-viewer-avatar").count()).toBe(0);
+        const pullRequest = card.locator(".session-hovercard__pr-row").first();
         await expect
           .poll(() => pullRequest.locator(".session-hovercard__pr-number").textContent())
           .toBe("#417");
-        expect(await pullRequest.locator(".session-hovercard__checks").textContent()).toBe("✓");
+        expect(
+          await pullRequest.locator(".session-hovercard__pr-state-icon").getAttribute("title"),
+        ).toBe("Open · CI checks passing");
         expect(await pullRequest.locator(".session-hovercard__files").textContent()).toBe(
           "7 files",
         );
@@ -317,6 +409,40 @@ suite.define(() => {
         await expect
           .poll(() => card.locator(".session-progress-card__step--pending").textContent())
           .toContain("Publish");
+        expect(
+          await card
+            .locator(
+              ".session-progress-card__step--completed .session-progress-card__step-marker svg",
+            )
+            .count(),
+        ).toBe(1);
+        expect(
+          await card
+            .locator(
+              ".session-progress-card__step--in_progress .session-progress-card__step-marker circle",
+            )
+            .count(),
+        ).toBe(1);
+        expect(
+          await card
+            .locator(
+              ".session-progress-card__step--pending .session-progress-card__step-marker circle",
+            )
+            .count(),
+        ).toBe(1);
+        const markerPresentation = await card
+          .locator(".session-progress-card__step-marker")
+          .evaluateAll((markers) =>
+            markers.slice(1).map((marker) => ({
+              color: getComputedStyle(marker).color,
+              dot: getComputedStyle(marker, "::after").content,
+            })),
+          );
+        expect(markerPresentation[0]?.dot).not.toBe("none");
+        expect(markerPresentation[0]?.dot).not.toBe(markerPresentation[1]?.dot);
+        expect(await card.locator(".session-hovercard__progress-footer:last-child").count()).toBe(
+          1,
+        );
         expect(await page.evaluate(() => "__progressCardPwned" in window)).toBe(false);
         await captureProof(page, "sidebar-row-hovercard-avatar.png");
         await captureProof(page, "sidebar-row-hovercard-progress.png");
@@ -336,7 +462,7 @@ suite.define(() => {
           .poll(() => card.locator(".session-hovercard__title").textContent())
           .toBe("Other session");
         await expect
-          .poll(() => card.locator(".session-hovercard__pr-number").textContent())
+          .poll(() => card.locator(".session-hovercard__pr-number").first().textContent())
           .toBe("#417");
         await expect.poll(() => card.locator("strong").textContent()).toContain("Building");
         await captureProof(page, "chat-link-hovercard-progress.png");
@@ -396,6 +522,168 @@ suite.define(() => {
           )
           .toBe(3);
         await captureProof(page, "hovercard-updated.png");
+      },
+    );
+  });
+
+  it("honors cold, bridge, sweep, and menu-suppression timing on real sidebar rows", async () => {
+    const selectedSessionKey = "agent:main:timing-selected";
+    const firstSessionKey = "agent:main:timing-first";
+    const secondSessionKey = "agent:main:timing-second";
+
+    await suite.withPage(
+      {
+        hasTouch: false,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          methodResponses: {
+            "progressCard.get": { card: null },
+            "sessions.list": chatSessionListResponse([
+              { key: selectedSessionKey, kind: "direct", label: "Selected", updatedAt: 3 },
+              { key: firstSessionKey, kind: "direct", label: "First timing row", updatedAt: 2 },
+              { key: secondSessionKey, kind: "direct", label: "Second timing row", updatedAt: 1 },
+            ]),
+          },
+          sessionKey: selectedSessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        const first = page.locator(`[data-session-key="${firstSessionKey}"]`);
+        const second = page.locator(`[data-session-key="${secondSessionKey}"]`);
+        const card = page.locator(".session-progress-hovercard");
+        await first.waitFor({ state: "visible" });
+
+        const pointer = async (locator: typeof first, type: "pointerover" | "pointerout") =>
+          locator.dispatchEvent(type, {
+            bubbles: true,
+            composed: true,
+            pointerType: "mouse",
+            relatedTarget: null,
+          });
+
+        await first.hover();
+        expect(await card.count()).toBe(0);
+        await card.waitFor({ state: "visible" });
+        await pointer(first, "pointerout");
+        await card.hover();
+        expect(await card.count()).toBe(1);
+        await page.mouse.move(900, 800);
+        await expect.poll(() => card.count()).toBe(0);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        await first.hover();
+        expect(await card.count()).toBe(0);
+        await card.waitFor({ state: "visible" });
+
+        await second.hover();
+        await expect
+          .poll(() => card.locator(".session-hovercard__title").textContent())
+          .toBe("Second timing row");
+
+        await card.hover();
+        expect(await card.count()).toBe(1);
+        await page.mouse.move(900, 800);
+        await expect.poll(() => card.count()).toBe(0);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        await first.hover();
+        await card.waitFor({ state: "visible" });
+        await first
+          .getByRole("button", { name: "Open session menu: First timing row" })
+          .dispatchEvent("click");
+        await expect.poll(() => card.count()).toBe(0);
+        await expect
+          .poll(() => page.locator("openclaw-session-menu").getByRole("menuitem").count())
+          .toBeGreaterThan(0);
+      },
+    );
+  });
+
+  it("renders and dismisses synthetic catalog-session hovercards", async () => {
+    const selectedSessionKey = "agent:main:catalog-selected";
+    const catalogSessionKey = "catalog:codex:gateway%3Acodex:thread-1";
+
+    await suite.withPage(
+      {
+        hasTouch: false,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        await installMockGateway(page, {
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "progressCard.get",
+            "sessions.catalog.list",
+          ],
+          methodResponses: {
+            "progressCard.get": { card: null },
+            "sessions.list": chatSessionListResponse([
+              { key: selectedSessionKey, kind: "direct", label: "Selected", updatedAt: 1 },
+            ]),
+            "sessions.catalog.list": {
+              catalogs: [
+                {
+                  id: "codex",
+                  label: "Codex",
+                  capabilities: { continueSession: true, archive: true },
+                  hosts: [
+                    {
+                      hostId: "gateway:codex",
+                      label: "Local Codex",
+                      kind: "gateway",
+                      connected: true,
+                      sessions: [
+                        {
+                          threadId: "thread-1",
+                          name: "Catalog release review",
+                          cwd: "/work/openclaw",
+                          gitBranch: "catalog-hovercard",
+                          createdAt: nowSeconds - 2 * 60 * 60,
+                          updatedAt: nowSeconds - 5 * 60,
+                          status: "stored",
+                          archived: false,
+                          canContinue: true,
+                          canArchive: true,
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          sessionKey: selectedSessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        const row = page.locator(`[data-session-key="${catalogSessionKey}"]`);
+        await row.waitFor({ state: "visible" });
+        await row.hover();
+        const card = page.locator(".session-progress-hovercard");
+        await card.waitFor({ state: "visible" });
+        expect(await card.locator(".session-hovercard__title").textContent()).toBe(
+          "Catalog release review",
+        );
+        expect(await card.locator(".session-hovercard__created-age").textContent()).toBe("2 hr");
+        expect(await card.locator(".session-hovercard__context-text").allTextContents()).toEqual([
+          "openclaw",
+          "catalog-hovercard",
+        ]);
+
+        await row.getByRole("button", { name: "Open session menu" }).dispatchEvent("click");
+        await expect.poll(() => card.count()).toBe(0);
+        await expect
+          .poll(() => page.locator("openclaw-catalog-session-menu").getByRole("menuitem").count())
+          .toBeGreaterThan(0);
       },
     );
   });
@@ -489,6 +777,11 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(":focus").getAttribute("href"))
           .toBe("https://example.com/build");
+        await page.keyboard.press("Escape");
+        await expect.poll(() => card.count()).toBe(0);
+        expect(await trigger.evaluate((element) => document.activeElement === element)).toBe(true);
+        expect(await trigger.getAttribute("aria-haspopup")).toBeNull();
+        expect(await trigger.getAttribute("aria-expanded")).toBeNull();
         await captureProof(page, "keyboard-focus.png");
       },
     );
@@ -552,12 +845,14 @@ suite.define(() => {
         const card = page.locator(".session-progress-hovercard");
         await card.waitFor({ state: "visible" });
         expect(["left", "right"]).toContain(await card.getAttribute("data-side"));
-        const avatar = card.locator("openclaw-channel-avatar.session-hovercard__avatar");
+        const avatar = card.locator(
+          "openclaw-channel-avatar.session-hovercard__creator-avatar",
+        );
         await expect
-          .poll(() => avatar.locator(".session-hovercard__avatar-fallback").textContent())
+          .poll(() => avatar.locator(".session-hovercard__creator-avatar-fallback").textContent())
           .toBe("AK");
         expect(await avatar.locator("img.channel-avatar").count()).toBe(0);
-        expect(await card.locator("span.session-hovercard__avatar").count()).toBe(0);
+        expect(await card.locator("openclaw-viewer-avatar").count()).toBe(0);
         await expect
           .poll(() => card.locator(".session-hovercard__excerpt").textContent())
           .toBe(lastMessagePreview);
