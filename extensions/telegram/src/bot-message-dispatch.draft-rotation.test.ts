@@ -1,4 +1,5 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { beforeEach, expect, it, vi } from "vitest";
 
@@ -410,7 +411,8 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     if (!isChannelPartialDeliveryError(observedError)) {
       throw new Error("Expected queued block rotation to surface a partial delivery error");
     }
-    expect(observedError.cause).toBe(buttonError);
+    expect(observedError.code).toBe("CHANNEL_PARTIAL_DELIVERY");
+    expect(formatErrorMessage(observedError)).toBe(formatErrorMessage(buttonError));
     expect(observedError.deliveryResult).toEqual(
       expect.objectContaining({
         content: "Pick one",
