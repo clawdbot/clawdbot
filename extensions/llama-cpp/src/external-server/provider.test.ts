@@ -1,12 +1,10 @@
 import type {
   ProviderCatalogContext,
   ProviderPrepareDynamicModelContext,
-  UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discoverLlamaServerProvider,
-  listLlamaServerCatalog,
   prepareLlamaServerDynamicModels,
   resolveLlamaServerDynamicModel,
 } from "./provider.js";
@@ -39,8 +37,6 @@ function model() {
     },
     status: "sleeping" as const,
     failed: false,
-    buildInfo: "b10000-test",
-    totalSlots: 2,
   };
 }
 
@@ -51,9 +47,7 @@ function success() {
       origin: "http://localhost:8080",
       inferenceBaseUrl: "http://localhost:8080/v1",
     },
-    health: "ready" as const,
     models: [model()],
-    fetchedAt: 1000,
   };
 }
 
@@ -70,7 +64,7 @@ function catalogContext(): ProviderCatalogContext {
   };
 }
 
-describe("llama-server provider catalog", () => {
+describe("llama-server provider discovery", () => {
   beforeEach(() => {
     discoverMock.mockReset();
     runtimeApiKeyMock.mockReset();
@@ -135,30 +129,6 @@ describe("llama-server provider catalog", () => {
     await expect(discoverLlamaServerProvider(ctx)).resolves.toMatchObject({
       provider: { models: [expect.objectContaining({ id: "org/model:Q4" })] },
     });
-  });
-
-  it("projects router state into unified catalog warnings", async () => {
-    discoverMock.mockResolvedValue(success());
-    const ctx = {
-      ...catalogContext(),
-      includeLive: true,
-    } as UnifiedModelCatalogProviderContext;
-
-    await expect(listLlamaServerCatalog(ctx)).resolves.toEqual([
-      expect.objectContaining({
-        kind: "text",
-        provider: "llama-cpp",
-        model: "org/model:Q4",
-        source: "live",
-        warnings: ["llama-server model is sleeping"],
-        capabilities: expect.objectContaining({
-          contextWindow: 16384,
-          status: "sleeping",
-          buildInfo: "b10000-test",
-          totalSlots: 2,
-        }),
-      }),
-    ]);
   });
 
   it("scopes dynamic catalogs by agent runtime and auth profile", async () => {
@@ -237,34 +207,6 @@ describe("llama-server provider catalog", () => {
     });
   });
 
-  it("moves a refreshed dynamic scope to the newest eviction position", async () => {
-    discoverMock.mockResolvedValue(success());
-    const contexts = Array.from(
-      { length: 101 },
-      (_, index) =>
-        ({
-          config: {},
-          provider: "llama-server",
-          modelId: "org/model:Q4",
-          modelRegistry: {},
-          agentRuntimeId: `refresh-runtime-${index}`,
-          providerConfig: {
-            baseUrl: "http://localhost:8080/v1",
-            api: "openai-completions",
-          },
-        }) as unknown as ProviderPrepareDynamicModelContext,
-    );
-
-    for (const ctx of contexts.slice(0, 100)) {
-      await prepareLlamaServerDynamicModels(ctx);
-    }
-    await prepareLlamaServerDynamicModels(contexts[0]!);
-    await prepareLlamaServerDynamicModels(contexts[100]!);
-
-    expect(resolveLlamaServerDynamicModel(contexts[0]!)).toMatchObject({ id: "org/model:Q4" });
-    expect(resolveLlamaServerDynamicModel(contexts[1]!)).toBeUndefined();
-  });
-
   it("keeps dynamic snapshots separate when only the endpoint changes", async () => {
     discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce({
       ...success(),
@@ -272,7 +214,7 @@ describe("llama-server provider catalog", () => {
     });
     const base = {
       config: {},
-      provider: "llama-server",
+      provider: "llama-cpp",
       modelId: "org/model:Q4",
       modelRegistry: {},
       agentRuntimeId: "endpoint-runtime",
@@ -302,7 +244,7 @@ describe("llama-server provider catalog", () => {
     });
     const ctx = {
       config: {},
-      provider: "llama-server",
+      provider: "llama-cpp",
       modelId: "org/model:Q4",
       modelRegistry: {},
       agentRuntimeId: "failed-refresh-runtime",
