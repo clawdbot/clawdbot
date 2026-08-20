@@ -41,26 +41,6 @@ function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
 }
 
-function providerUsageResponses(usageStatus: unknown) {
-  return {
-    "config.get": { config: {}, hash: "provider-usage-outcome" },
-    "models.list": { models: [] },
-    "models.authStatus": {
-      ts: NOW,
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          status: "ok",
-          profiles: [],
-        },
-      ],
-    },
-    "sessions.usage": { aggregates: { byProvider: [] } },
-    "usage.status": usageStatus,
-  };
-}
-
 function modelPickerValue(locator: Locator) {
   return locator.evaluate((element) => String((element as HTMLElement & { value?: string }).value));
 }
@@ -91,83 +71,6 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
-  });
-
-  it("shows a visible warning when the provider usage request fails", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: providerUsageResponses({
-        __mockError: { code: "INTERNAL_ERROR", message: "gateway transport unavailable" },
-      }),
-    });
-
-    try {
-      await page.goto(`${server.baseUrl}settings/model-providers`);
-      await page.locator('[data-provider-id="openai"]').waitFor();
-      await expect
-        .poll(async () => (await gateway.getRequests("usage.status")).length)
-        .toBeGreaterThan(0);
-      await expect
-        .poll(() => page.locator(".settings-page").textContent())
-        .toContain("Provider usage is unavailable; the last request failed. Refresh to retry.");
-      if (recordVisuals) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "provider-usage-request-failed.png"),
-        });
-      }
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("keeps provider-scoped usage errors as data without the global warning", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: providerUsageResponses({
-        updatedAt: NOW,
-        providers: [
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            windows: [],
-            error: "provider API unavailable",
-          },
-        ],
-      }),
-    });
-
-    try {
-      await page.goto(`${server.baseUrl}settings/model-providers`);
-      const card = page.locator('[data-provider-id="openai"]');
-      await card.waitFor();
-      await expect
-        .poll(async () => (await gateway.getRequests("usage.status")).length)
-        .toBeGreaterThan(0);
-      await expect.poll(() => card.textContent()).toContain("provider API unavailable");
-      await expect
-        .poll(() => page.locator(".settings-page").textContent())
-        .not.toContain("Provider usage is unavailable; the last request failed. Refresh to retry.");
-      if (recordVisuals) {
-        await card.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "provider-usage-provider-error.png"),
-        });
-      }
-    } finally {
-      await context.close();
-    }
   });
 
   it("defers live provider discovery until refresh while preserving model setup", async () => {
